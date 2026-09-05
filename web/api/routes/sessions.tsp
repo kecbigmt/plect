@@ -28,18 +28,10 @@ interface Sessions {
   @get
   @doc("""
     A single session's identity and runtime facts. Session names contain `/`
-    (e.g. `acceptance/web-1`). This parameter does not declare
-    `allowReserved`: `@typespec/openapi3` does not currently emit that
-    OpenAPI 3 property (compiling this source warns and drops it), so
-    declaring it here would assert a contract guarantee the emitted document
-    does not actually carry. A generated client therefore percent-encodes
-    `/` as `%2F` per RFC 3986's ordinary path-segment escaping — verified for
-    the committed client in web/api/verify/client-transport.mjs. The server
-    does not depend on a client doing otherwise: it matches this route
-    against the request path after the transport layer has already
-    percent-decoded it, so both an unencoded `/` and an encoded `%2F` reach
-    the handler as the same, correct, full session name — verified in
-    app/internal/webapi/transport_test.go through a real HTTP server.
+    (e.g. `acceptance/web-1`); send it percent-encoded (`%2F`) like any other
+    reserved character in a path-parameter value (RFC 3986). The server
+    accepts either an encoded or a literal `/` and resolves both to the
+    same, correct, full session name.
     """)
   get(
     @path

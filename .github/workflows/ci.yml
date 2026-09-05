@@ -139,9 +139,9 @@ jobs:
       - name: Prove the gh_app_guard shim mints before allow, denies before mint, and scopes GH_TOKEN to the delegated gh
         run: ./scripts/gh-app-guard_selftest.sh
 
-  # The schema-contract ADR (docs/adr/2026-09-06-web-api-schema-contract.md)
-  # requires CI to check schema compilation, reproducible Go/TypeScript
-  # generation, and generated-code compilation — this job is that check.
+  # The schema-contract decision record under docs/adr/ requires CI to
+  # check schema compilation, reproducible Go/TypeScript generation, and
+  # generated-code compilation — this job is that check.
   # Unconditional like the other whole-repo invariant checks above: the
   # TypeSpec source lives outside app/ and contracts/, so the changes job's
   # per-module trigger map has no entry for it, and this job is cheap
@@ -160,8 +160,11 @@ jobs:
       # ("Cannot find matching keyid"), independent of this repo. `npm
       # install -g` uses npm's own, unrelated package-integrity check, and
       # npm ships with actions/setup-node above — no new tool dependency.
-      - name: Install the pinned pnpm version
-        run: npm install -g pnpm@10.33.0
+      # The version comes from package.json's own packageManager field
+      # rather than being retyped here, so the two cannot drift apart.
+      - name: Install the pnpm version pinned in web/api/package.json
+        run: npm install -g "pnpm@$(node -p "require('./package.json').packageManager.split('@')[1]")"
+        working-directory: web/api
       - name: pnpm install
         run: pnpm install --frozen-lockfile
         working-directory: web/api

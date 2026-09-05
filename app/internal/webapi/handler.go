@@ -25,11 +25,14 @@ type SessionReader interface {
 func Routes(svc SessionReader) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /sessions", handleList(svc))
-	// Session names contain "/"; the OpenAPI contract documents `name` as a
-	// reserved-character path parameter for exactly this reason (OpenAPI 3
-	// itself has no wire representation for that yet — see web/api/README.md),
-	// so the route captures everything after the prefix rather than one
-	// path segment, the same wildcard shape webui's own routes already use.
+	// Session names contain "/", and a generated client sends it
+	// percent-encoded (%2F) rather than literal, since this contract's
+	// @typespec/openapi3 version does not emit OpenAPI 3's own
+	// allowReserved parameter property — see web/api/README.md. This route
+	// captures everything after the prefix rather than one path segment
+	// (the same wildcard shape webui's own routes already use), so it
+	// matches against net/http's already percent-decoded URL.Path and
+	// resolves either form to the same name regardless.
 	mux.HandleFunc("GET /sessions/{name...}", handleGet(svc))
 	return mux
 }
