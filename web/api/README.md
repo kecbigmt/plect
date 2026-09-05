@@ -18,8 +18,8 @@ This slice covers Session list/detail and common errors only — see
 | `generated/openapi.yaml` | Emitted OpenAPI 3.0 document. Committed, not edited. |
 | `generated/typescript/schema.d.ts` | Generated TypeScript types. Committed, not edited. |
 | `client.ts` | Hand-written thin `openapi-fetch` client bound to the generated types. |
-| `testdata/` | JSON fixtures shared (by content, not by symlink) with `app/internal/webapi/testdata/` — see [Verification](#verification). |
-| `verify/` | TypeScript-side verification: compile-time structural checks (`types.ts`) and a runtime fixture script (`fixtures.mjs`). |
+| `verify/` | TypeScript-side verification: compile-time structural checks (`types.ts`), a fixture round-trip script (`fixtures.mjs`), and a client-transport script (`client-transport.mjs`) — see [Verification](#verification). |
+| `../../app/internal/webapi/testdata/` | The one JSON fixture authority, read by both `app/internal/webapi/roundtrip_test.go` (Go) and `verify/fixtures.mjs` (TypeScript, by relative path — not copied). |
 | `../../app/internal/webapi/generated/types.gen.go` | Generated Go types (`oapi-codegen`, types only). Committed, not edited. |
 | `../../app/internal/webapi/` | Hand-written Go boundary: conversion from/to `service.*`, HTTP handlers, tests. |
 
@@ -42,13 +42,11 @@ go tool oapi-codegen -config oapi-codegen.yaml ../../../web/api/generated/openap
 ```
 
 Both steps are deterministic — running them again with no source change
-produces byte-identical output (verified for this PR: re-running `pnpm
-generate` reproduced `generated/openapi.yaml` and
-`generated/typescript/schema.d.ts` unchanged; re-running the `oapi-codegen`
-command reproduced `types.gen.go` unchanged). CI should run both and fail on
-a diff, the same way `scripts/check-agent-config.sh` and the config-language
-corpus harnesses already fail CI on drift — wiring that CI job is left to a
-follow-up so this PR stays scoped to the toolchain itself.
+produces byte-identical output. CI's `web-api-contract` job
+(`.github/workflows/ci.yml`) runs both regeneration commands on every PR and
+fails on any diff against the committed output, the same way
+`scripts/check-agent-config.sh` and the config-language corpus harnesses
+already fail CI on drift.
 
 Normal Go builds consume the committed `types.gen.go` and need neither the
 TypeSpec compiler nor Node — only editing the contract does.
@@ -94,29 +92,47 @@ meant for later Web API operations to reuse rather than reinvent, per
   TypeSpec source declares it (`routes/sessions.tsp`) — but `@typespec/openapi3`
   1.15.0 does not currently emit it (confirmed: compiling produces
   `@typespec/openapi3/path-reserved-expansion` warning, and the emitted
-  parameter carries no `allowReserved` key). The Go server does not rely on
-  the OpenAPI document for this: `app/internal/webapi/handler.go` routes
-  `GET /sessions/{name...}` with Go's own wildcard path capture (the same
-  shape `webui`'s existing HTML routes already use for session names), so a
-  literal `/` in the request path reaches the handler intact regardless of
-  what the OpenAPI parameter object says. A client generated purely from
-  `generated/typescript/schema.d.ts` must still send the name unencoded (see
-  the parameter's `@doc`) — `openapi-fetch` does this by default, since it
-  performs simple, non-percent-encoding string substitution for path
-  parameters.
-- **Absent, null, and empty values.** Every optional field on this contract
-  is omitted (never emitted as JSON `null`) when unset, mirroring the Go
-  source's `omitempty` struct tags — this API never distinguishes "unset"
-  from "explicitly null" because nothing in the underlying service/state
-  layer does either. A *required* field (e.g. `SessionSummary.resourceId`)
-  can still legitimately be an empty string; see `testdata/session_list.valid.json`'s
-  second item and the round-trip tests that assert on it.
+  parameter carries no `allowReserved` key). Without that signal, a
+  generated client has no reason to send `/` unencoded, and **does not**:
+  `verify/client-transport.mjs` proves the committed `client.ts`, built on
+  `openapi-fetch` 0.17.0, percent-encodes `team/workspace-a` as
+  `team%2Fworkspace-a`, matching RFC 3986's default path-segment escaping
+  regardless of `allowReserved`. The server does not depend on the client
+  doing otherwise: `app/internal/webapi/handler.go` routes `GET
+  /sessions/{name...}` with Go's own wildcard path capture, matched against
+  `net/http`'s already percent-decoded `URL.Path` — so both an unencoded `/`
+  and an encoded `%2F` arrive at the handler as the same, correct, full
+  session name. `app/internal/webapi/transport_test.go` proves this through
+  a real `net/http` server (not a direct handler call, which never
+  round-trips a raw request line through URL parsing) for both forms.
+- **Absent, null, and empty values.** Every optional field this contract's
+  Go source produces is omitted (never emitted as JSON `null`) when unset,
+  mirroring its `omitempty` struct tags. A *required* field (e.g.
+  `SessionSummary.resourceId`) can still legitimately be an empty string;
+  see `session_list.valid.json`'s second item and the round-trip tests that
+  assert on it. Nothing stops a non-conformant producer from sending an
+  explicit `null` anyway, so both consumers are tested against one:
+  `session_detail.explicit_null.json`. Go's decoder unifies null and
+  absence for every optional field here — both leave the pointer/slice/map
+  nil (`TestRoundTrip_ExplicitNullOptionalFieldsDecodeSameAsAbsent`).
+  `JSON.parse` does **not** perform the same unification: `null` stays a
+  present key holding the value `null`, distinguishable from an absent key
+  via the `in` operator (`verify/fixtures.mjs`'s corresponding check) — and
+  the *static* TypeScript type (`string | undefined`, never `| null`)
+  rejects an explicit `null` at compile time regardless
+  (`verify/types.ts`'s `invalidExplicitNull`), so a producer that respects
+  the generated types can never emit one in the first place.
 - **Status distinctions.** `SessionRunState` (`up`/`down`) and
   `SessionHealthState` (`healthy`/`unhealthy`/`undeclared`/`stalled`) are
   separate enums on separate fields, matching
   [docs/design/web-ui.md](../../docs/design/web-ui.md)'s dimensions table —
   a session can be `up` and `unhealthy` at once, and this contract does not
   collapse them into one combined status.
+- **List ordering.** `GET /sessions` returns entries ascending by session
+  name — `service.List`'s own documented and tested sort, which this
+  package only passes through
+  (`TestHandleList_DoesNotReorderWhatServiceListReturns`). Not "newest
+  first": nothing about recency or activity determines order.
 - **Authentication/bootstrap.** Documented on the service (`main.tsp`'s
   top-level `@doc`) as the existing `plect_auth` cookie the current
   Go-templated Web UI already enforces at the HTTP boundary
@@ -130,9 +146,10 @@ meant for later Web API operations to reuse rather than reinvent, per
 ## Verification
 
 `app/internal/webapi/roundtrip_test.go` and `verify/fixtures.mjs` +
-`verify/types.ts` exercise the same JSON fixtures (`testdata/`) from the Go
-and TypeScript sides respectively, each demonstrating and recording an
-actual result rather than assuming one:
+`verify/types.ts` exercise the same JSON fixtures
+(`app/internal/webapi/testdata/`, the one fixture authority — see
+[Layout](#layout)) from the Go and TypeScript sides respectively, each
+demonstrating and recording an actual result rather than assuming one:
 
 - **Template instantiation.** `ListResponse<SessionSummary>` (TypeSpec) ->
   `SessionListResponse` (Go/TS) round-trips as a named type on both sides.
@@ -164,16 +181,21 @@ actual result rather than assuming one:
   neither one enforces OpenAPI's `required` list — a payload missing `run`
   decodes without error on both sides, leaving it at the Go zero value
   (`""`, `Valid() == false`) or simply absent from the parsed JS object.
-  Catching this is explicit request-validation work `docs/adr/2026-09-06-web-api-schema-contract.md`
+  Catching this is explicit request-validation work the schema-contract ADR
   already calls out as ungenerated, and `verify/types.ts` additionally
   proves the compile-time half: `tsc --noEmit` rejects the same omission
   when a literal is typed against the generated `SessionDetail`.
+- **Transport reality, not just the schema's claim.** `verify/client-transport.mjs`
+  and `app/internal/webapi/transport_test.go` (see "Names containing `/`"
+  above) exercise the actual committed client and a real HTTP server rather
+  than asserting from the OpenAPI document what a client or server *should*
+  do.
 
 Run everything:
 
 ```sh
 cd app && go test ./internal/webapi/... ./internal/webui/...
-cd web/api && pnpm verify   # tsc --noEmit, then verify/fixtures.mjs
+cd web/api && pnpm verify   # tsc --noEmit, then fixtures.mjs, then client-transport.mjs
 ```
 
 ## What this PR does not claim

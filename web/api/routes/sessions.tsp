@@ -22,14 +22,26 @@ model SessionNotFoundResponse {
 @tag("Sessions")
 interface Sessions {
   @get
-  @doc("List every tracked session, newest name-sort order. No pagination cursor in this slice — see the design's Home/cross-session views for a bounded, cursor-paged read.")
+  @doc("List every tracked session, ordered ascending by session name (not by recency or activity). No pagination cursor in this slice — see the design's Home/cross-session views for a bounded, cursor-paged read.")
   list(): SessionListResponse | InternalErrorResponse;
 
   @get
-  @doc("A single session's identity and runtime facts. Session names contain `/` (e.g. `acceptance/web-1`); `name` is a reserved-character (`allowReserved`) path parameter, so a `/` in it is sent literally rather than percent-encoded, matching how the session-name space is already addressed elsewhere in this API's server implementation.")
+  @doc("""
+    A single session's identity and runtime facts. Session names contain `/`
+    (e.g. `acceptance/web-1`). A conformant client percent-encodes `/` as
+    `%2F` when substituting a path parameter (RFC 3986) regardless of this
+    parameter's `allowReserved` marking — `@typespec/openapi3` does not
+    currently emit `allowReserved` into the generated OpenAPI document, so
+    generated clients have no signal to do otherwise. The server does not
+    depend on that signal either way: it matches this route against the
+    request path after the transport layer has already percent-decoded it,
+    so both an unencoded `/` and an encoded `%2F` reach the handler as the
+    same, correct, full session name — see
+    app/internal/webapi/handler_test.go's transport-level test.
+    """)
   get(
     @path(#{ allowReserved: true })
-    @doc("The exact session name, `/` included. Sent unencoded (`allowReserved`) rather than as `%2F`.")
+    @doc("The exact session name, `/` included.")
     name: string,
   ): SessionDetail | SessionNotFoundResponse | InternalErrorResponse;
 }

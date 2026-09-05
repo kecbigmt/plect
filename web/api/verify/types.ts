@@ -56,9 +56,26 @@ const validConflict: ConflictError = {
   message: "session has children",
 };
 
+// Invalid: `branch` is typed `string | undefined`, not `string | null`, so
+// an explicit null (which verify/fixtures.mjs proves JSON.parse would
+// happily hand back at runtime) must be rejected here — the static type is
+// stricter than the untyped runtime value this contract's own fixture
+// (../../app/internal/webapi/testdata/session_detail.explicit_null.json)
+// demonstrates. This is not a bug in the generated type: a producer that
+// respects it can never emit null in the first place.
+const invalidExplicitNull: SessionDetail = {
+  sessionName: "team/workspace-a",
+  createdAt: "2026-09-06T00:00:00Z",
+  run: "up",
+  workspaceDirExists: true,
+  // @ts-expect-error - "branch" does not accept null, only string | undefined
+  branch: null,
+};
+
 // Referenced so `tsc --noEmit` treats every declaration above as used
 // rather than reporting an unrelated "declared but never read" diagnostic
 // that would mask the @ts-expect-error checks this file exists for.
 export const fixtures = { validDetail, validList, validConflict };
 void invalidDetail;
 void invalidNotFound;
+void invalidExplicitNull;

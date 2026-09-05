@@ -136,6 +136,42 @@ func TestRoundTrip_MissingRequiredFieldDecodesToZeroValueNotAnError(t *testing.T
 	}
 }
 
+// An explicit JSON `null` for an optional field is not the same wire event
+// as omitting the key, even though this contract only ever produces the
+// latter (web/api/README.md documents that). A conformant payload should
+// never send null, but nothing stops one from doing so, and Go's decoder
+// treats it identically to absence for every pointer-typed optional field
+// here: the field ends up nil either way, which is the finding this test
+// records rather than assumes.
+func TestRoundTrip_ExplicitNullOptionalFieldsDecodeSameAsAbsent(t *testing.T) {
+	raw := readTestdata(t, "session_detail.explicit_null.json")
+
+	var got webapiv1.SessionDetail
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal explicit null: %v", err)
+	}
+	if got.ResourceId != nil {
+		t.Errorf("ResourceId = %v, want nil for an explicit null", got.ResourceId)
+	}
+	if got.Branch != nil {
+		t.Errorf("Branch = %v, want nil for an explicit null", got.Branch)
+	}
+	if got.Children != nil {
+		t.Errorf("Children = %v, want nil for an explicit null", got.Children)
+	}
+	if got.Inputs != nil {
+		t.Errorf("Inputs = %v, want nil for an explicit null", got.Inputs)
+	}
+	if got.Message != nil {
+		t.Errorf("Message = %v, want nil for an explicit null", got.Message)
+	}
+	// Required fields alongside the explicit nulls still decode normally —
+	// null on one field does not corrupt sibling fields.
+	if got.SessionName != "team/workspace-a" || got.Run != webapiv1.Up {
+		t.Errorf("required fields not carried through alongside explicit nulls: %+v", got)
+	}
+}
+
 // DecodeApiError is the tagged union's read side: given a category it
 // recognizes, it must decode into the matching concrete leaf type with the
 // leaf's own narrower `code` enum populated.

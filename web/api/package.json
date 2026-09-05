@@ -10,7 +10,8 @@
     "generate:typescript": "openapi-typescript generated/openapi.yaml -o generated/typescript/schema.d.ts",
     "typecheck": "tsc --noEmit",
     "verify:fixtures": "node verify/fixtures.mjs",
-    "verify": "pnpm typecheck && pnpm verify:fixtures"
+    "verify:client-transport": "node verify/client-transport.mjs",
+    "verify": "pnpm typecheck && pnpm verify:fixtures && pnpm verify:client-transport"
   },
   "devDependencies": {
     "@typespec/compiler": "1.15.0",

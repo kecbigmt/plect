@@ -10,7 +10,19 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const testdata = path.join(here, "..", "testdata");
+// app/internal/webapi/testdata is the one fixture authority both languages
+// read — a second, separately-maintained copy here previously let the two
+// suites' fixtures silently diverge instead of actually sharing a contract.
+const testdata = path.join(
+  here,
+  "..",
+  "..",
+  "..",
+  "app",
+  "internal",
+  "webapi",
+  "testdata",
+);
 
 async function readFixture(name) {
   return JSON.parse(await readFile(path.join(testdata, name), "utf8"));
@@ -71,6 +83,19 @@ check(
   "JSON.parse does not enforce required fields either — 'run' is simply absent, not an error",
   () => {
     assert.equal("run" in invalidDetail, false);
+  },
+);
+
+const explicitNullDetail = await readFixture("session_detail.explicit_null.json");
+check(
+  "JSON.parse keeps an explicit null as null, distinct from an absent key (unlike Go's pointer-typed decode, which unifies both to nil)",
+  () => {
+    assert.equal(explicitNullDetail.branch, null);
+    assert.equal("branch" in explicitNullDetail, true);
+    assert.notEqual(explicitNullDetail.branch, undefined);
+    // typeof null === "object" is the classic JS gotcha this check exists
+    // to make explicit rather than assumed.
+    assert.equal(typeof explicitNullDetail.branch, "object");
   },
 );
 

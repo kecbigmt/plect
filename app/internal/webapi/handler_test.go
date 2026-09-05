@@ -53,6 +53,27 @@ func TestHandleList_ReturnsEveryEntryAsAnEnvelope(t *testing.T) {
 	}
 }
 
+// The contract documents ascending session-name order (service.List's own
+// documented and tested guarantee) — this handler's own responsibility is
+// narrower: not to disturb whatever order service.List already returns.
+// "z/..." before "a/..." here would be wrong input for the real service,
+// but exercises the one thing this test can actually prove: encoding to
+// JSON preserves slice order regardless of what that order is.
+func TestHandleList_DoesNotReorderWhatServiceListReturns(t *testing.T) {
+	svc := &fakeReader{entries: []service.ListEntry{
+		{SessionName: "z/last", ResourceID: "r1"},
+		{SessionName: "a/first", ResourceID: "r2"},
+	}}
+
+	rec := doRequest(t, svc, http.MethodGet, "/sessions")
+
+	var got webapiv1.SessionListResponse
+	decodeBody(t, rec, &got)
+	if len(got.Items) != 2 || got.Items[0].SessionName != "z/last" || got.Items[1].SessionName != "a/first" {
+		t.Fatalf("Items = %+v, want service.List's order preserved verbatim", got.Items)
+	}
+}
+
 func TestHandleList_EmptyStoreReturnsAnEmptyEnvelopeNotAnError(t *testing.T) {
 	svc := &fakeReader{entries: nil}
 
