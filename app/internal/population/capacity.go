@@ -39,16 +39,16 @@ func (c *capacityCoordinator) setDefinitions(definitions []Definition) {
 	}
 }
 
-func (c *capacityCoordinator) up(_ context.Context, def Definition, resource string, inputs map[string]any) (string, error) {
+func (c *capacityCoordinator) up(_ context.Context, def Definition, resource string, inputs map[string]any) (UpOutcome, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	provenance := &contract.PopulationProvenance{Workflow: def.Workflow.Address, Name: def.Population.Name}
-	session, err := upPopulation(c.cfg, c.state, def, provenance, resource, inputs)
+	outcome, err := upPopulation(c.cfg, c.state, def, provenance, resource, inputs)
 	if !isCapError(err) {
-		return session, err
+		return outcome, err
 	}
 	if c.pendingExistingAhead(def, resource) {
-		return "", fmt.Errorf("an existing population member has a pending up request and takes priority")
+		return UpOutcome{}, fmt.Errorf("an existing population member has a pending up request and takes priority")
 	}
 	for _, candidate := range c.idleCandidates() {
 		if _, downErr := service.Down(c.cfg(), c.state, service.DownParams{Identifier: candidate.session}); downErr != nil {
@@ -56,16 +56,16 @@ func (c *capacityCoordinator) up(_ context.Context, def Definition, resource str
 			continue
 		}
 		c.record(candidate, event.TypeWorkflowPopulationDown, "capacity", "population member brought down for virtual-root capacity")
-		session, err = upPopulation(c.cfg, c.state, def, provenance, resource, inputs)
+		outcome, err = upPopulation(c.cfg, c.state, def, provenance, resource, inputs)
 		if !isCapError(err) {
-			return session, err
+			return outcome, err
 		}
 	}
 	if target, resolveErr := service.ResolvePopulationSessionName(c.cfg(), def.Workflow.Address, resource); resolveErr == nil {
 		c.record(idleCandidate{session: target, resource: resource, key: populationKey(def)}, event.TypeWorkflowPopulationDown,
 			"capacity", "virtual-root capacity remains full with no eligible population member to bring down")
 	}
-	return "", err
+	return UpOutcome{}, err
 }
 
 func isCapError(err error) bool {

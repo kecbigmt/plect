@@ -20,7 +20,7 @@ func (e *populationConflictError) Error() string { return e.reason }
 func serviceHooks(cfg func() *config.Config, store *state.Store, def Definition, coordinator *capacityCoordinator) Hooks {
 	provenance := &contract.PopulationProvenance{Workflow: def.Workflow.Address, Name: def.Population.Name}
 	return Hooks{
-		Up: func(_ context.Context, resource string, inputs map[string]any) (string, error) {
+		Up: func(_ context.Context, resource string, inputs map[string]any) (UpOutcome, error) {
 			if coordinator != nil {
 				return coordinator.up(context.Background(), def, resource, inputs)
 			}
@@ -59,20 +59,21 @@ func serviceHooks(cfg func() *config.Config, store *state.Store, def Definition,
 	}
 }
 
-func upPopulation(cfg func() *config.Config, store *state.Store, def Definition, provenance *contract.PopulationProvenance, resource string, inputs map[string]any) (string, error) {
+func upPopulation(cfg func() *config.Config, store *state.Store, def Definition, provenance *contract.PopulationProvenance, resource string, inputs map[string]any) (UpOutcome, error) {
 	name, err := service.ResolvePopulationSessionName(cfg(), def.Workflow.Address, resource)
 	if err != nil {
-		return "", err
+		return UpOutcome{}, err
 	}
 	if current := store.Get(name); current != nil {
 		if current.Population == nil || *current.Population != *provenance || current.ResourceID != resource {
-			return "", &populationConflictError{session: name, reason: fmt.Sprintf("session %q is owned by another lifecycle authority", name)}
+			return UpOutcome{}, &populationConflictError{session: name, reason: fmt.Sprintf("session %q is owned by another lifecycle authority", name)}
 		}
+		alreadyUp := runIsUp(current)
 		result, err := service.Up(cfg(), store, service.UpParams{Identifier: name})
 		if err != nil {
-			return "", err
+			return UpOutcome{}, err
 		}
-		return result.SessionName, nil
+		return UpOutcome{SessionName: result.SessionName, AlreadyUp: alreadyUp}, nil
 	}
 	result, err := service.Up(cfg(), store, service.UpParams{
 		Identifier: resource,
@@ -81,7 +82,7 @@ func upPopulation(cfg func() *config.Config, store *state.Store, def Definition,
 		Population: provenance,
 	})
 	if err != nil {
-		return "", err
+		return UpOutcome{}, err
 	}
-	return result.SessionName, nil
+	return UpOutcome{SessionName: result.SessionName}, nil
 }

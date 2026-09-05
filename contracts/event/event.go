@@ -85,9 +85,14 @@ const (
 	// *target* work session's log (not the reviewer's) whenever a judge
 	// verdict is recorded, independent of any `[tick]` declaration — the tick
 	// reactor always reacts to it by ticking that target session.
-	TypeJudgeRecorded                     = "plect.judge.recorded"
-	TypeWorkflowPopulationDestroy         = "plect.workflow_population.destroy"
-	TypeWorkflowPopulationDown            = "plect.workflow_population.down"
+	TypeJudgeRecorded             = "plect.judge.recorded"
+	TypeWorkflowPopulationDestroy = "plect.workflow_population.destroy"
+	TypeWorkflowPopulationDown    = "plect.workflow_population.down"
+	// TypeWorkflowPopulationUp means the member's session just transitioned
+	// to up. Re-admitting a member that was already up records nothing: the
+	// admission path re-runs its idempotent up hook on any inbound signal, so
+	// an unconditional record would report presence changes that never
+	// happened.
 	TypeWorkflowPopulationUp              = "plect.workflow_population.up"
 	TypeWorkflowPopulationConflict        = "plect.workflow_population.conflict"
 	TypeWorkflowPopulationFailure         = "plect.workflow_population.failure"

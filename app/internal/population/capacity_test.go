@@ -85,7 +85,7 @@ type = "object"
 				}
 			}
 
-			session, err := coordinator.up(context.Background(), def, "urn:case:new", map[string]any{"resource": "urn:case:new"})
+			outcome, err := coordinator.up(context.Background(), def, "urn:case:new", map[string]any{"resource": "urn:case:new"})
 			if tc.wantErr {
 				if err == nil || !strings.Contains(err.Error(), "takes priority") {
 					t.Fatalf("up error = %v, want existing-member priority after a cap rejection", err)
@@ -95,8 +95,11 @@ type = "object"
 			if err != nil {
 				t.Fatalf("up under the virtual-root cap: %v", err)
 			}
-			if session == "" || store.Get(session) == nil {
-				t.Fatalf("session = %q, want a newly admitted population session", session)
+			if outcome.SessionName == "" || store.Get(outcome.SessionName) == nil {
+				t.Fatalf("session = %q, want a newly admitted population session", outcome.SessionName)
+			}
+			if outcome.AlreadyUp {
+				t.Fatal("a newly admitted session reported as already up")
 			}
 		})
 	}
