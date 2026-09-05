@@ -35,3 +35,18 @@ export function UnavailableState({ onRetry }: { onRetry: () => void }) {
     </div>
   );
 }
+
+// No Retry action here: a stale build talking to a newer/older server (or a
+// server sending a malformed response) will not become compatible by asking
+// again — the fix is reloading with a matching build, or the server
+// deploying one, not repeating the same request.
+export function IncompatibleApiState({ reportedVersion }: { reportedVersion: unknown }) {
+  return (
+    <div role="alert" className="flex h-dvh flex-col items-center justify-center gap-3 text-sm">
+      <p>This client does not support the server's API version.</p>
+      <p className="text-xs text-muted-foreground">
+        Reported: {typeof reportedVersion === "string" ? reportedVersion : "unrecognized response"}
+      </p>
+    </div>
+  );
+}

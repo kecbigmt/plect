@@ -64,6 +64,23 @@ describe("App", () => {
     expect(link).toHaveAttribute("href", expect.stringMatching(/^\/login\?next=/));
   });
 
+  it("shows an incompatible-API state instead of the shell for an unsupported apiVersion", async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ apiVersion: "v2", csrfToken: "tok-1" }));
+    renderApp();
+    await screen.findByRole("alert");
+    expect(screen.getByText(/does not support/i)).toBeInTheDocument();
+    expect(screen.getByText(/reported: v2/i)).toBeInTheDocument();
+    expect(screen.queryByText("Plecture")).not.toBeInTheDocument();
+  });
+
+  it("shows an incompatible-API state instead of the shell for a malformed bootstrap body", async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ csrfToken: "tok-1" })); // apiVersion missing
+    renderApp();
+    await screen.findByRole("alert");
+    expect(screen.getByText(/does not support/i)).toBeInTheDocument();
+    expect(screen.queryByText("Plecture")).not.toBeInTheDocument();
+  });
+
   it("offers a retry when the server is unavailable, and retry re-fetches", async () => {
     vi.mocked(fetch).mockRejectedValue(new TypeError("network error"));
     renderApp();

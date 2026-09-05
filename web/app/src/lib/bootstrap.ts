@@ -9,6 +9,13 @@ export interface BootstrapInfo {
   csrfToken: string;
 }
 
+// The one version this build was written against. docs/design/web-ui.md
+// requires "explicit compatibility checks for independently updated clients
+// and servers" — an older/newer plect-web build's bootstrap response must be
+// rejected here rather than trusted, since nothing else in this response
+// shape changes when the API does.
+const SUPPORTED_API_VERSION = "v1";
+
 // Distinguished from other failures so a caller can show "sign in" rather
 // than "server unavailable" — retrying a 401 will not fix it.
 export class BootstrapAuthError extends Error {
@@ -16,6 +23,26 @@ export class BootstrapAuthError extends Error {
     super("authentication required");
     this.name = "BootstrapAuthError";
   }
+}
+
+// Distinguished from a plain connectivity failure: retrying will not fix a
+// version this build does not know how to speak to. Carries whatever the
+// server actually sent (unknown, since a malformed body can't be trusted to
+// carry a string) so the UI can report it.
+export class IncompatibleApiError extends Error {
+  constructor(public readonly reportedVersion: unknown) {
+    super(`unsupported API version: ${JSON.stringify(reportedVersion)}`);
+    this.name = "IncompatibleApiError";
+  }
+}
+
+function isBootstrapInfo(value: unknown): value is BootstrapInfo {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as Record<string, unknown>).apiVersion === "string" &&
+    typeof (value as Record<string, unknown>).csrfToken === "string"
+  );
 }
 
 export async function fetchBootstrap(): Promise<BootstrapInfo> {
@@ -26,5 +53,13 @@ export async function fetchBootstrap(): Promise<BootstrapInfo> {
   if (!res.ok) {
     throw new Error(`bootstrap request failed with status ${res.status}`);
   }
-  return (await res.json()) as BootstrapInfo;
+  const body: unknown = await res.json();
+  if (!isBootstrapInfo(body)) {
+    const reported = (body as { apiVersion?: unknown } | null)?.apiVersion;
+    throw new IncompatibleApiError(reported);
+  }
+  if (body.apiVersion !== SUPPORTED_API_VERSION) {
+    throw new IncompatibleApiError(body.apiVersion);
+  }
+  return body;
 }

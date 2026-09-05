@@ -1,6 +1,11 @@
-import { BootstrapAuthError } from "@/lib/bootstrap";
+import { BootstrapAuthError, IncompatibleApiError } from "@/lib/bootstrap";
 import { useBootstrap } from "@/lib/useBootstrap";
-import { LoadingState, UnauthenticatedState, UnavailableState } from "@/components/shell/ConnectionState";
+import {
+  IncompatibleApiState,
+  LoadingState,
+  UnauthenticatedState,
+  UnavailableState,
+} from "@/components/shell/ConnectionState";
 import { AppShell } from "@/components/shell/AppShell";
 
 export function App() {
@@ -12,6 +17,9 @@ export function App() {
   if (bootstrap.isError) {
     if (bootstrap.error instanceof BootstrapAuthError) {
       return <UnauthenticatedState />;
+    }
+    if (bootstrap.error instanceof IncompatibleApiError) {
+      return <IncompatibleApiState reportedVersion={bootstrap.error.reportedVersion} />;
     }
     return <UnavailableState onRetry={() => void bootstrap.refetch()} />;
   }
