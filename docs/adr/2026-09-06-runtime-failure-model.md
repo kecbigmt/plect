@@ -56,6 +56,17 @@ member beside `setup`, `cleanup`, `[health]`, and `[terminal]`. Its roots match
 reused. Non-zero exit, an unresolved required value, timeout, or invalid action
 configuration means the instance is invalid.
 
+This follows [Puppet's `onlyif` and `unless` guards](https://help.puppet.com/core/current/Content/PuppetCore/Markdown/exec.htm)
+and [systemd's `ExecCondition`](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html#ExecCondition=):
+an executable predicate decides whether a lifecycle action proceeds. It also
+follows [Kubernetes' separation of readiness from liveness](https://kubernetes.io/docs/concepts/workloads/pods/probes/):
+reuse eligibility and ongoing health answer different questions. Plecture
+borrows the separate, executable pre-action predicate, not an expression
+language, traffic routing, service-start suppression, or an automatic restart
+policy. `valid` runs once at the explicit reuse decision; a failed result
+invalidates the stored production record for convergence rather than becoming a
+health verdict.
+
 ```toml
 [gh_app_guard]
 kind  = "effect"
@@ -101,6 +112,23 @@ dependency ordered:
 the whole durable truth. The loader rejects a setup-bearing effect that declares
 neither `valid` nor `validity = "record"`, so missing validity is not silently
 treated as reusable.
+
+`valid` composes per layer in a nesting chain, as
+[`setup`, `cleanup`, and `[health]` do in task nesting](../design/task-nesting.md).
+Every declared `[valid]` action succeeds for the composed effect only when all
+declared actions succeed; the composition is AND. A layer that declares
+`validity = "record"` contributes a successful record-only verdict, so an outer
+layer may use `validity = "record"` while an inner layer declares `[valid]`;
+that combination is valid and still evaluates the inner action.
+Within a layer's `[valid]`, `self.outputs.*` names that layer's own stored
+outputs, exactly as that layer's `cleanup` action reads them. It does not name
+another layer's outputs or the outermost projected public outputs.
+
+At load time, an effect with `setup` declares exactly one of `[valid]` and
+`validity = "record"`. `validity` accepts only the string `"record"`. On an
+effect with no `setup`, either `[valid]` or `validity` is a load error. These
+rules apply independently to every layer of a nesting chain; `[valid]` also
+obeys the ordinary action-table validation.
 
 ```toml
 [write_instruction]
@@ -409,6 +437,13 @@ configuration-language change. The one-time migration is:
 required because the value is derived from the current workflow plan and
 existing task records.
 
+`run_reason` is present whenever current-plan entries are failed or missing,
+including when the resulting `run` is `down`; it is absent only when neither
+set has entries. A list or status operation whose current plan cannot be built
+fails with the plan-resolution error rather than assigning that session a
+derived `run` value. Without a current plan, neither `down`, `up`, nor
+`degraded` is authoritative.
+
 Node-result events make setup progress and failure visible to session
 channels, event subscribers, and population-produced sessions without changing
 the meaning of population presence events. They also create one durable place
@@ -444,6 +479,17 @@ signals.
 Rejected. Persisting a validity result would create another stale latch. The
 only durable truth remains the production record; validity is re-evaluated at
 the lifecycle decision point where reuse is about to happen.
+
+### Use one syntax for validity
+
+Rejected. `[valid]` is an executable action with the ordinary action-table
+shape, while `validity = "record"` is a closed declaration that no action is
+needed because that layer's record is authoritative. Treating them as two
+forms of one table would make an action table carry a non-action marker, and a
+marker inside `[valid]` would hide the distinction between a probe that runs
+and a layer that has none. The two keys therefore express two different
+sources of the same reuse verdict; the exclusive load rule makes that choice
+unambiguous.
 
 ### Treat any failed node as `down`
 
