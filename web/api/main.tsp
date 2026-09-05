@@ -9,8 +9,8 @@ using Http;
 using OpenAPI;
 
 /// Plecture's Web API: JSON read projections of session state for the
-/// browser/desktop UI, over the existing Go service layer
-/// (`docs/adr/2026-09-06-web-api-schema-contract.md`). This is the initial,
+/// browser/desktop UI, over the existing Go service layer, per the
+/// schema-contract decision record under docs/adr/. This is the initial,
 /// version-1 slice — Session list/detail and common errors only; it does not
 /// cover Tasks, Graph, Terminal, or any mutation.
 @service(#{ title: "Plecture Web API" })

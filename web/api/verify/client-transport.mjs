@@ -1,18 +1,19 @@
 #!/usr/bin/env node
-// Exercises the same openapi-fetch call client.ts's
-// createPlectureWebApiClient makes (a bare createClient({ baseUrl }); the
-// wrapper adds no runtime logic of its own, so calling the library directly
-// here is equivalent for what this script checks) against a captured
-// fetch, to record what request path a real generated client actually
-// sends for a slash-containing session name — rather than assuming one.
+// Exercises the actual committed client.ts factory (not a re-implementation
+// of its openapi-fetch call) against a captured global fetch, to record what
+// request path it really sends for a slash-containing session name — rather
+// than assuming one. Run with --experimental-strip-types (see package.json's
+// verify:client-transport script) so this plain-JS script can import client.ts
+// directly.
 //
 // This is the client-side half of
 // app/internal/webapi/transport_test.go's server-side proof.
 import assert from "node:assert/strict";
-import createClient from "openapi-fetch";
+import { createPlectureWebApiClient } from "../client.ts";
 
 let capturedPath = null;
-const capturingFetch = async (input) => {
+const originalFetch = globalThis.fetch;
+globalThis.fetch = async (input) => {
   const url = typeof input === "string" ? input : input.url;
   capturedPath = new URL(url).pathname;
   return new Response("{}", {
@@ -21,13 +22,14 @@ const capturingFetch = async (input) => {
   });
 };
 
-const client = createClient({
-  baseUrl: "http://example.invalid/api/v1",
-  fetch: capturingFetch,
-});
-await client.GET("/sessions/{name}", {
-  params: { path: { name: "team/workspace-a" } },
-});
+try {
+  const client = createPlectureWebApiClient("http://example.invalid/api/v1");
+  await client.GET("/sessions/{name}", {
+    params: { path: { name: "team/workspace-a" } },
+  });
+} finally {
+  globalThis.fetch = originalFetch;
+}
 
 // openapi-fetch percent-encodes "/" in a path parameter's value — it does
 // not send the literal, unencoded session name. app/internal/webapi's
@@ -36,6 +38,6 @@ await client.GET("/sessions/{name}", {
 // actual behavior rather than the opposite.
 assert.equal(capturedPath, "/api/v1/sessions/team%2Fworkspace-a");
 console.log(
-  "ok - the committed client percent-encodes a slash-containing session name:",
+  "ok - the committed client.ts percent-encodes a slash-containing session name:",
   capturedPath,
 );

@@ -88,17 +88,21 @@ meant for later Web API operations to reuse rather than reinvent, per
 
 - **Names containing `/`.** Session names are the path parameter on `GET
   /sessions/{name}`. OpenAPI 3's parameter object has `allowReserved` for
-  exactly this ("send `/` unencoded rather than as `%2F`"), and the
-  TypeSpec source declares it (`routes/sessions.tsp`) — but `@typespec/openapi3`
-  1.15.0 does not currently emit it (confirmed: compiling produces
-  `@typespec/openapi3/path-reserved-expansion` warning, and the emitted
-  parameter carries no `allowReserved` key). Without that signal, a
-  generated client has no reason to send `/` unencoded, and **does not**:
+  exactly this ("send `/` unencoded rather than as `%2F`"), but
+  `@typespec/openapi3` 1.15.0 does not currently emit it — declaring it in
+  `routes/sessions.tsp` only produced a
+  `@typespec/openapi3/path-reserved-expansion` warning and an emitted
+  parameter with no `allowReserved` key, so the TypeSpec source does not
+  declare it: doing so would assert a contract guarantee the emitted
+  document never actually carries. A generated client therefore has no
+  signal to send `/` unencoded, and **does not**:
   `verify/client-transport.mjs` proves the committed `client.ts`, built on
   `openapi-fetch` 0.17.0, percent-encodes `team/workspace-a` as
-  `team%2Fworkspace-a`, matching RFC 3986's default path-segment escaping
-  regardless of `allowReserved`. The server does not depend on the client
-  doing otherwise: `app/internal/webapi/handler.go` routes `GET
+  `team%2Fworkspace-a` (RFC 3986's default path-segment escaping) — that
+  script imports and calls `client.ts`'s own `createPlectureWebApiClient`
+  against a captured `fetch`, not a reimplementation of the same
+  `openapi-fetch` call. The server does not depend on the client doing
+  otherwise: `app/internal/webapi/handler.go` routes `GET
   /sessions/{name...}` with Go's own wildcard path capture, matched against
   `net/http`'s already percent-decoded `URL.Path` — so both an unencoded `/`
   and an encoded `%2F` arrive at the handler as the same, correct, full
@@ -184,7 +188,11 @@ demonstrating and recording an actual result rather than assuming one:
   Catching this is explicit request-validation work the schema-contract ADR
   already calls out as ungenerated, and `verify/types.ts` additionally
   proves the compile-time half: `tsc --noEmit` rejects the same omission
-  when a literal is typed against the generated `SessionDetail`.
+  when a literal is typed against the generated `SessionDetail`. On the
+  encode side, `TestHandleGet_ResponseJSONOmitsEveryUnsetOptionalKey`
+  decodes an actual handler response into a bare `map[string]any` and
+  checks which keys are present — proving the wire bytes, not just the Go
+  struct's nil pointers, actually omit every unset optional field.
 - **Transport reality, not just the schema's claim.** `verify/client-transport.mjs`
   and `app/internal/webapi/transport_test.go` (see "Names containing `/`"
   above) exercise the actual committed client and a real HTTP server rather

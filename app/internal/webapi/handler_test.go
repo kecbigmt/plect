@@ -125,6 +125,42 @@ func TestHandleGet_ReturnsTheSessionDetail(t *testing.T) {
 	}
 }
 
+// The absent/empty documentation (web/api/README.md) is a claim about the
+// wire bytes a real handler response produces, not about the Go struct
+// encoding.Marshal is handed — decoding into the typed SessionDetail (as
+// TestDetailFromStatus_OmitsUnsetOptionalFields does) can't tell an omitted
+// key from one that was never checked, since a struct field simply defaults
+// to its zero value either way. Decoding the actual response body into a
+// bare map is the only way to see which keys the encoder actually wrote.
+func TestHandleGet_ResponseJSONOmitsEveryUnsetOptionalKey(t *testing.T) {
+	svc := &fakeReader{status: &service.StatusResult{
+		Identity: service.StatusIdentity{SessionName: "team/workspace-a", CreatedAt: time.Now()},
+		Runtime:  service.StatusRuntime{Run: domain.RunDown},
+	}}
+
+	rec := doRequest(t, svc, http.MethodGet, "/sessions/team/workspace-a")
+
+	var raw map[string]any
+	decodeBody(t, rec, &raw)
+
+	unsetOptionalKeys := []string{
+		"resourceId", "title", "branch", "workflow", "tag", "parentSession",
+		"children", "inputs", "health", "lastCheckedAt", "lastActivityAt",
+		"tasks", "workspaceDirPath", "message", "warnings", "destroyed",
+		"destroyedAt",
+	}
+	for _, key := range unsetOptionalKeys {
+		if _, present := raw[key]; present {
+			t.Errorf("response JSON has key %q = %v, want it omitted (not even null)", key, raw[key])
+		}
+	}
+	for _, key := range []string{"sessionName", "createdAt", "run", "workspaceDirExists"} {
+		if _, present := raw[key]; !present {
+			t.Errorf("response JSON is missing required key %q: %v", key, raw)
+		}
+	}
+}
+
 func TestHandleGet_UnknownSessionIsA404NotFoundError(t *testing.T) {
 	svc := &fakeReader{statusErr: &service.Error{Code: service.ErrSessionNotFound, Message: "no such session"}}
 
