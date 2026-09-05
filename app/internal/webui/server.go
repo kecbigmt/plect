@@ -17,6 +17,7 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/service"
 	"github.com/kecbigmt/plecture/app/internal/webapi"
+	"github.com/kecbigmt/plecture/app/internal/webui/webapp"
 	"github.com/kecbigmt/plecture/contracts/event"
 )
 
@@ -155,6 +156,12 @@ func (s *Server) Routes() http.Handler {
 	// its own per-method dispatch (and 404/405 responses) as later tasks
 	// add operations.
 	mux.Handle("/api/v1/", http.StripPrefix("/api/v1", webapi.Routes(s.svc)))
+	// Hand-written, not part of the generated Session contract above: the
+	// browser shell's own startup needs (see bootstrap.go). A literal pattern
+	// takes precedence over the "/api/v1/" subtree pattern it overlaps
+	// (net/http's ServeMux routes the most specific match), so this still
+	// resolves here regardless of registration order.
+	mux.HandleFunc("GET /api/v1/bootstrap", s.handleBootstrap)
 
 	// Lifecycle mutations. A {name...} wildcard must be the final path segment,
 	// so the action can't be a suffix after the (slash-containing) name; the
@@ -174,6 +181,13 @@ func (s *Server) Routes() http.Handler {
 
 	staticFS, _ := fs.Sub(assetsFS, "assets/static")
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(staticFS)))
+
+	// The React shell's development/review entry (see webapp/embed.go and
+	// the client/server boundary ADR). "/" above remains the production
+	// entry until the documented cutover; this path carries no
+	// compatibility promise beyond that milestone.
+	mux.Handle("GET /app/", s.handleWebApp())
+
 	return s.authMiddleware(s.csrfMiddleware(mux))
 }
 
@@ -306,4 +320,38 @@ func buttonClass(variant any) string {
 		v = "bg-primary text-primary-foreground hover:bg-primary/90"
 	}
 	return base + " " + v
+}
+
+// handleWebApp serves the embedded React shell build under /app/. A path
+// that does not resolve to a real built file (e.g. a future client-side
+// route the SPA's own router owns) falls back to index.html instead of a
+// bare 404, so a direct navigation or reload lands on the shell rather than
+// an error page — the same reason any single-page app's server needs a
+// catch-all.
+func (s *Server) handleWebApp() http.Handler {
+	dist, err := fs.Sub(webapp.FS, "dist")
+	if err != nil {
+		panic(err) // the embedded build always contains dist/; a missing one is a build bug, not a runtime condition.
+	}
+	fileServer := http.StripPrefix("/app/", http.FileServerFS(dist))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		name := strings.TrimPrefix(r.URL.Path, "/app/")
+		if name != "" {
+			if _, err := fs.Stat(dist, name); err != nil {
+				name = "" // unknown path: fall through to the directory below
+			}
+		}
+		req := r.Clone(r.Context())
+		if name == "" {
+			// The bare directory: FileServerFS serves dist/index.html for
+			// this on its own. Naming index.html explicitly here instead
+			// would hit net/http's own "/index.html -> ./" canonicalizing
+			// redirect, which a fetch() caller does not transparently follow
+			// the way a browser navigation does.
+			req.URL = &url.URL{Path: "/app/", RawQuery: r.URL.RawQuery}
+		} else {
+			req.URL = &url.URL{Path: "/app/" + name, RawQuery: r.URL.RawQuery}
+		}
+		fileServer.ServeHTTP(w, req)
+	})
 }

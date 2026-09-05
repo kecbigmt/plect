@@ -1,6 +1,7 @@
 {{- /* login: token entry, shown only when auth_token is configured. Arg is a
-       bool — true when re-rendered after a wrong token. Plain form (no htmx /
-       CSRF token needed): it is the pre-auth entry point. */ -}}
+       loginView{HasError, Next} — HasError is true when re-rendered after a
+       wrong token; Next is where a successful login should return to. Plain
+       form (no htmx / CSRF token needed): it is the pre-auth entry point. */ -}}
 {{define "login"}}<!doctype html>
 <html lang="ja">
 <head>
@@ -12,10 +13,11 @@
 <body class="bg-background text-foreground">
 <main class="mx-auto max-w-sm p-4">
   <h1 class="mb-4 text-heading font-semibold">Plecture sign in</h1>
-  {{- if . }}
+  {{- if .HasError }}
   <div role="alert" class="mb-3 flex items-center gap-2 rounded-md border border-destructive/50 bg-card p-3 text-body text-destructive">{{ template "icon-circle-alert" "size-4 shrink-0" }}<span>The token is incorrect.</span></div>
   {{- end }}
   <form method="post" action="/login" class="grid gap-3">
+    {{- if .Next }}<input type="hidden" name="next" value="{{ .Next }}">{{ end }}
     {{ template "input" (dict "id" "login-token" "name" "token" "type" "password" "label" "Auth token" "required" true) }}
     {{ template "button" (dict "type" "submit" "label" "Sign in") }}
   </form>

@@ -27,6 +27,18 @@ The bind address is set via `--host` / `--port` (`-p`), or `listen_addr` in
 `~/.config/plect-web/config.toml`. It defaults to loopback so a fresh install
 doesn't accidentally expose itself on every interface.
 
+## React shell (`/app/`)
+
+`GET /app/` serves the embedded production build of the React/TypeScript
+shell in [`web/app`](../../../web/app/README.md) (the `webapp` subpackage's
+`//go:embed`) — a development/review entry alongside this package's own
+production UI at `/`, per the client/server boundary ADR. It sits behind the
+same `authMiddleware`/`csrfMiddleware` chain as every other route, and
+`GET /api/v1/bootstrap` (`bootstrap.go`) is that shell's own hand-written
+entry for its startup needs (API version, CSRF token value) — see that
+file's doc comment for why it stays outside the generated Session contract
+in `app/internal/webapi`.
+
 ## Security (mutating operations)
 
 create / up / down / destroy change state. Defense in depth lives in `security.go`:
@@ -38,11 +50,16 @@ create / up / down / destroy change state. Defense in depth lives in `security.g
   cookie is SameSite=Strict + HttpOnly. `/login` is exempt from CSRF since it's
   pre-auth.
 - **auth_token** (optional): setting `auth_token` in `config.toml` locks the
-  whole UI behind authentication. Unauthenticated GETs redirect to `/login`;
-  everything else gets 401. Passes with `Authorization: Bearer <token>` or the
-  login cookie. `/login`, `/static`, and `/healthz` are exempt. If unset, the
-  UI trusts whatever network it's reachable on — additional defense for when
-  it's exposed over a private network / VPN.
+  whole UI behind authentication. Unauthenticated GETs redirect to
+  `/login?next=<original path>` (so a successful login returns where the
+  caller was headed); everything else gets 401. A request under `/api/`
+  always gets a JSON 401 instead of the HTML redirect/error a browser
+  navigation gets — a JSON client following a redirect would otherwise parse
+  a sign-in page as its response. Passes with `Authorization: Bearer <token>`
+  or the login cookie. `/login`, `/static`, and `/healthz` are exempt (`/app/`
+  is not — it redirects to sign-in like `/`). If unset, the UI trusts
+  whatever network it's reachable on — additional defense for when it's
+  exposed over a private network / VPN.
 
 ## Build (CSS / icons)
 

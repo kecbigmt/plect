@@ -162,12 +162,13 @@ jobs:
       # npm ships with actions/setup-node above — no new tool dependency.
       # The version comes from package.json's own packageManager field
       # rather than being retyped here, so the two cannot drift apart.
-      - name: Install the pnpm version pinned in web/api/package.json
+      - name: Install the pnpm version pinned in web/package.json
         run: npm install -g "pnpm@$(node -p "require('./package.json').packageManager.split('@')[1]")"
-        working-directory: web/api
-      - name: pnpm install
+        working-directory: web
+      # One lockfile at the workspace root covers both web/api and web/app.
+      - name: pnpm install (workspace-wide)
         run: pnpm install --frozen-lockfile
-        working-directory: web/api
+        working-directory: web
       - name: Regenerate OpenAPI + TypeScript and check for drift
         run: |
           pnpm generate
@@ -190,6 +191,46 @@ jobs:
             exit 1
           }
         working-directory: app/internal/webapi
+
+  # The client/server boundary ADR requires no Node at runtime and
+  # reproducible CI; app/internal/webui/webapp/embed.go commits the Vite
+  # build for exactly that reason (go:embed only sees what's present at
+  # compile time, and go install has no path to run pnpm build). This job is
+  # the reproducibility check for that committed build, mirroring
+  # web-api-contract's own generated-code drift check. Unconditional for the
+  # same reason web-api-contract is: web/ has no entry in the changes job's
+  # trigger map, so any change under it already forces a full run.
+  web-app-build:
+    name: web-app-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install the pnpm version pinned in web/package.json
+        run: npm install -g "pnpm@$(node -p "require('./package.json').packageManager.split('@')[1]")"
+        working-directory: web
+      - name: pnpm install (workspace-wide)
+        run: pnpm install --frozen-lockfile
+        working-directory: web
+      - name: Unit tests (vitest)
+        run: pnpm test
+        working-directory: web/app
+      - name: Build and check for drift against the committed embed
+        run: |
+          pnpm build
+          git diff --exit-code -- ../../app/internal/webui/webapp/dist/ || {
+            echo "::error::app/internal/webui/webapp/dist/ is out of date; run 'pnpm build' in web/app and commit the result." >&2
+            exit 1
+          }
+        working-directory: web/app
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: go test ./internal/webui/...
+        run: go test ./internal/webui/...
+        working-directory: app
 
   # This job covers the script-side half of a plugin's delivery contract;
   # its argv side is pinned by the channel-invocation records the
@@ -316,6 +357,7 @@ jobs:
       - instruction-orphans
       - gh-guard
       - web-api-contract
+      - web-app-build
       - plugin-script-selftests
       - build-test
       - integration-test
