@@ -194,6 +194,16 @@ Plugin-specific permission workflows do not define a universal Inbox contract.
 
 ## Implementation boundary
 
+The [schema-contract decision](../adr/2026-09-06-web-api-schema-contract.md)
+defines TypeSpec as the hand-edited HTTP contract source. OpenAPI and
+Go/TypeScript API source are generated, committed, and checked for reproducibility.
+Generated types stay within the Web boundary; handlers map them to existing
+service arguments and results. Runtime validation and authentication remain
+explicit. User-defined JSON is governed by existing configuration schemas.
+Concrete generator and OpenAPI versions require the contract verification
+described in that decision.
+
+
 The browser uses React and TypeScript, built by Vite. Tailwind CSS and
 shadcn/ui provide UI primitives. TanStack Query handles server data;
 React Flow and ELK.js handle graph interaction and layout. Dependencies are
