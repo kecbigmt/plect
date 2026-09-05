@@ -152,11 +152,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Not corepack: corepack enable's own package-manager download path
+      # currently fails signature verification against npm's registry
+      # ("Cannot find matching keyid"), independent of this repo — pnpm/action-setup
+      # installs the standalone pnpm binary directly instead.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - name: Enable corepack (reads web/api/package.json's pinned pnpm version)
-        run: corepack enable
       - name: pnpm install
         run: pnpm install --frozen-lockfile
         working-directory: web/api
