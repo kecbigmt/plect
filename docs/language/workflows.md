@@ -255,7 +255,7 @@ Population lifecycle decisions are durable events:
 
 | Event | Meaning |
 |---|---|
-| `plect.workflow_population.up` | A member was brought up. |
+| `plect.workflow_population.up` | A member's session transitioned to up. Re-admitting an already-up member records nothing. |
 | `plect.workflow_population.down` | Capacity policy selected or evaluated a down action. |
 | `plect.workflow_population.destroy` | An eligible member was destroyed. |
 | `plect.workflow_population.destroy_deferred` | The task guard blocked destruction. |

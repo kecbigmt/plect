@@ -22,15 +22,16 @@ type hookRecorder struct {
 	destroys      []string
 	blockers      []string
 	admissionSeen bool
+	sessionUp     bool
 }
 
 func (h *hookRecorder) hooks() Hooks {
 	return Hooks{
-		Up: func(_ context.Context, resource string, _ map[string]any) (string, error) {
+		Up: func(_ context.Context, resource string, _ map[string]any) (UpOutcome, error) {
 			persisted, _ := h.store.Population(h.key)
 			h.admissionSeen = persisted != nil && persisted.Members[resource] != nil
 			h.ups = append(h.ups, resource)
-			return "session-" + resource, nil
+			return UpOutcome{SessionName: "session-" + resource, AlreadyUp: h.sessionUp}, nil
 		},
 		Destroy: func(_ context.Context, session, _ string, _ bool) error {
 			h.destroys = append(h.destroys, session)
@@ -205,8 +206,8 @@ func TestPollPositiveReopensTombstoneAndAutoDestroyHonorsBlockers(t *testing.T) 
 
 func TestUpFailureLeavesAcceptedAppearancePending(t *testing.T) {
 	engine, _, accepted := engineFixture(t, false)
-	engine.hooks.Up = func(context.Context, string, map[string]any) (string, error) {
-		return "", errors.New("capacity full")
+	engine.hooks.Up = func(context.Context, string, map[string]any) (UpOutcome, error) {
+		return UpOutcome{}, errors.New("capacity full")
 	}
 	if err := engine.ApplyAppearance(context.Background(), map[string]any{"resource": "urn:case:a"}); err == nil {
 		t.Fatal("expected admission failure")
@@ -221,8 +222,8 @@ func TestUpFailureLeavesAcceptedAppearancePending(t *testing.T) {
 
 	created := accepted.Add(30 * time.Minute)
 	engine.now = func() time.Time { return created }
-	engine.hooks.Up = func(context.Context, string, map[string]any) (string, error) {
-		return "session-urn:case:a", nil
+	engine.hooks.Up = func(context.Context, string, map[string]any) (UpOutcome, error) {
+		return UpOutcome{SessionName: "session-urn:case:a"}, nil
 	}
 	if err := engine.Reconcile(context.Background()); err != nil {
 		t.Fatal(err)
@@ -235,8 +236,8 @@ func TestUpFailureLeavesAcceptedAppearancePending(t *testing.T) {
 
 func TestAdmissionProvenanceConflictEmitsConflictEvent(t *testing.T) {
 	engine, _, _ := engineFixture(t, false)
-	engine.hooks.Up = func(context.Context, string, map[string]any) (string, error) {
-		return "", &populationConflictError{session: "preexisting", reason: "owned elsewhere"}
+	engine.hooks.Up = func(context.Context, string, map[string]any) (UpOutcome, error) {
+		return UpOutcome{}, &populationConflictError{session: "preexisting", reason: "owned elsewhere"}
 	}
 	if err := engine.ApplyAppearance(context.Background(), map[string]any{"resource": "urn:case:a"}); err == nil {
 		t.Fatal("expected provenance conflict")
@@ -302,5 +303,90 @@ command = "true"
 	}
 	if len(recorder.destroys) != 1 {
 		t.Fatalf("destroys = %v, want one after inbound quiescence", recorder.destroys)
+	}
+}
+
+func upEventCount(t *testing.T, engine *Engine, session string) int {
+	t.Helper()
+	events, _, _, err := engine.log.List(session, 0, event.Filter{Types: []string{event.TypeWorkflowPopulationUp}})
+	if err != nil {
+		t.Fatalf("list up events: %v", err)
+	}
+	return len(events)
+}
+
+// An inbound event on a member re-admits it, which re-runs the idempotent Up
+// hook; only a hook call that actually took the session from not-up to up is
+// a presence change a relay downstream should see.
+func TestReadmissionRecordsUpOnlyOnRunStateTransition(t *testing.T) {
+	tests := []struct {
+		name          string
+		sessionWasUp  bool
+		wantUpRecords int
+	}{
+		{name: "session already up", sessionWasUp: true, wantUpRecords: 1},
+		{name: "session down and resuming", sessionWasUp: false, wantUpRecords: 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			engine, hooks, _ := engineFixture(t, false)
+			ctx := context.Background()
+			if err := engine.ApplyPoll(ctx, []map[string]any{{"resource": "urn:case:a"}}); err != nil {
+				t.Fatal(err)
+			}
+			if got := upEventCount(t, engine, "session-urn:case:a"); got != 1 {
+				t.Fatalf("first admission recorded %d up events, want 1", got)
+			}
+
+			hooks.sessionUp = tt.sessionWasUp
+			if _, _, _, err := engine.log.Append(event.Event{
+				SessionName: "session-urn:case:a",
+				Type:        "external.message",
+				Direction:   event.Inbound,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := engine.SweepExpiry(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if len(hooks.ups) != 2 {
+				t.Fatalf("Up hook calls = %v, want the inbound event to re-run it", hooks.ups)
+			}
+			if got := upEventCount(t, engine, "session-urn:case:a"); got != tt.wantUpRecords {
+				t.Fatalf("up events = %d, want %d", got, tt.wantUpRecords)
+			}
+		})
+	}
+}
+
+// Initial-task setup runs after the session is already up, and its failure
+// leaves the member pending for a retry whose Up hook then reports no
+// transition — so a record deferred until after setup is lost for good.
+func TestUpSurvivesAnInitialTaskFailureAndItsRetry(t *testing.T) {
+	engine, hooks, _ := engineFixture(t, false)
+	engine.definition.Population.Session.Task = "work"
+	engine.hooks.EnsureInitial = func(context.Context, string, string, string) error {
+		return errors.New("task setup failed")
+	}
+	ctx := context.Background()
+	if err := engine.ApplyPoll(ctx, []map[string]any{{"resource": "urn:case:a"}}); err == nil {
+		t.Fatal("expected initial task failure")
+	}
+
+	// The retry's Up hook finds the session the failed attempt left running.
+	hooks.sessionUp = true
+	engine.hooks.EnsureInitial = func(context.Context, string, string, string) error { return nil }
+	if err := engine.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	population, err := engine.state.Population(engine.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if population.Members["urn:case:a"].PendingUp {
+		t.Fatal("retry did not complete the admission")
+	}
+	if got := upEventCount(t, engine, "session-urn:case:a"); got != 1 {
+		t.Fatalf("up events = %d, want exactly one across the failure and its retry", got)
 	}
 }

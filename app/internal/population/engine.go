@@ -17,8 +17,17 @@ import (
 	"github.com/kecbigmt/plecture/contracts/event"
 )
 
+// UpOutcome reports what one Up hook call did. AlreadyUp is captured before
+// the hook runs, because the hook is idempotent and cannot say afterwards
+// whether it rebuilt anything: it separates a genuine presence change from a
+// re-admission of a member that never went down.
+type UpOutcome struct {
+	SessionName string
+	AlreadyUp   bool
+}
+
 type Hooks struct {
-	Up            func(context.Context, string, map[string]any) (string, error)
+	Up            func(context.Context, string, map[string]any) (UpOutcome, error)
 	Destroy       func(context.Context, string, string, bool) error
 	EnsureInitial func(context.Context, string, string, string) error
 	Blockers      func(context.Context, string) ([]string, error)
@@ -258,7 +267,7 @@ func (e *Engine) admit(ctx context.Context, member *state.PopulationMember) erro
 	if e.hooks.Up == nil {
 		return fmt.Errorf("population admission has no lifecycle hook")
 	}
-	session, err := e.hooks.Up(ctx, member.ResourceID, inputs)
+	outcome, err := e.hooks.Up(ctx, member.ResourceID, inputs)
 	if err != nil {
 		var conflict *populationConflictError
 		if errors.As(err, &conflict) {
@@ -268,6 +277,7 @@ func (e *Engine) admit(ctx context.Context, member *state.PopulationMember) erro
 		e.record(member.SessionName, event.TypeWorkflowPopulationFailure, "up", err.Error(), member.ResourceID)
 		return err
 	}
+	session := outcome.SessionName
 	now := e.now()
 	if err := e.state.UpdatePopulation(e.key, func(population *state.PopulationState) error {
 		current := population.Members[member.ResourceID]
@@ -282,13 +292,20 @@ func (e *Engine) admit(ctx context.Context, member *state.PopulationMember) erro
 	}); err != nil {
 		return err
 	}
+	// The record has to land here rather than after a completed admission:
+	// initial-task setup runs against an already-up session, and its failure
+	// leaves a retry whose up hook reports no transition, so a record deferred
+	// past it would be lost for good instead of merely delayed.
+	if !outcome.AlreadyUp {
+		e.record(session, event.TypeWorkflowPopulationUp, "up", "population member is up", member.ResourceID)
+	}
 	if e.definition.Population.Session.Task != "" && e.hooks.EnsureInitial != nil {
 		if err := e.hooks.EnsureInitial(ctx, session, e.definition.Population.Session.Task, member.ResourceID); err != nil {
 			e.record(session, event.TypeWorkflowPopulationFailure, "task_setup", err.Error(), member.ResourceID)
 			return err
 		}
 	}
-	if err := e.state.UpdatePopulation(e.key, func(population *state.PopulationState) error {
+	return e.state.UpdatePopulation(e.key, func(population *state.PopulationState) error {
 		current := population.Members[member.ResourceID]
 		if current == nil || current.Generation != member.Generation || current.Tombstoned {
 			return nil
@@ -296,11 +313,7 @@ func (e *Engine) admit(ctx context.Context, member *state.PopulationMember) erro
 		current.SessionName = session
 		current.PendingUp = false
 		return nil
-	}); err != nil {
-		return err
-	}
-	e.record(session, event.TypeWorkflowPopulationUp, "up", "population member is up", member.ResourceID)
-	return nil
+	})
 }
 
 func (e *Engine) decideDestroy(ctx context.Context, member *state.PopulationMember, reason string) error {
