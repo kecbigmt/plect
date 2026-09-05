@@ -19,16 +19,15 @@ not contain a node-level lifecycle result that a workflow channel can relay.
 The issue reports this through several concrete failures:
 
 - A runtime, credential guard, subscription, and terminal pane disappear across
-  a container replacement while produced records remain
-  (kecbigmt/plecture#368).
+  a container replacement while produced records remain (#368).
 - A runtime launch failure leaves later nodes unattempted, while the coarse run
   state can still read `up` because an earlier run-scoped node produced
-  (kecbigmt/plecture#364, kecbigmt/plecture#370).
+  (#364, #370).
 - A channel-side status can imply progress even when no runtime handoff occurs
-  (kecbigmt/plecture#363).
+  (#363).
 - A workflow population `up` event is intentionally gated on a real not-up to
   up transition, so an in-place repair cannot rely on that event to reach a
-  session's conversation channel (kecbigmt/plecture#394).
+  session's conversation channel (#394).
 
 The decisions here keep output records as records of production. They add the
 missing authorities that answer whether those records may be reused, whether a
@@ -147,6 +146,9 @@ Health continues to report the state of produced run-scoped effects between
   run-scoped node is failed.
 - `degraded`: at least one current-plan run-scoped node is produced and at
   least one current-plan run-scoped node is failed or missing.
+
+A workflow with no current-plan run-scoped nodes is `down`; `down` wins the
+empty-plan case so the three states remain mutually exclusive.
 
 A stale task entry for a node no longer in the workflow does not make the run
 degraded; stale-node cleanup already handles that lifecycle. A failed
