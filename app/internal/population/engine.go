@@ -292,13 +292,20 @@ func (e *Engine) admit(ctx context.Context, member *state.PopulationMember) erro
 	}); err != nil {
 		return err
 	}
+	// The record has to land here rather than after a completed admission:
+	// initial-task setup runs against an already-up session, and its failure
+	// leaves a retry whose up hook reports no transition, so a record deferred
+	// past it would be lost for good instead of merely delayed.
+	if !outcome.AlreadyUp {
+		e.record(session, event.TypeWorkflowPopulationUp, "up", "population member is up", member.ResourceID)
+	}
 	if e.definition.Population.Session.Task != "" && e.hooks.EnsureInitial != nil {
 		if err := e.hooks.EnsureInitial(ctx, session, e.definition.Population.Session.Task, member.ResourceID); err != nil {
 			e.record(session, event.TypeWorkflowPopulationFailure, "task_setup", err.Error(), member.ResourceID)
 			return err
 		}
 	}
-	if err := e.state.UpdatePopulation(e.key, func(population *state.PopulationState) error {
+	return e.state.UpdatePopulation(e.key, func(population *state.PopulationState) error {
 		current := population.Members[member.ResourceID]
 		if current == nil || current.Generation != member.Generation || current.Tombstoned {
 			return nil
@@ -306,14 +313,7 @@ func (e *Engine) admit(ctx context.Context, member *state.PopulationMember) erro
 		current.SessionName = session
 		current.PendingUp = false
 		return nil
-	}); err != nil {
-		return err
-	}
-	if outcome.AlreadyUp {
-		return nil
-	}
-	e.record(session, event.TypeWorkflowPopulationUp, "up", "population member is up", member.ResourceID)
-	return nil
+	})
 }
 
 func (e *Engine) decideDestroy(ctx context.Context, member *state.PopulationMember, reason string) error {

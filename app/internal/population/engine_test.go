@@ -358,3 +358,35 @@ func TestReadmissionRecordsUpOnlyOnRunStateTransition(t *testing.T) {
 		})
 	}
 }
+
+// Initial-task setup runs after the session is already up, and its failure
+// leaves the member pending for a retry whose Up hook then reports no
+// transition — so a record deferred until after setup is lost for good.
+func TestUpSurvivesAnInitialTaskFailureAndItsRetry(t *testing.T) {
+	engine, hooks, _ := engineFixture(t, false)
+	engine.definition.Population.Session.Task = "work"
+	engine.hooks.EnsureInitial = func(context.Context, string, string, string) error {
+		return errors.New("task setup failed")
+	}
+	ctx := context.Background()
+	if err := engine.ApplyPoll(ctx, []map[string]any{{"resource": "urn:case:a"}}); err == nil {
+		t.Fatal("expected initial task failure")
+	}
+
+	// The retry's Up hook finds the session the failed attempt left running.
+	hooks.sessionUp = true
+	engine.hooks.EnsureInitial = func(context.Context, string, string, string) error { return nil }
+	if err := engine.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	population, err := engine.state.Population(engine.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if population.Members["urn:case:a"].PendingUp {
+		t.Fatal("retry did not complete the admission")
+	}
+	if got := upEventCount(t, engine, "session-urn:case:a"); got != 1 {
+		t.Fatalf("up events = %d, want exactly one across the failure and its retry", got)
+	}
+}
