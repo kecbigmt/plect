@@ -76,6 +76,21 @@ func TestCSRF_ValidPasses(t *testing.T) {
 	}
 }
 
+// CSRF: a rejection under the JSON API namespace is JSON, not the HTML error
+// banner every other route gets — the same "no HTML to a JSON consumer"
+// contract the auth failure path holds.
+func TestCSRF_APIPathRejectionIsJSON(t *testing.T) {
+	rec := rawPost(t, New(&fakeService{}).Routes(), "/api/v1/bootstrap", func(r *http.Request) {
+		r.Header.Set("Origin", "http://"+r.Host)
+	})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+}
+
 // CSRF: GET pages mint a cookie and embed the token for htmx to echo back.
 func TestCSRF_GetMintsCookieAndToken(t *testing.T) {
 	rec := get(t, &fakeService{}, "/")
@@ -98,7 +113,8 @@ func authServer() http.Handler {
 	return NewWithConfig(&fakeService{status: sampleShow()}, &Config{AuthToken: "secret"}).Routes()
 }
 
-// Auth: an unauthenticated browser navigation is redirected to /login.
+// Auth: an unauthenticated browser navigation is redirected to /login,
+// carrying where it came from so a successful login returns there.
 func TestAuth_RedirectsToLogin(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
@@ -106,8 +122,37 @@ func TestAuth_RedirectsToLogin(t *testing.T) {
 	if w.Code != http.StatusSeeOther {
 		t.Fatalf("status = %d, want 303", w.Code)
 	}
-	if loc := w.Header().Get("Location"); loc != "/login" {
-		t.Errorf("Location = %q, want /login", loc)
+	if loc := w.Header().Get("Location"); loc != "/login?next=%2F" {
+		t.Errorf("Location = %q, want /login?next=%%2F", loc)
+	}
+}
+
+// Auth: the redirect's next target is the page actually requested, not just
+// the app root — the new React shell's entry included.
+func TestAuth_RedirectsToLoginWithRequestedNext(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/app/", nil)
+	w := httptest.NewRecorder()
+	authServer().ServeHTTP(w, req)
+	if loc := w.Header().Get("Location"); loc != "/login?next=%2Fapp%2F" {
+		t.Errorf("Location = %q, want /login?next=%%2Fapp%%2F", loc)
+	}
+}
+
+// Auth: a request under the JSON API namespace gets a JSON 401, never the
+// HTML redirect a browser navigation gets — a JSON client following a
+// redirect to /login would otherwise parse a sign-in page as its response.
+func TestAuth_APIPathGetsJSONNotRedirect(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/bootstrap", nil)
+	w := httptest.NewRecorder()
+	authServer().ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+	if loc := w.Header().Get("Location"); loc != "" {
+		t.Errorf("Location = %q, want no redirect", loc)
 	}
 }
 
@@ -138,6 +183,34 @@ func TestAuth_LoginSetsCookie(t *testing.T) {
 	}
 	if !ok {
 		t.Error("auth cookie not set on successful login")
+	}
+}
+
+// Auth: a successful login returns to the caller-supplied next path (e.g.
+// where authMiddleware's redirect sent them from), not always the list.
+func TestAuth_LoginRedirectsToNext(t *testing.T) {
+	body := url.Values{"token": {"secret"}, "next": {"/app/"}}.Encode()
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	authServer().ServeHTTP(w, req)
+	if loc := w.Header().Get("Location"); loc != "/app/" {
+		t.Errorf("Location = %q, want /app/", loc)
+	}
+}
+
+// Auth: an off-app next value (open-redirect bait) falls back to "/" rather
+// than being trusted.
+func TestAuth_LoginRejectsUnsafeNext(t *testing.T) {
+	for _, next := range []string{"//evil.example", "http://evil.example", "/\\evil.example"} {
+		body := url.Values{"token": {"secret"}, "next": {next}}.Encode()
+		req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		w := httptest.NewRecorder()
+		authServer().ServeHTTP(w, req)
+		if loc := w.Header().Get("Location"); loc != "/" {
+			t.Errorf("next=%q: Location = %q, want /", next, loc)
+		}
 	}
 }
 

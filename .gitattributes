@@ -1,0 +1,5 @@
+# The committed Vite production build embedded by app/internal/webui/webapp
+# (see that package's embed.go for why it is committed rather than built at
+# install time). CI regenerates and diffs it; reviewers should read
+# web/app/src/ instead.
+app/internal/webui/webapp/dist/** linguist-generated

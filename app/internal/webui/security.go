@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"strings"
@@ -51,11 +52,38 @@ func randomToken() string {
 func (s *Server) csrfMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isUnsafeMethod(r.Method) && r.URL.Path != "/login" && !validCSRF(r) {
-			s.renderStatusError(w, http.StatusForbidden, "CSRF validation failed; reload the page and retry")
+			const msg = "CSRF validation failed; reload the page and retry"
+			if isAPIPath(r.URL.Path) {
+				writeAPIAuthError(w, http.StatusForbidden, msg)
+				return
+			}
+			s.renderStatusError(w, http.StatusForbidden, msg)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isAPIPath marks the JSON API namespace. A request under it must never
+// receive an HTML redirect or error banner on an auth/CSRF failure: a JSON
+// client that followed a 303 to /login would parse that page's HTML as if
+// it were the API response it asked for — the "unexpectedly rendering HTML
+// to JSON consumers" failure the React shell's bootstrap must not hit.
+func isAPIPath(p string) bool {
+	return strings.HasPrefix(p, "/api/")
+}
+
+// writeAPIAuthError writes the minimal JSON body for a middleware-level
+// auth/CSRF rejection under isAPIPath. It deliberately does not reuse
+// webapi.ApiError's category enum: that type discriminates service.Error
+// outcomes from a request that reached the service layer, while this
+// rejection happens in front of it and carries no service.Error code.
+func writeAPIAuthError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(struct {
+		Message string `json:"message"`
+	}{Message: message})
 }
 
 func isUnsafeMethod(m string) bool {
@@ -117,13 +145,19 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// A browser navigation goes to the login form; a programmatic/htmx call
-		// gets a 401 it can surface directly.
-		if r.Method == http.MethodGet {
-			http.Redirect(w, r, "/login", http.StatusSeeOther)
+		const msg = "authentication required"
+		if isAPIPath(r.URL.Path) {
+			writeAPIAuthError(w, http.StatusUnauthorized, msg)
 			return
 		}
-		s.renderStatusError(w, http.StatusUnauthorized, "authentication required")
+		// A browser navigation goes to the login form, carrying where it was
+		// headed so a successful login returns there; a programmatic/htmx call
+		// gets a 401 it can surface directly.
+		if r.Method == http.MethodGet {
+			http.Redirect(w, r, "/login?next="+url.QueryEscape(r.URL.RequestURI()), http.StatusSeeOther)
+			return
+		}
+		s.renderStatusError(w, http.StatusUnauthorized, msg)
 	})
 }
 
@@ -146,18 +180,27 @@ func (s *Server) authed(r *http.Request) bool {
 	return false
 }
 
+// loginView is the "login" template's argument: whether to show the
+// wrong-token banner, and where a successful login should return to.
+type loginView struct {
+	HasError bool
+	Next     string
+}
+
 // handleLoginForm renders the token entry page. Registered only when an auth
 // token is configured.
 func (s *Server) handleLoginForm(w http.ResponseWriter, r *http.Request) {
-	s.render(w, "login", false)
+	s.render(w, "login", loginView{Next: safeNextPath(r.URL.Query().Get("next"))})
 }
 
 // handleLoginSubmit sets the auth cookie when the posted token matches, then
-// redirects to the list; a wrong token re-renders the form with an error.
+// redirects to next (the page authMiddleware sent the caller here from,
+// defaulting to the list); a wrong token re-renders the form with an error.
 func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
+	next := safeNextPath(r.FormValue("next"))
 	token := r.FormValue("token")
 	if subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.AuthToken)) != 1 {
-		s.renderStatus(w, http.StatusUnauthorized, "login", true)
+		s.renderStatus(w, http.StatusUnauthorized, "login", loginView{HasError: true, Next: next})
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
@@ -168,5 +211,15 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteStrictMode,
 		Secure:   r.TLS != nil,
 	})
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	http.Redirect(w, r, next, http.StatusSeeOther)
+}
+
+// safeNextPath rejects anything but an in-app absolute path, closing the
+// open redirect an unvalidated scheme-relative ("//evil.example") or
+// absolute URL target would otherwise hand the login form.
+func safeNextPath(next string) string {
+	if next == "" || next[0] != '/' || strings.HasPrefix(next, "//") || strings.Contains(next, "\\") {
+		return "/"
+	}
+	return next
 }
