@@ -10,6 +10,12 @@ serves.
 This slice covers Session list/detail and common errors only — see
 [Scope](#scope) below.
 
+`web/` is a pnpm workspace (`web/pnpm-workspace.yaml`) with this package and
+[`web/app`](../app/README.md) — the React Web UI shell — as members, sharing
+one lockfile at the workspace root. `web/app` depends on this package as
+`@plecture/web-api` via `workspace:*` for `client.ts` and the generated
+TypeScript types, rather than reimplementing its own HTTP client.
+
 ## Layout
 
 | Path | What |
@@ -28,8 +34,9 @@ This slice covers Session list/detail and common errors only — see
 After editing the TypeSpec source:
 
 ```sh
-cd web/api
-pnpm install --frozen-lockfile   # first time, or after a devDependency change
+cd web
+pnpm install --frozen-lockfile   # first time, or after a devDependency change; workspace-wide
+cd api
 pnpm generate                    # tsp compile -> generated/openapi.yaml -> generated/typescript/schema.d.ts
 ```
 
@@ -53,12 +60,13 @@ TypeSpec compiler nor Node — only editing the contract does.
 
 ## Tool versions
 
-Pinned exactly in `package.json` + `pnpm-lock.yaml` (JavaScript side) and as
-a `go get -tool` dependency in `app/go.mod` (Go side):
+Pinned exactly in `package.json` + the workspace-root `pnpm-lock.yaml`
+(JavaScript side) and as a `go get -tool` dependency in `app/go.mod` (Go
+side):
 
 | Tool | Version | Role |
 | --- | --- | --- |
-| pnpm | 10.33.0 | Package manager, matching the version already pinned elsewhere in this repo (`app/internal/webui/package.json`, `docs/design/web-ui/prototype/package.json`). |
+| pnpm | 10.33.0 | Package manager, matching the version already pinned elsewhere in this repo (`app/internal/webui/package.json`, `docs/design/web-ui/prototype/package.json`, and `web/app/package.json`). |
 | `@typespec/compiler`, `@typespec/http`, `@typespec/openapi`, `@typespec/openapi3` | 1.15.0 | TypeSpec source -> OpenAPI 3.0. |
 | `oapi-codegen` (`github.com/oapi-codegen/oapi-codegen/v2`) | v2.8.0 | OpenAPI -> Go types. |
 | `openapi-typescript` | 7.13.0 | OpenAPI -> TypeScript types. |
@@ -143,7 +151,10 @@ meant for later Web API operations to reuse rather than reinvent, per
   (`app/internal/webui/security.go`) — generation supplies no
   authentication of its own, and the mounted routes (`webui/server.go`)
   sit behind the same `authMiddleware`/`csrfMiddleware` chain as every
-  other route in that server.
+  other route in that server. The React shell's own startup needs (API
+  version, CSRF token value) are served by a separate, hand-written `GET
+  /api/v1/bootstrap` outside this generated contract — see
+  `app/internal/webui/bootstrap.go` and [`web/app/README.md`](../app/README.md).
 - **API version.** `/api/v1`, declared via `@server` in `main.tsp` and
   mounted at that literal prefix in `app/internal/webui/server.go`.
 
