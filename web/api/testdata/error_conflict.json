@@ -1,0 +1,5 @@
+{
+  "category": "conflict",
+  "code": "has_children",
+  "message": "session \"team/workspace-a\" has children; destroy them first"
+}

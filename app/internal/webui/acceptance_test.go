@@ -3,6 +3,7 @@
 package webui
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -15,6 +16,7 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/state"
+	webapiv1 "github.com/kecbigmt/plecture/app/internal/webapi/generated"
 )
 
 // mountResolverOnlyWorkspaceProvider registers a minimal global-layer workflow +
@@ -95,6 +97,73 @@ func TestAcceptance_SessionAppearsInList(t *testing.T) {
 	}
 	if body := rec.Body.String(); !strings.Contains(body, "acceptance/web-1") {
 		t.Errorf("seeded session not listed; body:\n%s", body)
+	}
+}
+
+// Acceptance: the generated-contract JSON API is reachable through the same
+// mux, at its documented version prefix, over the real service stack — not
+// just through the fake SessionReader webapi's own package tests use.
+//
+// Given a session persisted in a temp state store,
+// When GET /api/v1/sessions/<name> is served by the live service,
+// Then the response is the SessionDetail JSON for that session.
+func TestAcceptance_ApiV1SessionDetailServesSeededSession(t *testing.T) {
+	store := state.NewStore(t.TempDir())
+	sess := &domain.Session{
+		Name:             "acceptance/web-2",
+		ResourceID:       "https://github.com/acceptance/web/issues/2",
+		Branch:           "issue/2",
+		WorkspaceDirPath: "/nonexistent/workspace-dir",
+		CreatedAt:        time.Now(),
+		UpdatedAt:        time.Now(),
+	}
+	if err := store.Put(sess); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := newLiveService(cfg, store)
+	rec := get(t, svc, "/api/v1/sessions/acceptance/web-2")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body)
+	}
+	var detail webapiv1.SessionDetail
+	if err := json.NewDecoder(rec.Body).Decode(&detail); err != nil {
+		t.Fatalf("decode SessionDetail: %v", err)
+	}
+	if detail.SessionName != "acceptance/web-2" {
+		t.Errorf("SessionName = %q, want acceptance/web-2", detail.SessionName)
+	}
+	if detail.Branch == nil || *detail.Branch != "issue/2" {
+		t.Errorf("Branch = %v, want issue/2", detail.Branch)
+	}
+}
+
+// Given no session by that name exists,
+// When GET /api/v1/sessions/<name> is served,
+// Then the response is a 404 NotFoundError, not a 500 or an HTML error page.
+func TestAcceptance_ApiV1SessionDetailUnknownNameIs404(t *testing.T) {
+	store := state.NewStore(t.TempDir())
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := newLiveService(cfg, store)
+	rec := get(t, svc, "/api/v1/sessions/acceptance/missing")
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body: %s", rec.Code, rec.Body)
+	}
+	var apiErr webapiv1.NotFoundError
+	if err := json.NewDecoder(rec.Body).Decode(&apiErr); err != nil {
+		t.Fatalf("decode NotFoundError: %v", err)
+	}
+	if apiErr.Code != webapiv1.SessionNotFound {
+		t.Errorf("Code = %q, want session_not_found", apiErr.Code)
 	}
 }
 

@@ -1,0 +1,5 @@
+{
+  "category": "quota_exceeded",
+  "code": "some_future_code",
+  "message": "a category this contract does not know about yet"
+}

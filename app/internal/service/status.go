@@ -32,7 +32,11 @@ type StatusIdentity struct {
 	Tag           string                         `json:"tag,omitempty"`
 	ParentSession string                         `json:"parent_session,omitempty"`
 	Children      []string                       `json:"children,omitempty"`
-	CreatedAt     time.Time                      `json:"created_at"`
+	// Inputs is the workflow input values this session was created with —
+	// user-defined, workflow-schema-validated JSON preserved verbatim rather
+	// than interpreted here.
+	Inputs    map[string]any `json:"inputs,omitempty"`
+	CreatedAt time.Time      `json:"created_at"`
 }
 
 // StatusRuntimeTask is one run-scoped task instance's lifecycle state.
@@ -205,6 +209,7 @@ func Status(cfg *config.Config, store *state.Store, identifier string) (*StatusR
 			Tag:           sessionTag(sessionName),
 			ParentSession: session.ParentSession,
 			Children:      childNames(sessions, sessionName),
+			Inputs:        session.Inputs,
 			CreatedAt:     session.CreatedAt,
 		},
 		Runtime: StatusRuntime{

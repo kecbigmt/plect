@@ -110,6 +110,10 @@ The graph presents workflow Effect nodes and dependencies with readable,
 Dagster-inspired layout. Selecting a node opens the shared detail pane.
 Dynamic Task instances belong in Tasks, without invented workflow edges.
 
+[Graph inspection field mapping](web-ui-graph-fields.md) traces each row
+below to its existing state/service source and lists what is not yet
+available, ahead of this section's own implementation task.
+
 | Detail | Source and meaning |
 | --- | --- |
 | Structure | Resolvable workflow nodes, bindings, and depends_on |

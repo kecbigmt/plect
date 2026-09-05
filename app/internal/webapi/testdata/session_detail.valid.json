@@ -1,0 +1,19 @@
+{
+  "sessionName": "team/workspace-a",
+  "resourceId": "https://example.com/team/workspace/issues/1",
+  "branch": "issue/1",
+  "workflow": "default",
+  "children": ["team/workspace-a/review"],
+  "inputs": {
+    "reviewer": "alice",
+    "retries": 3,
+    "budget_bytes": 9007199254740993
+  },
+  "createdAt": "2026-09-06T00:00:00Z",
+  "run": "up",
+  "health": "healthy",
+  "workspaceDirExists": true,
+  "tasks": [
+    { "instance": "initial", "status": "produced" }
+  ]
+}
