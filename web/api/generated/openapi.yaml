@@ -1,0 +1,358 @@
+openapi: 3.0.0
+info:
+  title: Plecture Web API
+  description: |-
+    Authentication and CSRF protection are enforced by the same HTTP-boundary
+    middleware the existing Go-templated Web UI uses (an opaque bearer token in
+    the `plect_auth` cookie, checked outside of generated code) — this contract
+    does not add, replace, or generate that enforcement. Loopback binds with no
+    token configured require none; a configured token is mandatory on every
+    request. Unauthenticated and unauthorized requests are out of this slice's
+    documented response set, matching the existing Web UI's behavior of
+    redirecting to a login page rather than returning a JSON error body.
+  version: 0.0.0
+tags:
+  - name: Sessions
+paths:
+  /sessions:
+    get:
+      operationId: Sessions_list
+      description: List every tracked session, ordered ascending by session name (not by recency or activity). No pagination cursor in this slice — see the design's Home/cross-session views for a bounded, cursor-paged read.
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionListResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionError'
+      tags:
+        - Sessions
+  /sessions/{name}:
+    get:
+      operationId: Sessions_get
+      description: |-
+        A single session's identity and runtime facts. Session names contain `/`
+        (e.g. `acceptance/web-1`); send it percent-encoded (`%2F`) like any other
+        reserved character in a path-parameter value (RFC 3986). The server
+        accepts either an encoded or a literal `/` and resolves both to the
+        same, correct, full session name.
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: The exact session name, `/` included.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionDetail'
+        '404':
+          description: The server cannot find the requested resource.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotFoundError'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionError'
+      tags:
+        - Sessions
+security:
+  - ApiKeyAuth: []
+components:
+  schemas:
+    ApiError:
+      type: object
+      required:
+        - category
+        - message
+      properties:
+        category:
+          $ref: '#/components/schemas/ErrorCategory'
+        message:
+          type: string
+      discriminator:
+        propertyName: category
+        mapping:
+          not_found: '#/components/schemas/NotFoundError'
+          validation: '#/components/schemas/ValidationError'
+          conflict: '#/components/schemas/ConflictError'
+          execution: '#/components/schemas/ExecutionError'
+    ConflictError:
+      type: object
+      required:
+        - category
+        - code
+      properties:
+        category:
+          type: string
+          enum:
+            - conflict
+        code:
+          type: string
+          enum:
+            - has_children
+            - relation_not_allowed
+            - child_cap_exceeded
+            - child_up_in_progress
+      allOf:
+        - $ref: '#/components/schemas/ApiError'
+    ErrorCategory:
+      type: string
+      enum:
+        - validation
+        - not_found
+        - conflict
+        - execution
+    ExecutionError:
+      type: object
+      required:
+        - category
+        - code
+      properties:
+        category:
+          type: string
+          enum:
+            - execution
+        code:
+          type: string
+          enum:
+            - execution_failed
+            - not_attachable
+            - not_produced
+            - not_capturable
+      allOf:
+        - $ref: '#/components/schemas/ApiError'
+    NotFoundError:
+      type: object
+      required:
+        - category
+        - code
+      properties:
+        category:
+          type: string
+          enum:
+            - not_found
+        code:
+          type: string
+          enum:
+            - session_not_found
+      allOf:
+        - $ref: '#/components/schemas/ApiError'
+    SessionDetail:
+      type: object
+      required:
+        - run
+        - workspaceDirExists
+      properties:
+        run:
+          $ref: '#/components/schemas/SessionRunState'
+        health:
+          $ref: '#/components/schemas/SessionHealthState'
+        lastCheckedAt:
+          type: string
+          format: date-time
+        lastActivityAt:
+          type: string
+          format: date-time
+        tasks:
+          type: array
+          items:
+            $ref: '#/components/schemas/SessionTaskSummary'
+        workspaceDirPath:
+          type: string
+        workspaceDirExists:
+          type: boolean
+        message:
+          $ref: '#/components/schemas/SessionMessage'
+        warnings:
+          type: array
+          items:
+            type: string
+        destroyed:
+          type: boolean
+        destroyedAt:
+          type: string
+          format: date-time
+      allOf:
+        - $ref: '#/components/schemas/SessionIdentity'
+    SessionHealthState:
+      type: string
+      enum:
+        - healthy
+        - unhealthy
+        - undeclared
+        - stalled
+    SessionIdentity:
+      type: object
+      required:
+        - sessionName
+        - createdAt
+      properties:
+        sessionName:
+          type: string
+        resourceId:
+          type: string
+          description: 'Absent and empty are equivalent for every optional field on this model: the API omits an unset value rather than emitting it as `null` or `""`, mirroring the Go source''s `omitempty` struct tags.'
+        title:
+          type: string
+        branch:
+          type: string
+        workflow:
+          type: string
+        tag:
+          type: string
+        parentSession:
+          type: string
+        children:
+          type: array
+          items:
+            type: string
+        inputs:
+          type: object
+          additionalProperties: {}
+          description: 'Arbitrary user-defined JSON: the workflow input values this session was created with. Preserved verbatim, not reinterpreted or schema-checked by this API.'
+        createdAt:
+          type: string
+          format: date-time
+    SessionListResponse:
+      type: object
+      required:
+        - items
+        - count
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SessionSummary'
+        count:
+          type: integer
+          format: int32
+    SessionMessage:
+      type: object
+      required:
+        - text
+        - updatedAt
+      properties:
+        text:
+          type: string
+        updatedAt:
+          type: string
+          format: date-time
+    SessionRunState:
+      type: string
+      enum:
+        - up
+        - down
+    SessionRuntime:
+      type: object
+      required:
+        - run
+        - workspaceDirExists
+      properties:
+        run:
+          $ref: '#/components/schemas/SessionRunState'
+        health:
+          $ref: '#/components/schemas/SessionHealthState'
+        lastCheckedAt:
+          type: string
+          format: date-time
+        lastActivityAt:
+          type: string
+          format: date-time
+        tasks:
+          type: array
+          items:
+            $ref: '#/components/schemas/SessionTaskSummary'
+        workspaceDirPath:
+          type: string
+        workspaceDirExists:
+          type: boolean
+        message:
+          $ref: '#/components/schemas/SessionMessage'
+    SessionSummary:
+      type: object
+      required:
+        - sessionName
+        - displayStatus
+        - run
+        - resourceId
+      properties:
+        sessionName:
+          type: string
+        title:
+          type: string
+        displayStatus:
+          type: string
+          description: A human-readable status label combining run/health/message into one string for compact display; not a machine-readable status of its own (see `run` and `health`).
+        run:
+          $ref: '#/components/schemas/SessionRunState'
+        health:
+          $ref: '#/components/schemas/SessionHealthState'
+        resourceId:
+          type: string
+        lastActiveAt:
+          type: string
+          format: date-time
+        message:
+          $ref: '#/components/schemas/SessionMessage'
+        branch:
+          type: string
+        parentSession:
+          type: string
+        tasks:
+          type: array
+          items:
+            $ref: '#/components/schemas/SessionTaskSummary'
+    SessionTaskSummary:
+      type: object
+      required:
+        - instance
+        - status
+      properties:
+        instance:
+          type: string
+        status:
+          type: string
+    ValidationError:
+      type: object
+      required:
+        - category
+        - code
+      properties:
+        category:
+          type: string
+          enum:
+            - validation
+        code:
+          type: string
+          enum:
+            - invalid_url
+            - invalid_tag
+            - invalid_input
+            - repo_not_allowed
+      allOf:
+        - $ref: '#/components/schemas/ApiError'
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: cookie
+      name: plect_auth
+servers:
+  - url: /api/v1
+    description: The API is served from the same origin as the Web UI, under a fixed version prefix.
+    variables: {}

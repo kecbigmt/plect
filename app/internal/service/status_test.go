@@ -125,6 +125,32 @@ func TestStatus_SurfacesActivityProbeFaultsAsWarnings(t *testing.T) {
 	}
 }
 
+// StatusIdentity.Inputs projects the create-time workflow inputs already
+// persisted on the session (contract.Session.Inputs) — a session-identity
+// fact that predates any run, not something Runtime/Work recomputes.
+func TestStatus_IdentityCarriesCreateTimeInputs(t *testing.T) {
+	store := testStore(t)
+	cfg := aliveFixtureConfig(t, "true")
+	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", nil)
+	if err := store.Update("owner/repo-1", func(session *domain.Session) error {
+		session.Inputs = map[string]any{"reviewer": "alice", "retries": float64(3)}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Status(cfg, store, "owner/repo-1")
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if got := result.Identity.Inputs["reviewer"]; got != "alice" {
+		t.Errorf("Identity.Inputs[\"reviewer\"] = %v, want alice", got)
+	}
+	if got := result.Identity.Inputs["retries"]; got != float64(3) {
+		t.Errorf("Identity.Inputs[\"retries\"] = %v, want 3", got)
+	}
+}
+
 // Summarize is the default `plect status --json` projection: only instances
 // with a done_when, and only the leaf/chain fields an orchestrator needs —
 // never the instance's full (unfiltered) outputs map.

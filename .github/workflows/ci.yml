@@ -12,6 +12,7 @@ concurrency:
 env:
   GO_VERSION: "1.25.6"
   PYTHON_VERSION: "3.12"
+  NODE_VERSION: "22.13"
 
 jobs:
   # Core never imports plugins and plugins never import core, and both
@@ -138,6 +139,58 @@ jobs:
       - name: Prove the gh_app_guard shim mints before allow, denies before mint, and scopes GH_TOKEN to the delegated gh
         run: ./scripts/gh-app-guard_selftest.sh
 
+  # The schema-contract decision record under docs/adr/ requires CI to
+  # check schema compilation, reproducible Go/TypeScript generation, and
+  # generated-code compilation — this job is that check.
+  # Unconditional like the other whole-repo invariant checks above: the
+  # TypeSpec source lives outside app/ and contracts/, so the changes job's
+  # per-module trigger map has no entry for it, and this job is cheap
+  # enough that gating it on a path filter is not worth the added
+  # complexity in that map.
+  web-api-contract:
+    name: web-api-contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      # Not corepack: corepack enable's own package-manager download path
+      # currently fails signature verification against npm's registry
+      # ("Cannot find matching keyid"), independent of this repo. `npm
+      # install -g` uses npm's own, unrelated package-integrity check, and
+      # npm ships with actions/setup-node above — no new tool dependency.
+      # The version comes from package.json's own packageManager field
+      # rather than being retyped here, so the two cannot drift apart.
+      - name: Install the pnpm version pinned in web/api/package.json
+        run: npm install -g "pnpm@$(node -p "require('./package.json').packageManager.split('@')[1]")"
+        working-directory: web/api
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+        working-directory: web/api
+      - name: Regenerate OpenAPI + TypeScript and check for drift
+        run: |
+          pnpm generate
+          git diff --exit-code -- generated/ || {
+            echo "::error::web/api/generated/ is out of date; run 'pnpm generate' in web/api and commit the result." >&2
+            exit 1
+          }
+        working-directory: web/api
+      - name: Type-check and run the fixture round-trip script
+        run: pnpm verify
+        working-directory: web/api
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Regenerate Go types and check for drift
+        run: |
+          go tool oapi-codegen -config oapi-codegen.yaml ../../../web/api/generated/openapi.yaml
+          git diff --exit-code -- generated/ || {
+            echo "::error::app/internal/webapi/generated/ is out of date; run 'go generate ./internal/webapi/...' in app and commit the result." >&2
+            exit 1
+          }
+        working-directory: app/internal/webapi
+
   # This job covers the script-side half of a plugin's delivery contract;
   # its argv side is pinned by the channel-invocation records the
   # integration-test job regenerates from the shipped declarations. It is
@@ -262,6 +315,7 @@ jobs:
       - comment-references
       - instruction-orphans
       - gh-guard
+      - web-api-contract
       - plugin-script-selftests
       - build-test
       - integration-test

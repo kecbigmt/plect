@@ -1,0 +1,11 @@
+{
+  "sessionName": "team/workspace-a",
+  "resourceId": null,
+  "branch": null,
+  "children": null,
+  "inputs": null,
+  "message": null,
+  "createdAt": "2026-09-06T00:00:00Z",
+  "run": "up",
+  "workspaceDirExists": true
+}

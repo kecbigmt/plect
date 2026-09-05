@@ -1,0 +1,26 @@
+{
+  "name": "@plecture/web-api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "TypeSpec source for the Plecture Web API contract, and the OpenAPI/TypeScript artifacts generated from it.",
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "compile": "tsp compile .",
+    "generate": "pnpm compile && pnpm generate:typescript",
+    "generate:typescript": "openapi-typescript generated/openapi.yaml -o generated/typescript/schema.d.ts",
+    "typecheck": "tsc --noEmit",
+    "verify:fixtures": "node verify/fixtures.mjs",
+    "verify:client-transport": "node --experimental-strip-types verify/client-transport.mjs",
+    "verify": "pnpm typecheck && pnpm verify:fixtures && pnpm verify:client-transport"
+  },
+  "devDependencies": {
+    "@typespec/compiler": "1.15.0",
+    "@typespec/http": "1.15.0",
+    "@typespec/openapi": "1.15.0",
+    "@typespec/openapi3": "1.15.0",
+    "openapi-typescript": "7.13.0",
+    "openapi-fetch": "0.17.0",
+    "typescript": "5.9.3"
+  }
+}

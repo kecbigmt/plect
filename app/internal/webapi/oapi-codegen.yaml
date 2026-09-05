@@ -1,0 +1,8 @@
+# Regenerate with: go generate ./app/internal/webapi/...
+# (see web/api/README.md for the full TypeSpec -> OpenAPI -> Go/TypeScript chain)
+package: webapiv1
+generate:
+  models: true
+output: generated/types.gen.go
+output-options:
+  skip-prune: true

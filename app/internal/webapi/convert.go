@@ -1,0 +1,149 @@
+package webapi
+
+import (
+	"time"
+
+	"github.com/kecbigmt/plecture/app/internal/domain"
+	"github.com/kecbigmt/plecture/app/internal/service"
+	webapiv1 "github.com/kecbigmt/plecture/app/internal/webapi/generated"
+)
+
+// summaryFromListEntry projects one service.List row onto the wire's
+// SessionSummary. A separate, smaller conversion from detailFromStatus
+// deliberately: the list is built for every session on every poll, and
+// carries no Identity/Runtime detail beyond what ListEntry already computed.
+func summaryFromListEntry(e service.ListEntry) webapiv1.SessionSummary {
+	return webapiv1.SessionSummary{
+		SessionName:   e.SessionName,
+		Title:         optionalString(e.Title),
+		DisplayStatus: e.DisplayStatus,
+		Run:           runState(e.Run),
+		Health:        healthState(e.Health),
+		ResourceId:    e.ResourceID,
+		LastActiveAt:  e.LastActiveAt,
+		Message:       message(e.Message),
+		Branch:        optionalString(e.Branch),
+		ParentSession: optionalString(e.ParentSession),
+		Tasks:         taskSummariesFromInstances(e.Tasks),
+	}
+}
+
+// detailFromStatus projects service.Status's Identity and Runtime layers
+// onto the wire's SessionDetail. Work (Tasks detail) and Flow (events) are
+// out of this slice's scope — see docs/design/web-ui.md's Tasks/Conversation
+// sections, planned for a later task.
+func detailFromStatus(r *service.StatusResult) webapiv1.SessionDetail {
+	id := r.Identity
+	rt := r.Runtime
+	return webapiv1.SessionDetail{
+		SessionName:        id.SessionName,
+		ResourceId:         optionalString(id.ResourceID),
+		Title:              optionalString(id.Title),
+		Branch:             optionalString(id.Branch),
+		Workflow:           optionalString(id.Workflow),
+		Tag:                optionalString(id.Tag),
+		ParentSession:      optionalString(id.ParentSession),
+		Children:           optionalStrings(id.Children),
+		Inputs:             optionalJSON(id.Inputs),
+		CreatedAt:          id.CreatedAt,
+		Run:                runState(rt.Run),
+		Health:             healthState(rt.Health),
+		LastCheckedAt:      optionalTime(rt.LastCheckedAt),
+		LastActivityAt:     optionalTime(rt.LastActivityAt),
+		Tasks:              taskSummariesFromRuntime(rt.Tasks),
+		WorkspaceDirPath:   optionalString(rt.WorkspaceDirPath),
+		WorkspaceDirExists: rt.WorkspaceDirExists,
+		Message:            message(rt.Message),
+		Warnings:           optionalStrings(r.Warnings),
+		Destroyed:          optionalBool(r.Destroyed),
+		DestroyedAt:        optionalTime(r.DestroyedAt),
+	}
+}
+
+func runState(s domain.RunState) webapiv1.SessionRunState {
+	return webapiv1.SessionRunState(s)
+}
+
+// healthState returns nil for the zero HealthState rather than the empty
+// string: the wire field is optional, and an empty enum value is not one of
+// SessionHealthState's members.
+func healthState(s domain.HealthState) *webapiv1.SessionHealthState {
+	if s == "" {
+		return nil
+	}
+	v := webapiv1.SessionHealthState(s)
+	return &v
+}
+
+func message(m *domain.Message) *webapiv1.SessionMessage {
+	if m == nil {
+		return nil
+	}
+	return &webapiv1.SessionMessage{Text: m.Text, UpdatedAt: m.UpdatedAt}
+}
+
+func taskSummariesFromRuntime(tasks []service.StatusRuntimeTask) *[]webapiv1.SessionTaskSummary {
+	if len(tasks) == 0 {
+		return nil
+	}
+	out := make([]webapiv1.SessionTaskSummary, len(tasks))
+	for i, t := range tasks {
+		out[i] = webapiv1.SessionTaskSummary{Instance: t.Instance, Status: t.Status}
+	}
+	return &out
+}
+
+// taskSummariesFromInstances discards TaskInstanceView's outputs/done_when
+// detail — the list endpoint's task rollup is bare lifecycle status, matching
+// service.StatusRuntimeTask's shape on the Status endpoint.
+func taskSummariesFromInstances(tasks []service.TaskInstanceView) *[]webapiv1.SessionTaskSummary {
+	if len(tasks) == 0 {
+		return nil
+	}
+	out := make([]webapiv1.SessionTaskSummary, len(tasks))
+	for i, t := range tasks {
+		out[i] = webapiv1.SessionTaskSummary{Instance: t.Instance, Status: t.Status}
+	}
+	return &out
+}
+
+func optionalString(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+func optionalStrings(s []string) *[]string {
+	if len(s) == 0 {
+		return nil
+	}
+	return &s
+}
+
+func optionalBool(b bool) *bool {
+	if !b {
+		return nil
+	}
+	return &b
+}
+
+// optionalTime returns nil for a zero time.Time — the wire field is
+// omitempty, and a zero value here means "never observed", not epoch.
+func optionalTime(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
+}
+
+// optionalJSON returns nil for an empty/nil map so the wire field is
+// omitted rather than rendered as `{}`, matching every other optional field
+// on this model.
+func optionalJSON(m map[string]any) *map[string]interface{} {
+	if len(m) == 0 {
+		return nil
+	}
+	v := map[string]interface{}(m)
+	return &v
+}

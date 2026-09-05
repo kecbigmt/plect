@@ -16,6 +16,7 @@ import (
 
 	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/service"
+	"github.com/kecbigmt/plecture/app/internal/webapi"
 	"github.com/kecbigmt/plecture/contracts/event"
 )
 
@@ -146,6 +147,14 @@ func (s *Server) Routes() http.Handler {
 	// to the browser (same-origin, so the browser holds no bus token / UDS).
 	mux.HandleFunc("GET /events/stream", s.handleSessionEventsStream)
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
+
+	// The generated-contract JSON API (see the schema-contract ADR under
+	// docs/adr/): Session list/detail and common errors only, at this
+	// slice's fixed version prefix. s.svc already implements
+	// webapi.SessionReader. No method restriction here — webapi.Routes owns
+	// its own per-method dispatch (and 404/405 responses) as later tasks
+	// add operations.
+	mux.Handle("/api/v1/", http.StripPrefix("/api/v1", webapi.Routes(s.svc)))
 
 	// Lifecycle mutations. A {name...} wildcard must be the final path segment,
 	// so the action can't be a suffix after the (slash-containing) name; the
