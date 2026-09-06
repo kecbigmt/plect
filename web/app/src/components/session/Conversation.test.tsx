@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
@@ -90,6 +90,29 @@ describe("Conversation", () => {
     renderConversation("team/a");
     expect(await screen.findByText("session created")).toBeInTheDocument();
     expect(screen.getByText("lifecycle.created")).toBeInTheDocument();
+  });
+
+  it("keeps type and summary visible for an unrecognized inbound event with a body, not just its rendered text", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        events: [
+          {
+            id: "01",
+            sessionName: "team/a",
+            time: "2026-01-01T00:00:00Z",
+            type: "acme.chat_message",
+            source: "acme-provider",
+            direction: "inbound",
+            summary: "acme message received",
+            body: "Hello from acme",
+          },
+        ],
+      }),
+    );
+    renderConversation("team/a");
+    expect(await screen.findByText("Hello from acme")).toBeInTheDocument();
+    expect(screen.getByText("acme.chat_message")).toBeInTheDocument();
+    expect(screen.getByText("acme message received")).toBeInTheDocument();
   });
 
   it("keeps an unrecognized event type on the compact path with its metadata visible", async () => {
@@ -227,5 +250,66 @@ describe("Conversation", () => {
     await screen.findByText("second");
 
     expect(screen.getByText("first")).toBe(first);
+  });
+
+  it("stops offering Load more once a page comes back empty, even though the server still returns a cursor", async () => {
+    // The read contract hands back nextCursor whenever the log exists at
+    // all, independent of whether that page had any events — so a
+    // caught-up tail still carries one. Following it anyway would turn
+    // Load more into a control that never terminates.
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url.includes("cursor=cur-1")) {
+        return Promise.resolve(jsonResponse({ events: [], nextCursor: "cur-1" }));
+      }
+      return Promise.resolve(
+        jsonResponse({
+          events: [
+            { id: "01", sessionName: "team/a", time: "2026-01-01T00:00:01Z", type: "user.note", source: "cli", direction: "internal", summary: "first" },
+          ],
+          nextCursor: "cur-1",
+        }),
+      );
+    });
+    const user = userEvent.setup();
+    renderConversation("team/a");
+
+    await screen.findByText("first");
+    await user.click(screen.getByRole("button", { name: /load more/i }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /load more/i })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("restores a session's own scroll position after switching away and back", async () => {
+    // A Response body can only be read once; mockResolvedValue would hand
+    // out the same already-consumed Response for every one of the three
+    // fetches this test triggers, so each call gets a fresh one instead.
+    vi.mocked(fetch).mockImplementation(() => Promise.resolve(jsonResponse({ events: [] })));
+    const queryClient = new QueryClient();
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}>
+        <Conversation sessionName="team/a" onSelectSession={vi.fn()} />
+      </QueryClientProvider>,
+    );
+
+    const region = await screen.findByRole("region", { name: /conversation/i });
+    fireEvent.scroll(region, { target: { scrollTop: 120 } });
+
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <Conversation sessionName="team/b" onSelectSession={vi.fn()} />
+      </QueryClientProvider>,
+    );
+    await screen.findByRole("region", { name: /conversation/i });
+
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <Conversation sessionName="team/a" onSelectSession={vi.fn()} />
+      </QueryClientProvider>,
+    );
+    const restoredRegion = await screen.findByRole("region", { name: /conversation/i });
+    expect(restoredRegion.scrollTop).toBe(120);
   });
 });

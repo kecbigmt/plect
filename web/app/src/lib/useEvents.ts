@@ -17,11 +17,15 @@ export function useSessionEvents(sessionName: string | null) {
     queryFn: ({ pageParam }) =>
       fetchEventPage(sessionName!, { cursor: pageParam, order: "asc" }),
     initialPageParam: undefined as string | undefined,
-    // The read contract's ascending nextCursor is a forward log position,
-    // not a snapshot (docs/design/web-ui-event-history.md): paginating
-    // forward with it can only ever surface more of the same history, never
-    // "older" events relative to what is already loaded.
-    getNextPageParam: (lastPage) => lastPage.nextCursor,
+    // The read contract hands back nextCursor whenever the session's log
+    // exists at all, independent of whether that particular page had any
+    // events (docs/design/web-ui-event-history.md) — so a page that comes
+    // back empty means "caught up for now," not "no cursor was issued".
+    // Stopping there rather than following that cursor keeps Load more from
+    // becoming a control that re-fetches the same empty tail forever; this
+    // PR renders history pages only; a live subscription (#407) is what
+    // picks up new events past this point.
+    getNextPageParam: (lastPage) => (lastPage.events.length === 0 ? undefined : lastPage.nextCursor),
     enabled: sessionName !== null,
     retry: false,
   });

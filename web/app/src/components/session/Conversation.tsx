@@ -1,11 +1,15 @@
+import { useLayoutEffect, useRef } from "react";
+
 import type { SessionEvent } from "@/lib/eventsApi";
 import { dedupeEventsById, useSessionEvents } from "@/lib/useEvents";
 import { Button } from "@/components/ui/button";
 
-// key={sessionName} forces a remount on every selection change, matching
-// DetailPane's own pattern: switching sessions resets straight to a fresh
-// loading state instead of a stale timeline lingering while the new
-// session's first page is still in flight.
+// Unlike DetailPane's key={sessionName} remount, this component never
+// unmounts on selection change: a fresh queryKey already renders isPending
+// with no data (TanStack Query's own default), so nothing here needs a
+// remount to avoid leaking a previous session's events, and keeping the one
+// scroll container alive across a switch is what lets restoreScrollPosition
+// below put a revisited session back where its reading left off.
 export function Conversation({
   sessionName,
   onSelectSession,
@@ -13,19 +17,27 @@ export function Conversation({
   sessionName: string;
   onSelectSession: (name: string) => void;
 }) {
-  return (
-    <SessionConversation key={sessionName} sessionName={sessionName} onSelectSession={onSelectSession} />
-  );
-}
-
-function SessionConversation({
-  sessionName,
-  onSelectSession,
-}: {
-  sessionName: string;
-  onSelectSession: (name: string) => void;
-}) {
   const events = useSessionEvents(sessionName);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // Keyed by session name so switching away and back restores that
+  // session's own offset instead of carrying over whichever session was
+  // viewed last; survives because this component itself never remounts.
+  const scrollPositions = useRef<Map<string, number>>(new Map());
+  // Guards against re-applying a saved offset on every render once a
+  // session has already been restored (e.g. a background refetch, or
+  // fetchNextPage appending a page) — only an actual switch to a
+  // not-yet-restored session should move the scroll position.
+  const restoredForRef = useRef<string | null>(null);
+
+  useLayoutEffect(() => {
+    if (events.isPending || restoredForRef.current === sessionName) {
+      return;
+    }
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollPositions.current.get(sessionName) ?? 0;
+    }
+    restoredForRef.current = sessionName;
+  }, [sessionName, events.isPending]);
 
   if (events.isPending) {
     return (
@@ -49,7 +61,13 @@ function SessionConversation({
     // appending a loaded page never disturbs the reading position: new
     // events land after existing ones in normal document flow, and nothing
     // here scrolls the view on its own.
-    <div role="region" aria-label="Conversation" className="flex min-h-0 flex-1 flex-col overflow-auto p-3">
+    <div
+      ref={scrollRef}
+      role="region"
+      aria-label="Conversation"
+      className="flex min-h-0 flex-1 flex-col overflow-auto p-3"
+      onScroll={(e) => scrollPositions.current.set(sessionName, e.currentTarget.scrollTop)}
+    >
       {items.length === 0 ? (
         <p className="text-sm text-muted-foreground">No events recorded yet.</p>
       ) : (
@@ -83,8 +101,9 @@ function SessionConversation({
 // sensibly: a body-bearing inbound/outbound record (a user message, a
 // delivered instruction, a pushed kick) reads as a message; everything
 // else (internal records, and inbound/outbound records with no body, such
-// as a bare terminal.done push) is a compact row that still surfaces its
-// type, source, summary, body, and metadata verbatim.
+// as a bare terminal.done push) is a compact row. Both branches keep type,
+// source, summary, body, and metadata visible regardless of whether this
+// UI recognizes the type — only the layout differs.
 function isUtterance(event: SessionEvent): boolean {
   return (event.direction === "inbound" || event.direction === "outbound") && !!event.body?.trim();
 }
@@ -106,10 +125,11 @@ function EventRow({
       <article className="rounded-md border border-border p-2 text-sm">
         <header className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
           <span>
-            {event.source} · {event.direction}
+            <code>{event.type}</code> · {event.source} · {event.direction}
           </span>
           <time dateTime={event.time}>{time}</time>
         </header>
+        {event.summary && <p className="mt-0.5 text-xs font-medium text-foreground">{event.summary}</p>}
         <p className="mt-1 whitespace-pre-wrap break-words">{event.body}</p>
         {originSession && originSession !== sessionName && (
           <OriginNote origin={originSession} receiver={sessionName} onSelectSession={onSelectSession} />
