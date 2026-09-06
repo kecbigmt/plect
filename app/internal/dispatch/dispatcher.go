@@ -17,10 +17,10 @@ import (
 	"github.com/kecbigmt/plecture/contracts/event"
 )
 
-// dispatcherConsumer is this consumer's cursor name. The cursor is durable per
+// dispatcherConsumer is this consumer's cursor kind. The cursor is durable per
 // session, so it survives down/up; it assumes a single resident process (one
 // dispatcher per session process-wide).
-const dispatcherConsumer = "dispatcher"
+const dispatcherConsumer = "delivery"
 
 // fallbackDrain re-drains even if a wake was missed/coalesced — correctness rests
 // on the durable cursor, so this only bounds worst-case latency, not delivery.

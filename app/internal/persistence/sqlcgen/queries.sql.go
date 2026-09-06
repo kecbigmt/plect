@@ -95,16 +95,16 @@ func (q *Queries) DeleteUpReservation(ctx context.Context, childSessionName stri
 }
 
 const getEventCursor = `-- name: GetEventCursor :one
-SELECT next_sequence FROM event_cursors WHERE stream_id = ? AND cursor_name = ?
+SELECT next_sequence FROM event_cursors WHERE stream_id = ? AND kind = ?
 `
 
 type GetEventCursorParams struct {
-	StreamID   string
-	CursorName string
+	StreamID string
+	Kind     string
 }
 
 func (q *Queries) GetEventCursor(ctx context.Context, arg GetEventCursorParams) (int64, error) {
-	row := q.db.QueryRowContext(ctx, getEventCursor, arg.StreamID, arg.CursorName)
+	row := q.db.QueryRowContext(ctx, getEventCursor, arg.StreamID, arg.Kind)
 	var next_sequence int64
 	err := row.Scan(&next_sequence)
 	return next_sequence, err
@@ -169,31 +169,31 @@ func (q *Queries) GetSession(ctx context.Context, name string) (Session, error) 
 }
 
 const hasEventCursor = `-- name: HasEventCursor :one
-SELECT COUNT(*) FROM event_cursors WHERE stream_id = ? AND cursor_name = ?
+SELECT COUNT(*) FROM event_cursors WHERE stream_id = ? AND kind = ?
 `
 
 type HasEventCursorParams struct {
-	StreamID   string
-	CursorName string
+	StreamID string
+	Kind     string
 }
 
 func (q *Queries) HasEventCursor(ctx context.Context, arg HasEventCursorParams) (int64, error) {
-	row := q.db.QueryRowContext(ctx, hasEventCursor, arg.StreamID, arg.CursorName)
+	row := q.db.QueryRowContext(ctx, hasEventCursor, arg.StreamID, arg.Kind)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
 }
 
 const insertEvent = `-- name: InsertEvent :exec
-INSERT INTO events (event_id, stream_id, sequence, recorded_at, type, source, direction, summary, body, metadata_json)
+INSERT INTO events (id, stream_id, sequence, time, type, source, direction, summary, body, metadata_json)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertEventParams struct {
-	EventID      string
+	ID           string
 	StreamID     string
 	Sequence     int64
-	RecordedAt   string
+	Time         string
 	Type         string
 	Source       string
 	Direction    string
@@ -204,10 +204,10 @@ type InsertEventParams struct {
 
 func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) error {
 	_, err := q.db.ExecContext(ctx, insertEvent,
-		arg.EventID,
+		arg.ID,
 		arg.StreamID,
 		arg.Sequence,
-		arg.RecordedAt,
+		arg.Time,
 		arg.Type,
 		arg.Source,
 		arg.Direction,
@@ -438,7 +438,7 @@ func (q *Queries) ListEventStreamSessions(ctx context.Context) ([]string, error)
 }
 
 const listEventsFromByStream = `-- name: ListEventsFromByStream :many
-SELECT event_id, sequence, recorded_at, type, source, direction, summary, body, metadata_json
+SELECT id, sequence, time, type, source, direction, summary, body, metadata_json
 FROM events WHERE stream_id = ? AND sequence >= ? ORDER BY sequence
 `
 
@@ -448,9 +448,9 @@ type ListEventsFromByStreamParams struct {
 }
 
 type ListEventsFromByStreamRow struct {
-	EventID      string
+	ID           string
 	Sequence     int64
-	RecordedAt   string
+	Time         string
 	Type         string
 	Source       string
 	Direction    string
@@ -469,9 +469,9 @@ func (q *Queries) ListEventsFromByStream(ctx context.Context, arg ListEventsFrom
 	for rows.Next() {
 		var i ListEventsFromByStreamRow
 		if err := rows.Scan(
-			&i.EventID,
+			&i.ID,
 			&i.Sequence,
-			&i.RecordedAt,
+			&i.Time,
 			&i.Type,
 			&i.Source,
 			&i.Direction,
@@ -867,18 +867,18 @@ func (q *Queries) SessionParent(ctx context.Context, name string) (sql.NullStrin
 }
 
 const upsertEventCursor = `-- name: UpsertEventCursor :exec
-INSERT INTO event_cursors (stream_id, cursor_name, next_sequence) VALUES (?, ?, ?)
-ON CONFLICT(stream_id, cursor_name) DO UPDATE SET next_sequence = excluded.next_sequence
+INSERT INTO event_cursors (stream_id, kind, next_sequence) VALUES (?, ?, ?)
+ON CONFLICT(stream_id, kind) DO UPDATE SET next_sequence = excluded.next_sequence
 `
 
 type UpsertEventCursorParams struct {
 	StreamID     string
-	CursorName   string
+	Kind         string
 	NextSequence int64
 }
 
 func (q *Queries) UpsertEventCursor(ctx context.Context, arg UpsertEventCursorParams) error {
-	_, err := q.db.ExecContext(ctx, upsertEventCursor, arg.StreamID, arg.CursorName, arg.NextSequence)
+	_, err := q.db.ExecContext(ctx, upsertEventCursor, arg.StreamID, arg.Kind, arg.NextSequence)
 	return err
 }
 

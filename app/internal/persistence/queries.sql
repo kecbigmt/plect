@@ -190,19 +190,19 @@ SELECT session_name FROM event_streams ORDER BY session_name;
 SELECT COALESCE(MAX(sequence), 0) + 1 FROM events WHERE stream_id = ?;
 
 -- name: InsertEvent :exec
-INSERT INTO events (event_id, stream_id, sequence, recorded_at, type, source, direction, summary, body, metadata_json)
+INSERT INTO events (id, stream_id, sequence, time, type, source, direction, summary, body, metadata_json)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: ListEventsFromByStream :many
-SELECT event_id, sequence, recorded_at, type, source, direction, summary, body, metadata_json
+SELECT id, sequence, time, type, source, direction, summary, body, metadata_json
 FROM events WHERE stream_id = ? AND sequence >= ? ORDER BY sequence;
 
 -- name: HasEventCursor :one
-SELECT COUNT(*) FROM event_cursors WHERE stream_id = ? AND cursor_name = ?;
+SELECT COUNT(*) FROM event_cursors WHERE stream_id = ? AND kind = ?;
 
 -- name: GetEventCursor :one
-SELECT next_sequence FROM event_cursors WHERE stream_id = ? AND cursor_name = ?;
+SELECT next_sequence FROM event_cursors WHERE stream_id = ? AND kind = ?;
 
 -- name: UpsertEventCursor :exec
-INSERT INTO event_cursors (stream_id, cursor_name, next_sequence) VALUES (?, ?, ?)
-ON CONFLICT(stream_id, cursor_name) DO UPDATE SET next_sequence = excluded.next_sequence;
+INSERT INTO event_cursors (stream_id, kind, next_sequence) VALUES (?, ?, ?)
+ON CONFLICT(stream_id, kind) DO UPDATE SET next_sequence = excluded.next_sequence;

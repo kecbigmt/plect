@@ -9,10 +9,10 @@ import (
 )
 
 type Event struct {
-	EventID      string
+	ID           string
 	StreamID     string
 	Sequence     int64
-	RecordedAt   string
+	Time         string
 	Type         string
 	Source       string
 	Direction    string
@@ -23,7 +23,7 @@ type Event struct {
 
 type EventCursor struct {
 	StreamID     string
-	CursorName   string
+	Kind         string
 	NextSequence int64
 }
 

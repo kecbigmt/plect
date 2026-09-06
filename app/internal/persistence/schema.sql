@@ -213,10 +213,10 @@ CREATE TABLE event_streams (
 CREATE UNIQUE INDEX event_streams_session_name ON event_streams(session_name);
 
 CREATE TABLE events (
-    event_id TEXT PRIMARY KEY,
+    id TEXT PRIMARY KEY,
     stream_id TEXT NOT NULL REFERENCES event_streams(id),
     sequence INTEGER NOT NULL CHECK (sequence > 0),
-    recorded_at TEXT NOT NULL,
+    time TEXT NOT NULL,
     type TEXT NOT NULL,
     source TEXT NOT NULL,
     direction TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound', 'internal')),
@@ -226,17 +226,17 @@ CREATE TABLE events (
 );
 
 CREATE UNIQUE INDEX events_stream_id_sequence ON events(stream_id, sequence);
-CREATE INDEX events_stream_id_event_id_idx ON events(stream_id, event_id);
+CREATE INDEX events_stream_id_id_idx ON events(stream_id, id);
 
--- One reader-position table for every named cursor over a stream. dispatcher
--- and reactor are delivery commitments (at-least-once, preserved by a later
--- import); heartbeat_inbound is an observation high-water mark with no
--- delivery meaning (may be reset to the tail). next_sequence is exclusive
+-- One reader-position table for every named cursor over a stream. delivery
+-- and tick are delivery commitments (at-least-once, preserved by a later
+-- import); heartbeat is an observation high-water mark with no delivery
+-- meaning (may be reset to the tail). next_sequence is exclusive
 -- (event.Cursor.Off); unlike events.sequence, 0 is valid (nothing consumed
 -- yet). ON DELETE CASCADE: a cursor has no meaning once its stream is gone.
 CREATE TABLE event_cursors (
     stream_id TEXT NOT NULL REFERENCES event_streams(id) ON DELETE CASCADE,
-    cursor_name TEXT NOT NULL CHECK (cursor_name IN ('dispatcher', 'reactor', 'heartbeat_inbound')),
+    kind TEXT NOT NULL CHECK (kind IN ('delivery', 'tick', 'heartbeat')),
     next_sequence INTEGER NOT NULL CHECK (next_sequence >= 0),
-    PRIMARY KEY (stream_id, cursor_name)
+    PRIMARY KEY (stream_id, kind)
 );

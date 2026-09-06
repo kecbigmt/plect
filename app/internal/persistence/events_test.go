@@ -187,7 +187,7 @@ func TestEventStreamID_EmptyUntilFirstTouchThenStable(t *testing.T) {
 func TestEventCursor_RoundTripAndHasDistinguishesNeverFromZero(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
-	const session, cursorName = "s1", "dispatcher"
+	const session, cursorName = "s1", "delivery"
 
 	has, err := db.HasEventCursor(ctx, session, cursorName)
 	if err != nil || has {
@@ -218,7 +218,7 @@ func TestEventCursor_RoundTripAndHasDistinguishesNeverFromZero(t *testing.T) {
 func TestSetEventCursor_CreatesStreamWhenNoEventExistsYet(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
-	const session, cursorName = "s1", "dispatcher"
+	const session, cursorName = "s1", "delivery"
 
 	if err := db.SetEventCursor(ctx, session, cursorName, 0); err != nil {
 		t.Fatalf("set: %v", err)

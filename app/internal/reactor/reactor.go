@@ -18,10 +18,10 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// reactorConsumer is this consumer's durable cursor name — distinct from
-// dispatch's "dispatcher" cursor so the two followers advance independently
+// reactorConsumer is this consumer's durable cursor kind — distinct from
+// dispatch's "delivery" cursor so the two followers advance independently
 // over the same log.
-const reactorConsumer = "reactor"
+const reactorConsumer = "tick"
 
 // fallbackDrain re-drains even if a wake was missed/coalesced, mirroring
 // dispatch's fallback ticker: correctness rests on the durable cursor, so

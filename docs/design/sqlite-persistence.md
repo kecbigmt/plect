@@ -52,7 +52,8 @@ untyped affinity alone. Every `*_at` timestamp column is a UTC RFC3339 string
 with exactly nine fractional digits (for example
 `2026-09-06T08:50:42.821423717Z`), or `NULL` when unset — never a
 variable-width fractional part, so lexical order equals time order; see
-`timeconv.go`.
+`timeconv.go`. A text column holding JSON carries the `_json` suffix
+(`record_json`, `metadata_json`).
 
 `record_json` never duplicates a value a relational column already carries.
 Each table's write path encodes its blob through a persistence-local payload
@@ -77,8 +78,8 @@ nothing beyond its columns serializes to `"{}"`.
 | `up_reservations` | `child_session_name` primary key; nullable `parent_session_name`, `virtual_root`, `pid`, `reserved_at` | none | `state.json` `up_reservations` |
 | `pending_deliveries` | `(session_name, resource_id, operation)` primary key; `operation` is subscribe or unsubscribe | none | `pending_delivery.json` |
 | `event_streams` | `id` (ULID) primary key; `session_name` unique | none | each event directory and its `.gen` file |
-| `events` | `event_id` primary key; `(stream_id, sequence)` unique and references `event_streams(id)`; `direction` CHECK IN `inbound`/`outbound`/`internal` | type, source, direction, summary, body, metadata, and recorded time | each `log.jsonl` record |
-| `event_cursors` | `(stream_id, cursor_name)` primary key and stream foreign key (`ON DELETE CASCADE`); `cursor_name` CHECK IN `dispatcher`/`reactor`/`heartbeat_inbound`; `next_sequence` | none | `.cursor.<consumer>`, `TickBackoff.LastLogPosition` |
+| `events` | `id` primary key; `(stream_id, sequence)` unique and references `event_streams(id)`; `direction` CHECK IN `inbound`/`outbound`/`internal` | type, source, direction, summary, body, metadata, and recorded time | each `log.jsonl` record |
+| `event_cursors` | `(stream_id, kind)` primary key and stream foreign key (`ON DELETE CASCADE`); `kind` CHECK IN `delivery`/`tick`/`heartbeat`; `next_sequence` | none | `.cursor.<consumer>`, `TickBackoff.LastLogPosition` |
 | `session_tombstones` | `session_name` primary key; `destroyed_at` | tombstone session snapshot | `tombstone.json` |
 
 `population_members.session_name` is a recorded fact, not an enforced foreign
@@ -176,11 +177,12 @@ ordering.
 
 Vocabulary: a *cursor* is the opaque encoded token (`event.Cursor`) handed to
 a client; a *position* is the stored plain-integer `next_sequence` a server
-holds on its behalf. `event_cursors` holds three named positions per stream:
-`dispatcher` and `reactor` are delivery commitments (at-least-once — a later
-importer must preserve them exactly), and `heartbeat_inbound` is an
-observation high-water mark with no delivery meaning (an importer may reset
-it to the tail instead).
+holds on its behalf. `event_cursors` holds three named positions per stream,
+keyed by `kind`: `delivery` (dispatch's channel-delivery cursor) and `tick`
+(the reactor's tick-loop cursor) are delivery commitments (at-least-once — a
+later importer must preserve them exactly), and `heartbeat` (the reactor's
+heartbeat inbound sweep) is an observation high-water mark with no delivery
+meaning (an importer may reset it to the tail instead).
 
 The database does not contain plugin-owned configuration or plugin-private
 state. In particular, plugin catalog and lock files remain configuration, and
@@ -224,10 +226,10 @@ CREATE TABLE event_streams (
 CREATE UNIQUE INDEX event_streams_session_name ON event_streams(session_name);
 
 CREATE TABLE events (
-    event_id TEXT PRIMARY KEY,
+    id TEXT PRIMARY KEY,
     stream_id TEXT NOT NULL REFERENCES event_streams(id),
     sequence INTEGER NOT NULL CHECK (sequence > 0),
-    recorded_at TEXT NOT NULL,
+    time TEXT NOT NULL,
     type TEXT NOT NULL,
     source TEXT NOT NULL,
     direction TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound', 'internal')),
@@ -237,13 +239,13 @@ CREATE TABLE events (
 );
 
 CREATE UNIQUE INDEX events_stream_id_sequence ON events(stream_id, sequence);
-CREATE INDEX events_stream_id_event_id_idx ON events(stream_id, event_id);
+CREATE INDEX events_stream_id_id_idx ON events(stream_id, id);
 
 CREATE TABLE event_cursors (
     stream_id TEXT NOT NULL REFERENCES event_streams(id) ON DELETE CASCADE,
-    cursor_name TEXT NOT NULL CHECK (cursor_name IN ('dispatcher', 'reactor', 'heartbeat_inbound')),
+    kind TEXT NOT NULL CHECK (kind IN ('delivery', 'tick', 'heartbeat')),
     next_sequence INTEGER NOT NULL CHECK (next_sequence >= 0),
-    PRIMARY KEY (stream_id, cursor_name)
+    PRIMARY KEY (stream_id, kind)
 );
 ```
 
@@ -267,7 +269,7 @@ WHERE stream_id = ?;
 
 -- name: InsertEvent :exec
 INSERT INTO events (
-    event_id, stream_id, sequence, recorded_at, type, source, direction,
+    id, stream_id, sequence, time, type, source, direction,
     summary, body, metadata_json
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 ```
@@ -408,8 +410,8 @@ zero or an end boundary of a complete line; it becomes the sequence of the
 next complete event, skipping malformed lines exactly as legacy `List` does.
 An offset that is negative, beyond the complete log, inside a line, or inside a
 trailing partial line rejects the import. Dispatcher and reactor positions
-import into `event_cursors` under their own `cursor_name`; the heartbeat
-position imports under `heartbeat_inbound`.
+import into `event_cursors` under their own `kind` (`delivery`, `tick`); the
+heartbeat position imports under `heartbeat`.
 
 ## One-time importer inventory
 
@@ -420,11 +422,11 @@ alongside the database. The command reads the following runtime paths.
 
 | Legacy path | Validation and destination |
 | --- | --- |
-| `state.json` | Parse once; require the supported legacy envelope version; validate layer effect identities and tree relationships; import sessions, tasks, completion state, populations, and reservations. Each session's `TickBackoff.LastLogPosition` translates through the same byte-boundary index as a `.cursor.<consumer>` file and imports into `event_cursors` as that session's `heartbeat_inbound` position. |
+| `state.json` | Parse once; require the supported legacy envelope version; validate layer effect identities and tree relationships; import sessions, tasks, completion state, populations, and reservations. Each session's `TickBackoff.LastLogPosition` translates through the same byte-boundary index as a `.cursor.<consumer>` file and imports into `event_cursors` as that session's `heartbeat` position. |
 | `state.json.lock` | Confirm it is not held before import; do not copy it. The access gate replaces it. |
 | `events/<escaped-session>/log.jsonl` | Decode complete lines in byte order; reject invalid event identity, session mismatch, duplicate ID, and a malformed complete line; discard only a trailing partial line, matching the live reader; import stream and events. A record with no `direction` imports as `internal`, counted in the import summary. |
 | `events/<escaped-session>/.gen` | Read one trimmed non-empty stream identifier when present and reuse it as `event_streams.id`; otherwise mint a fresh id after recording that no old page cursor survives cutover. |
-| `events/<escaped-session>/.cursor.<consumer>` | Parse a non-negative decimal boundary, validate it against the log boundary index, map `<consumer>` to its `event_cursors.cursor_name` (`tick-reactor` imports as `reactor`; every other consumer name imports unchanged), and import the translated position. |
+| `events/<escaped-session>/.cursor.<consumer>` | Parse a non-negative decimal boundary, validate it against the log boundary index, map `<consumer>` to its `event_cursors.kind` (`dispatcher` imports as `delivery`, `tick-reactor` imports as `tick`), and import the translated position. |
 | `events/<escaped-session>/tombstone.json` | Decode one tombstone, require that its embedded name matches the directory session, and import its snapshot and destruction time. |
 | `events/<escaped-session>/.lock` | Confirm it is not held before import; do not copy it. The database transaction and access gate replace it. |
 | `pending_delivery.json` | Decode subscribe and unsubscribe maps; require non-empty session and resource values; deduplicate entries into `pending_deliveries`. |

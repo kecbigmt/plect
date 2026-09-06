@@ -36,10 +36,10 @@ func (db *DB) AppendEvent(ctx context.Context, ev event.Event) (sequence int64, 
 		}
 
 		if err := q.InsertEvent(ctx, sqlcgen.InsertEventParams{
-			EventID:      ev.ID,
+			ID:           ev.ID,
 			StreamID:     streamID,
 			Sequence:     next,
-			RecordedAt:   formatTime(ev.Time),
+			Time:         formatTime(ev.Time),
 			Type:         ev.Type,
 			Source:       ev.Source,
 			Direction:    string(ev.Direction),
@@ -144,8 +144,8 @@ func (db *DB) HasEventCursor(ctx context.Context, session, cursorName string) (b
 			return fmt.Errorf("get event stream id for %q: %w", session, err)
 		}
 		count, err := q.HasEventCursor(ctx, sqlcgen.HasEventCursorParams{
-			StreamID:   streamID,
-			CursorName: cursorName,
+			StreamID: streamID,
+			Kind:     cursorName,
 		})
 		if err != nil {
 			return fmt.Errorf("check cursor %q/%q: %w", session, cursorName, err)
@@ -170,8 +170,8 @@ func (db *DB) EventCursor(ctx context.Context, session, cursorName string) (int6
 			return fmt.Errorf("get event stream id for %q: %w", session, err)
 		}
 		p, err := q.GetEventCursor(ctx, sqlcgen.GetEventCursorParams{
-			StreamID:   streamID,
-			CursorName: cursorName,
+			StreamID: streamID,
+			Kind:     cursorName,
 		})
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
@@ -197,7 +197,7 @@ func (db *DB) SetEventCursor(ctx context.Context, session, cursorName string, ne
 		}
 		if err := q.UpsertEventCursor(ctx, sqlcgen.UpsertEventCursorParams{
 			StreamID:     streamID,
-			CursorName:   cursorName,
+			Kind:         cursorName,
 			NextSequence: next,
 		}); err != nil {
 			return fmt.Errorf("set cursor %q/%q: %w", session, cursorName, err)
@@ -259,16 +259,16 @@ func unmarshalEventMetadata(s string) (map[string]string, error) {
 // value here: nothing reads it back from persistence, and it is derivable
 // from the event's type prefix when a reader needs it.
 func eventFromRow(row sqlcgen.ListEventsFromByStreamRow, session string) (event.Event, error) {
-	t, err := parseTime(row.RecordedAt)
+	t, err := parseTime(row.Time)
 	if err != nil {
-		return event.Event{}, fmt.Errorf("parse event %q recorded_at: %w", row.EventID, err)
+		return event.Event{}, fmt.Errorf("parse event %q time: %w", row.ID, err)
 	}
 	metadata, err := unmarshalEventMetadata(row.MetadataJson)
 	if err != nil {
-		return event.Event{}, fmt.Errorf("parse event %q metadata: %w", row.EventID, err)
+		return event.Event{}, fmt.Errorf("parse event %q metadata: %w", row.ID, err)
 	}
 	return event.Event{
-		ID:          row.EventID,
+		ID:          row.ID,
 		SessionName: session,
 		Time:        t,
 		Type:        row.Type,
