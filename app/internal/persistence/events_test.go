@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/contracts/event"
 )
 
@@ -13,6 +12,12 @@ func TestAppendEvent_AssignsIncreasingPerStreamSequence(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
 	const session = "s1"
+	if _, err := db.CreateEventStream(ctx, session); err != nil {
+		t.Fatalf("create stream: %v", err)
+	}
+	if _, err := db.CreateEventStream(ctx, "s2"); err != nil {
+		t.Fatalf("create stream s2: %v", err)
+	}
 
 	first, err := db.AppendEvent(ctx, event.Event{ID: "e1", SessionName: session, Time: time.Now().UTC(), Type: "a", Source: "test", Direction: event.Internal})
 	if err != nil {
@@ -45,17 +50,21 @@ func TestAppendEvent_RoundTripsEveryField(t *testing.T) {
 	ctx := context.Background()
 	const session = "s1"
 	when := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+	if _, err := db.CreateEventStream(ctx, session); err != nil {
+		t.Fatalf("create stream: %v", err)
+	}
 
 	want := event.Event{
-		ID:          "01JXAMPLE",
-		SessionName: session,
-		Time:        when,
-		Type:        "widget.message",
-		Source:      "widget",
-		Direction:   event.Inbound,
-		Summary:     "hello",
-		Body:        "hello body",
-		Metadata:    map[string]string{"k": "v"},
+		ID:           "01JXAMPLE",
+		SessionName:  session,
+		Time:         when,
+		Type:         "widget.message",
+		Source:       "widget",
+		Direction:    event.Inbound,
+		Summary:      "hello",
+		Body:         "hello body",
+		Metadata:     map[string]string{"k": "v"},
+		DeliveryMode: event.DeliveryModePush,
 	}
 	if _, err := db.AppendEvent(ctx, want); err != nil {
 		t.Fatalf("append: %v", err)
@@ -74,7 +83,7 @@ func TestAppendEvent_RoundTripsEveryField(t *testing.T) {
 	ev := got[0]
 	if ev.ID != want.ID || ev.SessionName != want.SessionName || !ev.Time.Equal(want.Time) ||
 		ev.Type != want.Type || ev.Source != want.Source || ev.Direction != want.Direction ||
-		ev.Summary != want.Summary || ev.Body != want.Body {
+		ev.Summary != want.Summary || ev.Body != want.Body || ev.DeliveryMode != want.DeliveryMode {
 		t.Fatalf("round-tripped event = %+v, want %+v", ev, want)
 	}
 	if ev.Metadata["k"] != "v" {
@@ -86,6 +95,9 @@ func TestAppendEvent_EmptyMetadataRoundTripsAsNil(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
 	const session = "s1"
+	if _, err := db.CreateEventStream(ctx, session); err != nil {
+		t.Fatalf("create stream: %v", err)
+	}
 
 	if _, err := db.AppendEvent(ctx, event.Event{ID: "e1", SessionName: session, Time: time.Now().UTC(), Type: "a", Source: "test", Direction: event.Internal}); err != nil {
 		t.Fatalf("append: %v", err)
@@ -102,29 +114,22 @@ func TestAppendEvent_EmptyMetadataRoundTripsAsNil(t *testing.T) {
 func TestAppendEvent_RejectsEmptyDirection(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
+	const session = "s1"
+	if _, err := db.CreateEventStream(ctx, session); err != nil {
+		t.Fatalf("create stream: %v", err)
+	}
 
-	if _, err := db.AppendEvent(ctx, event.Event{ID: "e1", SessionName: "s1", Time: time.Now().UTC(), Type: "a"}); err == nil {
+	if _, err := db.AppendEvent(ctx, event.Event{ID: "e1", SessionName: session, Time: time.Now().UTC(), Type: "a"}); err == nil {
 		t.Fatal("append with empty direction succeeded, want error")
 	}
 }
 
-func TestAppendEvent_DeliveryModeIsNotPersisted(t *testing.T) {
+func TestAppendEvent_RejectsMissingCurrentStream(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
-	const session = "s1"
 
-	if _, err := db.AppendEvent(ctx, event.Event{
-		ID: "e1", SessionName: session, Time: time.Now().UTC(), Type: "a",
-		Direction: event.Internal, DeliveryMode: event.DeliveryModePush,
-	}); err != nil {
-		t.Fatalf("append: %v", err)
-	}
-	got, _, err := db.ListEventsFrom(ctx, session, 0)
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	if len(got) != 1 || got[0].DeliveryMode != "" {
-		t.Fatalf("delivery mode = %q, want zero value on read", got[0].DeliveryMode)
+	if _, err := db.AppendEvent(ctx, event.Event{ID: "e1", SessionName: "never/created", Time: time.Now().UTC(), Type: "a", Direction: event.Internal}); err == nil {
+		t.Fatal("append to a session with no current stream succeeded, want error")
 	}
 }
 
@@ -132,6 +137,9 @@ func TestListEventsFrom_ResumesAfterAGivenSequence(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
 	const session = "s1"
+	if _, err := db.CreateEventStream(ctx, session); err != nil {
+		t.Fatalf("create stream: %v", err)
+	}
 
 	for i := range 3 {
 		if _, err := db.AppendEvent(ctx, event.Event{ID: string(rune('a' + i)), SessionName: session, Time: time.Now().UTC(), Type: "t", Direction: event.Internal}); err != nil {
@@ -158,30 +166,77 @@ func TestListEventsFrom_MissingStreamIsEmptyNotError(t *testing.T) {
 	}
 }
 
-func TestEventStreamID_EmptyUntilFirstTouchThenStable(t *testing.T) {
+func TestEventStreamID_EmptyUntilCreatedThenStableAcrossAppends(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
 	const session = "s9"
 
 	gen, err := db.EventStreamID(ctx, session)
 	if err != nil || gen != "" {
-		t.Fatalf("gen before any touch = %q (err=%v), want empty", gen, err)
+		t.Fatalf("stream id before create = %q (err=%v), want empty", gen, err)
+	}
+
+	created, err := db.CreateEventStream(ctx, session)
+	if err != nil || created == "" {
+		t.Fatalf("create stream: id=%q err=%v", created, err)
+	}
+	g1, err := db.EventStreamID(ctx, session)
+	if err != nil || g1 != created {
+		t.Fatalf("stream id after create = %q (err=%v), want %q", g1, err, created)
 	}
 
 	if _, err := db.AppendEvent(ctx, event.Event{ID: "e1", SessionName: session, Time: time.Now().UTC(), Type: "a", Direction: event.Internal}); err != nil {
 		t.Fatalf("append: %v", err)
 	}
-	g1, err := db.EventStreamID(ctx, session)
-	if err != nil || g1 == "" {
-		t.Fatalf("gen after first append = %q (err=%v), want non-empty", g1, err)
-	}
-
 	if _, err := db.AppendEvent(ctx, event.Event{ID: "e2", SessionName: session, Time: time.Now().UTC(), Type: "b", Direction: event.Internal}); err != nil {
 		t.Fatalf("append: %v", err)
 	}
 	g2, err := db.EventStreamID(ctx, session)
 	if err != nil || g2 != g1 {
-		t.Fatalf("gen changed across appends: %q -> %q", g1, g2)
+		t.Fatalf("stream id changed across appends: %q -> %q", g1, g2)
+	}
+}
+
+// TestEventStreamID_RecreateMintsANewCurrentIncarnation pins schema
+// amendment 9 (revised): CreateEventStream always inserts, never looks up
+// first, so calling it again for the same session name (a session create on
+// a name whose prior incarnation was destroyed) mints a distinct id and
+// EventStreamID resolves to that new row — the latest by created_at — not
+// the superseded one. The old stream's own rows are untouched (no delete
+// anywhere in this package), so its sequence does not leak into the new
+// stream's numbering.
+func TestEventStreamID_RecreateMintsANewCurrentIncarnation(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+	const session = "s1"
+
+	first, err := db.CreateEventStream(ctx, session)
+	if err != nil {
+		t.Fatalf("create stream (first): %v", err)
+	}
+	if _, err := db.AppendEvent(ctx, event.Event{ID: "e1", SessionName: session, Time: time.Now().UTC(), Type: "a", Direction: event.Internal}); err != nil {
+		t.Fatalf("append to first incarnation: %v", err)
+	}
+
+	second, err := db.CreateEventStream(ctx, session)
+	if err != nil {
+		t.Fatalf("create stream (second): %v", err)
+	}
+	if second == first {
+		t.Fatalf("second incarnation's stream id = %q, want distinct from first %q", second, first)
+	}
+
+	current, err := db.EventStreamID(ctx, session)
+	if err != nil || current != second {
+		t.Fatalf("current stream id = %q (err=%v), want the second incarnation %q", current, err, second)
+	}
+
+	seq, err := db.AppendEvent(ctx, event.Event{ID: "e2", SessionName: session, Time: time.Now().UTC(), Type: "b", Direction: event.Internal})
+	if err != nil {
+		t.Fatalf("append to second incarnation: %v", err)
+	}
+	if seq != 1 {
+		t.Fatalf("second incarnation's first sequence = %d, want 1 (its own stream, not continuing the first's)", seq)
 	}
 }
 
@@ -189,6 +244,9 @@ func TestEventCursor_RoundTripAndHasDistinguishesNeverFromZero(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
 	const session, cursorName = "s1", "delivery"
+	if _, err := db.CreateEventStream(ctx, session); err != nil {
+		t.Fatalf("create stream: %v", err)
+	}
 
 	has, err := db.HasEventCursor(ctx, session, cursorName)
 	if err != nil || has {
@@ -216,60 +274,11 @@ func TestEventCursor_RoundTripAndHasDistinguishesNeverFromZero(t *testing.T) {
 	}
 }
 
-func TestSetEventCursor_CreatesStreamWhenNoEventExistsYet(t *testing.T) {
+func TestSetEventCursor_RejectsMissingCurrentStream(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
-	const session, cursorName = "s1", "delivery"
 
-	if err := db.SetEventCursor(ctx, session, cursorName, 0); err != nil {
-		t.Fatalf("set: %v", err)
-	}
-	gen, err := db.EventStreamID(ctx, session)
-	if err != nil || gen == "" {
-		t.Fatalf("gen after seeding a cursor with no events = %q (err=%v), want non-empty", gen, err)
-	}
-}
-
-// TestEventStreamID_SurvivesSessionDeleteAndRecreateUnderSameName pins that
-// destroying a session (deleting its sessions row, which has no bearing on
-// event_streams: there is no FK between them) and recreating one under the
-// same name reuses the same stream id and continues its sequence, rather
-// than starting a fresh stream. A v2 event.Cursor issued before the delete
-// therefore still names the correct, unbroken stream afterward.
-func TestEventStreamID_SurvivesSessionDeleteAndRecreateUnderSameName(t *testing.T) {
-	db := migratedTestDB(t)
-	ctx := context.Background()
-	const session = "s1"
-	now := time.Now().UTC()
-
-	if err := db.PutSession(ctx, &domain.Session{Name: session, CreatedAt: now, UpdatedAt: now}); err != nil {
-		t.Fatalf("put session: %v", err)
-	}
-	first, err := db.AppendEvent(ctx, event.Event{ID: "e1", SessionName: session, Time: now, Type: "a", Direction: event.Internal})
-	if err != nil {
-		t.Fatalf("append before delete: %v", err)
-	}
-	streamBefore, err := db.EventStreamID(ctx, session)
-	if err != nil || streamBefore == "" {
-		t.Fatalf("stream id before delete = %q (err=%v), want non-empty", streamBefore, err)
-	}
-
-	if err := db.DeleteSession(ctx, session); err != nil {
-		t.Fatalf("delete session: %v", err)
-	}
-	if err := db.PutSession(ctx, &domain.Session{Name: session, CreatedAt: now, UpdatedAt: now}); err != nil {
-		t.Fatalf("put session (recreate): %v", err)
-	}
-
-	streamAfter, err := db.EventStreamID(ctx, session)
-	if err != nil || streamAfter != streamBefore {
-		t.Fatalf("stream id after recreate = %q (err=%v), want unchanged %q", streamAfter, err, streamBefore)
-	}
-	second, err := db.AppendEvent(ctx, event.Event{ID: "e2", SessionName: session, Time: now, Type: "b", Direction: event.Internal})
-	if err != nil {
-		t.Fatalf("append after recreate: %v", err)
-	}
-	if second != first+1 {
-		t.Fatalf("sequence after recreate = %d, want %d (continuing, not reset)", second, first+1)
+	if err := db.SetEventCursor(ctx, "never/created", "delivery", 0); err == nil {
+		t.Fatal("set cursor on a session with no current stream succeeded, want error")
 	}
 }

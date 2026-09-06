@@ -130,6 +130,9 @@ func addCapacityMember(t *testing.T, def Definition, store *state.Store, logStor
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := logStore.NewStream(name); err != nil {
+		t.Fatal(err)
+	}
 	if !cleared.IsZero() {
 		if _, _, _, err := logStore.Append(event.Event{
 			SessionName: name,

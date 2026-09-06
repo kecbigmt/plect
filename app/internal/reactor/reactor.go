@@ -83,6 +83,16 @@ type sessionReactor struct {
 	channelHealthEvery time.Duration
 }
 
+// effectiveLogger falls back to slog.Default() for a test-constructed
+// sessionReactor that (like a nil cfgFn) skips buildReactor and leaves
+// logger unset.
+func (r *sessionReactor) effectiveLogger() *slog.Logger {
+	if r.logger != nil {
+		return r.logger
+	}
+	return slog.Default()
+}
+
 func (r *sessionReactor) run(ctx context.Context) {
 	seedCursor(r.log, r.session)
 	startGen, _ := r.log.StreamID(r.session)
@@ -130,7 +140,7 @@ func (r *sessionReactor) run(ctx context.Context) {
 			// permanently exit this loop (nothing restarts it) instead of
 			// retrying once the store recovers. Log and keep the loop alive
 			// to try again on the next wake/tick.
-			r.logger.Error("reactor: read session state failed", "session", r.session, "error", err)
+			r.effectiveLogger().Error("reactor: read session state failed", "session", r.session, "error", err)
 		} else if s == nil {
 			return // destroyed
 		} else if r.cfg.RunScopeUp(s) {
@@ -423,7 +433,7 @@ func (r *sessionReactor) updateBackoff(ctx context.Context) {
 		}
 		return nil
 	}); err != nil {
-		r.logger.Warn("reactor: update tick backoff failed", "session", r.session, "error", err)
+		r.effectiveLogger().Warn("reactor: update tick backoff failed", "session", r.session, "error", err)
 	}
 }
 

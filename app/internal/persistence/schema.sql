@@ -199,14 +199,21 @@ CREATE TABLE up_reservations (
     CHECK ((parent_session_name IS NOT NULL) != (virtual_root = 1))
 );
 
--- id is minted once and never changes for the session name, so it detects
--- a same-name session recreate; no FK to sessions since history survives a destroy.
+-- One row per session incarnation: a session create mints a new row; a
+-- down/up or --force-recreate reuses the existing one (same id, sequence
+-- continues), since the runtime failure model preserves the event log
+-- across those. session_name is therefore not unique — a later create under
+-- the same name mints another row — and a read resolves to the current
+-- incarnation, the row with the latest created_at for that name. No FK to
+-- sessions: a destroyed session's rows and events survive it as history,
+-- reachable by their own id even though no longer current for that name.
 CREATE TABLE event_streams (
     id TEXT PRIMARY KEY,
-    session_name TEXT NOT NULL
+    session_name TEXT NOT NULL,
+    created_at TEXT NOT NULL
 );
 
-CREATE UNIQUE INDEX event_streams_session_name ON event_streams(session_name);
+CREATE INDEX event_streams_session_name_created_at ON event_streams(session_name, created_at DESC);
 
 CREATE TABLE events (
     id TEXT PRIMARY KEY,
@@ -218,7 +225,8 @@ CREATE TABLE events (
     direction TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound', 'internal')),
     summary TEXT NOT NULL,
     body TEXT NOT NULL DEFAULT '',
-    metadata_json TEXT NOT NULL
+    metadata_json TEXT NOT NULL CHECK (json_valid(metadata_json)),
+    delivery_mode TEXT NOT NULL
 );
 
 CREATE UNIQUE INDEX events_stream_id_sequence ON events(stream_id, sequence);

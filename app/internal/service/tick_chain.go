@@ -67,11 +67,10 @@ func chainAttemptFingerprint(capRefused bool, target string) string {
 
 // chainAttemptStreamID scopes a session's chain-attempt markers to this
 // particular incarnation of its name via its event stream's own id: a
-// destroy-then-recreate under the same name still shares the survived
-// stream, so this is a coarser scope than the session's own CreatedAt would
-// give — a follow-up concern, not a new one this call introduces, since the
-// event log a marker guards against was always keyed by session name alone.
-// A lookup failure logs and falls back to "" rather than failing the tick.
+// session create mints a fresh stream, so a destroy-then-recreate under the
+// same name gets a new one and never shares a key with the incarnation it
+// replaced. A lookup failure logs and falls back to "" rather than failing
+// the tick.
 func chainAttemptStreamID(store *state.Store, sessionName string) string {
 	id, err := eventlog.NewStore(store.Dir()).StreamID(sessionName)
 	if err != nil {
@@ -89,16 +88,16 @@ func chainAttemptStreamID(store *state.Store, sessionName string) string {
 // resolved-then-refused-again recurrence looks identical to a continuing one
 // — so TickSession keeps this boundary marker instead, synced for every
 // chain on every tick regardless of outcome.
-func syncChainAttemptStreak(store *state.Store, sessionName, instance, chainID, streamID, newFingerprint string) (previous string, won bool, err error) {
-	return eventlog.NewStore(store.Dir()).SwapChainAttempt(sessionName, instance, chainID, streamID, newFingerprint)
+func syncChainAttemptStreak(store *state.Store, sessionName, instance, chainID, scope, newFingerprint string) (previous string, won bool, err error) {
+	return eventlog.NewStore(store.Dir()).SwapChainAttempt(sessionName, instance, chainID, scope, newFingerprint)
 }
 
 // revertChainAttemptStreak compensates a syncChainAttemptStreak win (claimed)
 // whose event never actually got published, restoring previous — but only if
 // the marker still holds claimed. See eventlog.Store.RevertChainAttempt for
 // why the restore must stay conditional.
-func revertChainAttemptStreak(store *state.Store, sessionName, instance, chainID, streamID, claimed, previous string) error {
-	_, err := eventlog.NewStore(store.Dir()).RevertChainAttempt(sessionName, instance, chainID, streamID, claimed, previous)
+func revertChainAttemptStreak(store *state.Store, sessionName, instance, chainID, scope, claimed, previous string) error {
+	_, err := eventlog.NewStore(store.Dir()).RevertChainAttempt(sessionName, instance, chainID, scope, claimed, previous)
 	return err
 }
 

@@ -429,12 +429,16 @@ func TestTickSession_ChainCapAttemptMarkerDoesNotSurviveRecreationUnderTheSameNa
 	if _, err := TickSession(cfg, store, TickParams{SessionName: "work1", SkipRefresh: true}); err != nil {
 		t.Fatalf("TickSession(2): %v", err)
 	}
+	// A same-name recreate mints a new stream, so reading by session name
+	// now resolves to only that new incarnation: its own first refusal, not
+	// suppressed by the destroyed incarnation's marker (which shared no key
+	// with the new stream's id).
 	evs2, _, _, err := eventlog.NewStore(store.Dir()).List("work1", 0, event.Filter{Types: []string{event.TypeChainAttempt}})
 	if err != nil {
 		t.Fatalf("List(2): %v", err)
 	}
-	if len(evs2) != 2 {
-		t.Fatalf("chain-attempt events across a destroy and same-name recreation = %d, want 2 (the recreated session's own first refusal, not suppressed by the destroyed one's marker)", len(evs2))
+	if len(evs2) != 1 {
+		t.Fatalf("chain-attempt events on the recreated incarnation = %d, want 1 (its own first refusal, not suppressed by the destroyed one's marker)", len(evs2))
 	}
 }
 

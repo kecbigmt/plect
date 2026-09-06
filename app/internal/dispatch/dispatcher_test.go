@@ -58,6 +58,9 @@ func runTestDispatcher(t *testing.T, log *eventlog.Store, sock string) (*session
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := log.NewStream("o/r-1"); err != nil {
+		t.Fatal(err)
+	}
 	d := &sessionDispatcher{
 		session:  "o/r-1",
 		cfg:      &config.Config{},
@@ -217,6 +220,17 @@ func runtimeDispatcher(t *testing.T, session string, log *eventlog.Store, socket
 	st := state.NewStore(t.TempDir())
 	if err := st.Put(s); err != nil {
 		t.Fatal(err)
+	}
+	// Callers rebuild a dispatcher over the same log/session to simulate a
+	// restart (TestDispatcher_ReplaysFromCursorAcrossRestart), so only mint
+	// a stream the first time — a second mint would give the rebuilt
+	// dispatcher a different current stream than the one its cursor names.
+	if id, err := log.StreamID(session); err != nil {
+		t.Fatal(err)
+	} else if id == "" {
+		if _, err := log.NewStream(session); err != nil {
+			t.Fatal(err)
+		}
 	}
 	d := &sessionDispatcher{
 		session: session,

@@ -526,6 +526,9 @@ func summaryAt(evs []event.Event, i int) string {
 func TestCursorRoundTrip(t *testing.T) {
 	s := NewStore(t.TempDir())
 	const session, consumer = "o/r-1", "delivery"
+	if _, err := s.NewStream(session); err != nil {
+		t.Fatal(err)
+	}
 	if off, err := s.ReadCursor(session, consumer); err != nil || off != 0 {
 		t.Fatalf("missing cursor should be 0: off=%d err=%v", off, err)
 	}
@@ -541,6 +544,9 @@ func TestCursorRoundTrip(t *testing.T) {
 func TestHasCursor(t *testing.T) {
 	s := NewStore(t.TempDir())
 	const session, consumer = "o/r-1", "delivery"
+	if _, err := s.NewStream(session); err != nil {
+		t.Fatal(err)
+	}
 	if s.HasCursor(session, consumer) {
 		t.Error("HasCursor true before any commit")
 	}

@@ -59,9 +59,12 @@ func (s *Server) handleSessionEventsStream(w http.ResponseWriter, r *http.Reques
 	var since int64
 	var gen string
 	if v := r.Header.Get("Last-Event-ID"); v != "" {
-		if g, seq, err := s.svc.EventStreamResume(session, v); err == nil {
-			gen, since = g, seq
+		g, seq, err := s.svc.EventStreamResume(session, v)
+		if err != nil {
+			http.Error(w, "invalid Last-Event-ID", http.StatusBadRequest)
+			return
 		}
+		gen, since = g, seq
 	}
 
 	resp, err := s.openBusStream(ctx, s.busClient(), session, since)

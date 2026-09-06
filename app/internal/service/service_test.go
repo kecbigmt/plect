@@ -34,6 +34,16 @@ func testStore(t *testing.T) *state.Store {
 	return state.NewStore(t.TempDir())
 }
 
+// mustNewStream mints sessionName's event stream, matching what a real
+// session create does (createsetup.go), for a test that seeds state
+// directly via store.Put rather than through Create.
+func mustNewStream(t *testing.T, store *state.Store, sessionName string) {
+	t.Helper()
+	if _, err := eventlog.NewStore(store.Dir()).NewStream(sessionName); err != nil {
+		t.Fatalf("new stream for %q: %v", sessionName, err)
+	}
+}
+
 // List ranges store.All() (a map), so without sorting its order is random and
 // the web UI's auto-refresh reshuffles. Sessions must come back sorted by name.
 func TestList_SortsTrackedByName(t *testing.T) {
@@ -574,6 +584,7 @@ func TestSetMessage(t *testing.T) {
 		CreatedAt: now,
 		UpdatedAt: now,
 	})
+	mustNewStream(t, store, "owner/repo-1")
 
 	if err := SetMessage(nil, store, "owner/repo-1", "working"); err != nil {
 		t.Fatalf("SetMessage() error: %v", err)
@@ -603,6 +614,7 @@ func TestSetMessage_EmitsStatusMessageEventsOnlyWhenTextChanges(t *testing.T) {
 	store := testStore(t)
 	now := time.Now()
 	store.Put(&domain.Session{Name: "owner/repo-1", CreatedAt: now, UpdatedAt: now})
+	mustNewStream(t, store, "owner/repo-1")
 
 	if err := SetMessage(nil, store, "owner/repo-1", "working"); err != nil {
 		t.Fatalf("SetMessage(working) error: %v", err)
@@ -668,6 +680,7 @@ func TestSetMessage_FirstExplicitEmptyReportEmitsClearEvent(t *testing.T) {
 	store := testStore(t)
 	now := time.Now()
 	store.Put(&domain.Session{Name: "owner/repo-1", CreatedAt: now, UpdatedAt: now})
+	mustNewStream(t, store, "owner/repo-1")
 
 	if err := SetMessage(nil, store, "owner/repo-1", ""); err != nil {
 		t.Fatalf("SetMessage(empty) error: %v", err)

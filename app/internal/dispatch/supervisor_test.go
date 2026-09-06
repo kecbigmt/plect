@@ -548,6 +548,9 @@ include     = ["plect.instruction"]
 	}
 
 	log := eventlog.NewStore(t.TempDir())
+	if _, err := log.NewStream("o/r-1"); err != nil {
+		t.Fatal(err)
+	}
 	hub := sessionhub.NewRegistry(log, sessionhub.WithPollInterval(2*time.Millisecond))
 	defer hub.Close()
 	sup := NewSupervisor(func() *config.Config { return currentCfg }, stateStore, log, hub)

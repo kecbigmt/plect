@@ -3,7 +3,6 @@ package webui
 import (
 	"bufio"
 	"context"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -129,13 +128,14 @@ func TestEventsStream_RelaysRenderedRows(t *testing.T) {
 	}
 }
 
-func TestEventsStream_RawIntegerLastEventIDFallsBackToFreshConnect(t *testing.T) {
+// A pre-cutover raw byte offset (or any other undecodable token) must be
+// rejected before the bus is ever dialed, matching the JSON relay and the
+// bus stream's own contract: the client's recovery path is to discard the
+// cursor and refetch history, not to receive an unannounced fresh connect.
+func TestEventsStream_RawIntegerLastEventIDIsRejectedBeforeDialingBus(t *testing.T) {
 	bus := fakeBus(t)
 	defer bus.Close()
 
-	// resolveGen's own later call (cursor="") races the initial validation
-	// call on fakeService's shared gotResumeCursor field, so this test tracks
-	// every call itself instead, under its own lock.
 	var mu sync.Mutex
 	var gotCursors []string
 	svc := &fakeService{
@@ -166,11 +166,9 @@ func TestEventsStream_RawIntegerLastEventIDFallsBackToFreshConnect(t *testing.T)
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (fresh connect, not an error)", resp.StatusCode)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (rejected before the bus is dialed)", resp.StatusCode)
 	}
-	io.Copy(io.Discard, resp.Body) // wait out the relay goroutine before inspecting gotCursors
-	// Rejected as an invalid cursor, so the handler fell through to since=0.
 	mu.Lock()
 	defer mu.Unlock()
 	if !slices.Contains(gotCursors, "128") {

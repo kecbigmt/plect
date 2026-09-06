@@ -57,6 +57,9 @@ func newTestReactor(t *testing.T, tc config.TickConfig) (*sessionReactor, *state
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := log.NewStream("o/r-1"); err != nil {
+		t.Fatal(err)
+	}
 	r := &sessionReactor{
 		session: "o/r-1",
 		cfg:     &config.Config{WorkspaceDirsRoot: t.TempDir()},

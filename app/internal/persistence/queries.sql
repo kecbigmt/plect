@@ -178,23 +178,23 @@ DELETE FROM up_reservations WHERE child_session_name = ?;
 -- Events
 
 -- name: GetEventStreamIDBySession :one
-SELECT id FROM event_streams WHERE session_name = ?;
+SELECT id FROM event_streams WHERE session_name = ? ORDER BY created_at DESC LIMIT 1;
 
 -- name: InsertEventStream :exec
-INSERT INTO event_streams (id, session_name) VALUES (?, ?);
+INSERT INTO event_streams (id, session_name, created_at) VALUES (?, ?, ?);
 
 -- name: ListEventStreamSessions :many
-SELECT session_name FROM event_streams ORDER BY session_name;
+SELECT DISTINCT session_name FROM event_streams ORDER BY session_name;
 
 -- name: NextEventSequence :one
 SELECT COALESCE(MAX(sequence), 0) + 1 FROM events WHERE stream_id = ?;
 
 -- name: InsertEvent :exec
-INSERT INTO events (id, stream_id, sequence, time, type, source, direction, summary, body, metadata_json)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO events (id, stream_id, sequence, time, type, source, direction, summary, body, metadata_json, delivery_mode)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: ListEventsFromByStream :many
-SELECT id, sequence, time, type, source, direction, summary, body, metadata_json
+SELECT id, sequence, time, type, source, direction, summary, body, metadata_json, delivery_mode
 FROM events WHERE stream_id = ? AND sequence >= ? ORDER BY sequence;
 
 -- name: HasEventCursor :one

@@ -112,7 +112,7 @@ func (q *Queries) GetEventCursor(ctx context.Context, arg GetEventCursorParams) 
 
 const getEventStreamIDBySession = `-- name: GetEventStreamIDBySession :one
 
-SELECT id FROM event_streams WHERE session_name = ?
+SELECT id FROM event_streams WHERE session_name = ? ORDER BY created_at DESC LIMIT 1
 `
 
 // Events
@@ -185,8 +185,8 @@ func (q *Queries) HasEventCursor(ctx context.Context, arg HasEventCursorParams) 
 }
 
 const insertEvent = `-- name: InsertEvent :exec
-INSERT INTO events (id, stream_id, sequence, time, type, source, direction, summary, body, metadata_json)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO events (id, stream_id, sequence, time, type, source, direction, summary, body, metadata_json, delivery_mode)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertEventParams struct {
@@ -200,6 +200,7 @@ type InsertEventParams struct {
 	Summary      string
 	Body         string
 	MetadataJson string
+	DeliveryMode string
 }
 
 func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) error {
@@ -214,21 +215,23 @@ func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) error 
 		arg.Summary,
 		arg.Body,
 		arg.MetadataJson,
+		arg.DeliveryMode,
 	)
 	return err
 }
 
 const insertEventStream = `-- name: InsertEventStream :exec
-INSERT INTO event_streams (id, session_name) VALUES (?, ?)
+INSERT INTO event_streams (id, session_name, created_at) VALUES (?, ?, ?)
 `
 
 type InsertEventStreamParams struct {
 	ID          string
 	SessionName string
+	CreatedAt   string
 }
 
 func (q *Queries) InsertEventStream(ctx context.Context, arg InsertEventStreamParams) error {
-	_, err := q.db.ExecContext(ctx, insertEventStream, arg.ID, arg.SessionName)
+	_, err := q.db.ExecContext(ctx, insertEventStream, arg.ID, arg.SessionName, arg.CreatedAt)
 	return err
 }
 
@@ -411,7 +414,7 @@ func (q *Queries) ListChildSessionNames(ctx context.Context, parentSessionName s
 }
 
 const listEventStreamSessions = `-- name: ListEventStreamSessions :many
-SELECT session_name FROM event_streams ORDER BY session_name
+SELECT DISTINCT session_name FROM event_streams ORDER BY session_name
 `
 
 func (q *Queries) ListEventStreamSessions(ctx context.Context) ([]string, error) {
@@ -438,7 +441,7 @@ func (q *Queries) ListEventStreamSessions(ctx context.Context) ([]string, error)
 }
 
 const listEventsFromByStream = `-- name: ListEventsFromByStream :many
-SELECT id, sequence, time, type, source, direction, summary, body, metadata_json
+SELECT id, sequence, time, type, source, direction, summary, body, metadata_json, delivery_mode
 FROM events WHERE stream_id = ? AND sequence >= ? ORDER BY sequence
 `
 
@@ -457,6 +460,7 @@ type ListEventsFromByStreamRow struct {
 	Summary      string
 	Body         string
 	MetadataJson string
+	DeliveryMode string
 }
 
 func (q *Queries) ListEventsFromByStream(ctx context.Context, arg ListEventsFromByStreamParams) ([]ListEventsFromByStreamRow, error) {
@@ -478,6 +482,7 @@ func (q *Queries) ListEventsFromByStream(ctx context.Context, arg ListEventsFrom
 			&i.Summary,
 			&i.Body,
 			&i.MetadataJson,
+			&i.DeliveryMode,
 		); err != nil {
 			return nil, err
 		}

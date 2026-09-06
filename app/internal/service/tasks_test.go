@@ -46,6 +46,7 @@ func TestPutBestEffort_PutFailureLogsWarningWithoutPanicking(t *testing.T) {
 
 func seedSession(t *testing.T, store interface {
 	Put(*domain.Session) error
+	Dir() string
 }, sessionName, ownerRepo string, number int, workflow string, tasks map[string]*contract.TaskState) {
 	t.Helper()
 	now := time.Now()
@@ -60,6 +61,12 @@ func seedSession(t *testing.T, store interface {
 	}
 	if err := store.Put(session); err != nil {
 		t.Fatalf("seed: %v", err)
+	}
+	// A real session create mints its event stream (createsetup.go); a test
+	// that seeds state directly, bypassing Create, needs the same so
+	// AppendEvent/SetEventCursor find a current stream instead of erroring.
+	if _, err := eventlog.NewStore(store.Dir()).NewStream(sessionName); err != nil {
+		t.Fatalf("seed: new stream: %v", err)
 	}
 }
 

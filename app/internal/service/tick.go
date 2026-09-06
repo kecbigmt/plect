@@ -64,7 +64,7 @@ func TickSession(cfg *config.Config, store *state.Store, params TickParams) (*Ch
 		}
 	}
 
-	streamID := chainAttemptStreamID(store, resolvedName)
+	scope := chainAttemptStreamID(store, resolvedName)
 	chains := make([]ChainSpawn, 0, len(chainPlan))
 	for _, sp := range chainPlan {
 		capRefused := false
@@ -112,7 +112,7 @@ func TickSession(cfg *config.Config, store *state.Store, params TickParams) (*Ch
 		// spawn in between, which only this per-tick sync — not the event
 		// log — can tell apart from an uninterrupted streak.
 		fingerprint := chainAttemptFingerprint(capRefused, sp.TargetSession)
-		previous, won, syncErr := syncChainAttemptStreak(store, resolvedName, sp.Instance, sp.ChainID, streamID, fingerprint)
+		previous, won, syncErr := syncChainAttemptStreak(store, resolvedName, sp.Instance, sp.ChainID, scope, fingerprint)
 		switch {
 		case syncErr != nil:
 			sp.Warnings = append(sp.Warnings, fmt.Sprintf("chain-attempt bookkeeping failed: %v", syncErr))
@@ -122,7 +122,7 @@ func TickSession(cfg *config.Config, store *state.Store, params TickParams) (*Ch
 			// rather than left to silently swallow the event forever.
 			if pubErr := publishChainCapAttempt(cfg, store, resolvedName, sp); pubErr != nil {
 				sp.Warnings = append(sp.Warnings, fmt.Sprintf("chain-attempt event failed: %v", pubErr))
-				if revertErr := revertChainAttemptStreak(store, resolvedName, sp.Instance, sp.ChainID, streamID, fingerprint, previous); revertErr != nil {
+				if revertErr := revertChainAttemptStreak(store, resolvedName, sp.Instance, sp.ChainID, scope, fingerprint, previous); revertErr != nil {
 					sp.Warnings = append(sp.Warnings, fmt.Sprintf("chain-attempt bookkeeping rollback failed: %v", revertErr))
 				}
 			}

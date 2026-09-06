@@ -19,6 +19,7 @@ type Event struct {
 	Summary      string
 	Body         string
 	MetadataJson string
+	DeliveryMode string
 }
 
 type EventCursor struct {
@@ -30,6 +31,7 @@ type EventCursor struct {
 type EventStream struct {
 	ID          string
 	SessionName string
+	CreatedAt   string
 }
 
 type NodeInstance struct {

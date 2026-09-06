@@ -94,6 +94,11 @@ func (s *Store) lockPath(session string) string { return filepath.Join(s.session
 
 // Append writes ev to its session's log and returns the stored event (with ID
 // and Time filled in if absent), its sequence (the replay cursor), and next.
+// A session with no current stream (never created through Create, or a
+// notice about a resource whose admission never went through) gets one
+// started here rather than rejecting the write: the guarantee Create's own
+// NewStream protects is a fresh incarnation on every session create, not
+// that every append target was already created.
 func (s *Store) Append(ev event.Event) (stored event.Event, seq, next int64, err error) {
 	if ev.SessionName == "" {
 		return ev, 0, 0, fmt.Errorf("eventlog: session_name is required")
@@ -109,7 +114,15 @@ func (s *Store) Append(ev event.Event) (stored event.Event, seq, next int64, err
 	if err != nil {
 		return ev, 0, 0, err
 	}
-	seq, err = db.AppendEvent(context.Background(), ev)
+	ctx := context.Background()
+	if id, gerr := db.EventStreamID(ctx, ev.SessionName); gerr != nil {
+		return ev, 0, 0, fmt.Errorf("eventlog: append: %w", gerr)
+	} else if id == "" {
+		if _, cerr := db.CreateEventStream(ctx, ev.SessionName); cerr != nil {
+			return ev, 0, 0, fmt.Errorf("eventlog: append: %w", cerr)
+		}
+	}
+	seq, err = db.AppendEvent(ctx, ev)
 	if err != nil {
 		return ev, 0, 0, fmt.Errorf("eventlog: append: %w", err)
 	}
@@ -341,9 +354,11 @@ func (s *Store) TailOffset(session string, f event.Filter, n int) (int64, error)
 	return ring[0], nil // sequence of the n-th-from-last matching record
 }
 
-// StreamID returns the stream's id, or "" if none yet. It is fixed for the
-// session name once assigned, changing only on a destroy/recreate, so a
-// stale opaque cursor is detectable instead of silently resolving wrong.
+// StreamID returns the current incarnation's stream id for session, or ""
+// if none has been created yet. NewStream mints a fresh one on session
+// create, so a cursor issued for a since-superseded incarnation resolves to
+// a different id here and is detectable as stale rather than silently
+// resolving into the wrong incarnation's log.
 func (s *Store) StreamID(session string) (string, error) {
 	db, err := s.dbHandle()
 	if err != nil {
@@ -352,6 +367,22 @@ func (s *Store) StreamID(session string) (string, error) {
 	id, err := db.EventStreamID(context.Background(), session)
 	if err != nil {
 		return "", fmt.Errorf("eventlog: stream id: %w", err)
+	}
+	return id, nil
+}
+
+// NewStream mints a new event stream for session — one incarnation's log —
+// and returns its id. It always creates, so callers own the decision of
+// when a session name starts a new incarnation (a session create) versus
+// resuming its current one (a down/up or --force-recreate).
+func (s *Store) NewStream(session string) (string, error) {
+	db, err := s.dbHandle()
+	if err != nil {
+		return "", err
+	}
+	id, err := db.CreateEventStream(context.Background(), session)
+	if err != nil {
+		return "", fmt.Errorf("eventlog: new stream: %w", err)
 	}
 	return id, nil
 }
