@@ -300,7 +300,6 @@ func TestStatus_ProjectsTree(t *testing.T) {
 	}
 }
 
-// Status does not flatten a multi-level tree into the root's Children.
 func TestStatus_ProjectsTree_GrandchildAndIndependentRootStayDistinct(t *testing.T) {
 	cfg := &config.Config{}
 	store := testStore(t)
@@ -413,9 +412,6 @@ func TestStatus_ProjectsTree_ExplicitRootGroupSiblings(t *testing.T) {
 	}
 }
 
-// state.Store detaches a child's ParentSession when the parent is deleted
-// (state.TestStore_DeleteDetachesSessionTreeLinks); this proves that fact
-// also reads back correctly through List/Status.
 func TestStatus_ProjectsTree_OrphanedAfterParentDeleted(t *testing.T) {
 	cfg := &config.Config{}
 	store := testStore(t)

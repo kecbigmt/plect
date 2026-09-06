@@ -167,12 +167,6 @@ func TestAcceptance_ApiV1SessionDetailUnknownNameIs404(t *testing.T) {
 	}
 }
 
-// Given a root, its child, its grandchild, and an unrelated independent root
-// persisted in a temp state store,
-// When GET /api/v1/sessions and GET /api/v1/sessions/<name> are served by the
-// live service,
-// Then each response's parentSession/children preserve that structure, and
-// the independent root stays distinct from the tree.
 func TestAcceptance_ApiV1SessionsPreserveParentChildGrandchildAndIndependentRoots(t *testing.T) {
 	store := state.NewStore(t.TempDir())
 	now := time.Now()
