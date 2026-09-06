@@ -35,7 +35,7 @@ const (
 // publish same-session events that drive the reviewer or work session. Against
 // that same refreshed fact set, it also fires [[chains]].
 func TickSession(cfg *config.Config, store *state.Store, params TickParams) (*CheckResult, error) {
-	resolvedName, computed, chainPlan, err := evaluateSessionActions(cfg, store, params.SessionName, !params.SkipRefresh, params.Trigger)
+	resolvedName, session, computed, chainPlan, err := evaluateSessionActions(cfg, store, params.SessionName, !params.SkipRefresh, params.Trigger)
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +64,7 @@ func TickSession(cfg *config.Config, store *state.Store, params TickParams) (*Ch
 		}
 	}
 
-	generation := sessionGeneration(store.Get(resolvedName))
+	generation := sessionGeneration(session)
 	chains := make([]ChainSpawn, 0, len(chainPlan))
 	for _, sp := range chainPlan {
 		capRefused := false

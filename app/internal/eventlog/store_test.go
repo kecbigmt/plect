@@ -166,12 +166,6 @@ func TestClearChainAttempts_RemovesEveryMarkerForTheSession(t *testing.T) {
 	}
 }
 
-// A tick still evaluating a session's old generation can race its destroy:
-// ClearChainAttempts is unlocked (a plain file remove) and best-effort, so
-// that stale tick's own SwapChainAttempt can land after the clear and
-// recreate the file. Scoping the key by generation is what actually defeats
-// this, independent of ordering: the stale write lands under the old
-// generation's key, which the recreated session's own generation never reads.
 func TestSwapChainAttempt_StaleGenerationWriteAfterClearDoesNotSuppressANewGeneration(t *testing.T) {
 	s := NewStore(t.TempDir())
 
@@ -181,7 +175,6 @@ func TestSwapChainAttempt_StaleGenerationWriteAfterClearDoesNotSuppressANewGener
 	if err := s.ClearChainAttempts("work1"); err != nil {
 		t.Fatalf("ClearChainAttempts: %v", err)
 	}
-	// The stale tick's write lands after the clear, recreating the file.
 	if _, won, err := s.SwapChainAttempt("work1", "work", "review", "gen1", "cap|A"); err != nil || !won {
 		t.Fatalf("stale gen1 rewrite: won=%v err=%v", won, err)
 	}

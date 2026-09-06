@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/domain"
@@ -430,5 +431,34 @@ func TestTickSession_ChainCapAttemptMarkerDoesNotSurviveRecreationUnderTheSameNa
 	}
 	if len(evs2) != 2 {
 		t.Fatalf("chain-attempt events across a destroy and same-name recreation = %d, want 2 (the recreated session's own first refusal, not suppressed by the destroyed one's marker)", len(evs2))
+	}
+}
+
+func TestEvaluateSessionActions_ReturnedSnapshotIsImmuneToALaterStoreMutation(t *testing.T) {
+	store := testStore(t)
+	cfg := writeWorkflowFixture(t, t.TempDir(), "wf",
+		[]taskFixture{workTaskWithChain(capReviewChainFixture)},
+		[]nodeFixture{{id: "work"}})
+	writeWorkflowFile(t, cfg, "reviewer_wf", "")
+	seedReviewWork(t, store, "work1", map[string]any{"checks_status": "SUCCESS", "revision": "sha1"})
+
+	_, session, _, _, err := evaluateSessionActions(cfg, store, "work1", false, "")
+	if err != nil {
+		t.Fatalf("evaluateSessionActions: %v", err)
+	}
+	snapshot := sessionGeneration(session)
+
+	if err := store.Update("work1", func(s *domain.Session) error {
+		s.CreatedAt = s.CreatedAt.Add(time.Hour)
+		return nil
+	}); err != nil {
+		t.Fatalf("store.Update: %v", err)
+	}
+
+	if got := sessionGeneration(session); got != snapshot {
+		t.Fatalf("sessionGeneration(session) = %q after an unrelated store mutation, want %q unchanged", got, snapshot)
+	}
+	if live := sessionGeneration(store.Get("work1")); live == snapshot {
+		t.Fatal("test setup did not actually change the live session's generation")
 	}
 }
