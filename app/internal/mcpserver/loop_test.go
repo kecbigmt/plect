@@ -9,6 +9,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 
+	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/state"
 )
 
@@ -36,8 +37,8 @@ type = "noop"
 }
 
 // setUpJudgeableInstance creates a session with one revwork instance carrying
-// an "ac-met" judge leaf, ready for a judge tool call to record a verdict
-// against.
+// two judge leaves ("ac-met", "solves") under the default relation policy
+// (sibling/parent), ready for judge tool calls to record verdicts against.
 func setUpJudgeableInstance(t *testing.T, sessionID string) (session, instance string) {
 	t.Helper()
 	writeRevisionTask(t)
@@ -45,7 +46,7 @@ func setUpJudgeableInstance(t *testing.T, sessionID string) (session, instance s
 	result, err := handleTaskSetup(context.Background(), reqWith(map[string]any{
 		"task_id":        "revwork",
 		"session":        session,
-		"done_when_json": `{"all":[{"judge":"acceptance criteria","id":"ac-met"}]}`,
+		"done_when_json": `{"all":[{"judge":"acceptance criteria","id":"ac-met"},{"judge":"solves the issue","id":"solves"}]}`,
 	}))
 	if err != nil {
 		t.Fatalf("handleTaskSetup: %v", err)
@@ -56,6 +57,18 @@ func setUpJudgeableInstance(t *testing.T, sessionID string) (session, instance s
 		t.Fatalf("missing instance in task_setup result: %+v", out)
 	}
 	return session, instance
+}
+
+// makeParent sets child's ParentSession to parent, so the default judge
+// relation policy (sibling/parent) accepts a verdict recorded by parent.
+func makeParent(t *testing.T, child, parent string) {
+	t.Helper()
+	if err := state.NewStore("").Update(child, func(s *domain.Session) error {
+		s.ParentSession = parent
+		return nil
+	}); err != nil {
+		t.Fatalf("set parent session: %v", err)
+	}
 }
 
 func reqWith(args map[string]any) mcp.CallToolRequest {
@@ -145,12 +158,20 @@ func TestRecordJudge_RejectsRetiredReviewerSessionArgument(t *testing.T) {
 
 // TestHandleJudgeApprove_JudgeSessionRoundTrips proves the judge_session
 // argument recorded through the MCP tool round-trips end to end: the
-// response carries it back under judge_session (never reviewer_session),
-// and the persisted contract state names the judge the same way.
+// response carries it back under judge_session (never reviewer_session), the
+// persisted contract state names the judge the same way, and — the actual
+// public read path a client uses — plect_status's JSON carries judge_session
+// and judge_workflow in both the live done_when.leaves projection (for the
+// approved, satisfied ac-met leaf) and unmet_items (for the request-changes,
+// unsatisfied solves leaf), with no reviewer_* key anywhere in the response.
+// A live session's status never populates persisted_done_when (that
+// projection is tombstone-only, see status.go's tombstoneStatusResult), so
+// done_when.leaves is the live equivalent this test checks instead.
 func TestHandleJudgeApprove_JudgeSessionRoundTrips(t *testing.T) {
 	setUpConfigHome(t)
 	work, instance := setUpJudgeableInstance(t, "judge-work-session-2")
 	reviewer := createPlainSession(t, "judge-review-session")
+	makeParent(t, work, reviewer)
 
 	result, err := handleJudgeApprove(context.Background(), reqWith(map[string]any{
 		"session":       work,
@@ -170,6 +191,18 @@ func TestHandleJudgeApprove_JudgeSessionRoundTrips(t *testing.T) {
 		t.Fatalf("response must not carry a reviewer_session key: %+v", out)
 	}
 
+	// "solves" is left unsatisfied (request_changes) so it surfaces in
+	// unmet_items, the other place a judge's identity is projected.
+	if _, err := handleJudgeRequestChanges(context.Background(), reqWith(map[string]any{
+		"session":       work,
+		"instance":      instance,
+		"judge_id":      "solves",
+		"reason":        "missing an edge case",
+		"judge_session": reviewer,
+	})); err != nil {
+		t.Fatalf("handleJudgeRequestChanges: %v", err)
+	}
+
 	s := state.NewStore("").Get(work)
 	if s == nil {
 		t.Fatal("work session not persisted")
@@ -180,6 +213,83 @@ func TestHandleJudgeApprove_JudgeSessionRoundTrips(t *testing.T) {
 	}
 	if judge.JudgeSession != reviewer {
 		t.Fatalf("persisted judge_session = %q, want %q", judge.JudgeSession, reviewer)
+	}
+
+	statusResult, err := handleStatus(context.Background(), reqWith(map[string]any{"url": work}))
+	if err != nil {
+		t.Fatalf("handleStatus: %v", err)
+	}
+	statusText, ok := statusResult.Content[0].(mcp.TextContent)
+	if !ok {
+		t.Fatalf("expected text content, got %T", statusResult.Content[0])
+	}
+	if strings.Contains(statusText.Text, "reviewer_session") || strings.Contains(statusText.Text, "reviewer_workflow") {
+		t.Fatalf("plect_status JSON must not carry any reviewer_* key: %s", statusText.Text)
+	}
+
+	statusOut := decodeJSONResult(t, statusResult)
+	work0, ok := statusOut["work"].([]any)
+	if !ok || len(work0) == 0 {
+		t.Fatalf("expected work entries in status, got %+v", statusOut)
+	}
+	var task map[string]any
+	for _, w := range work0 {
+		if wm, ok := w.(map[string]any); ok && wm["instance"] == instance {
+			task = wm
+			break
+		}
+	}
+	if task == nil {
+		t.Fatalf("status has no work entry for instance %q: %+v", instance, statusOut)
+	}
+
+	doneWhen, ok := task["done_when"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing done_when: %+v", task)
+	}
+	leaves, ok := doneWhen["leaves"].([]any)
+	if !ok || len(leaves) == 0 {
+		t.Fatalf("missing done_when.leaves: %+v", doneWhen)
+	}
+	var acMet map[string]any
+	for _, leaf := range leaves {
+		if lm, ok := leaf.(map[string]any); ok && lm["id"] == "ac-met" {
+			acMet = lm
+			break
+		}
+	}
+	if acMet == nil {
+		t.Fatalf("done_when.leaves missing the satisfied ac-met judge leaf: %+v", leaves)
+	}
+	if acMet["status"] != "satisfied" {
+		t.Fatalf("done_when.leaves ac-met.status = %v, want satisfied", acMet["status"])
+	}
+	if acMet["judge_session"] != reviewer {
+		t.Fatalf("done_when.leaves ac-met.judge_session = %v, want %v", acMet["judge_session"], reviewer)
+	}
+	if acMet["judge_workflow"] != "plain" {
+		t.Fatalf("done_when.leaves ac-met.judge_workflow = %v, want plain", acMet["judge_workflow"])
+	}
+
+	unmetItems, ok := task["unmet_items"].([]any)
+	if !ok || len(unmetItems) == 0 {
+		t.Fatalf("expected unmet_items for the unsatisfied solves judge, got %+v", task)
+	}
+	var solves map[string]any
+	for _, item := range unmetItems {
+		if im, ok := item.(map[string]any); ok && im["id"] == "solves" {
+			solves = im
+			break
+		}
+	}
+	if solves == nil {
+		t.Fatalf("unmet_items missing the unsatisfied solves judge leaf: %+v", unmetItems)
+	}
+	if solves["judge_session"] != reviewer {
+		t.Fatalf("unmet_items solves.judge_session = %v, want %v", solves["judge_session"], reviewer)
+	}
+	if solves["judge_workflow"] != "plain" {
+		t.Fatalf("unmet_items solves.judge_workflow = %v, want plain", solves["judge_workflow"])
 	}
 }
 
