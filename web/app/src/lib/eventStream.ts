@@ -1,28 +1,16 @@
 import type { SessionEvent } from "@/lib/eventsApi";
 
 // The live-timeline connection module (docs/design/web-ui-event-history.md's
-// history/live handoff). It hand-rolls this over `fetch()` +
-// `ReadableStream` rather than the browser's native `EventSource`:
-// `EventSource` cannot read a response's HTTP status or body
-// on failure, so a 401 (auth expired), a 502 (bus unavailable), and a
-// transient network blip would all surface identically — this module reads
-// `response.status` directly, matching how `bootstrap.ts` already
-// distinguishes those cases for the bootstrap read. It also owns its own
-// resume cursor end-to-end (the wire's opaque `id:` per frame — the same
-// format `GET /api/v1/events` returns as `nextCursor`), so a caller never
-// re-derives a resume position after the first connect.
+// "The live subscription" — see there for why this hand-rolls fetch() +
+// ReadableStream instead of using EventSource).
 //
-// Reconnect uses full-jitter exponential backoff: `BACKOFF_INITIAL_MS` (0.5s)
-// doubling each attempt (`BACKOFF_FACTOR`) up to `BACKOFF_MAX_MS` (15s), reset
-// to zero attempts as soon as a connection is actually accepted (a long-lived
-// stream that later drops does not inherit an old backoff count from a prior
-// blip). After `MAX_RECONNECT_ATTEMPTS` (8) consecutive failures to even
-// connect, the module gives up and reports "unavailable" rather than retrying
-// forever silently — the acceptance criteria call for a "usable client
-// state," not an endless invisible retry loop; a caller that wants to keep
-// trying re-opens the connection (a fresh `openEventStream` call), which
-// resets the count. A `401` never retries at all: it reports "auth-expired"
-// immediately, since retrying will not fix an expired session.
+// Reconnect: full-jitter backoff, BACKOFF_INITIAL_MS (0.5s) doubling by
+// BACKOFF_FACTOR up to BACKOFF_MAX_MS (15s); the attempt budget resets once a
+// connection is actually accepted. After MAX_RECONNECT_ATTEMPTS (8)
+// consecutive failures to connect, this gives up and reports "unavailable"
+// rather than retrying forever silently — a caller that wants to keep trying
+// calls openEventStream again, which resets the budget. A 401 reports
+// "auth-expired" immediately with no retry.
 
 export const BACKOFF_INITIAL_MS = 500;
 export const BACKOFF_FACTOR = 2;
@@ -90,12 +78,6 @@ function dispatchFrame(raw: string, onEvent: (event: SessionEvent) => void): voi
   }
 }
 
-// connectOnce opens one fetch-based SSE connection and reads it to
-// completion (server close, network failure, or abort), parsing the same
-// line-oriented framing the Go relay writes (a blank line dispatches the
-// buffered frame; ":"-prefixed lines are keepalive comments; "id:" advances
-// cursor.value so a later reconnect resumes from the last frame actually
-// processed, not just where this connection started).
 async function connectOnce(
   sessionName: string,
   cursor: { value: string },
@@ -115,7 +97,7 @@ async function connectOnce(
   if (response.status === 401) {
     return { kind: "auth-expired" };
   }
-  if (!response.ok || !response.body) {
+  if (!response.ok || !response.body || response.bodyUsed) {
     return { kind: "retry" };
   }
 
@@ -129,15 +111,15 @@ async function connectOnce(
   const decoder = new TextDecoder();
   let buffer = "";
   let dataLines: string[] = [];
+  let pendingId: string | null = null;
   try {
     while (true) {
       const { done, value } = await reader.read();
-      // Re-checked after every read, not just relied on via `fetch`'s own
+      // Re-checked after every read, not just relied on via fetch's own
       // AbortSignal wiring: a frame already in flight when the caller
-      // cancels (a session switch) can still resolve after `signal.aborted`
-      // flips, and dispatching it would let a delayed response cross into
-      // whatever session opened next — the exact hazard the acceptance
-      // criteria call out by name.
+      // cancels (a session switch) can still resolve after signal.aborted
+      // flips, and dispatching it would let it cross into whatever session
+      // opened next.
       if (signal.aborted) {
         return { kind: "aborted" };
       }
@@ -150,9 +132,18 @@ async function connectOnce(
       for (const rawLine of lines) {
         const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
         if (line === "") {
+          // A frame's id becomes the resume cursor only once its terminating
+          // blank line arrives — committing it at the "id:" line itself
+          // would advance past an event whose "data:" line never showed up
+          // because the connection dropped mid-frame, permanently skipping
+          // it on reconnect.
           if (dataLines.length > 0) {
             dispatchFrame(dataLines.join("\n"), handlers.onEvent);
             dataLines = [];
+          }
+          if (pendingId !== null) {
+            cursor.value = pendingId;
+            pendingId = null;
           }
           continue;
         }
@@ -160,7 +151,7 @@ async function connectOnce(
           continue; // keepalive comment
         }
         if (line.startsWith("id:")) {
-          cursor.value = line.slice(3).trim();
+          pendingId = line.slice(3).trim();
           continue;
         }
         if (line.startsWith("data:")) {
@@ -174,12 +165,8 @@ async function connectOnce(
   return { kind: "retry" }; // the stream ended (server close/bus restart); reconnect from cursor.value
 }
 
-// openEventStream starts the connection loop and returns immediately; it
-// runs until `signal` aborts (the caller's cleanup — a session switch or
-// unmount) or the module itself gives up (auth expiry, or exhausted
-// reconnect attempts). `initialCursor` is the seed only: every reconnect
-// after the first uses whatever cursor.value advanced to, from the frames
-// actually processed.
+// initialCursor seeds only the first connection attempt; every reconnect
+// after that resumes from whatever cursor.value last advanced to.
 export function openEventStream(
   sessionName: string,
   initialCursor: string,

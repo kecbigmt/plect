@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/service"
+	"github.com/kecbigmt/plecture/contracts/event"
 )
 
 func TestEventsStreamJSON_RequiresSession(t *testing.T) {
@@ -19,9 +20,7 @@ func TestEventsStreamJSON_RequiresSession(t *testing.T) {
 	}
 }
 
-// A malformed/stale-generation cursor is rejected as a 400 before the bus is
-// ever dialed — the same "invalid resume state" semantics EventPage already
-// applies, not a silently-wrong resume position.
+// An invalid cursor is a 400 before the bus is ever dialed.
 func TestEventsStreamJSON_RejectsInvalidCursor(t *testing.T) {
 	svc := &fakeService{resumeErr: &service.Error{Code: service.ErrInvalidInput, Message: "cursor expired"}}
 	rr := get(t, svc, "/api/v1/events/stream?session=acme/session-x&cursor=garbage")
@@ -53,10 +52,6 @@ func fakeBusJSON(t *testing.T, wantSince string) *httptest.Server {
 	return httptest.NewServer(mux)
 }
 
-// A fresh connect (no cursor) forwards no since= to the bus and relays each
-// frame as JSON identical in shape to the history endpoint's own Event DTO,
-// with the resume id re-encoded as the same opaque cursor format EventPage
-// returns as NextCursor (not the bus's raw byte offset).
 func TestEventsStreamJSON_RelaysEventsWithOpaqueResumeCursor(t *testing.T) {
 	bus := fakeBusJSON(t, "")
 	defer bus.Close()
@@ -116,9 +111,6 @@ func TestEventsStreamJSON_RelaysEventsWithOpaqueResumeCursor(t *testing.T) {
 	}
 }
 
-// A resume cursor decodes to a byte offset that becomes the bus's own
-// since= parameter — the live endpoint's resume mechanism is EventPage's
-// cursor, translated, not a second format.
 func TestEventsStreamJSON_ResumesBusFromDecodedCursor(t *testing.T) {
 	bus := fakeBusJSON(t, "64")
 	defer bus.Close()
@@ -141,6 +133,49 @@ func TestEventsStreamJSON_ResumesBusFromDecodedCursor(t *testing.T) {
 	_, _ = bufio.NewReader(resp.Body).ReadString('\n') // drain enough to let the handler run
 	if svc.gotResumeCursor != "some-opaque-token" {
 		t.Errorf("resume cursor = %q", svc.gotResumeCursor)
+	}
+}
+
+func TestEventsStreamJSON_ResolvesGenerationEstablishedByTheFirstLiveEvent(t *testing.T) {
+	bus := fakeBusJSON(t, "")
+	defer bus.Close()
+
+	calls := 0
+	svc := &fakeService{resumeFn: func(string, string) (string, int64, error) {
+		calls++
+		if calls == 1 {
+			return "", 0, nil // connect time: the log does not exist yet
+		}
+		return "01REAL000", 0, nil // resolveGen's re-check, after the log exists
+	}}
+	srv := httptest.NewServer(withBus(svc, bus.URL).Routes())
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/v1/events/stream?session=acme/session-x", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var gotCursor string
+	sc := bufio.NewScanner(resp.Body)
+	for sc.Scan() {
+		if id, ok := strings.CutPrefix(sc.Text(), "id: "); ok {
+			gotCursor = id
+		}
+	}
+	if gotCursor == "" {
+		t.Fatal("no resume id was emitted")
+	}
+	decoded, err := event.DecodeCursor(gotCursor)
+	if err != nil {
+		t.Fatalf("decode cursor: %v", err)
+	}
+	if decoded.Gen != "01REAL000" {
+		t.Errorf("frame cursor generation = %q, want the generation established by the first event, not the empty one seen at connect time", decoded.Gen)
 	}
 }
 

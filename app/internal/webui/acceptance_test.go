@@ -575,14 +575,11 @@ func TestAcceptance_ApiV1EventsStreamResumesFromTheHistoryEndpointsOwnCursor(t *
 	}
 	cursor := *firstPage.NextCursor
 
-	// The race: an event arrives after the cursor was captured but before
-	// the client's live subscription opens.
 	publish("third-arrived-during-the-gap")
 
-	// A bare-bones bus that replays everything at/after ?since= from the
-	// same real store, mirroring what the production bus does over the
-	// durable log — this test exercises the JSON relay/cursor-decode layer,
-	// not the bus's own fan-out.
+	// A minimal bus that replays from ?since= over the same real store —
+	// this test exercises the JSON relay/cursor-decode layer, not the bus's
+	// own fan-out.
 	bus := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		evs, offs, _, err := service.EventList(cfg, store, session, sinceFromQuery(r), event.Filter{})
 		if err != nil {

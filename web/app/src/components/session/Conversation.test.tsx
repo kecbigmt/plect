@@ -428,4 +428,60 @@ describe("Conversation", () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(screen.queryByText("late-arrival")).not.toBeInTheDocument();
   });
+
+  it("opens the live subscription even when the session's history starts out empty", async () => {
+    let sawStreamCursorParam: string | null = "unset";
+    vi.mocked(fetch).mockImplementation((input) => {
+      const url = requestUrl(input);
+      if (url.pathname.endsWith("/events/stream")) {
+        sawStreamCursorParam = url.searchParams.get("cursor");
+        return Promise.resolve(
+          sseResponse(
+            'id: cur-1\ndata: {"id":"01","sessionName":"team/a","time":"2026-01-01T00:00:01Z","type":"user.note","source":"cli","direction":"internal","summary":"first-live-event"}\n\n',
+          ),
+        );
+      }
+      return Promise.resolve(jsonResponse({ events: [] })); // no nextCursor: no log exists yet
+    });
+
+    renderConversation("team/a");
+
+    expect(await screen.findByText("first-live-event")).toBeInTheDocument();
+    expect(sawStreamCursorParam).toBeNull();
+  });
+
+  it("clears a previous session's live events when switching to another session whose own history is also empty", async () => {
+    vi.mocked(fetch).mockImplementation((input) => {
+      const url = requestUrl(input);
+      const session = url.searchParams.get("session");
+      if (url.pathname.endsWith("/events/stream")) {
+        if (session === "team/a") {
+          return Promise.resolve(
+            sseResponse(
+              'id: cur-1\ndata: {"id":"01","sessionName":"team/a","time":"2026-01-01T00:00:01Z","type":"user.note","source":"cli","direction":"internal","summary":"team-a-live"}\n\n',
+            ),
+          );
+        }
+        return Promise.resolve(sseResponse(""));
+      }
+      return Promise.resolve(jsonResponse({ events: [] })); // both sessions: no nextCursor
+    });
+
+    const queryClient = new QueryClient();
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}>
+        <Conversation sessionName="team/a" onSelectSession={vi.fn()} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText("team-a-live");
+
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <Conversation sessionName="team/b" onSelectSession={vi.fn()} />
+      </QueryClientProvider>,
+    );
+
+    await screen.findByText(/no events recorded/i);
+    expect(screen.queryByText("team-a-live")).not.toBeInTheDocument();
+  });
 });

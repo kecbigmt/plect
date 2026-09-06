@@ -89,6 +89,42 @@ describe("openEventStream", () => {
     expect(states.slice(0, 3)).toEqual(["connecting", "live", "reconnecting"]);
   });
 
+  it("does not advance the resume cursor for a frame truncated before its terminating blank line", async () => {
+    const seenCursors: string[] = [];
+    const controller = new AbortController();
+    vi.mocked(fetch).mockImplementation((input) => {
+      seenCursors.push(cursorOf(input as RequestInfo | URL));
+      if (seenCursors.length === 1) {
+        // The id line arrives, but the connection ends before the frame's
+        // data and terminating blank line ever do.
+        return Promise.resolve(sseResponse("id: cur-truncated\n"));
+      }
+      controller.abort();
+      return Promise.reject(new DOMException("aborted", "AbortError"));
+    });
+
+    openEventStream("team/a", "seed-cursor", { onEvent: () => {}, onStateChange: () => {} }, controller.signal);
+    await vi.advanceTimersByTimeAsync(BACKOFF_MAX_MS);
+
+    expect(seenCursors).toEqual(["seed-cursor", "seed-cursor"]);
+  });
+
+  it("retries rather than throwing when the response body was already read", async () => {
+    const response = sseResponse("");
+    await response.text(); // consumes the body, as a shared/reused Response would arrive already consumed
+    const states: EventStreamState[] = [];
+    vi.mocked(fetch).mockResolvedValue(response);
+    const controller = new AbortController();
+
+    openEventStream("team/a", "", { onEvent: () => {}, onStateChange: (s) => states.push(s) }, controller.signal);
+    await vi.advanceTimersByTimeAsync(0);
+    controller.abort();
+
+    expect(states[0]).toBe("connecting");
+    expect(states).not.toContain("live");
+    expect(states.every((s) => s === "connecting" || s === "reconnecting")).toBe(true);
+  });
+
   it("reports auth-expired on a 401 and does not reconnect", async () => {
     const states: EventStreamState[] = [];
     vi.mocked(fetch).mockResolvedValue(emptyResponse(401));

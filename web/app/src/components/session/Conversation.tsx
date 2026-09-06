@@ -19,12 +19,8 @@ export function Conversation({
   onSelectSession: (name: string) => void;
 }) {
   const events = useSessionEvents(sessionName);
-  // The first page's own nextCursor is the exact history/live handoff
-  // position (docs/design/web-ui-event-history.md) — undefined until that
-  // page has actually loaded, which is what keeps the live subscription from
-  // opening before there is a resume position to hand it.
-  const firstPageCursor = events.data?.pages[0]?.nextCursor;
-  const live = useLiveEvents(sessionName, firstPageCursor);
+  const firstPage = events.data?.pages[0];
+  const live = useLiveEvents(sessionName, firstPage !== undefined, firstPage?.nextCursor ?? "");
   const scrollRef = useRef<HTMLDivElement>(null);
   // Keyed by session name so switching away and back restores that
   // session's own offset instead of carrying over whichever session was
@@ -103,12 +99,9 @@ export function Conversation({
   );
 }
 
-// Stale-state indication for the live subscription: "connecting"/"live" are
-// the steady states and render nothing —
-// only a state the reader should actually act on or wait out gets a banner.
-// "reconnecting" is transient background noise the connection module itself
-// recovers from, so it likewise renders nothing to avoid flickering a banner
-// on every brief blip.
+// "connecting"/"live"/"reconnecting" render nothing — only a state the
+// reader should act on or wait out gets a banner; "reconnecting" is
+// transient enough that flagging it would just flicker on every brief blip.
 function LiveStateBanner({ state }: { state: EventStreamState }) {
   if (state === "auth-expired") {
     return (

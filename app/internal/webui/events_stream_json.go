@@ -13,32 +13,10 @@ import (
 	"github.com/kecbigmt/plecture/contracts/event"
 )
 
-// handleSessionEventsStreamJSON is the React shell's live-timeline endpoint:
-// GET /api/v1/events/stream?session=&cursor=. It is hand-written rather than
-// part of the generated @plecture/web-api contract (see web/api/README.md's
-// "What this PR does not claim" — SSE reconnection/replay semantics stay
-// explicit and separately tested at this boundary), mounted as a literal
-// pattern the same way GET /api/v1/bootstrap already is.
-//
-// Unlike the Go-templated timeline's handleSessionEventsStream (which relays
-// rendered HTML rows and resumes from the bus's own raw byte-offset Last-
-// Event-ID), this endpoint's resume token IS the opaque cursor
-// GET /api/v1/events already returns as nextCursor: docs/design/web-ui-
-// event-history.md's history/live handoff closes its race window by letting
-// a client hand that cursor straight to this endpoint, with no second cursor
-// format to translate. service.EventStreamResume decodes and validates it
-// exactly like EventPage does, so a malformed, wrong-order, or stale-
-// generation cursor is a 400 here the same way it already is there — the
-// bus is never dialed with a resume position that cannot be trusted. No
-// cursor at all is a fresh connect: it replays a bounded recent tail
-// (streamTailLimit, unchanged) like the HTML relay does.
-//
-// Each frame carries one JSON object in the identical shape as the history
-// endpoint's own events[] item (webapi.EventFromDomain — the same
-// conversion, not a second one), and its `id:` is the same opaque cursor
-// format re-encoded for the position after that record, so a client's own
-// fetch-based reconnect module can hand that id straight back as this
-// endpoint's `cursor` with no translation of its own.
+// handleSessionEventsStreamJSON is hand-written rather than part of the
+// generated @plecture/web-api contract: SSE reconnection/replay semantics
+// stay explicit and separately tested at this boundary (web/api/README.md,
+// docs/design/web-ui-event-history.md).
 func (s *Server) handleSessionEventsStreamJSON(w http.ResponseWriter, r *http.Request) {
 	session := r.URL.Query().Get("session")
 	if session == "" {
@@ -71,17 +49,27 @@ func (s *Server) handleSessionEventsStreamJSON(w http.ResponseWriter, r *http.Re
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	_ = relayBusBodyJSON(resp.Body, w, flusher, gen)
+	// A fresh connect against a session with no durable log yet resolves gen
+	// as "" (EventStreamResume). The log's real, permanent generation is
+	// assigned on its first Append, which can happen after this connection
+	// is already open and following live — so resolveGen re-reads it lazily
+	// until a non-empty value appears, rather than baking in the empty one
+	// for the rest of the connection's frames (which a later reconnect would
+	// then reject as a stale-generation cursor).
+	known := gen
+	resolveGen := func() string {
+		if known == "" {
+			if g, _, gerr := s.svc.EventStreamResume(session, ""); gerr == nil {
+				known = g
+			}
+		}
+		return known
+	}
+
+	_ = relayBusBodyJSON(resp.Body, w, flusher, resolveGen)
 }
 
-// relayBusBodyJSON copies a bus SSE stream to the browser, converting each
-// event frame's payload to the wire's Event DTO and its raw byte-offset id
-// to the opaque event.Cursor format — the same transformation
-// relayBusBody (events_stream.go) applies for rendering, kept as a separate
-// function since the two outputs (HTML row vs. JSON DTO) share no rendering
-// path worth abstracting over. Comment lines (keepalives) are forwarded
-// verbatim, exactly as relayBusBody does.
-func relayBusBodyJSON(body io.Reader, w io.Writer, flusher http.Flusher, gen string) error {
+func relayBusBodyJSON(body io.Reader, w io.Writer, flusher http.Flusher, resolveGen func() string) error {
 	sc := bufio.NewScanner(body)
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	var dataLines []string
@@ -95,7 +83,7 @@ func relayBusBodyJSON(body io.Reader, w io.Writer, flusher http.Flusher, gen str
 			}
 			var ev event.Event
 			if json.Unmarshal([]byte(strings.Join(dataLines, "\n")), &ev) == nil {
-				cursor := event.Cursor{V: event.CursorVersion, Off: lastOffset, Ord: event.OrderAsc, Gen: gen}.Encode()
+				cursor := event.Cursor{V: event.CursorVersion, Off: lastOffset, Ord: event.OrderAsc, Gen: resolveGen()}.Encode()
 				payload, merr := json.Marshal(webapi.EventFromDomain(ev))
 				if merr == nil {
 					if err := writeEventFrame(w, cursor, string(payload)); err != nil {
@@ -119,12 +107,6 @@ func relayBusBodyJSON(body io.Reader, w io.Writer, flusher http.Flusher, gen str
 	return sc.Err()
 }
 
-// writeAPIValidationError writes the JSON API's ValidationError shape for a
-// request this handler rejects before calling the service (a missing query
-// parameter) — mirrors webapi's own writeValidationError, which is
-// unexported and scoped to that package's generated-contract handlers. A
-// *service.Error routes through webapi.ApiError's own classification table
-// rather than a second, hand-built error envelope.
 func writeAPIValidationError(w http.ResponseWriter, msg string) {
 	status, body := webapi.ApiError(&service.Error{Code: service.ErrInvalidInput, Message: msg})
 	writeJSONBody(w, status, body)

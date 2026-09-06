@@ -250,10 +250,6 @@ func TestEventPageRejectsStaleGenerationCursor(t *testing.T) {
 	}
 }
 
-// EventStreamResume is the live-endpoint's own door onto EventPage's cursor
-// validation: a client hands it the exact opaque cursor GET /events already
-// returns as NextCursor, and it must decode to the identical byte offset
-// EventPage itself would resume from.
 func TestEventStreamResumeDecodesEventPageCursor(t *testing.T) {
 	store := state.NewStore(t.TempDir())
 	const session = "owner/repo-9"
@@ -275,9 +271,6 @@ func TestEventStreamResumeDecodesEventPageCursor(t *testing.T) {
 		t.Fatal("resume: expected a non-empty generation")
 	}
 
-	// The resumed offset must line up with what a further EventPage call
-	// would have read from the same cursor: the next page starts exactly
-	// where the first left off.
 	rest, err := EventPage(nil, store, session, EventPageParams{Cursor: page.NextCursor})
 	if err != nil {
 		t.Fatalf("rest page: %v", err)
@@ -291,9 +284,6 @@ func TestEventStreamResumeDecodesEventPageCursor(t *testing.T) {
 	}
 }
 
-// A "" cursor (a fresh live connection with no history handoff yet) resolves
-// to the log's current generation and no offset — the caller applies its own
-// tail-replay policy rather than resuming from a specific position.
 func TestEventStreamResumeEmptyCursorIsFreshConnect(t *testing.T) {
 	store := state.NewStore(t.TempDir())
 	const session = "owner/repo-9"
@@ -312,16 +302,13 @@ func TestEventStreamResumeEmptyCursorIsFreshConnect(t *testing.T) {
 	}
 }
 
-// A cursor issued for a log generation that no longer exists (the log
-// rotated) must be rejected the same way EventPage already rejects it — a
-// live subscription must never resume against the wrong generation's byte
-// layout.
 func TestEventStreamResumeRejectsStaleGenerationCursor(t *testing.T) {
 	store := state.NewStore(t.TempDir())
 	const session = "owner/repo-9"
 	if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote}); err != nil {
 		t.Fatal(err)
 	}
+	// Forge a cursor with a generation the log never had.
 	stale := event.Cursor{V: event.CursorVersion, Off: 0, Ord: event.OrderAsc, Gen: "01JXNEVER"}.Encode()
 	_, _, err := EventStreamResume(nil, store, session, stale)
 	var svcErr *Error
@@ -330,8 +317,6 @@ func TestEventStreamResumeRejectsStaleGenerationCursor(t *testing.T) {
 	}
 }
 
-// A cursor issued for desc (which never paginates) must never be honored as
-// a resume position — the same order check EventPage already applies.
 func TestEventStreamResumeRejectsOrderMismatchCursor(t *testing.T) {
 	store := state.NewStore(t.TempDir())
 	const session = "owner/repo-9"
@@ -354,8 +339,6 @@ func TestEventStreamResumeRejectsOrderMismatchCursor(t *testing.T) {
 	}
 }
 
-// A malformed cursor (not even a valid token) is rejected the same way, not
-// treated as "no cursor".
 func TestEventStreamResumeRejectsMalformedCursor(t *testing.T) {
 	store := state.NewStore(t.TempDir())
 	const session = "owner/repo-9"

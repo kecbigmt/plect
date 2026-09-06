@@ -35,15 +35,11 @@ export function useSessionEvents(sessionName: string | null) {
 
 // Flattens history pages (in fetch order) and any live-stream events after
 // them, deduplicating by event ID rather than by content: an ascending page
-// can hand back an event an earlier page already returned (a refetch
-// replays the same forward position), and the live stream's own replay-then-
-// follow catch-up can re-deliver one a history page already showed (the
-// history/live handoff protocol's documented overlap,
-// docs/design/web-ui-event-history.md) — but a genuinely distinct record —
-// an origin event and the parent notification it caused — must never
-// collapse just because their text happens to match. History wins a
-// collision (it is iterated first): a live redelivery of an already-shown
-// event is simply dropped, not treated as a second occurrence.
+// can hand back an event an earlier page already returned, and the live
+// stream's own replay-then-follow catch-up can re-deliver one a history page
+// already showed — but a genuinely distinct record must never collapse just
+// because its text happens to match. History wins a collision (it is
+// iterated first).
 export function dedupeEventsById(
   pages: readonly SessionEventPage[] | undefined,
   liveEvents: readonly SessionEvent[] = [],
@@ -64,33 +60,29 @@ export function dedupeEventsById(
   return [...byId.values()];
 }
 
-// useLiveEvents opens the live subscription once the first history page has
-// settled, per the history/live handoff protocol
-// (docs/design/web-ui-event-history.md): that page's own nextCursor is the
-// exact resume position, so no separate "wait until history is exhausted"
-// step is needed before going live — anything between that position and now
-// (whether genuinely new or merely not yet paged into view) arrives through
-// this same stream, and dedupeEventsById reconciles it against whatever
-// pages a manual "Load more" also fetched.
+// historyReady and resumeCursor are separate: resumeCursor is "" for a
+// session with no durable log yet at all (EventPage omits nextCursor only in
+// that case), and "" is itself a valid, meaningful resume position — a fresh
+// connect — not a stand-in for "the history page hasn't loaded yet". A
+// single conflated signal would leave such a session's live subscription
+// never opening at all.
 //
-// A live event never updates this session's own detail/list rows directly
-// (the issue's ratified decision): it invalidates those query keys so the
-// next read re-derives status from the service layer, since not every state
-// change emits an event.
-export function useLiveEvents(sessionName: string | null, firstPageCursor: string | undefined) {
+// A live event invalidates the session detail/list query keys rather than
+// updating them directly, since not every state change emits an event.
+export function useLiveEvents(sessionName: string | null, historyReady: boolean, resumeCursor: string) {
   const queryClient = useQueryClient();
   const [liveEvents, setLiveEvents] = useState<SessionEvent[]>([]);
   const [state, setState] = useState<EventStreamState>("connecting");
 
   useEffect(() => {
-    if (sessionName === null || firstPageCursor === undefined) {
+    if (sessionName === null || !historyReady) {
       return;
     }
     setLiveEvents([]);
     const controller = new AbortController();
     openEventStream(
       sessionName,
-      firstPageCursor,
+      resumeCursor,
       {
         onEvent: (event) => {
           setLiveEvents((prev) => (prev.some((e) => e.id === event.id) ? prev : [...prev, event]));
@@ -101,13 +93,8 @@ export function useLiveEvents(sessionName: string | null, firstPageCursor: strin
       },
       controller.signal,
     );
-    // Switching sessions (a dependency change) or unmounting aborts the
-    // in-flight connection — including a response already being read — so a
-    // delayed frame for an abandoned session can never reach the new
-    // session's timeline (connectOnce's reader.read() rejects/returns once
-    // the signal fires, per eventStream.ts).
     return () => controller.abort();
-  }, [sessionName, firstPageCursor, queryClient]);
+  }, [sessionName, historyReady, resumeCursor, queryClient]);
 
   return { liveEvents, state };
 }
