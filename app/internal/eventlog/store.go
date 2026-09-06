@@ -280,11 +280,7 @@ func (s *Store) List(session string, since int64, f event.Filter) (evs []event.E
 	return evs, seqs, next, nil
 }
 
-// ListFromStreamID is List's stream-scoped counterpart: it reads streamID's
-// own rows directly, bypassing session-name resolution to current, so a
-// caller can drain a superseded stream's tail after a same-name recreate has
-// made a newer one current — the only way to reach those rows once that has
-// happened.
+// ListFromStreamID is List's stream-scoped counterpart, reading streamID's own rows directly instead of resolving a session name to its current stream.
 func (s *Store) ListFromStreamID(streamID, session string, since int64) (evs []event.Event, seqs []int64, next int64, err error) {
 	db, err := s.dbHandle()
 	if err != nil {

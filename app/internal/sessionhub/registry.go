@@ -23,10 +23,7 @@ const pollInterval = 500 * time.Millisecond
 // up is dropped rather than stalling the shared reader (see FrameSub.deliver).
 const frameBuffer = 256
 
-// Frame is one delivered event with its SSE resume position (the sequence
-// past the record) and the id of the stream Start/Resume are scoped to —
-// needed since a same-name recreate gives a later record a lower sequence
-// than an earlier one from a different stream.
+// Frame is one delivered event with its SSE resume position (the sequence past the record) and the id of the stream Start/Resume are scoped to.
 type Frame struct {
 	Event    event.Event
 	StreamID string
@@ -112,10 +109,7 @@ func (r *reader) run(ctx context.Context) {
 	streamID, cur := r.streamID, r.cursor
 	r.mu.Unlock()
 	for {
-		// A same-name recreate mints a new stream with its own sequence, so
-		// streamID/cur (scoped to the superseded one) must drain that
-		// stream's own tail by its own id — a session-name read only ever
-		// resolves to the current stream — before ever reading the new one.
+		// A same-name recreate mints a new stream, so streamID/cur (scoped to the superseded one) must drain its own tail by id before reading the new one.
 		if id, err := r.store.StreamID(r.session); err == nil && id != "" {
 			if streamID == "" {
 				streamID = id

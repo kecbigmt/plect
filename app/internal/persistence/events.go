@@ -157,10 +157,8 @@ func (db *DB) ListEventsFrom(ctx context.Context, session string, since int64) (
 
 // ListEventsFromStreamID returns every event of the given stream id at or
 // after sequence `since`, bypassing session-name resolution — the only way
-// to reach a superseded stream's rows once a same-name recreate has made a
-// newer one current. session names the returned events (the caller already
-// knows it; a superseded stream's own row carries the same session_name,
-// but events itself never did).
+// to reach a superseded stream's rows once a recreate has a newer one
+// current. session names the returned events, since events itself does not.
 func (db *DB) ListEventsFromStreamID(ctx context.Context, streamID, session string, since int64) ([]event.Event, []int64, error) {
 	var evs []event.Event
 	var seqs []int64

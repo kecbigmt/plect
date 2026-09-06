@@ -317,9 +317,7 @@ func TestRegistry_LastUnsubscribeJoinsReaderGoroutine(t *testing.T) {
 func TestRegistry_ActiveReaderSurvivesStreamRotation(t *testing.T) {
 	store := eventlog.NewStore(t.TempDir())
 	store.Append(event.Event{SessionName: "o/r-1", Type: "user.note", Body: "old-seen", Direction: event.Internal})
-	// A slow poll gives every write below a wide window to land before the
-	// reader's first check, so the rotation is guaranteed to be mid-flight
-	// rather than possibly already resolved by the time it looks.
+	// A slow poll gives every write below a wide window to land before the reader's first check, guaranteeing the rotation is mid-flight, not already resolved.
 	reg := NewRegistry(store, WithPollInterval(200*time.Millisecond))
 	defer reg.Close()
 	sub := reg.SubscribeFrames("o/r-1")
