@@ -92,9 +92,9 @@ describe("Sidebar", () => {
     const firstRegion = await screen.findByRole("region", { name: /session list/i });
     fireEvent.scroll(firstRegion, { target: { scrollTop: 90 } });
     expect(scrollTopRef.current).toBe(90);
-    first.unmount(); // e.g. the narrow-layout sidebar Sheet closing
+    first.unmount();
 
-    renderSidebar({ scrollTopRef }, queryClient); // e.g. the Sheet reopening
+    renderSidebar({ scrollTopRef }, queryClient);
     const secondRegion = await screen.findByRole("region", { name: /session list/i });
     await waitFor(() => expect(secondRegion.scrollTop).toBe(90));
   });

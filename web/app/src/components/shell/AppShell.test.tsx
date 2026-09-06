@@ -40,10 +40,6 @@ function stubMatchMedia(matches: boolean) {
   );
 }
 
-// A live variant of stubMatchMedia: set() flips `matches` and fires every
-// registered "change" listener, so a test can simulate an actual
-// wide<->narrow layout transition (a resize or an orientation change), not
-// just render each layout independently from a fresh mount.
 function stubLiveMatchMedia(initialMatches: boolean) {
   let matches = initialMatches;
   const listeners = new Set<() => void>();
@@ -196,12 +192,9 @@ describe("AppShell session selection", () => {
     const user = userEvent.setup();
     renderShell();
 
-    // release/config starts hidden: release is collapsed by default.
     await screen.findByRole("treeitem", { name: /^release$/ });
     expect(screen.queryByRole("treeitem", { name: /release\/config$/ })).not.toBeInTheDocument();
 
-    // A search reveals it (force-expanding its ancestor), independent of
-    // the real expandedNames state.
     await user.type(screen.getByRole("searchbox", { name: /search sessions/i }), "config");
     await user.click(await screen.findByRole("treeitem", { name: /release\/config$/ }));
 
