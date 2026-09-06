@@ -23,8 +23,6 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// startFakeChannelSocket stands in for a runtime's own delivery endpoint,
-// the same way app/internal/dispatch's own tests do.
 func startFakeChannelSocket(t *testing.T) (string, <-chan protocol.MessagePayload) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "c.sock")
@@ -64,8 +62,6 @@ func startFakeChannelSocket(t *testing.T) (string, <-chan protocol.MessagePayloa
 	return path, recv
 }
 
-// The member starts already produced and up, with an alive probe that
-// always fails, so Up repairs it in place rather than transitioning it.
 func TestUp_PopulationMemberInPlaceRepairDeliversNodeResultThroughChannel(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")

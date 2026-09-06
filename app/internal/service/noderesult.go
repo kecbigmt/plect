@@ -11,7 +11,6 @@ import (
 	"github.com/kecbigmt/plecture/contracts/event"
 )
 
-// noopTaskObserver: several lifecycle callers pass no Observer at all.
 type noopTaskObserver struct{}
 
 func (noopTaskObserver) OnStart(string, string)                                 {}
@@ -25,9 +24,6 @@ type nodeResultObserver struct {
 	sessionName string
 }
 
-// withNodeResultRecording wraps inner (nil becomes noopTaskObserver) so
-// task.RunSetup/RunCleanup's plect.node.result reports are appended to
-// sessionName's log, in addition to inner's own CLI/UI rendering.
 func withNodeResultRecording(store *state.Store, sessionName string, inner task.Observer) task.Observer {
 	if inner == nil {
 		inner = noopTaskObserver{}
