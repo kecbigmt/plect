@@ -42,8 +42,6 @@ func runTestMain(m *testing.M) int {
 	return m.Run()
 }
 
-// newBrowserPage opens a fresh, isolated browser context (its own cookies and
-// storage, matching a first-time visitor) and closes it when the test ends.
 func newBrowserPage(t *testing.T) playwright.Page {
 	t.Helper()
 	ctx, err := sharedBrowser.NewContext()

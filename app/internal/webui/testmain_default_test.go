@@ -4,8 +4,9 @@ package webui
 
 import "testing"
 
-// testmain_browser_test.go's browser-tagged runTestMain replaces this one to
-// launch and tear down the shared Chromium instance around m.Run().
+// Every default go test/go vet run — including every non-browser CI job —
+// must stay usable on a host with no Playwright driver or Chromium
+// installed at all, so this stub must never attempt to launch one.
 func runTestMain(m *testing.M) int {
 	return m.Run()
 }

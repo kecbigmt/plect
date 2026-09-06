@@ -23,7 +23,6 @@ import (
 	"github.com/mxschmitt/playwright-go"
 )
 
-// browserOrigin: pass &Config{} for the network-trust default.
 func browserOrigin(t *testing.T, store *state.Store, cfg *Config) (string, *LiveService) {
 	t.Helper()
 	svcCfg, err := config.Load()
