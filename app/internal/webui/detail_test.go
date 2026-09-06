@@ -120,6 +120,7 @@ func (n nameCapture) EventsSubtree(string) ([]event.Event, error) { return nil, 
 func (n nameCapture) EventPage(string, service.EventPageParams) (service.EventPageResult, error) {
 	return service.EventPageResult{}, nil
 }
+func (n nameCapture) EventStreamResume(string, string) (string, int64, error) { return "", 0, nil }
 func (n nameCapture) PublishEvent(string, service.EventPublishParams) (event.Event, error) {
 	return event.Event{}, nil
 }

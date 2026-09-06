@@ -1,7 +1,8 @@
 import { useLayoutEffect, useRef } from "react";
 
 import type { SessionEvent } from "@/lib/eventsApi";
-import { dedupeEventsById, useSessionEvents } from "@/lib/useEvents";
+import { dedupeEventsById, useLiveEvents, useSessionEvents } from "@/lib/useEvents";
+import type { EventStreamState } from "@/lib/eventStream";
 import { Button } from "@/components/ui/button";
 
 // Unlike DetailPane's key={sessionName} remount, this component never
@@ -18,6 +19,12 @@ export function Conversation({
   onSelectSession: (name: string) => void;
 }) {
   const events = useSessionEvents(sessionName);
+  // The first page's own nextCursor is the exact history/live handoff
+  // position (docs/design/web-ui-event-history.md) — undefined until that
+  // page has actually loaded, which is what keeps the live subscription from
+  // opening before there is a resume position to hand it.
+  const firstPageCursor = events.data?.pages[0]?.nextCursor;
+  const live = useLiveEvents(sessionName, firstPageCursor);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Keyed by session name so switching away and back restores that
   // session's own offset instead of carrying over whichever session was
@@ -54,7 +61,7 @@ export function Conversation({
     );
   }
 
-  const items = dedupeEventsById(events.data.pages);
+  const items = dedupeEventsById(events.data.pages, live.liveEvents);
 
   return (
     // overflow-auto (not the ancestor) owns the scroll container, so
@@ -68,6 +75,7 @@ export function Conversation({
       className="flex min-h-0 flex-1 flex-col overflow-auto p-3"
       onScroll={(e) => scrollPositions.current.set(sessionName, e.currentTarget.scrollTop)}
     >
+      <LiveStateBanner state={live.state} />
       {items.length === 0 ? (
         <p className="text-sm text-muted-foreground">No events recorded yet.</p>
       ) : (
@@ -93,6 +101,30 @@ export function Conversation({
       )}
     </div>
   );
+}
+
+// Stale-state indication for the live subscription (issue #407's acceptance
+// criteria): "connecting"/"live" are the steady states and render nothing —
+// only a state the reader should actually act on or wait out gets a banner.
+// "reconnecting" is transient background noise the connection module itself
+// recovers from, so it likewise renders nothing to avoid flickering a banner
+// on every brief blip.
+function LiveStateBanner({ state }: { state: EventStreamState }) {
+  if (state === "auth-expired") {
+    return (
+      <p role="alert" className="mb-2 rounded-md border border-border bg-muted p-2 text-xs text-muted-foreground">
+        Sign-in expired — live updates are paused. Reload the page to sign in again.
+      </p>
+    );
+  }
+  if (state === "unavailable") {
+    return (
+      <p role="alert" className="mb-2 rounded-md border border-border bg-muted p-2 text-xs text-muted-foreground">
+        Live updates are unavailable. New events may not appear until you reload.
+      </p>
+    );
+  }
+  return null;
 }
 
 // Only the two conversational types contracts/event itself defines get

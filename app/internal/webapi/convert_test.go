@@ -185,7 +185,7 @@ func TestEventFromDomain_PreservesUnknownTypeAndMetadataVerbatim(t *testing.T) {
 		},
 	}
 
-	got := eventFromDomain(ev)
+	got := EventFromDomain(ev)
 
 	if got.Id != ev.ID || got.SessionName != ev.SessionName || !got.Time.Equal(when) {
 		t.Fatalf("required identity fields not carried through: %+v", got)
@@ -224,7 +224,7 @@ func TestEventFromDomain_DistinguishesReceiverFromOrigin(t *testing.T) {
 		Metadata:    map[string]string{event.MetaOriginSession: "team/child"},
 	}
 
-	got := eventFromDomain(ev)
+	got := EventFromDomain(ev)
 
 	if got.SessionName != "team/parent" {
 		t.Errorf("SessionName = %q, want the receiver team/parent", got.SessionName)
@@ -235,7 +235,7 @@ func TestEventFromDomain_DistinguishesReceiverFromOrigin(t *testing.T) {
 }
 
 func TestEventFromDomain_OmitsUnsetOptionalFields(t *testing.T) {
-	got := eventFromDomain(event.Event{
+	got := EventFromDomain(event.Event{
 		ID:          "01JXAMPLE0000000000000002",
 		SessionName: "team/workspace-a",
 		Type:        event.TypeUserNote,
@@ -254,7 +254,7 @@ func TestEventFromDomain_OmitsUnsetOptionalFields(t *testing.T) {
 }
 
 func TestEventFromDomain_MapsPushDeliveryMode(t *testing.T) {
-	got := eventFromDomain(event.Event{
+	got := EventFromDomain(event.Event{
 		ID:           "01JXAMPLE0000000000000003",
 		SessionName:  "team/parent",
 		Type:         event.TypeTerminalDone,

@@ -33,6 +33,12 @@ type fakeService struct {
 	gotEventPage *service.EventPageParams
 	gotEventName string
 
+	resumeGen       string
+	resumeOffset    int64
+	resumeErr       error
+	gotResumeName   string
+	gotResumeCursor string
+
 	createResult  *service.CreateResult
 	upResult      *service.UpResult
 	upErr         error
@@ -66,6 +72,12 @@ func (f *fakeService) EventPage(name string, p service.EventPageParams) (service
 	f.gotEventName = name
 	f.gotEventPage = &p
 	return f.eventPage, f.eventPageErr
+}
+
+func (f *fakeService) EventStreamResume(name, cursor string) (string, int64, error) {
+	f.gotResumeName = name
+	f.gotResumeCursor = cursor
+	return f.resumeGen, f.resumeOffset, f.resumeErr
 }
 
 func (f *fakeService) PublishEvent(name string, p service.EventPublishParams) (event.Event, error) {

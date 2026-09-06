@@ -3,6 +3,8 @@
 package webui
 
 import (
+	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -534,4 +536,111 @@ func TestAcceptance_ApiV1EventsCursorClosesTheHistoryLiveHandoffGap(t *testing.T
 	if len(secondPage.Events) != 1 || secondPage.Events[0].Summary != "third-arrived-during-the-gap" {
 		t.Fatalf("second page = %+v, want exactly the event published after the cursor was issued", secondPage.Events)
 	}
+}
+
+// Acceptance: proves the live JSON SSE endpoint (events_stream_json.go)
+// completes the same handoff — a client hands GET /api/v1/events's own
+// nextCursor to GET /api/v1/events/stream with no cursor format of its own,
+// and the event published in the race window arrives exactly once through
+// the live channel rather than needing a second history refetch.
+func TestAcceptance_ApiV1EventsStreamResumesFromTheHistoryEndpointsOwnCursor(t *testing.T) {
+	store := state.NewStore(t.TempDir())
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	isolateMachineConfig(cfg)
+	svc := newLiveService(cfg, store)
+	const session = "acceptance/events-stream-handoff"
+
+	publish := func(summary string) {
+		t.Helper()
+		if _, err := svc.PublishEvent(session, service.EventPublishParams{Type: event.TypeUserNote, Summary: summary}); err != nil {
+			t.Fatalf("publish %q: %v", summary, err)
+		}
+	}
+	publish("first")
+	publish("second")
+
+	firstRec := get(t, svc, "/api/v1/events?session="+url.QueryEscape(session)+"&limit=2")
+	if firstRec.Code != http.StatusOK {
+		t.Fatalf("first page status = %d, want 200; body: %s", firstRec.Code, firstRec.Body)
+	}
+	var firstPage webapiv1.EventPage
+	if err := json.NewDecoder(firstRec.Body).Decode(&firstPage); err != nil {
+		t.Fatalf("decode first page: %v", err)
+	}
+	if firstPage.NextCursor == nil {
+		t.Fatalf("first page = %+v, want a cursor", firstPage)
+	}
+	cursor := *firstPage.NextCursor
+
+	// The race: an event arrives after the cursor was captured but before
+	// the client's live subscription opens.
+	publish("third-arrived-during-the-gap")
+
+	// A bare-bones bus that replays everything at/after ?since= from the
+	// same real store, mirroring what the production bus does over the
+	// durable log — this test exercises the JSON relay/cursor-decode layer,
+	// not the bus's own fan-out.
+	bus := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		evs, offs, _, err := service.EventList(cfg, store, session, sinceFromQuery(r), event.Filter{})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		for i, ev := range evs {
+			b, _ := json.Marshal(ev)
+			fmt.Fprintf(w, "id: %d\ndata: %s\n\n", offs[i], b)
+		}
+		w.(http.Flusher).Flush()
+	}))
+	defer bus.Close()
+
+	srv := httptest.NewServer(withBus(svc, bus.URL).Routes())
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/v1/events/stream?session="+url.QueryEscape(session)+"&cursor="+url.QueryEscape(cursor), nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("stream status = %d, want 200", resp.StatusCode)
+	}
+
+	sc := bufio.NewScanner(resp.Body)
+	var gotSummaries []string
+	for sc.Scan() {
+		line := sc.Text()
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		var got webapiv1.Event
+		if json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &got) == nil {
+			gotSummaries = append(gotSummaries, got.Summary)
+		}
+	}
+	if len(gotSummaries) != 1 || gotSummaries[0] != "third-arrived-during-the-gap" {
+		t.Fatalf("stream delivered %v, want exactly the event published after the cursor was issued", gotSummaries)
+	}
+}
+
+// sinceFromQuery parses the fake bus's ?since= the same way the real bus
+// does (a plain byte offset), isolated so the handler body above stays a
+// straight-line read of the durable log.
+func sinceFromQuery(r *http.Request) int64 {
+	v := r.URL.Query().Get("since")
+	if v == "" {
+		return 0
+	}
+	var n int64
+	_, _ = fmt.Sscanf(v, "%d", &n)
+	return n
 }

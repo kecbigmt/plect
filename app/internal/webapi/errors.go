@@ -47,11 +47,15 @@ var errorClasses = map[string]errorClass{
 	service.ErrExecutionFailed: {http.StatusInternalServerError, webapiv1.ErrorCategoryExecution},
 }
 
-// apiError converts any error into the (HTTP status, JSON body) pair the
+// ApiError converts any error into the (HTTP status, JSON body) pair the
 // "common errors" contract promises. A *service.Error uses its code's
 // documented class; every other error (a store I/O failure, a bug) is an
-// unclassified execution failure — 500, never a guess at 4xx.
-func apiError(err error) (int, any) {
+// unclassified execution failure — 500, never a guess at 4xx. Exported so a
+// hand-written route outside this package's generated contract (the live SSE
+// endpoint, webui) reports a *service.Error the identical way GET /events
+// already does, rather than reimplementing the status/category mapping a
+// second time.
+func ApiError(err error) (int, any) {
 	svcErr, ok := err.(*service.Error)
 	if !ok {
 		return http.StatusInternalServerError, webapiv1.ExecutionError{

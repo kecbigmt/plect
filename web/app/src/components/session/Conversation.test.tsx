@@ -12,6 +12,20 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+function sseResponse(frames: string): Response {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(frames));
+      controller.close();
+    },
+  });
+  return new Response(stream, { status: 200 });
+}
+
+function requestUrl(input: RequestInfo | URL): URL {
+  return new URL(String(input instanceof Request ? input.url : input), "http://localhost");
+}
+
 function renderConversation(sessionName: string, onSelectSession: (name: string) => void = vi.fn()) {
   const queryClient = new QueryClient();
   return render(
@@ -314,5 +328,104 @@ describe("Conversation", () => {
     );
     const restoredRegion = await screen.findByRole("region", { name: /conversation/i });
     expect(restoredRegion.scrollTop).toBe(120);
+  });
+
+  it("shows an event delivered via the live stream, deduplicated against history by ID", async () => {
+    vi.mocked(fetch).mockImplementation((input) => {
+      if (requestUrl(input).pathname.endsWith("/events/stream")) {
+        return Promise.resolve(
+          sseResponse(
+            'id: cur-2\ndata: {"id":"01","sessionName":"team/a","time":"2026-01-01T00:00:01Z","type":"user.note","source":"cli","direction":"internal","summary":"first"}\n\n' +
+              'id: cur-3\ndata: {"id":"02","sessionName":"team/a","time":"2026-01-01T00:00:02Z","type":"user.note","source":"cli","direction":"internal","summary":"live-arrived"}\n\n',
+          ),
+        );
+      }
+      return Promise.resolve(
+        jsonResponse({
+          events: [
+            {
+              id: "01",
+              sessionName: "team/a",
+              time: "2026-01-01T00:00:01Z",
+              type: "user.note",
+              source: "cli",
+              direction: "internal",
+              summary: "first",
+            },
+          ],
+          nextCursor: "cur-1",
+        }),
+      );
+    });
+    renderConversation("team/a");
+
+    expect(await screen.findByText("first")).toBeInTheDocument();
+    expect(await screen.findByText("live-arrived")).toBeInTheDocument();
+    // The stream's own replay-then-follow catch-up re-delivered "first"
+    // (same ID history already showed) — it must not render twice.
+    expect(screen.getAllByText("first")).toHaveLength(1);
+  });
+
+  it("cancels the previous session's stream on switch, so a delayed frame never enters the new session's timeline", async () => {
+    let pushLate!: (text: string) => void;
+    const teamAStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        // Nothing enqueued yet: team/a's stream stays open (in flight) until
+        // the test pushes a frame explicitly, after the switch to team/b.
+        pushLate = (text) => controller.enqueue(new TextEncoder().encode(text));
+      },
+    });
+
+    vi.mocked(fetch).mockImplementation((input) => {
+      const url = requestUrl(input);
+      const session = url.searchParams.get("session");
+      if (url.pathname.endsWith("/events/stream")) {
+        return Promise.resolve(session === "team/a" ? new Response(teamAStream, { status: 200 }) : sseResponse(""));
+      }
+      return Promise.resolve(
+        jsonResponse({
+          events: [
+            {
+              id: session === "team/a" ? "a1" : "b1",
+              sessionName: session ?? "",
+              time: "2026-01-01T00:00:01Z",
+              type: "user.note",
+              source: "cli",
+              direction: "internal",
+              summary: session === "team/a" ? "first-a" : "first-b",
+            },
+          ],
+          nextCursor: "cur-1",
+        }),
+      );
+    });
+
+    const queryClient = new QueryClient();
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}>
+        <Conversation sessionName="team/a" onSelectSession={vi.fn()} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText("first-a");
+
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <Conversation sessionName="team/b" onSelectSession={vi.fn()} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText("first-b");
+
+    // The delayed frame arrives on team/a's (already-cancelled) connection
+    // only now — after the switch — simulating a response that was already
+    // in flight at the moment of cancellation.
+    pushLate(
+      'id: cur-late\ndata: {"id":"late","sessionName":"team/a","time":"2026-01-01T00:00:03Z","type":"user.note","source":"cli","direction":"internal","summary":"late-arrival"}\n\n',
+    );
+    // A real delay, not a negative waitFor (which would pass immediately by
+    // just checking "not yet in the DOM" before the pushed frame has even
+    // had a chance to propagate): give the read loop's promise chain every
+    // opportunity to run before asserting it produced nothing.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.queryByText("late-arrival")).not.toBeInTheDocument();
   });
 });

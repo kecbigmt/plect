@@ -101,6 +101,11 @@ type SessionService interface {
 	// through to the same service.EventPage this htmx UI's own timeline
 	// reads never needed cursor-based paging for.
 	EventPage(name string, p service.EventPageParams) (service.EventPageResult, error)
+	// EventStreamResume backs the JSON live SSE endpoint's resume cursor —
+	// the same opaque cursor EventPage returns as NextCursor, decoded and
+	// validated the same way, so the live stream and the history page share
+	// one door onto the log's cursor semantics rather than two.
+	EventStreamResume(name, cursor string) (gen string, offset int64, err error)
 	PublishEvent(name string, p service.EventPublishParams) (event.Event, error)
 	Create(service.CreateParams) (*service.CreateResult, error)
 	Up(service.UpParams) (*service.UpResult, error)
@@ -167,6 +172,10 @@ func (s *Server) Routes() http.Handler {
 	// (net/http's ServeMux routes the most specific match), so this still
 	// resolves here regardless of registration order.
 	mux.HandleFunc("GET /api/v1/bootstrap", s.handleBootstrap)
+	// The React shell's live timeline (see events_stream_json.go): JSON SSE
+	// with the opaque event-history cursor as its resume token, a sibling to
+	// GET /api/v1/events rather than an addition to the generated contract.
+	mux.HandleFunc("GET /api/v1/events/stream", s.handleSessionEventsStreamJSON)
 
 	// Lifecycle mutations. A {name...} wildcard must be the final path segment,
 	// so the action can't be a suffix after the (slash-containing) name; the

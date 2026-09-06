@@ -174,6 +174,39 @@ func EventPage(cfg *config.Config, store *state.Store, identifier string, p Even
 	return res, nil
 }
 
+// EventStreamResume decodes and validates a live-endpoint resume cursor,
+// sharing EventPage's own cursor-validation code path exactly: a client that
+// hands this the opaque NextCursor a prior EventPage call returned gets back
+// the identical byte offset EventPage itself would have resumed from. This is
+// the history/live handoff's resume mechanism (docs/design/web-ui-event-
+// history.md) — the live SSE endpoint has no cursor semantics of its own to
+// invent. An empty cursor is a fresh connection (no history handoff yet): it
+// resolves to the log's current generation and a zero offset, leaving any
+// tail-replay policy to the caller. A malformed, wrong-order, or stale-
+// generation cursor is rejected the same way EventPage rejects one — resuming
+// against the wrong generation's byte layout would silently misread the log.
+func EventStreamResume(cfg *config.Config, store *state.Store, identifier, cursor string) (gen string, offset int64, err error) {
+	name, err := resolveSessionName(cfg, store, identifier)
+	if err != nil {
+		return "", 0, err
+	}
+	gen, gerr := eventlog.NewStore(store.Dir()).Gen(name)
+	if gerr != nil {
+		return "", 0, &Error{Code: ErrExecutionFailed, Message: gerr.Error()}
+	}
+	if cursor == "" {
+		return gen, 0, nil
+	}
+	cur, derr := event.DecodeCursor(cursor)
+	if derr != nil {
+		return "", 0, &Error{Code: ErrInvalidInput, Message: derr.Error()}
+	}
+	if verr := cur.Validate(event.OrderAsc, gen); verr != nil {
+		return "", 0, &Error{Code: ErrInvalidInput, Message: verr.Error()}
+	}
+	return gen, cur.Off, nil
+}
+
 // EventPageSubtree returns one page of the merged event timeline for the subtree
 // rooted at identifier (the root session plus all its descendants), in time
 // order by event id. asc (default) pages forward via a ULID keyset cursor and

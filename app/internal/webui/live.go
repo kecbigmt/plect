@@ -73,6 +73,12 @@ func (l *LiveService) EventPage(name string, p service.EventPageParams) (service
 	return service.EventPage(l.cfg, l.store, name, p)
 }
 
+// EventStreamResume backs the JSON live SSE endpoint's resume cursor,
+// unchanged from service.EventStreamResume.
+func (l *LiveService) EventStreamResume(name, cursor string) (string, int64, error) {
+	return service.EventStreamResume(l.cfg, l.store, name, cursor)
+}
+
 // PublishEvent appends an event to the session's log. The bus tailer fans the
 // appended event to the live SSE stream, so an open timeline updates without a
 // round-trip from this handler.
