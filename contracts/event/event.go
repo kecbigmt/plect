@@ -98,6 +98,31 @@ const (
 	TypeWorkflowPopulationFailure         = "plect.workflow_population.failure"
 	TypeWorkflowPopulationDestroyDeferred = "plect.workflow_population.destroy_deferred"
 	TypeWorkflowPopulationDestroyDryRun   = "plect.workflow_population.destroy_dry_run"
+	// TypeNodeResult records a workflow node's setup, cleanup, or liveness
+	// verification completing, or being skipped after a successful liveness
+	// check. It fires the same way for a manual session, a child session, and
+	// a population-produced member — appended to that session's own log,
+	// independent of TypeWorkflowPopulationUp/Down. Deduplicated only by the
+	// log's ordinary append identity: a repeated attempt is a separate fact,
+	// not a dedup collision.
+	TypeNodeResult = "plect.node.result"
+)
+
+// NodeResultAction is TypeNodeResult's closed set of "action" metadata
+// values: which lifecycle action the event reports on.
+const (
+	NodeResultActionSetup   = "setup"
+	NodeResultActionCleanup = "cleanup"
+	NodeResultActionAlive   = "alive"
+)
+
+// NodeResultOutcome is TypeNodeResult's closed set of "result" metadata
+// values: what that action produced.
+const (
+	NodeResultProduced = "produced"
+	NodeResultSkipped  = "skipped"
+	NodeResultFailed   = "failed"
+	NodeResultCleaned  = "cleaned"
 )
 
 // Metadata keys stamped on a pushed terminal event (TypeTerminalDone /

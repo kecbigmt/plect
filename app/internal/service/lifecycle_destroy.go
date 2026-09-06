@@ -48,6 +48,7 @@ func Destroy(cfg *config.Config, store *state.Store, params DestroyParams) (*Des
 	if err != nil {
 		return nil, err
 	}
+	params.Observer = withNodeResultRecording(store, sessionName, params.Observer)
 	flushPendingDeliveryLogged(cfg, store, sessionName)
 	// Tearing down an existing session is a per-session write; clamp it to the
 	// active guard so a guarded orchestrator can't destroy another owner's

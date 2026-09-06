@@ -25,6 +25,7 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/effect"
 	"github.com/kecbigmt/plecture/app/internal/lang"
 	"github.com/kecbigmt/plecture/app/internal/plugins"
+	"github.com/kecbigmt/plecture/contracts/event"
 	contract "github.com/kecbigmt/plecture/contracts/state"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
@@ -627,6 +628,93 @@ func observerOr(o Observer) Observer {
 	return o
 }
 
+// ResultObserver is an optional Observer extension. RunSetup and RunCleanup
+// type-assert for it at every terminal outcome — a setup or cleanup
+// completing, and a produced node's liveness check passing — so a caller
+// that wants a durable plect.node.result record (app/internal/service) can
+// compose it without widening the base Observer interface that every
+// progress-UI implementation (e.g. StreamReporter) must satisfy.
+//
+// action is one of contracts/event's NodeResultAction* constants, result one
+// of its NodeResult* outcome constants. body is the bounded stderr/error
+// tail the runner already captured for the failure; empty otherwise.
+type ResultObserver interface {
+	OnResult(scope, node, effectID, action, result string, elapsed time.Duration, body string)
+}
+
+// nodeResultBodyLimit bounds how much of a failure's stderr or error text a
+// plect.node.result event carries: the log is a durable delivery surface for
+// channels, not a dump for arbitrarily large script output — state.Outputs
+// remains the authority for anything larger.
+const nodeResultBodyLimit = 4096
+
+// nodeResultBody prefers captured stderr over the error text, matching what
+// an operator would look at first; a script's own stderr almost always
+// explains the failure better than the wrapping Go error string around it.
+func nodeResultBody(err error, stderr []byte) string {
+	if s := strings.TrimSpace(string(stderr)); s != "" {
+		return boundedTail(s, nodeResultBodyLimit)
+	}
+	if err != nil {
+		return boundedTail(err.Error(), nodeResultBodyLimit)
+	}
+	return ""
+}
+
+// boundedTail keeps the last limit bytes of s, matching "bounded stderr or
+// error tail": the most recent output is the most likely to explain a
+// failure, so truncation drops the head rather than the tail.
+func boundedTail(s string, limit int) string {
+	if len(s) <= limit {
+		return s
+	}
+	return s[len(s)-limit:]
+}
+
+func reportResult(obs Observer, r Resolved, action, result string, elapsed time.Duration, body string) {
+	if ro, ok := obs.(ResultObserver); ok {
+		ro.OnResult(r.Scope, r.NodeID, r.TaskID, action, result, elapsed, body)
+	}
+}
+
+// reportSetupSuccess and reportSetupFailure pair every RunSetup terminal
+// outcome with its plect.node.result report, so a plain action, a nested
+// chain, and every input/schema failure branch report through one seam.
+// reportSetupFailure returns err unchanged so call sites can `return
+// reportSetupFailure(...)`.
+func reportSetupSuccess(obs Observer, r Resolved, elapsed time.Duration, stderr []byte) {
+	obs.OnSuccess(r.Scope, r.NodeID, elapsed, stderr)
+	reportResult(obs, r, event.NodeResultActionSetup, event.NodeResultProduced, elapsed, "")
+}
+
+func reportSetupFailure(obs Observer, r Resolved, elapsed time.Duration, err error, stderr []byte) error {
+	obs.OnFailure(r.Scope, r.NodeID, elapsed, err, stderr)
+	reportResult(obs, r, event.NodeResultActionSetup, event.NodeResultFailed, elapsed, nodeResultBody(err, stderr))
+	return err
+}
+
+// reportAliveSkip reports the one case where a skip is itself a completed
+// lifecycle action: a produced node's liveness probe passed, so setup is
+// short-circuited. RunCleanup's other OnSkip reasons ("no setup state",
+// "already cleaned") report nothing — no action was taken.
+func reportAliveSkip(obs Observer, r Resolved, elapsed time.Duration) {
+	obs.OnSkip(r.Scope, r.NodeID, "already produced")
+	reportResult(obs, r, event.NodeResultActionAlive, event.NodeResultSkipped, elapsed, "")
+}
+
+// reportCleanupSuccess and reportCleanupFailure mirror the setup pair for
+// RunCleanup's terminal outcomes, including the no-declared-cleanup case
+// (treated as an immediate cleaned) and a nested chain's cleanup.
+func reportCleanupSuccess(obs Observer, r Resolved, elapsed time.Duration, stderr []byte) {
+	obs.OnSuccess(r.Scope, r.NodeID, elapsed, stderr)
+	reportResult(obs, r, event.NodeResultActionCleanup, event.NodeResultCleaned, elapsed, "")
+}
+
+func reportCleanupFailure(obs Observer, r Resolved, elapsed time.Duration, err error, stderr []byte) {
+	obs.OnFailure(r.Scope, r.NodeID, elapsed, err, stderr)
+	reportResult(obs, r, event.NodeResultActionCleanup, event.NodeResultFailed, elapsed, nodeResultBody(err, stderr))
+}
+
 // RunSetup executes the setup commands for the provided ordered task list
 // against the given session. Outputs are persisted into session.Tasks.
 // Stops at the first failure; subsequent tasks in the slice are not run.
@@ -644,10 +732,13 @@ func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, ta
 	for _, r := range ordered {
 		session = withFreshTerminalOutputs(session, terminalOwner, tasks)
 		if existing, ok := tasks[r.NodeID]; ok && existing != nil && existing.Status == contract.TaskStatusProduced {
-			if aliveErr := verifyLiveness(goCtx, r, session, existing); aliveErr == nil {
-				obs.OnSkip(r.Scope, r.NodeID, "already produced")
+			aliveStart := time.Now()
+			aliveErr := verifyLiveness(goCtx, r, session, existing)
+			if aliveErr == nil {
+				reportAliveSkip(obs, r, time.Since(aliveStart))
 				continue
-			} else if invalidateErr := invalidateProducedNode(goCtx, r, ordered, aliveErr, session, tasks, obs); invalidateErr != nil {
+			}
+			if invalidateErr := invalidateProducedNode(goCtx, r, ordered, aliveErr, session, tasks, obs); invalidateErr != nil {
 				return invalidateErr
 			}
 		}
@@ -668,15 +759,13 @@ func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, ta
 		if inputErr != nil {
 			tasks[r.NodeID] = failedState(r, now, inputErr.Error(), prev, nil)
 			wrapped := fmt.Errorf("node %q input: %w", r.NodeID, inputErr)
-			obs.OnFailure(r.Scope, r.NodeID, time.Since(now), wrapped, nil)
-			return wrapped
+			return reportSetupFailure(obs, r, time.Since(now), wrapped, nil)
 		}
 		if r.InputsSchema != nil {
 			if vErr := r.InputsSchema.Validate(toJSONShape(resolvedInputs)); vErr != nil {
 				tasks[r.NodeID] = failedState(r, now, vErr.Error(), prev, resolvedInputs)
 				wrapped := fmt.Errorf("node %q input schema: %w", r.NodeID, vErr)
-				obs.OnFailure(r.Scope, r.NodeID, time.Since(now), wrapped, nil)
-				return wrapped
+				return reportSetupFailure(obs, r, time.Since(now), wrapped, nil)
 			}
 		}
 		ctx := RenderContext{
@@ -697,8 +786,7 @@ func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, ta
 				failed.Layers = layers
 				tasks[r.NodeID] = failed
 				wrapped := fmt.Errorf("task %q: %w", r.NodeID, nestErr)
-				obs.OnFailure(r.Scope, r.NodeID, time.Since(now), wrapped, stderr)
-				return wrapped
+				return reportSetupFailure(obs, r, time.Since(now), wrapped, stderr)
 			}
 			outputs, projErr := projectNestedOutputs(r, layers, session)
 			if projErr != nil {
@@ -706,8 +794,7 @@ func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, ta
 				failed.Layers = layers
 				tasks[r.NodeID] = failed
 				wrapped := fmt.Errorf("task %q: %w", r.NodeID, projErr)
-				obs.OnFailure(r.Scope, r.NodeID, time.Since(now), wrapped, stderr)
-				return wrapped
+				return reportSetupFailure(obs, r, time.Since(now), wrapped, stderr)
 			}
 			tasks[r.NodeID] = &contract.TaskState{
 				Scope:   r.Scope,
@@ -719,7 +806,7 @@ func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, ta
 				Seq:     nextSeq(tasks),
 				SetupAt: now,
 			}
-			obs.OnSuccess(r.Scope, r.NodeID, time.Since(now), stderr)
+			reportSetupSuccess(obs, r, time.Since(now), stderr)
 			continue
 		}
 		outputs := map[string]any{}
@@ -729,8 +816,7 @@ func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, ta
 			if resolveErr != nil {
 				tasks[r.NodeID] = failedState(r, now, resolveErr.Error(), prev, resolvedInputs)
 				wrapped := fmt.Errorf("effect %q setup: %w", r.NodeID, resolveErr)
-				obs.OnFailure(r.Scope, r.NodeID, time.Since(now), wrapped, nil)
-				return wrapped
+				return reportSetupFailure(obs, r, time.Since(now), wrapped, nil)
 			}
 			stdout, stderr, runErr := resolved.Run(goCtx, session.WorkspaceDirPath)
 			resolved.Close()
@@ -738,24 +824,21 @@ func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, ta
 			if runErr != nil {
 				tasks[r.NodeID] = failedState(r, now, runErr.Error(), prev, resolvedInputs)
 				wrapped := fmt.Errorf("task %q setup: %w", r.NodeID, runErr)
-				obs.OnFailure(r.Scope, r.NodeID, time.Since(now), wrapped, stderr)
-				return wrapped
+				return reportSetupFailure(obs, r, time.Since(now), wrapped, stderr)
 			}
 			var parseErr error
 			outputs, parseErr = lang.ParseOutputs(stdout)
 			if parseErr != nil {
 				tasks[r.NodeID] = failedState(r, now, parseErr.Error(), prev, resolvedInputs)
 				wrapped := fmt.Errorf("task %q setup: %w", r.NodeID, parseErr)
-				obs.OnFailure(r.Scope, r.NodeID, time.Since(now), wrapped, stderr)
-				return wrapped
+				return reportSetupFailure(obs, r, time.Since(now), wrapped, stderr)
 			}
 		}
 		if r.OutputsSchema != nil {
 			if vErr := r.OutputsSchema.Validate(outputs); vErr != nil {
 				tasks[r.NodeID] = failedState(r, now, vErr.Error(), prev, resolvedInputs)
 				wrapped := fmt.Errorf("task %q setup: outputs schema: %w", r.NodeID, vErr)
-				obs.OnFailure(r.Scope, r.NodeID, time.Since(now), wrapped, stderrCaptured)
-				return wrapped
+				return reportSetupFailure(obs, r, time.Since(now), wrapped, stderrCaptured)
 			}
 		}
 		tasks[r.NodeID] = &contract.TaskState{
@@ -767,7 +850,7 @@ func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, ta
 			Seq:     nextSeq(tasks),
 			SetupAt: now,
 		}
-		obs.OnSuccess(r.Scope, r.NodeID, time.Since(now), stderrCaptured)
+		reportSetupSuccess(obs, r, time.Since(now), stderrCaptured)
 	}
 	return nil
 }
@@ -907,13 +990,13 @@ func RunCleanup(goCtx context.Context, ordered []Resolved, session SessionVars, 
 				if firstErr == nil {
 					firstErr = wrapped
 				}
-				obs.OnFailure(r.Scope, r.NodeID, time.Since(now), wrapped, stderr)
+				reportCleanupFailure(obs, r, time.Since(now), wrapped, stderr)
 				continue
 			}
 			state.Status = contract.TaskStatusCleaned
 			state.CleanedAt = now
 			state.Error = ""
-			obs.OnSuccess(r.Scope, r.NodeID, time.Since(now), stderr)
+			reportCleanupSuccess(obs, r, time.Since(now), stderr)
 			continue
 		}
 		if r.Cleanup == nil {
@@ -923,7 +1006,7 @@ func RunCleanup(goCtx context.Context, ordered []Resolved, session SessionVars, 
 			// matches the new status semantics (cleaned ≡ gone).
 			state.Status = contract.TaskStatusCleaned
 			state.CleanedAt = now
-			obs.OnSuccess(r.Scope, r.NodeID, time.Since(now), nil)
+			reportCleanupSuccess(obs, r, time.Since(now), nil)
 			continue
 		}
 		obs.OnStart(r.Scope, r.NodeID)
@@ -951,7 +1034,7 @@ func RunCleanup(goCtx context.Context, ordered []Resolved, session SessionVars, 
 			if firstErr == nil {
 				firstErr = wrapped
 			}
-			obs.OnFailure(r.Scope, r.NodeID, time.Since(now), wrapped, nil)
+			reportCleanupFailure(obs, r, time.Since(now), wrapped, nil)
 			continue
 		}
 		_, stderr, runErr := resolved.Run(goCtx, session.WorkspaceDirPath)
@@ -964,13 +1047,13 @@ func RunCleanup(goCtx context.Context, ordered []Resolved, session SessionVars, 
 			if firstErr == nil {
 				firstErr = wrapped
 			}
-			obs.OnFailure(r.Scope, r.NodeID, time.Since(now), wrapped, stderr)
+			reportCleanupFailure(obs, r, time.Since(now), wrapped, stderr)
 			continue
 		}
 		state.Status = contract.TaskStatusCleaned
 		state.CleanedAt = now
 		state.Error = ""
-		obs.OnSuccess(r.Scope, r.NodeID, time.Since(now), stderr)
+		reportCleanupSuccess(obs, r, time.Since(now), stderr)
 	}
 	return firstErr
 }

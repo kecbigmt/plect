@@ -66,7 +66,7 @@ queue_dir = { from = "nodes.worker.outputs.queue_dir" }
 [[goal_reviewer.event.channel]]
 name    = "runtime"
 uses    = "official.codex.exec_delivery"
-include = ["plect.instruction", "user.emit", "plect.terminal.*"]
+include = ["plect.instruction", "user.emit", "plect.terminal.*", "plect.node.result"]
 
 [goal_reviewer.event.channel.inputs]
 queue_dir = { from = "nodes.worker.outputs.queue_dir" }
@@ -84,6 +84,28 @@ the same roots node inputs use, evaluated at delivery.
 
 `name` identifies the channel binding within the workflow; two bindings may
 select the same channel definition under different names and includes.
+
+## Node lifecycle
+
+`plect.node.result` is appended to a session's own log whenever a node's
+setup, cleanup, or liveness verification completes, or a produced node is
+skipped after its liveness check passes. It fires the same way for a manual
+session, a child session, and a population-produced member, independent of
+`plect.workflow_population.up`/`down` — a member repaired in place still
+reaches a channel that includes it.
+
+| Metadata key | Meaning |
+|---|---|
+| `node` | The node id. |
+| `effect` | The node's effect (its `uses` target). |
+| `scope` | `session` or `run`. |
+| `action` | `setup`, `cleanup`, or `alive`. |
+| `result` | `produced`, `skipped`, `failed`, or `cleaned`. |
+| `duration_ms` | How long the action took. |
+
+`body` carries a bounded stderr or error tail for a `failed` result; a
+`produced` or `cleaned` result carries none — state remains the authority for
+outputs.
 
 ## Display
 
