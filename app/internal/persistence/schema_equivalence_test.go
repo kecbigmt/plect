@@ -272,11 +272,8 @@ func indexPredicate(t *testing.T, ctx context.Context, handle *sql.DB, index str
 		// partial, so there is no predicate to find.
 		return ""
 	}
-	// A partial index's predicate is free to contain a string literal whose
-	// content happens to spell "WHERE" (e.g. a value like 'anywhere'), so
-	// the search must run over a copy with literal content masked out — a
-	// plain LastIndex on the raw text could match inside such a literal
-	// instead of the real keyword, corrupting the extracted predicate.
+	// See maskStringLiterals: a value like 'anywhere' would otherwise let
+	// LastIndex match "WHERE" inside the literal instead of the keyword.
 	masked := strings.ToUpper(maskStringLiterals(createSQL.String))
 	where := strings.LastIndex(masked, "WHERE")
 	if where == -1 {
@@ -389,14 +386,10 @@ func tableChecks(t *testing.T, ctx context.Context, handle *sql.DB, table string
 
 // extractChecks finds each standalone "CHECK" keyword in a CREATE TABLE
 // statement and captures its parenthesized expression by tracking paren
-// depth, rather than matching to the first ")" — a table- or column-level
-// CHECK expression is free to contain its own nested parentheses (as
-// schema.sql's own sessions-table example does) or a string literal
-// containing "check", a stray paren, or anything else as ordinary data.
-// Both the keyword search and the paren-depth count below run against a
-// string-literal-masked copy for exactly that reason; every index found
-// against it is used to slice the original, unmasked createTableSQL, so
-// the extracted expression still has its literals' real content.
+// depth, rather than matching to the first ")" — a CHECK expression is
+// free to contain its own nested parentheses, as schema.sql's own
+// sessions-table example does. It scans maskStringLiterals(createTableSQL)
+// but slices createTableSQL itself at the indexes found there.
 func extractChecks(createTableSQL string) []string {
 	masked := strings.ToUpper(maskStringLiterals(createTableSQL))
 	var checks []string
@@ -779,11 +772,6 @@ func TestExtractChecks_DistinguishesLiteralCase(t *testing.T) {
 	}
 }
 
-// TestExtractChecks_IgnoresSyntaxInsideStringLiterals is the regression a
-// masking-free scan would hit: a CHECK expression's own string literal is
-// free to contain an unbalanced paren or the word "check", and naive paren
-// counting or keyword search would either truncate the expression early
-// or misidentify the literal's content as a second CHECK clause.
 func TestExtractChecks_IgnoresSyntaxInsideStringLiterals(t *testing.T) {
 	const createTable = `CREATE TABLE t (
 		note TEXT,
@@ -797,12 +785,6 @@ func TestExtractChecks_IgnoresSyntaxInsideStringLiterals(t *testing.T) {
 	}
 }
 
-// TestIndexPredicate_IgnoresWhereInsideStringLiteral is the same
-// regression for the partial-index path: strings.LastIndex(masked,
-// "WHERE") must not match the literal "where" inside a value like
-// 'anywhere' — two predicates differing only by their string literal must
-// extract to two different, uncorrupted predicates rather than both
-// collapsing to a truncated tail.
 func TestIndexPredicate_IgnoresWhereInsideStringLiteral(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
