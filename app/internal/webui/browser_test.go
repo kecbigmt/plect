@@ -31,10 +31,8 @@ import (
 // (startEventBusRelay, shared with the HTTP-level acceptance suite), and the
 // production Routes() — including the real, committed /app/ build — behind
 // an httptest server. cfg controls auth; pass &Config{} for the network-trust
-// default. Each middleware wraps the previous one, outermost first, so a
-// test can intercept a specific request (see blockFirstHistoryRequest)
-// before it reaches the real handler.
-func browserOrigin(t *testing.T, store *state.Store, cfg *Config, middleware ...func(http.Handler) http.Handler) (string, *LiveService) {
+// default.
+func browserOrigin(t *testing.T, store *state.Store, cfg *Config) (string, *LiveService) {
 	t.Helper()
 	svcCfg, err := config.Load()
 	if err != nil {
@@ -48,11 +46,7 @@ func browserOrigin(t *testing.T, store *state.Store, cfg *Config, middleware ...
 	s.busClientFn = func() *event.Client {
 		return &event.Client{BaseURL: bus.URL, HTTP: http.DefaultClient}
 	}
-	var h http.Handler = s.Routes()
-	for _, mw := range middleware {
-		h = mw(h)
-	}
-	srv := httptest.NewServer(h)
+	srv := httptest.NewServer(s.Routes())
 	t.Cleanup(srv.Close)
 	return srv.URL, svc
 }
@@ -297,8 +291,29 @@ func TestBrowserAcceptance_SwitchingSessionsIsolatesPendingStream(t *testing.T) 
 	seedSession(t, store, &domain.Session{Name: "browser-switch-a"})
 	seedSession(t, store, &domain.Session{Name: "browser-switch-b"})
 
+	// Only this test needs a's history read held pending, so the gate wraps
+	// the handler directly here rather than becoming a second, one-consumer
+	// parameter on the shared browserOrigin helper.
+	svcCfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	isolateMachineConfig(svcCfg)
+	svc := newLiveService(svcCfg, store)
+	bus := startEventBusRelay(t, svcCfg, store)
+	s := NewWithConfig(svc, &Config{})
+	s.busClientFn = func() *event.Client {
+		return &event.Client{BaseURL: bus.URL, HTTP: http.DefaultClient}
+	}
 	blockA, aRequestStarted, releaseA := blockFirstHistoryRequest("browser-switch-a")
-	origin, svc := browserOrigin(t, store, &Config{}, blockA)
+	srv := httptest.NewServer(blockA(s.Routes()))
+	t.Cleanup(srv.Close)
+	// Registered after srv's own cleanup above, so it runs first (t.Cleanup
+	// is LIFO): a failure anywhere below must not leave the intercepted
+	// handler permanently blocked while srv.Close waits for it to return.
+	t.Cleanup(releaseA)
+	origin := srv.URL
+
 	for i := range scrollableEventCount {
 		publish(t, svc, "browser-switch-a", service.EventPublishParams{
 			Type: event.TypeUserNote, Summary: fmt.Sprintf("only-in-a-%02d", i),
@@ -327,11 +342,7 @@ func TestBrowserAcceptance_SwitchingSessionsIsolatesPendingStream(t *testing.T) 
 	if err := page.GetByRole("treeitem", playwright.PageGetByRoleOptions{Name: "browser-switch-a"}).Click(); err != nil {
 		t.Fatalf("select a: %v", err)
 	}
-	select {
-	case <-aRequestStarted:
-	case <-time.After(5 * time.Second):
-		t.Fatal("a's history request never reached the server")
-	}
+	<-aRequestStarted
 
 	if err := page.GetByRole("treeitem", playwright.PageGetByRoleOptions{Name: "browser-switch-b"}).Click(); err != nil {
 		t.Fatalf("select b while a's read is still genuinely pending: %v", err)
@@ -344,11 +355,7 @@ func TestBrowserAcceptance_SwitchingSessionsIsolatesPendingStream(t *testing.T) 
 	}
 
 	releaseA()
-	select {
-	case <-aResponseReceived:
-	case <-time.After(5 * time.Second):
-		t.Fatal("a's released response never reached the browser")
-	}
+	<-aResponseReceived
 	// Force the event loop past whatever a's now-arrived (but abandoned)
 	// response scheduled, using a positive assertion as the fence: this
 	// marker is delivered through b's own live subscription, which shares
@@ -379,12 +386,10 @@ func TestBrowserAcceptance_SwitchingSessionsIsolatesPendingStream(t *testing.T) 
 		t.Fatalf("a's event published while it was unselected should show up once a is reselected: %v", err)
 	}
 
-	// Scroll-state restoration (docs/design/web-ui.md's shared-details
-	// contract): scroll a's conversation, switch away and back, and confirm
-	// the reading position survived the round trip. The scroll event is
-	// dispatched explicitly (native "scroll" events do not bubble, so
-	// setting scrollTop alone is not guaranteed to invoke Conversation.tsx's
-	// onScroll handler before the next line runs).
+	// The scroll event is dispatched explicitly: a native "scroll" event
+	// does not bubble, so setting scrollTop alone is not guaranteed to have
+	// already invoked Conversation.tsx's onScroll handler by the time the
+	// next line reads it back.
 	if _, err := conversation.Evaluate(`el => { el.scrollTop = el.scrollHeight; el.dispatchEvent(new Event("scroll")); }`, nil); err != nil {
 		t.Fatalf("scroll a's conversation: %v", err)
 	}

@@ -173,18 +173,37 @@ sessions. This is the real-runtime procedure referenced from this
 milestone's PR body; it needs an operator with a real `plect-web` deployment
 to run and observe, and cannot be automated as a CI check.
 
-1. **Generate a local auth token and config**, so the sign-in step below is
-   actually exercised rather than skipped (network trust with no
-   `auth_token` is the default, but this milestone's login criterion needs
-   the gated path). This file lives outside the repo and is never committed:
+1. **Generate an isolated auth token and config**, so the sign-in step
+   below is actually exercised (network trust with no `auth_token` is the
+   default, but this milestone's login criterion needs the gated path).
+   `plect-web`'s own `config.toml` is the only thing this touches: it reads
+   `$HOME/.config/plect-web/config.toml` with no override of its own, so
+   pointing `$HOME` at a throwaway directory for this shell session isolates
+   it completely, with nothing existing to overwrite and nothing to restore
+   afterward. `XDG_CONFIG_HOME`/`XDG_DATA_HOME` are re-pinned to their real
+   values first, so the actual plect declarations and session state this
+   procedure is meant to exercise stay real, not just the auth token:
    ```bash
-   mkdir -p ~/.config/plect-web
-   token="$(openssl rand -hex 32)"
-   cat > ~/.config/plect-web/config.toml <<TOML
-   auth_token = "$token"
-   TOML
-   printf 'auth_token: %s\n' "$token"   # sign in with this value in step 2
+   real_home="$HOME"
+   export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$real_home/.config}"
+   export XDG_DATA_HOME="${XDG_DATA_HOME:-$real_home/.local/share}"
+   export HOME="$(mktemp -d)"
+   # The plugin/catalog cache has no XDG override of its own (always
+   # ~/.cache/plect, DefaultCacheRoot in app/internal/plugins/cache.go) —
+   # sharing it via a symlink is what keeps a workflow's plugins resolvable
+   # under the isolated $HOME above, same as the real deployment.
+   ln -s "$real_home/.cache" "$HOME/.cache"
+   (umask 077 && mkdir -p "$HOME/.config/plect-web")
+   token="$(head -c32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+   (umask 077 && printf 'auth_token = "%s"\n' "$token" > "$HOME/.config/plect-web/config.toml")
+   printf 'auth_token: %s\n' "$token"   # sign in with this value in step 3
    ```
+   Only running `plect-web` itself needs this isolated `$HOME` (step 2, and
+   step 8's second bind — reuse this same session rather than a fresh
+   `mktemp -d`, which would pick a different, token-less directory). Step
+   5's `plect event publish` is a plain CLI command: it never reads
+   `plect-web`'s config, so any ordinary terminal (with the real `$HOME`)
+   resolves the same real state without any of the exports above.
 2. **Build and run** against real state — `plect-web` picks up the
    `config.toml` written above automatically:
    ```bash
