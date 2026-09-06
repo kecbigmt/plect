@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Enforce the comment-shape rules CLAUDE.md's Comments section states,
-scoped to one PR's added/modified lines (base-ref..head-ref), for
-.go/.ts/.tsx/.sql/.toml files.
+scoped to one PR's added/modified lines (a three-dot diff: base-ref against
+merge-base(base-ref, head-ref)), for .go/.ts/.tsx/.sql/.toml files.
 
 Three checks, each reported as "<file>:<line>: <check> <value> > <limit>":
   density        comment lines / added non-blank lines, for files with at
@@ -99,6 +99,14 @@ def is_new_file(root, base, path):
     return result.returncode != 0
 
 
+def merge_base(root, base, head):
+    result = run_git(root, ["merge-base", base, head])
+    if result.returncode != 0:
+        sys.stderr.write(result.stderr.decode("utf-8", "replace"))
+        sys.exit(2)
+    return result.stdout.decode("utf-8", "replace").strip()
+
+
 HUNK_HEADER_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 
 
@@ -127,17 +135,31 @@ def file_lines(root, head, path):
     return result.stdout.decode("utf-8", "replace").splitlines()
 
 
-def classify_go_ts(lines):
-    NORMAL, BLOCK_COMMENT, DQUOTE, SQUOTE, BACKTICK = range(5)
-    state = NORMAL
+def classify_go_ts(lines, interpolates_backtick):
+    # A stack, not a flat state: a `${...}` interpolation inside a template
+    # literal is executable code -- it can contain its own comments,
+    # strings, nested templates, and braces from an object literal or
+    # function body -- not inert string content, so entering one has to
+    # push a fresh scanning context (with its own brace-nesting depth, to
+    # find the interpolation's own matching `}`) rather than just flipping
+    # a single mode bit.
+    #
+    # interpolates_backtick is False for Go: a Go raw string has no `${...}`
+    # syntax, and one holding an embedded shell script's literal
+    # `${VAR}` (a common pattern in this codebase's own test fixtures) must
+    # not be misread as TypeScript template interpolation.
+    stack = [{"type": "normal"}]
     out = []
     for line in lines:
         i, n = 0, len(line)
         code_chars = 0
         parts = []
         while i < n:
+            frame = stack[-1]
+            ftype = frame["type"]
             c = line[i]
-            if state == BLOCK_COMMENT:
+
+            if ftype == "block_comment":
                 j = line.find("*/", i)
                 if j == -1:
                     parts.append(line[i:])
@@ -145,20 +167,54 @@ def classify_go_ts(lines):
                 else:
                     parts.append(line[i : j + 2])
                     i = j + 2
-                    state = NORMAL
+                    stack.pop()
                 continue
-            if state in (DQUOTE, SQUOTE, BACKTICK):
-                closer = '"' if state == DQUOTE else ("'" if state == SQUOTE else "`")
+
+            if ftype in ("dquote", "squote"):
+                closer = '"' if ftype == "dquote" else "'"
                 if c == "\\":
                     code_chars += 1
                     i += 2
                     continue
                 code_chars += 1
                 if c == closer:
-                    state = NORMAL
+                    stack.pop()
                 i += 1
                 continue
-            # NORMAL
+
+            if ftype == "backtick":
+                if c == "\\":
+                    code_chars += 1
+                    i += 2
+                    continue
+                if c == "`":
+                    code_chars += 1
+                    stack.pop()
+                    i += 1
+                    continue
+                if interpolates_backtick and c == "$" and i + 1 < n and line[i + 1] == "{":
+                    code_chars += 2
+                    stack.append({"type": "template_expr", "depth": 0})
+                    i += 2
+                    continue
+                code_chars += 1
+                i += 1
+                continue
+
+            # ftype in ("normal", "template_expr")
+            if ftype == "template_expr" and c == "{":
+                frame["depth"] += 1
+                code_chars += 1
+                i += 1
+                continue
+            if ftype == "template_expr" and c == "}":
+                code_chars += 1
+                i += 1
+                if frame["depth"] == 0:
+                    stack.pop()
+                else:
+                    frame["depth"] -= 1
+                continue
             if c == "/" and i + 1 < n and line[i + 1] == "/":
                 parts.append(line[i:])
                 i = n
@@ -166,7 +222,7 @@ def classify_go_ts(lines):
             if c == "/" and i + 1 < n and line[i + 1] == "*":
                 j = line.find("*/", i + 2)
                 if j == -1:
-                    state = BLOCK_COMMENT
+                    stack.append({"type": "block_comment"})
                     parts.append(line[i:])
                     i = n
                 else:
@@ -174,17 +230,17 @@ def classify_go_ts(lines):
                     i = j + 2
                 continue
             if c == '"':
-                state = DQUOTE
+                stack.append({"type": "dquote"})
                 code_chars += 1
                 i += 1
                 continue
             if c == "'":
-                state = SQUOTE
+                stack.append({"type": "squote"})
                 code_chars += 1
                 i += 1
                 continue
             if c == "`":
-                state = BACKTICK
+                stack.append({"type": "backtick"})
                 code_chars += 1
                 i += 1
                 continue
@@ -327,7 +383,7 @@ def classify_toml(lines):
 
 def classify_file(lines, ext):
     if ext in GO_TS_EXTS:
-        raw = classify_go_ts(lines)
+        raw = classify_go_ts(lines, interpolates_backtick=(ext != ".go"))
     elif ext in SQL_EXTS:
         raw = classify_sql(lines)
     elif ext in TOML_EXTS:
@@ -458,6 +514,13 @@ def main(argv):
         sys.stderr.write("usage: comment_density.py <repo-root> <base-ref> <head-ref>\n")
         return 2
     _, root, base, head = argv
+
+    # A three-dot diff (base against merge-base(base, head), not base
+    # itself): a caller passing a moving base-branch tip (as CI does, via
+    # github.event.pull_request.base.sha) must not have this checker score
+    # commits that landed on the base branch after the PR branched but
+    # before the check ran -- those are someone else's lines, not this PR's.
+    base = merge_base(root, base, head)
 
     violations = []
     sentence_index = {}
