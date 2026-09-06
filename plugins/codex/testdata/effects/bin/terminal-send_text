@@ -6,6 +6,6 @@
 # launch_env, which this stand-in honors by withholding that file instead.
 plect-effect-record terminal-send_text "$@"
 case "$1" in *PLECT_TEST_NEVER_READY*) exit 0 ;; esac
-state_dir=$(printf '%s' "$1" | sed -n "s/.*exec [^ ]* '[^']*' '\([^']*\)'.*/\1/p")
+state_dir=$(printf '%s' "$1" | sed -n "s/.*codex-exec-worker '[^']*' '\([^']*\)'.*/\1/p")
 [ -n "$state_dir" ] && mkdir -p "$state_dir" && : > "$state_dir/ready"
 true

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # codex-headless runtime worker: the sole consumer of a session's queue
-# directory. Runs as the tmux pane's own process (exec'd, not a child), so
-# its PID is the pane PID and no TUI-boot detection is needed — `codex exec`
-# has no input box to wedge.
+# directory. Runs as an ordinary child of the pane's shell (not exec'd), so
+# a stuck worker can be terminated by its own pid without ending the pane's
+# root process — `codex exec` has no input box to wedge, so this still
+# needs no TUI-boot detection.
 #
 # Turns are drained strictly serially (one `codex exec`/`codex exec resume`
 # at a time) so a kick arriving mid-turn queues instead of racing the

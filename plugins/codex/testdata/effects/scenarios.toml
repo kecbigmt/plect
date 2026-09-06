@@ -4,6 +4,29 @@
 # answers the pane introspection each launch performs, and — for the headless
 # shape — stands in for the worker's own readiness signal.
 
+# The pid is found (pgrep/ps's live-process stand-ins never fail that part),
+# but the TUI's boot banner never clears, so the ready-wait (launch_timeout
+# shortened to keep this scenario fast) runs out its window. This is what
+# exercises the kill-on-timeout branch: the setup script must actually
+# terminate the pane's live codex child before failing
+# (expect_live_process_dead asserts the real process is gone, not just that a
+# kill was invoked), so a later `plect up` retry never types a second launch
+# into a pane that still runs the first one. Runs before launch-succeeds on
+# purpose: CODEX_HOME_DIR is shared across scenarios for this session_name,
+# so launch-succeeds producing normally right after this one is this
+# corpus's evidence that a killed launch's leftover state does not block a
+# retry.
+[[codex]]
+name                     = "launch-timeout-kills-pane-child"
+inputs                   = { launch_timeout = "1s" }
+capture                  = "esc to interrupt"
+expect_live_process_dead = true
+# Only setup is under test here — a node whose setup fails is never handed
+# to the health probes in real orchestration, so exercising them against
+# this scenario's empty self would only record an artifact of the harness,
+# not a claim about this effect's contract.
+hooks                    = ["setup"]
+
 [[codex]]
 name   = "launch-succeeds"
 inputs = { model = "gpt-5.6-sol", effort = "high", launch_env = '{"PLECT_TEAM_CONTEXT":"acme"}', path_prepend = "/spy/guard" }
@@ -16,43 +39,28 @@ capture = "› "
 path    = ".codex/sessions/rollout.jsonl"
 content = '{"type":"session_meta","payload":{"cwd":"WORKSPACE","session_id":"11111111-2222-3333-4444-555555555555"}}'
 
-# The pid is found (pgrep/ps's live-process stand-ins never fail that part),
-# but the TUI's boot banner never clears, so the ready-wait (launch_timeout
-# shortened to keep this scenario fast) runs out its window. This is what
-# exercises the kill-on-timeout branch: the setup script must actually
-# terminate the pane's live codex child before failing
-# (expect_live_process_dead asserts the real process is gone, not just that a
-# kill was invoked), so a later `plect up` retry never types a second launch
-# into a pane that still runs the first one.
-[[codex]]
-name                     = "launch-timeout-kills-pane-child"
-inputs                   = { launch_timeout = "1s" }
-capture                  = "esc to interrupt"
-expect_live_process_dead = true
-# Only setup is under test here — a node whose setup fails is never handed
-# to the health probes in real orchestration, so exercising them against
-# this scenario's empty self would only record an artifact of the harness,
-# not a claim about this effect's contract.
-hooks                    = ["setup"]
-
-[[exec_runtime]]
-name   = "worker-ready"
-inputs = { model = "gpt-5.6-sol", effort = "high", launch_env = '{"PLECT_TEAM_CONTEXT":"acme"}', path_prepend = "/spy/guard" }
-
 # PLECT_TEST_NEVER_READY tells the terminal-send_text stand-in to withhold
 # the readiness file a real worker would create, so the ready-wait
 # (launch_timeout shortened to keep this scenario fast) runs out its window.
 # This exercises the kill-on-timeout branch: the setup script must actually
-# terminate the pane's own process — the worker replaced it via `exec`,
-# so the pane pid is the worker pid — before failing
+# terminate the worker's own child pid — not the pane's root process, which
+# the worker no longer replaces via `exec` — before failing
 # (expect_live_process_dead asserts the real process is gone, not just that
 # a kill was invoked), so a later `plect up` retry never collides with a
-# still-running worker.
+# still-running worker and the pane itself survives for that retry. Runs
+# before worker-ready on purpose: STATE_DIR is shared across scenarios for
+# this session_name, so worker-ready producing normally right after this one
+# is this corpus's evidence that a killed launch's leftover state (a stale
+# queue dir, an unlinked ready file) does not block a retry.
 [[exec_runtime]]
 name                     = "launch-timeout-kills-worker"
 inputs                   = { launch_env = '{"PLECT_TEST_NEVER_READY":"1"}', launch_timeout = "1s" }
 expect_live_process_dead = true
 hooks                    = ["setup"]
+
+[[exec_runtime]]
+name   = "worker-ready"
+inputs = { model = "gpt-5.6-sol", effort = "high", launch_env = '{"PLECT_TEAM_CONTEXT":"acme"}', path_prepend = "/spy/guard" }
 
 [[codex_initial_prompt]]
 inputs  = { terminal_ready = "acme-widget-1", agent_session = "1234", prompt = "rendered instruction", repeat = "" }

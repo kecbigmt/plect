@@ -371,8 +371,11 @@ mcp_servers  = { type = "string", pattern = "^[^']*$" }
 path_prepend = { type = "string", pattern = "^[A-Za-z0-9_./:-]*$" }
 # launch_timeout: restricted to digits-plus-"s" so the setup script can strip
 # the suffix and use the result directly in shell arithmetic — no separate
-# duration parser needed, and no non-numeric value can reach $(( )).
-launch_timeout = { type = "string", pattern = "^[1-9][0-9]*s$" }
+# duration parser needed, and no non-numeric value can reach $(( )). The
+# schema default documents the same "120s" the setup script's own
+# `${launch_timeout:-120s}` fallback applies; the language runtime does not
+# fill in JSON-schema defaults itself.
+launch_timeout = { type = "string", pattern = "^[1-9][0-9]*s$", default = "120s" }
 
 [runtime.outputs_schema]
 type     = "object"
