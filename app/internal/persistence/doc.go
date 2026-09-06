@@ -28,7 +28,14 @@
 //	curl -sSL -o atlas https://release.ariga.io/atlas/atlas-community-<os>-<arch>-v1.3.0
 //	echo "<checksum>  atlas" | sha256sum -c -
 //
-// linux-amd64 checksum: 10d7913e3dce43ab99b8d71534a4cbadaf11a16dc293adf3b91d10e83a0ac70b
+// v1.3.0 community-binary SHA-256 checksums, one per platform a developer
+// might run this on (CI only ever needs linux-amd64; the rest are here so
+// a developer on another platform is never left to trust an unverified
+// download):
+//
+//	linux-amd64:   10d7913e3dce43ab99b8d71534a4cbadaf11a16dc293adf3b91d10e83a0ac70b
+//	darwin-amd64:  650981a024301775ec964e5134e2d5712b7ef1b25fec4b2ec54bad762b4bdf6f
+//	darwin-arm64:  4e5ffdc10b2b4fd3a06074aba72848150907d5316cacad7b19bae6c6ae3db991
 //
 // Query code (schema.sql + queries.sql -> sqlcgen):
 //

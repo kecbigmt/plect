@@ -27,7 +27,17 @@ while IFS= read -r gomod; do
   # build list, so `go list -m all` inside one `use`d module would
   # otherwise report the combined graph instead of that module's own — the
   # opposite of what a real standalone `go install` of that module sees.
-  if (cd "$moddir" && GOWORK=off go list -m all 2>/dev/null) | grep -q "^$driver "; then
+  #
+  # go list's exit status is checked on its own, separately from grep: a
+  # `go list -m all` failure (a broken go.mod, an unresolvable require) is
+  # not evidence the driver is absent, so piping its stderr-suppressed
+  # output straight into `grep -q` would silently report "clean" for a
+  # module this check could not actually verify at all.
+  if ! list_output="$(cd "$moddir" && GOWORK=off go list -m all 2>&1)"; then
+    echo "$gomod: \`go list -m all\` failed, cannot verify it excludes $driver:" >&2
+    echo "$list_output" >&2
+    fail=1
+  elif grep -q "^$driver " <<< "$list_output"; then
     echo "$gomod: depends on $driver, a core-only cgo-requiring dependency" >&2
     fail=1
   fi

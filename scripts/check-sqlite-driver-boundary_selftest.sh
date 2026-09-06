@@ -14,8 +14,8 @@ checker="$root/scripts/check-sqlite-driver-boundary.sh"
 # populated, without depending on network access in a sandboxed CI runner.
 driver_version="$(cd "$root/app" && GOWORK=off go list -m -f '{{.Version}}' github.com/mattn/go-sqlite3)"
 
-dirty="" clean=""
-trap 'rm -rf "$dirty" "$clean"' EXIT
+dirty="" clean="" broken=""
+trap 'rm -rf "$dirty" "$clean" "$broken"' EXIT
 
 run_against() {
   local fixture="$1"
@@ -65,3 +65,25 @@ if ! run_against "$clean" >/tmp/sqlite-driver-boundary-selftest-clean.log 2>&1; 
   exit 1
 fi
 echo "ok: checker passes on a clean fixture"
+
+# Broken fixture: a module whose go.mod `go list -m all` cannot even
+# resolve must fail the checker, not silently report "clean" — go list
+# erroring is not proof the driver is absent, and the checker must not
+# fail open on that failure.
+broken=$(mktemp -d)
+mkdir -p "$broken/plugins/broken/src"
+cat > "$broken/plugins/broken/src/go.mod" <<'EOF'
+this is not a valid go.mod file
+EOF
+
+if run_against "$broken" >/tmp/sqlite-driver-boundary-selftest-broken.log 2>&1; then
+  echo "FAIL: checker passed against a module whose go.mod go list -m all cannot resolve (fail-open bug)" >&2
+  cat /tmp/sqlite-driver-boundary-selftest-broken.log >&2
+  exit 1
+fi
+if ! grep -q "plugins/broken/src/go.mod" /tmp/sqlite-driver-boundary-selftest-broken.log; then
+  echo "FAIL: checker did not name the module whose go list failed" >&2
+  cat /tmp/sqlite-driver-boundary-selftest-broken.log >&2
+  exit 1
+fi
+echo "ok: checker fails closed when go list -m all cannot resolve a module, instead of silently passing"

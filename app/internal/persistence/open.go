@@ -62,7 +62,6 @@ func Open(path string) (*DB, error) {
 	return &DB{read: read, write: write}, nil
 }
 
-// Close closes both connection pools.
 func (db *DB) Close() error {
 	readErr := db.read.Close()
 	writeErr := db.write.Close()

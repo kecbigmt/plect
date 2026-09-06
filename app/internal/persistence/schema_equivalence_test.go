@@ -3,6 +3,7 @@ package persistence
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"sort"
 	"strconv"
@@ -235,9 +236,77 @@ func diffTable(name string, want, got tableSchema) string {
 	if len(want.indexes) != len(got.indexes) {
 		diff += "table " + name + ": schema.sql has " + strconv.Itoa(len(want.indexes)) + " secondary indexes, migration history has " + strconv.Itoa(len(got.indexes)) + "\n"
 	}
+	n = len(want.indexes)
+	if len(got.indexes) < n {
+		n = len(got.indexes)
+	}
+	for i := 0; i < n; i++ {
+		if !indexesEqual(want.indexes[i], got.indexes[i]) {
+			diff += "table " + name + " index " + strconv.Itoa(i) + ": schema.sql=" + indexString(want.indexes[i]) + " migration=" + indexString(got.indexes[i]) + "\n"
+		}
+	}
 	return diff
 }
 
 func columnString(c columnInfo) string {
 	return c.name + " " + c.sqlType
+}
+
+// indexInfo embeds a slice (cols), so it cannot use Go's built-in ==;
+// two indexes with the same name and column count but different actual
+// columns, or the same columns under different uniqueness, must still
+// compare unequal.
+func indexesEqual(a, b indexInfo) bool {
+	if a.name != b.name || a.unique != b.unique || a.origin != b.origin {
+		return false
+	}
+	if len(a.cols) != len(b.cols) {
+		return false
+	}
+	for i := range a.cols {
+		if a.cols[i] != b.cols[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func indexString(idx indexInfo) string {
+	return idx.name + " unique=" + strconv.FormatBool(idx.unique) + " cols=" + strconv.Itoa(len(idx.cols)) + ":" + fmt.Sprint(idx.cols)
+}
+
+// TestDiffTable_CatchesIndexDefinitionMismatch is the regression this
+// declaration-equivalence check needs but the bootstrap persistence_smoke
+// table alone can never exercise, since it has no secondary index: two
+// tables can carry the same number of indexes while those indexes cover
+// different columns or uniqueness, a mismatch a same-count-only check
+// would silently accept.
+func TestDiffTable_CatchesIndexDefinitionMismatch(t *testing.T) {
+	base := tableSchema{
+		columns: []columnInfo{{name: "id", sqlType: "INTEGER", pk: 1}},
+	}
+
+	cases := map[string]indexInfo{
+		"different columns":    {name: "idx_note", unique: true, origin: "c", cols: []string{"other_column"}},
+		"different uniqueness": {name: "idx_note", unique: false, origin: "c", cols: []string{"note"}},
+	}
+	want := base
+	want.indexes = []indexInfo{{name: "idx_note", unique: true, origin: "c", cols: []string{"note"}}}
+
+	for name, mismatched := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := base
+			got.indexes = []indexInfo{mismatched}
+
+			if diff := diffTable("t", want, got); diff == "" {
+				t.Fatal("diffTable reported no difference for tables with the same index count but a mismatched index definition")
+			}
+		})
+	}
+
+	identical := base
+	identical.indexes = []indexInfo{{name: "idx_note", unique: true, origin: "c", cols: []string{"note"}}}
+	if diff := diffTable("t", want, identical); diff != "" {
+		t.Fatalf("diffTable reported a difference for identical index definitions: %s", diff)
+	}
 }
