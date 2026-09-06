@@ -66,7 +66,7 @@ func isolateMachineConfig(cfg *config.Config) {
 }
 
 // Acceptance: the real service stack (state.Store + service.List), driven
-// through the HTTP handler, surfaces a session that exists in state.json.
+// through the HTTP handler, surfaces a session that exists in the store.
 //
 // Given a session persisted in a temp state store,
 // When GET / is served by the live service,
@@ -267,7 +267,7 @@ func TestAcceptance_ApiV1SessionsPreserveParentChildGrandchildAndIndependentRoot
 func strPtr(s string) *string { return &s }
 
 // Acceptance: the real service stack, driven through the HTTP handler, renders
-// the detail page for a session that exists in state.json.
+// the detail page for a session that exists in the store.
 //
 // Given a session persisted in a temp state store,
 // When GET /sessions/<name> is served by the live service,

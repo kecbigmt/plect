@@ -1,12 +1,15 @@
 package webui
 
 import (
+	"context"
+	"database/sql"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/kecbigmt/plecture/app/internal/persistence"
 	"github.com/kecbigmt/plecture/app/internal/state"
 )
 
@@ -17,42 +20,20 @@ func TestNewLiveServiceRejectsStateVersionMismatch(t *testing.T) {
 	if err := os.MkdirAll(stateDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	original := []byte(`{
-  "version": 6,
-  "sessions": {
-    "org/repo-1": {
-      "session_name": "org/repo-1",
-      "workspace_dir_path": "/tmp/workdir"
-    }
-  }
-}`)
-	statePath := filepath.Join(stateDir, "state.json")
-	if err := os.WriteFile(statePath, original, 0644); err != nil {
-		t.Fatal(err)
-	}
+	writeDatabaseNewerThanBinarySupports(t, stateDir)
 
 	_, err := NewLiveService()
 	if err == nil {
-		t.Fatal("NewLiveService() over a mismatched state version must fail")
+		t.Fatal("NewLiveService() over a database newer than this binary supports must fail")
 	}
-	for _, part := range []string{"state schema version mismatch", "got 6", "want 7", "go run ./plugins/legacy-migration/cmd/legacy-migration"} {
-		if !strings.Contains(err.Error(), part) {
-			t.Fatalf("error = %q, want it to contain %q", err.Error(), part)
-		}
-	}
-
-	data, err := os.ReadFile(statePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != string(original) {
-		t.Fatalf("mismatched state file was rewritten: got %q, want unchanged %q", data, original)
+	if !strings.Contains(err.Error(), "newer than this binary supports") {
+		t.Fatalf("error = %q, want it to name the newer-than-supported condition", err.Error())
 	}
 }
 
 func TestLiveServiceListSurfacesStateVersionMismatch(t *testing.T) {
 	dir := t.TempDir()
-	writeMismatchedState(t, filepath.Join(dir, "state.json"))
+	writeDatabaseNewerThanBinarySupports(t, dir)
 
 	rec := get(t, newLiveService(nil, state.NewStore(dir)), "/sessions")
 	if rec.Code != http.StatusInternalServerError {
@@ -60,29 +41,32 @@ func TestLiveServiceListSurfacesStateVersionMismatch(t *testing.T) {
 	}
 	body := rec.Body.String()
 	if strings.Contains(body, "No sessions") {
-		t.Fatalf("mismatched state rendered empty-state placeholder: %q", body)
+		t.Fatalf("mismatched database rendered empty-state placeholder: %q", body)
 	}
-	if !strings.Contains(body, "state schema version mismatch") {
-		t.Fatalf("body = %q, want state schema mismatch", body)
+	if !strings.Contains(body, "newer than this binary supports") {
+		t.Fatalf("body = %q, want the newer-than-supported condition", body)
 	}
 }
 
-func writeMismatchedState(t *testing.T, path string) []byte {
+// writeDatabaseNewerThanBinarySupports creates and migrates a real database
+// in dir, then plants a goose ledger row past anything this binary embeds,
+// so any later open/read/write path must refuse it — the SQLite
+// counterpart of the retired state.json version-mismatch fixture.
+func writeDatabaseNewerThanBinarySupports(t *testing.T, dir string) {
 	t.Helper()
-	original := []byte(`{
-  "version": 5,
-  "sessions": {
-    "org/repo-1": {
-      "session_name": "org/repo-1",
-      "workspace_dir_path": "/tmp/workdir"
-    }
-  }
-}`)
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		t.Fatal(err)
+	db, err := persistence.Open(filepath.Join(dir, "store.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
 	}
-	if err := os.WriteFile(path, original, 0644); err != nil {
-		t.Fatal(err)
+	defer db.Close()
+	ctx := context.Background()
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
 	}
-	return original
+	if err := db.WithImmediateTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, "INSERT INTO goose_db_version (version_id, is_applied) VALUES (99999999999999, 1)")
+		return err
+	}); err != nil {
+		t.Fatalf("plant future version row: %v", err)
+	}
 }

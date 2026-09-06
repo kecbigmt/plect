@@ -1,83 +1,49 @@
+// Package state is the persistence-backed facade over core's durable
+// runtime state: sessions, task instances, done_when/judge state,
+// population state, and up-slot reservations. It is a thin translation
+// seam over app/internal/persistence's SQLite-backed store — the type,
+// constructor, and method set below are what the rest of core depends on,
+// so they stay stable even though the storage underneath is not state.json.
 package state
 
 import (
-	"encoding/json"
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
-	"strings"
 	"sync"
-	"syscall"
-	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/domain"
-	"github.com/kecbigmt/plecture/contracts/atomicfile"
-	contract "github.com/kecbigmt/plecture/contracts/state"
+	"github.com/kecbigmt/plecture/app/internal/persistence"
 )
 
-const stateVersion = contract.SchemaVersion
+// UpReservation is an alias for the shared domain type: it must live
+// outside this package so app/internal/persistence (a lower layer this
+// package depends on) can also use it without importing state back.
+type UpReservation = domain.UpReservation
 
-// UpReservation has no TTL field: RunSetup has no deadline, so only a
-// confirmed-dead holder, never elapsed time, may expire one.
-type UpReservation struct {
-	Parent string    `json:"parent"`
-	At     time.Time `json:"at"` // diagnostic only; expiry never reads it
-	PID    int       `json:"pid"`
-}
+// PopulationState is an alias for the shared domain type; see UpReservation.
+type PopulationState = domain.PopulationState
 
-// PID reuse (a crashed holder's PID reassigned to an unrelated live
-// process) is an accepted false negative of this technique — a stuck
-// reservation stays recoverable via retry or Destroy either way.
-func processAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	err := syscall.Kill(pid, 0)
-	return err == nil || err == syscall.EPERM // EPERM: exists, just unsignalable
-}
+// PopulationMember is an alias for the shared domain type; see UpReservation.
+type PopulationMember = domain.PopulationMember
 
-type stateFile struct {
-	Version     int                         `json:"version"`
-	Sessions    map[string]*domain.Session  `json:"sessions"`
-	Populations map[string]*PopulationState `json:"populations,omitempty"`
-	// Keyed by child name so a retry reclaims its own entry and Delete can
-	// drop one by name. Kept out of contracts/state.Session: local bookkeeping.
-	UpReservations map[string]UpReservation `json:"up_reservations,omitempty"`
-}
+// ErrUpAlreadyReserved: childName's reservation is held by another live
+// process — a second concurrent `plect up` for that child, not a sibling.
+var ErrUpAlreadyReserved = domain.ErrUpAlreadyReserved
 
-// PopulationState holds durable source generations independently of session
-// state, so a successful absence can suppress stale appearances even after a
-// session has been destroyed.
-type PopulationState struct {
-	Workflow string                       `json:"workflow"`
-	Name     string                       `json:"name"`
-	Members  map[string]*PopulationMember `json:"members,omitempty"`
-}
-
-type PopulationMember struct {
-	ResourceID     string         `json:"resource_id"`
-	Item           map[string]any `json:"item,omitempty"`
-	SessionName    string         `json:"session_name,omitempty"`
-	Generation     uint64         `json:"generation"`
-	AcceptedAt     time.Time      `json:"accepted_at,omitzero"`
-	LastAppearance time.Time      `json:"last_appearance,omitzero"`
-	LastInbound    time.Time      `json:"last_inbound,omitzero"`
-	Tombstoned     bool           `json:"tombstoned,omitempty"`
-	PendingUp      bool           `json:"pending_up,omitempty"`
-	LastDecision   string         `json:"last_decision,omitempty"`
-	LastBlockers   []string       `json:"last_blockers,omitempty"`
-}
-
-// Store manages session state persistence.
+// Store manages session, task, population, and reservation persistence
+// against a SQLite database in its data directory.
 type Store struct {
-	path string
-	mu   sync.Mutex
+	dir string
+	mu  sync.Mutex
+	db  *persistence.DB
 }
 
-// NewStore creates a Store using the given directory for state.json.
-// If dir is empty, defaults to ~/.local/share/plect.
+// NewStore creates a Store using the given directory to hold the database.
+// If dir is empty, defaults to ~/.local/share/plect. The database is not
+// opened until the first call that needs it.
 func NewStore(dir string) *Store {
 	if dir == "" {
 		dataHome := os.Getenv("XDG_DATA_HOME")
@@ -87,574 +53,198 @@ func NewStore(dir string) *Store {
 		}
 		dir = filepath.Join(dataHome, "plect")
 	}
-	return &Store{path: filepath.Join(dir, "state.json")}
+	return &Store{dir: dir}
 }
 
-// Dir returns the directory holding state.json. Co-located stores (e.g. the
-// event log) derive their root from it so they share the same data home.
+// Dir returns the directory holding the database. Co-located stores (e.g.
+// the event log) derive their root from it so they share the same data
+// home.
 func (s *Store) Dir() string {
-	return filepath.Dir(s.path)
+	return s.dir
 }
 
-// CheckReadable verifies that the state file can be loaded by this binary.
+// dbHandle opens and migrates the database on first use and memoizes the
+// handle; a failed attempt is not cached, so a transient error (e.g. a
+// directory not yet created) does not stick to the Store for its whole
+// lifetime.
+func (s *Store) dbHandle() (*persistence.DB, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.db != nil {
+		return s.db, nil
+	}
+
+	if err := os.MkdirAll(s.dir, 0755); err != nil {
+		return nil, fmt.Errorf("state: create data directory: %w", err)
+	}
+	db, err := persistence.Open(filepath.Join(s.dir, "store.db"))
+	if err != nil {
+		return nil, fmt.Errorf("state: open database: %w", err)
+	}
+	if err := db.Migrate(context.Background()); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("state: migrate database: %w", err)
+	}
+	s.db = db
+	return db, nil
+}
+
+// CheckReadable verifies that the database can be opened, migrated, and
+// read by this binary.
 func (s *Store) CheckReadable() error {
-	_, err := s.loadE()
+	db, err := s.dbHandle()
+	if err != nil {
+		return err
+	}
+	_, err = db.AllSessions(context.Background())
 	return err
 }
 
-// Get returns a session by name, or nil if not found.
+// Get returns a session by name, or nil if not found or unreadable.
+// Compatibility read paths degrade to nil when callers have no error
+// return to propagate; new read paths should use GetE.
 func (s *Store) Get(name string) *domain.Session {
-	sf := s.load()
-	return sf.Sessions[name]
+	session, err := s.GetE(name)
+	if err != nil {
+		return nil
+	}
+	return session
 }
 
-// GetE returns a session by name while preserving state load errors.
+// GetE returns a session by name while preserving read errors.
 func (s *Store) GetE(name string) (*domain.Session, error) {
-	sf, err := s.loadE()
+	db, err := s.dbHandle()
 	if err != nil {
 		return nil, err
 	}
-	return sf.Sessions[name], nil
+	return db.GetSession(context.Background(), name)
 }
 
 // Put saves or updates a session.
 func (s *Store) Put(session *domain.Session) error {
-	return s.withFileLock(func() error {
-		sf, err := s.loadLocked()
-		if err != nil {
-			return fmt.Errorf("state: put %q: %w", session.Name, err)
-		}
-		sf.Sessions[session.Name] = session
-		normalizeSessionTree(sf.Sessions)
-		return s.saveLocked(sf)
-	})
+	db, err := s.dbHandle()
+	if err != nil {
+		return fmt.Errorf("state: put %q: %w", session.Name, err)
+	}
+	if err := db.PutSession(context.Background(), session); err != nil {
+		return fmt.Errorf("state: put %q: %w", session.Name, err)
+	}
+	return nil
 }
 
-// Update atomically applies fn to the named session under the file lock and
-// persists the result. This is the read-modify-write primitive for callers
-// that may race with other plect processes (e.g. a watcher daemon merging
-// task outputs while a lifecycle command runs). fn returning an error
-// aborts without writing.
+// Update atomically applies fn to the named session and persists the
+// result. This is the read-modify-write primitive for callers that may
+// race with other plect processes (e.g. a watcher daemon merging task
+// outputs while a lifecycle command runs). fn returning an error aborts
+// without writing.
 func (s *Store) Update(name string, fn func(*domain.Session) error) error {
-	return s.withFileLock(func() error {
-		sf, err := s.loadLocked()
-		if err != nil {
-			return fmt.Errorf("state: update %q: %w", name, err)
-		}
-		session, ok := sf.Sessions[name]
-		if !ok {
-			return fmt.Errorf("no state entry for session %q", name)
-		}
-		if err := fn(session); err != nil {
-			return err
-		}
-		normalizeSessionTree(sf.Sessions)
-		return s.saveLocked(sf)
-	})
+	db, err := s.dbHandle()
+	if err != nil {
+		return fmt.Errorf("state: update %q: %w", name, err)
+	}
+	// fn's own error is returned verbatim, not wrapped: callers type-assert
+	// or errors.Is against sentinel/typed errors fn returns (e.g. a service
+	// *Error), and this is the read-modify-write primitive they call
+	// through, so this seam must not obscure that type.
+	return db.UpdateSession(context.Background(), name, fn)
 }
 
+// Population returns one population's durable state, or nil if key has
+// never been recorded.
 func (s *Store) Population(key string) (*PopulationState, error) {
-	sf, err := s.loadE()
+	db, err := s.dbHandle()
 	if err != nil {
 		return nil, err
 	}
-	return clonePopulation(sf.Populations[key]), nil
+	return db.Population(context.Background(), key)
 }
 
+// UpdatePopulation atomically applies fn to the named population (creating
+// it, and its Members map, if absent) and persists the result.
 func (s *Store) UpdatePopulation(key string, fn func(*PopulationState) error) error {
-	return s.withFileLock(func() error {
-		sf, err := s.loadLocked()
-		if err != nil {
-			return fmt.Errorf("state: update population %q: %w", key, err)
-		}
-		if sf.Populations == nil {
-			sf.Populations = make(map[string]*PopulationState)
-		}
-		population := sf.Populations[key]
-		if population == nil {
-			population = &PopulationState{Members: make(map[string]*PopulationMember)}
-			sf.Populations[key] = population
-		}
-		if population.Members == nil {
-			population.Members = make(map[string]*PopulationMember)
-		}
-		if err := fn(population); err != nil {
-			return err
-		}
-		return s.saveLocked(sf)
-	})
+	db, err := s.dbHandle()
+	if err != nil {
+		return fmt.Errorf("state: update population %q: %w", key, err)
+	}
+	// fn's own error is returned verbatim; see Update's identical rationale.
+	return db.UpdatePopulation(context.Background(), key, fn)
 }
 
-func clonePopulation(in *PopulationState) *PopulationState {
-	if in == nil {
-		return nil
-	}
-	out := *in
-	out.Members = make(map[string]*PopulationMember, len(in.Members))
-	for key, member := range in.Members {
-		if member == nil {
-			continue
-		}
-		copyMember := *member
-		copyMember.Item = make(map[string]any, len(member.Item))
-		for itemKey, value := range member.Item {
-			copyMember.Item[itemKey] = value
-		}
-		copyMember.LastBlockers = append([]string(nil), member.LastBlockers...)
-		out.Members[key] = &copyMember
-	}
-	return &out
-}
-
-// ErrUpAlreadyReserved: childName's reservation is held by another live
-// process — a second concurrent `plect up` for that child, not a sibling.
-var ErrUpAlreadyReserved = errors.New("state: up already reserved by a live process")
-
-// ReserveUpSlot locks the whole snapshot, unlike Update's single session,
-// so fn can weigh every session and reservation together; it never
-// overwrites a still-live reservation for childName itself (ErrUpAlreadyReserved).
+// ReserveUpSlot lets fn weigh every session and reservation together before
+// admitting childName; it never overwrites a still-live reservation for
+// childName itself (ErrUpAlreadyReserved).
 func (s *Store) ReserveUpSlot(childName, parentName string, fn func(sessions map[string]*domain.Session, reservations map[string]UpReservation) (approved bool)) (bool, error) {
-	approved := false
-	err := s.withFileLock(func() error {
-		sf, err := s.loadLocked()
-		if err != nil {
-			return fmt.Errorf("state: reserve up-slot for %q: %w", childName, err)
+	db, err := s.dbHandle()
+	if err != nil {
+		return false, fmt.Errorf("state: reserve up-slot for %q: %w", childName, err)
+	}
+	approved, err := db.ReserveUpSlot(context.Background(), childName, parentName, fn)
+	if err != nil {
+		if errors.Is(err, ErrUpAlreadyReserved) {
+			return false, err
 		}
-		live := make(map[string]UpReservation, len(sf.UpReservations))
-		for name, res := range sf.UpReservations {
-			if !processAlive(res.PID) {
-				continue
-			}
-			live[name] = res
-		}
-		if _, held := live[childName]; held {
-			return ErrUpAlreadyReserved
-		}
-		approved = fn(sf.Sessions, live)
-		if !approved {
-			return nil
-		}
-		live[childName] = UpReservation{Parent: parentName, At: time.Now(), PID: os.Getpid()}
-		sf.UpReservations = live
-		return s.saveLocked(sf)
-	})
-	return approved, err
+		return false, fmt.Errorf("state: reserve up-slot for %q: %w", childName, err)
+	}
+	return approved, nil
 }
 
 func (s *Store) ReleaseUpSlot(childName string) error {
-	return s.withFileLock(func() error {
-		sf, err := s.loadLocked()
-		if err != nil {
-			return fmt.Errorf("state: release up-slot for %q: %w", childName, err)
-		}
-		if _, ok := sf.UpReservations[childName]; !ok {
-			return nil
-		}
-		delete(sf.UpReservations, childName)
-		return s.saveLocked(sf)
-	})
+	db, err := s.dbHandle()
+	if err != nil {
+		return fmt.Errorf("state: release up-slot for %q: %w", childName, err)
+	}
+	if err := db.ReleaseUpSlot(context.Background(), childName); err != nil {
+		return fmt.Errorf("state: release up-slot for %q: %w", childName, err)
+	}
+	return nil
 }
 
 // Delete removes a session by name.
 func (s *Store) Delete(name string) error {
-	return s.withFileLock(func() error {
-		sf, err := s.loadLocked()
-		if err != nil {
-			return fmt.Errorf("state: delete %q: %w", name, err)
-		}
-		for _, session := range sf.Sessions {
-			if session == nil {
-				continue
-			}
-			if session.ParentSession == name {
-				session.ParentSession = ""
-			}
-			session.Children = removeSessionName(session.Children, name)
-		}
-		delete(sf.Sessions, name)
-		delete(sf.UpReservations, name) // lets Destroy free a stuck one
-		normalizeSessionTree(sf.Sessions)
-		return s.saveLocked(sf)
-	})
+	db, err := s.dbHandle()
+	if err != nil {
+		return fmt.Errorf("state: delete %q: %w", name, err)
+	}
+	if err := db.DeleteSession(context.Background(), name); err != nil {
+		return fmt.Errorf("state: delete %q: %w", name, err)
+	}
+	return nil
 }
 
 // FindByAlias returns all sessions whose create-time alias equals the given
 // string. Multiple hits are possible (tag variants share the alias), so the
 // caller decides how to disambiguate.
 func (s *Store) FindByAlias(alias string) []*domain.Session {
-	sf := s.load()
-	return findByAlias(sf.Sessions, alias)
+	sessions, err := s.FindByAliasE(alias)
+	if err != nil {
+		return nil
+	}
+	return sessions
 }
 
-// FindByAliasE returns alias matches while preserving state load errors.
+// FindByAliasE returns alias matches while preserving read errors.
 func (s *Store) FindByAliasE(alias string) ([]*domain.Session, error) {
-	sf, err := s.loadE()
+	db, err := s.dbHandle()
 	if err != nil {
 		return nil, err
 	}
-	return findByAlias(sf.Sessions, alias), nil
+	return db.FindSessionsByAlias(context.Background(), alias)
 }
 
 // All returns all sessions.
 func (s *Store) All() map[string]*domain.Session {
-	sf := s.load()
-	return copySessions(sf.Sessions)
+	sessions, err := s.AllE()
+	if err != nil {
+		return make(map[string]*domain.Session)
+	}
+	return sessions
 }
 
-// AllE returns all sessions while preserving state load errors.
+// AllE returns all sessions while preserving read errors.
 func (s *Store) AllE() (map[string]*domain.Session, error) {
-	sf, err := s.loadE()
+	db, err := s.dbHandle()
 	if err != nil {
 		return nil, err
 	}
-	return copySessions(sf.Sessions), nil
-}
-
-func findByAlias(sessions map[string]*domain.Session, alias string) []*domain.Session {
-	var result []*domain.Session
-	for _, session := range sessions {
-		if session.Alias != "" && session.Alias == alias {
-			result = append(result, session)
-		}
-	}
-	return result
-}
-
-func copySessions(sessions map[string]*domain.Session) map[string]*domain.Session {
-	result := make(map[string]*domain.Session, len(sessions))
-	for k, v := range sessions {
-		result[k] = v
-	}
-	return result
-}
-
-// withFileLock acquires both the in-process mutex and a file-level lock (flock)
-// to provide cross-process mutual exclusion for read-modify-write operations.
-func (s *Store) withFileLock(fn func() error) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	lockPath := s.path + ".lock"
-	dir := filepath.Dir(lockPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("failed to create state directory: %w", err)
-	}
-
-	// LOCK_EX requires a descriptor opened for writing: the Linux NFS client
-	// enforces this and returns EBADF for an O_RDONLY fd, even though local
-	// filesystems tolerate it. The descriptor is never read or written to;
-	// only its lock is used.
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0644)
-	if err != nil {
-		return fmt.Errorf("failed to open lock file: %w", err)
-	}
-	defer f.Close()
-
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		return fmt.Errorf("failed to acquire file lock: %w", err)
-	}
-	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-
-	return fn()
-}
-
-// withSharedFileLock acquires the in-process mutex and a shared file lock (LOCK_SH)
-// to prevent reading a partially-written file from another process.
-func (s *Store) withSharedFileLock(fn func() *stateFile) *stateFile {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	lockPath := s.path + ".lock"
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDONLY, 0644)
-	if err != nil {
-		return &stateFile{Version: stateVersion, Sessions: make(map[string]*domain.Session)}
-	}
-	defer f.Close()
-
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_SH); err != nil {
-		return &stateFile{Version: stateVersion, Sessions: make(map[string]*domain.Session)}
-	}
-	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-
-	return fn()
-}
-
-func (s *Store) withSharedLockErr(fn func() error) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	lockPath := s.path + ".lock"
-	dir := filepath.Dir(lockPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("create state directory: %w", err)
-	}
-
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDONLY, 0644)
-	if err != nil {
-		return fmt.Errorf("open state lock file: %w", err)
-	}
-	defer f.Close()
-
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_SH); err != nil {
-		return fmt.Errorf("acquire state lock: %w", err)
-	}
-	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-
-	return fn()
-}
-
-func (s *Store) load() *stateFile {
-	return s.withSharedFileLock(func() *stateFile {
-		sf, err := s.loadLocked()
-		if err != nil {
-			// Compatibility read paths degrade to empty when callers have no
-			// error return to propagate. New read paths should use loadE.
-			return &stateFile{Version: stateVersion, Sessions: make(map[string]*domain.Session)}
-		}
-		return sf
-	})
-}
-
-func (s *Store) loadE() (*stateFile, error) {
-	var sf *stateFile
-	err := s.withSharedLockErr(func() error {
-		var err error
-		sf, err = s.loadLocked()
-		return err
-	})
-	if err != nil {
-		return nil, err
-	}
-	return sf, nil
-}
-
-// loadLocked reads and parses state.json. A missing file is a fresh, empty
-// state; any other read or parse error is returned rather than silently
-// treated as empty — an empty stateFile handed to a write path would
-// overwrite good on-disk state with nothing.
-func (s *Store) loadLocked() (*stateFile, error) {
-	sf := &stateFile{Version: stateVersion, Sessions: make(map[string]*domain.Session), Populations: make(map[string]*PopulationState)}
-
-	data, err := os.ReadFile(s.path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return sf, nil
-		}
-		return nil, fmt.Errorf("read state file: %w", err)
-	}
-
-	if err := checkLayerIdentityMigrated(data); err != nil {
-		return nil, err
-	}
-
-	var header struct {
-		Version int `json:"version"`
-	}
-	if err := json.Unmarshal(data, &header); err != nil {
-		return nil, fmt.Errorf("parse state file: %w", err)
-	}
-	if err := validateStateVersion(header.Version); err != nil {
-		return nil, err
-	}
-
-	var parsed stateFile
-	if err := json.Unmarshal(data, &parsed); err != nil {
-		return nil, fmt.Errorf("parse state file: %w", err)
-	}
-	if parsed.Sessions == nil {
-		parsed.Sessions = make(map[string]*domain.Session)
-	}
-	if parsed.Populations == nil {
-		parsed.Populations = make(map[string]*PopulationState)
-	}
-	if err := validateStateVersion(parsed.Version); err != nil {
-		return nil, err
-	}
-
-	for name, session := range parsed.Sessions {
-		if session == nil {
-			continue
-		}
-		session.Name = name // ensure name is set from map key
-		migrateResourceID(session)
-		sf.Sessions[name] = session
-	}
-	normalizeSessionTree(sf.Sessions)
-	sf.UpReservations = parsed.UpReservations
-	sf.Populations = parsed.Populations
-
-	return sf, nil
-}
-
-// json.Unmarshal silently drops unknown struct fields, so without this
-// check an unmigrated task_id would decode as a zero-value EffectID and a
-// later whole-file save would persist that zero value, destroying the
-// layer's identity. See docs/migrations/task-layer-effect-id-migration.md.
-func checkLayerIdentityMigrated(data []byte) error {
-	var raw struct {
-		Sessions map[string]struct {
-			Tasks map[string]struct {
-				Layers []map[string]json.RawMessage `json:"layers"`
-			} `json:"tasks"`
-		} `json:"sessions"`
-	}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		// Malformed JSON is reported by the caller's own parse step.
-		return nil
-	}
-
-	for sessionName, session := range raw.Sessions {
-		for taskID, task := range session.Tasks {
-			for i, layer := range task.Layers {
-				if _, hasLegacyField := layer["task_id"]; hasLegacyField {
-					return fmt.Errorf("state file: session %q task %q layer %d still has the pre-rename task_id field instead of effect_id; run the migration in docs/migrations/task-layer-effect-id-migration.md before using this binary", sessionName, taskID, i)
-				}
-				var effectID string
-				if effectIDRaw, ok := layer["effect_id"]; ok {
-					_ = json.Unmarshal(effectIDRaw, &effectID)
-				}
-				if effectID == "" {
-					return fmt.Errorf("state file: session %q task %q layer %d has no effect_id; run the migration in docs/migrations/task-layer-effect-id-migration.md before using this binary", sessionName, taskID, i)
-				}
-			}
-		}
-	}
-	return nil
-}
-
-func validateStateVersion(got int) error {
-	if got == stateVersion {
-		return nil
-	}
-	if got > stateVersion {
-		return fmt.Errorf("state schema version mismatch: got %d, want %d; this state was written by a newer plect binary, so use a matching binary or migrate explicitly", got, stateVersion)
-	}
-	return fmt.Errorf("state schema version mismatch: got %d, want %d; run `go run ./plugins/legacy-migration/cmd/legacy-migration` before using this plect binary", got, stateVersion)
-}
-
-func normalizeSessionTree(sessions map[string]*domain.Session) {
-	for parentName, parent := range sessions {
-		if parent == nil {
-			continue
-		}
-		parent.Children = uniqueSessionNames(parent.Children)
-		for _, childName := range parent.Children {
-			child := sessions[childName]
-			if child == nil || child.ParentSession != "" {
-				continue
-			}
-			if childName != parentName && !wouldCreateCycle(sessions, childName, parentName) {
-				child.ParentSession = parentName
-			}
-		}
-	}
-
-	for _, session := range sessions {
-		if session != nil {
-			session.Children = nil
-		}
-	}
-
-	for childName, child := range sessions {
-		if child == nil || child.ParentSession == "" {
-			continue
-		}
-		if rootTarget, ok := strings.CutPrefix(child.ParentSession, "root:"); ok {
-			// A "root:<session>" parent is a pseudo-node (that session's own
-			// implicit root, domain.ImplicitRootParent) — not a Session in
-			// this map, so it has no Children slot to append into. It is
-			// valid as long as the named session actually exists.
-			if rootTarget == "" || rootTarget == childName || sessions[rootTarget] == nil {
-				child.ParentSession = ""
-			}
-			continue
-		}
-		parent := sessions[child.ParentSession]
-		if parent == nil || child.ParentSession == childName || wouldCreateCycle(sessions, childName, child.ParentSession) {
-			child.ParentSession = ""
-			continue
-		}
-		parent.Children = append(parent.Children, childName)
-	}
-
-	for _, session := range sessions {
-		if session != nil {
-			session.Children = uniqueSessionNames(session.Children)
-		}
-	}
-}
-
-func wouldCreateCycle(sessions map[string]*domain.Session, childName, parentName string) bool {
-	seen := map[string]bool{}
-	for cur := parentName; cur != ""; {
-		if cur == childName {
-			return true
-		}
-		if seen[cur] {
-			return true
-		}
-		seen[cur] = true
-		parent := sessions[cur]
-		if parent == nil {
-			return false
-		}
-		cur = parent.ParentSession
-	}
-	return false
-}
-
-func uniqueSessionNames(names []string) []string {
-	if len(names) == 0 {
-		return nil
-	}
-	seen := map[string]bool{}
-	out := names[:0]
-	for _, name := range names {
-		if name == "" || seen[name] {
-			continue
-		}
-		seen[name] = true
-		out = append(out, name)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func removeSessionName(names []string, remove string) []string {
-	if len(names) == 0 {
-		return nil
-	}
-	out := names[:0]
-	for _, name := range names {
-		if name != remove {
-			out = append(out, name)
-		}
-	}
-	return uniqueSessionNames(out)
-}
-
-// migrateResourceID backfills the create-time alias from the canonical
-// resource id, which is what a session created without an explicit alias
-// was looked up by.
-func migrateResourceID(session *domain.Session) {
-	if session.Alias == "" && session.ResourceID != "" {
-		session.Alias = session.ResourceID
-	}
-}
-
-func (s *Store) saveLocked(sf *stateFile) error {
-	dir := filepath.Dir(s.path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("failed to create state directory: %w", err)
-	}
-
-	data, err := json.MarshalIndent(sf, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal state: %w", err)
-	}
-
-	if err := atomicfile.Write(s.path, data); err != nil {
-		return fmt.Errorf("failed to write state file: %w", err)
-	}
-	return nil
+	return db.AllSessions(context.Background())
 }

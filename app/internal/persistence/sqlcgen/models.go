@@ -4,8 +4,95 @@
 
 package sqlcgen
 
+import (
+	"database/sql"
+)
+
 type PersistenceSmoke struct {
 	ID        int64
 	Note      string
 	CreatedAt string
+}
+
+type Population struct {
+	PopulationKey string
+	Workflow      string
+	Name          string
+}
+
+type PopulationMember struct {
+	PopulationKey    string
+	ResourceID       string
+	SessionName      string
+	Generation       int64
+	AcceptedAt       string
+	LastAppearance   string
+	LastInbound      string
+	Tombstoned       int64
+	PendingUp        int64
+	LastDecision     string
+	ItemJson         string
+	LastBlockersJson string
+}
+
+type Session struct {
+	Name              string
+	ParentSessionName sql.NullString
+	RootSessionName   sql.NullString
+	ResourceID        string
+	Alias             string
+	Workflow          string
+	WorkspaceDirPath  string
+	CreatedAt         string
+	UpdatedAt         string
+	RecordJson        string
+}
+
+type TaskDoneWhen struct {
+	SessionName          string
+	InstanceName         string
+	HeartbeatTicks       int64
+	HeartbeatEscalations int64
+	LastAction           string
+	LastFingerprint      string
+	LastReason           string
+	LastUnsatisfiedJson  string
+	LastBody             string
+	EscalatedAt          string
+	EscalateReason       string
+}
+
+type TaskDoneWhenJudge struct {
+	SessionName      string
+	InstanceName     string
+	LeafID           string
+	Action           string
+	Reason           string
+	Revision         string
+	TargetSession    string
+	TargetInstance   string
+	ReviewerSession  string
+	ReviewerWorkflow string
+	Relation         string
+	CreatedAt        string
+}
+
+type TaskInstance struct {
+	SessionName   string
+	InstanceName  string
+	TaskID        string
+	Scope         string
+	Status        string
+	Sequence      int64
+	Dynamic       int64
+	Resource      string
+	NamedInstance string
+	RecordJson    string
+}
+
+type UpReservation struct {
+	ChildSessionName string
+	ParentName       string
+	Pid              int64
+	ReservedAt       string
 }

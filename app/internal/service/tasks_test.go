@@ -24,11 +24,10 @@ import (
 
 func TestPutBestEffort_PutFailureLogsWarningWithoutPanicking(t *testing.T) {
 	dir := t.TempDir()
-	// state.json exists as a directory, so Store.Put's read/write of it fails
-	// — this pins the best-effort swallow at putBestEffort: a broken store
-	// must not panic or block the caller, but the failure must not be
-	// invisible either.
-	if err := os.MkdirAll(filepath.Join(dir, "state.json"), 0o755); err != nil {
+	// store.db exists as a directory, so Store.Put's open of it fails — this
+	// pins the best-effort swallow at putBestEffort: a broken store must not
+	// panic or block the caller, but the failure must not be invisible either.
+	if err := os.MkdirAll(filepath.Join(dir, "store.db"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	store := state.NewStore(dir)
@@ -412,23 +411,24 @@ func TestUp_ForceRecreateRelationGuardBlocksUnrelatedCaller(t *testing.T) {
 // A run-scope node's setup script (e.g. goal_bootstrap re-deriving
 // `pursue_goal` instances during `plect up`, see
 // config/plect/tasks/goal_bootstrap.toml) can itself shell out to a nested
-// `plect task setup`, which writes its instance straight to state.json while
+// `plect task setup`, which writes its instance straight to the store while
 // this Up call's own RunSetup is still in flight. Up's persist must overlay
 // (mergeTasks), not blind-Put, or that nested write is clobbered — the same
 // hazard TestCreate_SessionNodeNestedWriteSurvives covers for Create's
 // initial_task dispatcher. Exercises the real store path (not a stub).
 func TestUp_RunScopeNestedWriteSurvives(t *testing.T) {
-	if _, err := exec.LookPath("jq"); err != nil {
-		t.Skip("jq not available")
-	}
 	store := testStore(t)
 	sessionName := "org/repo-12"
-	t.Setenv("SP", filepath.Join(store.Dir(), "state.json"))
+	t.Setenv("PLECT_SERVICE_NESTED_WRITE_HELPER", "1")
 
 	// dispatcher mimics a nested `plect task setup`: writes a sibling "goal_x"
-	// key straight to disk, then produces normally.
-	dispatcher := fmt.Sprintf(`jq '.sessions["%s"].tasks.goal_x={"scope":"session","status":"produced","dynamic":true,"task_id":"pursue_goal","name":"goal_x","outputs":{}}' "$SP" > "$SP.tmp" && mv "$SP.tmp" "$SP"
-echo '{}'`, sessionName)
+	// key straight to the store, then produces normally.
+	dispatcher := nestedWriteCommand(t, store.Dir(), sessionName, nestedWritePatch{
+		Tasks: map[string]*contract.TaskState{
+			"goal_x": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, Dynamic: true, TaskID: "pursue_goal", Name: "goal_x", Outputs: map[string]any{}},
+		},
+	}) + `
+echo '{}'`
 	cfg := writeWorkflowFixture(t, t.TempDir(), "default",
 		[]taskFixture{{id: "dispatcher", scope: "run", setup: dispatcher}},
 		[]nodeFixture{{id: "dispatcher"}},
@@ -567,14 +567,17 @@ func TestUp_StaleNodeCleanupDoesNotClobberConcurrentSessionWrites(t *testing.T) 
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
 	}
-	if _, err := exec.LookPath("jq"); err != nil {
-		t.Skip("jq not available")
-	}
 	store := testStore(t)
 	sessionName := "org/repo-14"
-	t.Setenv("SP", filepath.Join(store.Dir(), "state.json"))
+	t.Setenv("PLECT_SERVICE_NESTED_WRITE_HELPER", "1")
 	cleanupLog := filepath.Join(t.TempDir(), "cleanup.log")
-	concurrentWrite := fmt.Sprintf(`jq --arg name %q '.sessions[$name].tasks.kept.outputs.self_healed="yes" | .sessions[$name].health={"last_state":"healthy","last_reason":"concurrent"} | .sessions[$name].tick_backoff={"last_fingerprint":"concurrent"}' "$SP" > "$SP.tmp" && mv "$SP.tmp" "$SP"`, sessionName)
+	concurrentWrite := nestedWriteCommand(t, store.Dir(), sessionName, nestedWritePatch{
+		Tasks: map[string]*contract.TaskState{
+			"kept": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Outputs: map[string]any{"self_healed": "yes"}, Seq: 2},
+		},
+		Health:      &contract.HealthState{LastState: "healthy", LastReason: "concurrent"},
+		TickBackoff: &contract.TickBackoff{LastFingerprint: "concurrent"},
+	})
 	cfg := writeWorkflowFixture(t, t.TempDir(), "default",
 		[]taskFixture{
 			{

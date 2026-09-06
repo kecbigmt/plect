@@ -7,7 +7,92 @@ package sqlcgen
 
 import (
 	"context"
+	"database/sql"
 )
+
+const countSessionsNamed = `-- name: CountSessionsNamed :one
+SELECT COUNT(*) FROM sessions WHERE name = ?
+`
+
+func (q *Queries) CountSessionsNamed(ctx context.Context, name string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countSessionsNamed, name)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const deletePopulationMembersForPopulation = `-- name: DeletePopulationMembersForPopulation :exec
+DELETE FROM population_members WHERE population_key = ?
+`
+
+func (q *Queries) DeletePopulationMembersForPopulation(ctx context.Context, populationKey string) error {
+	_, err := q.db.ExecContext(ctx, deletePopulationMembersForPopulation, populationKey)
+	return err
+}
+
+const deleteSession = `-- name: DeleteSession :exec
+DELETE FROM sessions WHERE name = ?
+`
+
+func (q *Queries) DeleteSession(ctx context.Context, name string) error {
+	_, err := q.db.ExecContext(ctx, deleteSession, name)
+	return err
+}
+
+const deleteTaskInstancesForSession = `-- name: DeleteTaskInstancesForSession :exec
+DELETE FROM task_instances WHERE session_name = ?
+`
+
+func (q *Queries) DeleteTaskInstancesForSession(ctx context.Context, sessionName string) error {
+	_, err := q.db.ExecContext(ctx, deleteTaskInstancesForSession, sessionName)
+	return err
+}
+
+const deleteUpReservation = `-- name: DeleteUpReservation :exec
+DELETE FROM up_reservations WHERE child_session_name = ?
+`
+
+func (q *Queries) DeleteUpReservation(ctx context.Context, childSessionName string) error {
+	_, err := q.db.ExecContext(ctx, deleteUpReservation, childSessionName)
+	return err
+}
+
+const getPopulation = `-- name: GetPopulation :one
+
+SELECT population_key, workflow, name FROM populations WHERE population_key = ?
+`
+
+// Populations
+func (q *Queries) GetPopulation(ctx context.Context, populationKey string) (Population, error) {
+	row := q.db.QueryRowContext(ctx, getPopulation, populationKey)
+	var i Population
+	err := row.Scan(&i.PopulationKey, &i.Workflow, &i.Name)
+	return i, err
+}
+
+const getSession = `-- name: GetSession :one
+SELECT name, parent_session_name, root_session_name, resource_id, alias,
+       workflow, workspace_dir_path, created_at, updated_at, record_json
+FROM sessions WHERE name = ?
+`
+
+func (q *Queries) GetSession(ctx context.Context, name string) (Session, error) {
+	row := q.db.QueryRowContext(ctx, getSession, name)
+	var i Session
+	err := row.Scan(
+		&i.Name,
+		&i.ParentSessionName,
+		&i.RootSessionName,
+		&i.ResourceID,
+		&i.Alias,
+		&i.Workflow,
+		&i.WorkspaceDirPath,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.RecordJson,
+	)
+	return i, err
+}
 
 const insertPersistenceSmoke = `-- name: InsertPersistenceSmoke :one
 INSERT INTO persistence_smoke (note, created_at)
@@ -25,4 +110,577 @@ func (q *Queries) InsertPersistenceSmoke(ctx context.Context, arg InsertPersiste
 	var i PersistenceSmoke
 	err := row.Scan(&i.ID, &i.Note, &i.CreatedAt)
 	return i, err
+}
+
+const insertPopulationMember = `-- name: InsertPopulationMember :exec
+INSERT INTO population_members (
+    population_key, resource_id, session_name, generation, accepted_at,
+    last_appearance, last_inbound, tombstoned, pending_up, last_decision,
+    item_json, last_blockers_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type InsertPopulationMemberParams struct {
+	PopulationKey    string
+	ResourceID       string
+	SessionName      string
+	Generation       int64
+	AcceptedAt       string
+	LastAppearance   string
+	LastInbound      string
+	Tombstoned       int64
+	PendingUp        int64
+	LastDecision     string
+	ItemJson         string
+	LastBlockersJson string
+}
+
+func (q *Queries) InsertPopulationMember(ctx context.Context, arg InsertPopulationMemberParams) error {
+	_, err := q.db.ExecContext(ctx, insertPopulationMember,
+		arg.PopulationKey,
+		arg.ResourceID,
+		arg.SessionName,
+		arg.Generation,
+		arg.AcceptedAt,
+		arg.LastAppearance,
+		arg.LastInbound,
+		arg.Tombstoned,
+		arg.PendingUp,
+		arg.LastDecision,
+		arg.ItemJson,
+		arg.LastBlockersJson,
+	)
+	return err
+}
+
+const insertTaskDoneWhen = `-- name: InsertTaskDoneWhen :exec
+
+INSERT INTO task_done_when (
+    session_name, instance_name, heartbeat_ticks, heartbeat_escalations,
+    last_action, last_fingerprint, last_reason, last_unsatisfied_json,
+    last_body, escalated_at, escalate_reason
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type InsertTaskDoneWhenParams struct {
+	SessionName          string
+	InstanceName         string
+	HeartbeatTicks       int64
+	HeartbeatEscalations int64
+	LastAction           string
+	LastFingerprint      string
+	LastReason           string
+	LastUnsatisfiedJson  string
+	LastBody             string
+	EscalatedAt          string
+	EscalateReason       string
+}
+
+// Task done_when
+func (q *Queries) InsertTaskDoneWhen(ctx context.Context, arg InsertTaskDoneWhenParams) error {
+	_, err := q.db.ExecContext(ctx, insertTaskDoneWhen,
+		arg.SessionName,
+		arg.InstanceName,
+		arg.HeartbeatTicks,
+		arg.HeartbeatEscalations,
+		arg.LastAction,
+		arg.LastFingerprint,
+		arg.LastReason,
+		arg.LastUnsatisfiedJson,
+		arg.LastBody,
+		arg.EscalatedAt,
+		arg.EscalateReason,
+	)
+	return err
+}
+
+const insertTaskDoneWhenJudge = `-- name: InsertTaskDoneWhenJudge :exec
+
+INSERT INTO task_done_when_judges (
+    session_name, instance_name, leaf_id, action, reason, revision,
+    target_session, target_instance, reviewer_session, reviewer_workflow,
+    relation, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type InsertTaskDoneWhenJudgeParams struct {
+	SessionName      string
+	InstanceName     string
+	LeafID           string
+	Action           string
+	Reason           string
+	Revision         string
+	TargetSession    string
+	TargetInstance   string
+	ReviewerSession  string
+	ReviewerWorkflow string
+	Relation         string
+	CreatedAt        string
+}
+
+// Task done_when judges
+func (q *Queries) InsertTaskDoneWhenJudge(ctx context.Context, arg InsertTaskDoneWhenJudgeParams) error {
+	_, err := q.db.ExecContext(ctx, insertTaskDoneWhenJudge,
+		arg.SessionName,
+		arg.InstanceName,
+		arg.LeafID,
+		arg.Action,
+		arg.Reason,
+		arg.Revision,
+		arg.TargetSession,
+		arg.TargetInstance,
+		arg.ReviewerSession,
+		arg.ReviewerWorkflow,
+		arg.Relation,
+		arg.CreatedAt,
+	)
+	return err
+}
+
+const insertTaskInstance = `-- name: InsertTaskInstance :exec
+
+INSERT INTO task_instances (
+    session_name, instance_name, task_id, scope, status, sequence, dynamic,
+    resource, named_instance, record_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type InsertTaskInstanceParams struct {
+	SessionName   string
+	InstanceName  string
+	TaskID        string
+	Scope         string
+	Status        string
+	Sequence      int64
+	Dynamic       int64
+	Resource      string
+	NamedInstance string
+	RecordJson    string
+}
+
+// Task instances
+func (q *Queries) InsertTaskInstance(ctx context.Context, arg InsertTaskInstanceParams) error {
+	_, err := q.db.ExecContext(ctx, insertTaskInstance,
+		arg.SessionName,
+		arg.InstanceName,
+		arg.TaskID,
+		arg.Scope,
+		arg.Status,
+		arg.Sequence,
+		arg.Dynamic,
+		arg.Resource,
+		arg.NamedInstance,
+		arg.RecordJson,
+	)
+	return err
+}
+
+const listChildSessionNames = `-- name: ListChildSessionNames :many
+SELECT name FROM sessions WHERE parent_session_name = ? ORDER BY name
+`
+
+func (q *Queries) ListChildSessionNames(ctx context.Context, parentSessionName sql.NullString) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listChildSessionNames, parentSessionName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		items = append(items, name)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPopulationMembers = `-- name: ListPopulationMembers :many
+SELECT population_key, resource_id, session_name, generation, accepted_at,
+       last_appearance, last_inbound, tombstoned, pending_up, last_decision,
+       item_json, last_blockers_json
+FROM population_members WHERE population_key = ? ORDER BY resource_id
+`
+
+func (q *Queries) ListPopulationMembers(ctx context.Context, populationKey string) ([]PopulationMember, error) {
+	rows, err := q.db.QueryContext(ctx, listPopulationMembers, populationKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PopulationMember
+	for rows.Next() {
+		var i PopulationMember
+		if err := rows.Scan(
+			&i.PopulationKey,
+			&i.ResourceID,
+			&i.SessionName,
+			&i.Generation,
+			&i.AcceptedAt,
+			&i.LastAppearance,
+			&i.LastInbound,
+			&i.Tombstoned,
+			&i.PendingUp,
+			&i.LastDecision,
+			&i.ItemJson,
+			&i.LastBlockersJson,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSessions = `-- name: ListSessions :many
+SELECT name, parent_session_name, root_session_name, resource_id, alias,
+       workflow, workspace_dir_path, created_at, updated_at, record_json
+FROM sessions ORDER BY name
+`
+
+func (q *Queries) ListSessions(ctx context.Context) ([]Session, error) {
+	rows, err := q.db.QueryContext(ctx, listSessions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Session
+	for rows.Next() {
+		var i Session
+		if err := rows.Scan(
+			&i.Name,
+			&i.ParentSessionName,
+			&i.RootSessionName,
+			&i.ResourceID,
+			&i.Alias,
+			&i.Workflow,
+			&i.WorkspaceDirPath,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.RecordJson,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSessionsByAlias = `-- name: ListSessionsByAlias :many
+SELECT name, parent_session_name, root_session_name, resource_id, alias,
+       workflow, workspace_dir_path, created_at, updated_at, record_json
+FROM sessions WHERE alias = ? ORDER BY name
+`
+
+func (q *Queries) ListSessionsByAlias(ctx context.Context, alias string) ([]Session, error) {
+	rows, err := q.db.QueryContext(ctx, listSessionsByAlias, alias)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Session
+	for rows.Next() {
+		var i Session
+		if err := rows.Scan(
+			&i.Name,
+			&i.ParentSessionName,
+			&i.RootSessionName,
+			&i.ResourceID,
+			&i.Alias,
+			&i.Workflow,
+			&i.WorkspaceDirPath,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.RecordJson,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTaskDoneWhen = `-- name: ListTaskDoneWhen :many
+SELECT session_name, instance_name, heartbeat_ticks, heartbeat_escalations,
+       last_action, last_fingerprint, last_reason, last_unsatisfied_json,
+       last_body, escalated_at, escalate_reason
+FROM task_done_when WHERE session_name = ?
+`
+
+func (q *Queries) ListTaskDoneWhen(ctx context.Context, sessionName string) ([]TaskDoneWhen, error) {
+	rows, err := q.db.QueryContext(ctx, listTaskDoneWhen, sessionName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TaskDoneWhen
+	for rows.Next() {
+		var i TaskDoneWhen
+		if err := rows.Scan(
+			&i.SessionName,
+			&i.InstanceName,
+			&i.HeartbeatTicks,
+			&i.HeartbeatEscalations,
+			&i.LastAction,
+			&i.LastFingerprint,
+			&i.LastReason,
+			&i.LastUnsatisfiedJson,
+			&i.LastBody,
+			&i.EscalatedAt,
+			&i.EscalateReason,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTaskDoneWhenJudges = `-- name: ListTaskDoneWhenJudges :many
+SELECT session_name, instance_name, leaf_id, action, reason, revision,
+       target_session, target_instance, reviewer_session, reviewer_workflow,
+       relation, created_at
+FROM task_done_when_judges WHERE session_name = ?
+`
+
+func (q *Queries) ListTaskDoneWhenJudges(ctx context.Context, sessionName string) ([]TaskDoneWhenJudge, error) {
+	rows, err := q.db.QueryContext(ctx, listTaskDoneWhenJudges, sessionName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TaskDoneWhenJudge
+	for rows.Next() {
+		var i TaskDoneWhenJudge
+		if err := rows.Scan(
+			&i.SessionName,
+			&i.InstanceName,
+			&i.LeafID,
+			&i.Action,
+			&i.Reason,
+			&i.Revision,
+			&i.TargetSession,
+			&i.TargetInstance,
+			&i.ReviewerSession,
+			&i.ReviewerWorkflow,
+			&i.Relation,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTaskInstances = `-- name: ListTaskInstances :many
+SELECT session_name, instance_name, task_id, scope, status, sequence, dynamic,
+       resource, named_instance, record_json
+FROM task_instances WHERE session_name = ? ORDER BY instance_name
+`
+
+func (q *Queries) ListTaskInstances(ctx context.Context, sessionName string) ([]TaskInstance, error) {
+	rows, err := q.db.QueryContext(ctx, listTaskInstances, sessionName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TaskInstance
+	for rows.Next() {
+		var i TaskInstance
+		if err := rows.Scan(
+			&i.SessionName,
+			&i.InstanceName,
+			&i.TaskID,
+			&i.Scope,
+			&i.Status,
+			&i.Sequence,
+			&i.Dynamic,
+			&i.Resource,
+			&i.NamedInstance,
+			&i.RecordJson,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUpReservations = `-- name: ListUpReservations :many
+
+SELECT child_session_name, parent_name, pid, reserved_at FROM up_reservations ORDER BY child_session_name
+`
+
+// Up-slot reservations
+func (q *Queries) ListUpReservations(ctx context.Context) ([]UpReservation, error) {
+	rows, err := q.db.QueryContext(ctx, listUpReservations)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []UpReservation
+	for rows.Next() {
+		var i UpReservation
+		if err := rows.Scan(
+			&i.ChildSessionName,
+			&i.ParentName,
+			&i.Pid,
+			&i.ReservedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const sessionParent = `-- name: SessionParent :one
+SELECT parent_session_name FROM sessions WHERE name = ?
+`
+
+func (q *Queries) SessionParent(ctx context.Context, name string) (sql.NullString, error) {
+	row := q.db.QueryRowContext(ctx, sessionParent, name)
+	var parent_session_name sql.NullString
+	err := row.Scan(&parent_session_name)
+	return parent_session_name, err
+}
+
+const upsertPopulation = `-- name: UpsertPopulation :exec
+INSERT INTO populations (population_key, workflow, name) VALUES (?, ?, ?)
+ON CONFLICT(population_key) DO UPDATE SET workflow = excluded.workflow, name = excluded.name
+`
+
+type UpsertPopulationParams struct {
+	PopulationKey string
+	Workflow      string
+	Name          string
+}
+
+func (q *Queries) UpsertPopulation(ctx context.Context, arg UpsertPopulationParams) error {
+	_, err := q.db.ExecContext(ctx, upsertPopulation, arg.PopulationKey, arg.Workflow, arg.Name)
+	return err
+}
+
+const upsertSession = `-- name: UpsertSession :exec
+
+INSERT INTO sessions (
+    name, parent_session_name, root_session_name, resource_id, alias,
+    workflow, workspace_dir_path, created_at, updated_at, record_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(name) DO UPDATE SET
+    parent_session_name = excluded.parent_session_name,
+    root_session_name = excluded.root_session_name,
+    resource_id = excluded.resource_id,
+    alias = excluded.alias,
+    workflow = excluded.workflow,
+    workspace_dir_path = excluded.workspace_dir_path,
+    created_at = excluded.created_at,
+    updated_at = excluded.updated_at,
+    record_json = excluded.record_json
+`
+
+type UpsertSessionParams struct {
+	Name              string
+	ParentSessionName sql.NullString
+	RootSessionName   sql.NullString
+	ResourceID        string
+	Alias             string
+	Workflow          string
+	WorkspaceDirPath  string
+	CreatedAt         string
+	UpdatedAt         string
+	RecordJson        string
+}
+
+// Sessions
+func (q *Queries) UpsertSession(ctx context.Context, arg UpsertSessionParams) error {
+	_, err := q.db.ExecContext(ctx, upsertSession,
+		arg.Name,
+		arg.ParentSessionName,
+		arg.RootSessionName,
+		arg.ResourceID,
+		arg.Alias,
+		arg.Workflow,
+		arg.WorkspaceDirPath,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+		arg.RecordJson,
+	)
+	return err
+}
+
+const upsertUpReservation = `-- name: UpsertUpReservation :exec
+INSERT INTO up_reservations (child_session_name, parent_name, pid, reserved_at)
+VALUES (?, ?, ?, ?)
+ON CONFLICT(child_session_name) DO UPDATE SET
+    parent_name = excluded.parent_name,
+    pid = excluded.pid,
+    reserved_at = excluded.reserved_at
+`
+
+type UpsertUpReservationParams struct {
+	ChildSessionName string
+	ParentName       string
+	Pid              int64
+	ReservedAt       string
+}
+
+func (q *Queries) UpsertUpReservation(ctx context.Context, arg UpsertUpReservationParams) error {
+	_, err := q.db.ExecContext(ctx, upsertUpReservation,
+		arg.ChildSessionName,
+		arg.ParentName,
+		arg.Pid,
+		arg.ReservedAt,
+	)
+	return err
 }

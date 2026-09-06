@@ -23,6 +23,7 @@ const busyTimeoutMillis = 5000
 // transaction-lock mode at open time (the "_txlock" DSN parameter), not per
 // transaction.
 type DB struct {
+	path  string
 	read  *sql.DB
 	write *sql.DB
 }
@@ -50,18 +51,27 @@ func Open(path string) (*DB, error) {
 	// redundant connections that would only ever queue behind each other.
 	write.SetMaxOpenConns(1)
 
-	if err := read.Ping(); err != nil {
+	// Pinging both handles is what actually creates a brand-new file's WAL
+	// and shared-memory files; without this lock, several processes pinging
+	// the same not-yet-existent path for the first time race on that
+	// creation and one gets "database is locked" instead of a working
+	// connection.
+	pingErr := withFileLock(path+".open.lock", func() error {
+		if err := read.Ping(); err != nil {
+			return fmt.Errorf("ping read handle: %w", err)
+		}
+		if err := write.Ping(); err != nil {
+			return fmt.Errorf("ping write handle: %w", err)
+		}
+		return nil
+	})
+	if pingErr != nil {
 		read.Close()
 		write.Close()
-		return nil, fmt.Errorf("ping read handle: %w", err)
-	}
-	if err := write.Ping(); err != nil {
-		read.Close()
-		write.Close()
-		return nil, fmt.Errorf("ping write handle: %w", err)
+		return nil, pingErr
 	}
 
-	return &DB{read: read, write: write}, nil
+	return &DB{path: path, read: read, write: write}, nil
 }
 
 func (db *DB) Close() error {

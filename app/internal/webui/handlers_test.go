@@ -14,7 +14,7 @@ import (
 )
 
 // fakeService injects canned results so handlers can be tested without
-// git/tmux/state.json side tasks. The capture pointers record the params the
+// git/tmux/store side tasks. The capture pointers record the params the
 // handler built so mutation tests can assert on them.
 type fakeService struct {
 	entries   []service.ListEntry
@@ -190,7 +190,7 @@ func TestStatusBadges_Distinct(t *testing.T) {
 
 // 4. error case: List failure -> 500 + error banner, no panic.
 func TestSessions_ErrorReturns500(t *testing.T) {
-	rec := get(t, &fakeService{err: errors.New("state.json corrupt")}, "/sessions")
+	rec := get(t, &fakeService{err: errors.New("database corrupt")}, "/sessions")
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", rec.Code)
 	}

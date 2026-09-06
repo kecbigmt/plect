@@ -68,7 +68,7 @@ func recordDeliveryFailure(st *state.Store, session, channelName string, cause e
 // episode; a later validation failure starts a new one, free to escalate
 // again. It never touches ChannelDeliveryHealth — a validation success says
 // nothing about whether a separate, still-open delivery failure has been
-// fixed. The cheap Get check avoids a state.json rewrite on the path where
+// fixed. The cheap Get check avoids a session persist on the path where
 // nothing needs clearing, the overwhelming majority of validations.
 func recordValidationSuccess(st *state.Store, session string) {
 	if s := st.Get(session); s == nil || s.ChannelValidationHealth == nil || s.ChannelValidationHealth.ConsecutiveFailures == 0 {

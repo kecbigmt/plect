@@ -38,8 +38,15 @@ const preGuardStateVersion = 5
 // vocabulary.
 const workdirEraStateVersion = 6
 
+// targetStateVersion is the last legacy state.json envelope version this
+// tool's rewrites ever produced (7). It is a frozen historical fact this
+// tool owns, not a live authority: contracts/state no longer defines a
+// schema version, since state.json is no longer the runtime persistence
+// format.
+const targetStateVersion = 7
+
 // supportedOldStateVersions are every schema version this tool knows how to
-// bring forward to contract.SchemaVersion. Deliberately an explicit set, not
+// bring forward to targetStateVersion. Deliberately an explicit set, not
 // a "less than current" range: each entry names a real historical release
 // shape this tool's field-rewrite functions were written against, not an
 // assumption that every older version happens to need the same rewrites.
@@ -272,25 +279,25 @@ func migrateStateJSON(data []byte) ([]byte, []string, error) {
 func stampStateVersion(state map[string]any) (string, error) {
 	raw, ok := state["version"]
 	if !ok {
-		state["version"] = float64(contract.SchemaVersion)
-		return fmt.Sprintf("state.json: stamped schema version %d", contract.SchemaVersion), nil
+		state["version"] = float64(targetStateVersion)
+		return fmt.Sprintf("state.json: stamped schema version %d", targetStateVersion), nil
 	}
 	version, ok := raw.(float64)
 	if !ok || version != float64(int(version)) {
 		return "", fmt.Errorf("state.json: invalid schema version %v", raw)
 	}
 	got := int(version)
-	if got == contract.SchemaVersion {
+	if got == targetStateVersion {
 		return "", nil
 	}
-	if got > contract.SchemaVersion {
-		return "", fmt.Errorf("state.json: schema version %d is newer than this migration tool understands (%d)", got, contract.SchemaVersion)
+	if got > targetStateVersion {
+		return "", fmt.Errorf("state.json: schema version %d is newer than this migration tool understands (%d)", got, targetStateVersion)
 	}
 	if !supportedOldStateVersions[got] {
 		return "", fmt.Errorf("state.json: schema version %d is not supported by this migration tool", got)
 	}
-	state["version"] = float64(contract.SchemaVersion)
-	return fmt.Sprintf("state.json: bumped schema version from %d to %d", got, contract.SchemaVersion), nil
+	state["version"] = float64(targetStateVersion)
+	return fmt.Sprintf("state.json: bumped schema version from %d to %d", got, targetStateVersion), nil
 }
 
 func migrateSlackField(session map[string]any) bool {

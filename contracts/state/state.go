@@ -1,17 +1,16 @@
-// Package state defines the shared contract types for plect state.json.
+// Package state defines the shared contract types for plect's durable
+// runtime state.
 //
 // These types represent the boundary data that other components (a chat
-// adapter, say) may read from state.json.
-// plect owns and writes these; consumers read only.
+// adapter, say) may read. plect owns and writes these; consumers read
+// only. This package makes no promise about the underlying storage
+// format or that any of these types are directly file-readable.
 package state
 
 import (
 	"encoding/json"
 	"time"
 )
-
-// SchemaVersion is the current state.json format version.
-const SchemaVersion = 7
 
 // Conversation holds information about an external communication channel
 // associated with a session (e.g., a chat thread).
@@ -205,7 +204,7 @@ type LayerState struct {
 	Error                string    `json:"error,omitempty"`
 }
 
-// Session is the shared representation of a plect session in state.json.
+// Session is the shared representation of a plect session's durable state.
 // This contains all fields that external consumers may read.
 //
 // Workflow is the chosen workflow name (e.g. "coding-agent"). Frozen at create
@@ -255,7 +254,7 @@ type Session struct {
 	// path never accrues an extra sweep.
 	LastTickAt time.Time `json:"last_tick_at,omitzero"`
 	// TickBackoff is nil until the first heartbeat sweep decides a tick, so a
-	// session that has never backed off keeps a clean state.json.
+	// session that has never backed off keeps a clean record.
 	TickBackoff *TickBackoff `json:"tick_backoff,omitempty"`
 	CreatedAt   time.Time    `json:"created_at"`
 	UpdatedAt   time.Time    `json:"updated_at"`
@@ -326,17 +325,11 @@ type TickBackoff struct {
 }
 
 // Tombstone is the durable snapshot a session leaves behind in its event log
-// directory when `plect destroy` deletes its state.json entry. It embeds the
-// full Session (resource mapping, task outputs, done_when/judge records) so
+// directory when `plect destroy` deletes its runtime state entry. It embeds
+// the full Session (resource mapping, task outputs, done_when/judge records) so
 // that context survives destroy instead of being lost alongside the state
 // entry.
 type Tombstone struct {
 	Session
 	DestroyedAt time.Time `json:"destroyed_at"`
-}
-
-// StateFile is the top-level structure of state.json.
-type StateFile struct {
-	Version  int                 `json:"version"`
-	Sessions map[string]*Session `json:"sessions"`
 }

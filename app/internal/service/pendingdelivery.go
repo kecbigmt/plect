@@ -19,7 +19,7 @@ import (
 // re-check — so the failure is a retry candidate on the session's next
 // activity rather than a lost one-shot attempt. Kept out of
 // contracts/state.Session (a separately pseudo-version-pinned module this
-// change must not touch) and rooted next to state.json instead, as a pure
+// change must not touch) and rooted next to the runtime database instead, as a pure
 // implementation detail of this package's own retry behavior.
 type pendingDeliveryFile struct {
 	Subscribe   map[string][]string `json:"subscribe,omitempty"`

@@ -1,20 +1,19 @@
 package state
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/domain"
-	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
 func TestStore_PutAndGet(t *testing.T) {
@@ -82,12 +81,12 @@ func TestStore_GetMissing(t *testing.T) {
 	}
 }
 
-func TestStore_CheckReadableAllowsMissingStateFile(t *testing.T) {
+func TestStore_CheckReadableAllowsAFreshDataDirectory(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "missing")
 	store := NewStore(dir)
 
 	if err := store.CheckReadable(); err != nil {
-		t.Fatalf("CheckReadable() with no state file: %v", err)
+		t.Fatalf("CheckReadable() with no database yet: %v", err)
 	}
 }
 
@@ -225,8 +224,8 @@ func TestStore_All(t *testing.T) {
 }
 
 // TestStore_ConcurrentPut verifies that concurrent Put calls from multiple
-// Store instances (simulating separate processes sharing the same lock file)
-// do not cause lost updates.
+// Store instances (simulating separate processes sharing the same
+// database) do not cause lost updates.
 func TestStore_ConcurrentPut(t *testing.T) {
 	dir := t.TempDir()
 	const n = 20
@@ -257,67 +256,6 @@ func TestStore_ConcurrentPut(t *testing.T) {
 	if len(all) != n {
 		t.Errorf("expected %d sessions, got %d (lost updates detected)", n, len(all))
 	}
-}
-
-// The Linux NFS client rejects LOCK_EX on an O_RDONLY descriptor with EBADF,
-// even though local filesystems tolerate it. This test inspects the lock
-// file descriptor's own open flags via /proc, so it catches the
-// regression even on a local (non-NFS) test filesystem.
-func TestStore_WithFileLockOpensLockFileWritable(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("lock fd flags are inspected via /proc, which is Linux-specific")
-	}
-
-	store := NewStore(t.TempDir())
-	lockPath := store.path + ".lock"
-
-	err := store.withFileLock(func() error {
-		accMode, err := lockFileAccessMode(lockPath)
-		if err != nil {
-			return err
-		}
-		if accMode == os.O_RDONLY {
-			return fmt.Errorf("lock file opened O_RDONLY; exclusive lock (LOCK_EX) requires a writable descriptor on NFS")
-		}
-		return nil
-	})
-	if err != nil {
-		t.Error(err)
-	}
-}
-
-// lockFileAccessMode finds the process's own open file descriptor for path
-// and reports its access mode (O_RDONLY, O_WRONLY, or O_RDWR), read from
-// /proc/self/fdinfo. There is no portable way to query an fd's open flags
-// from outside the process that opened it.
-func lockFileAccessMode(path string) (int, error) {
-	entries, err := os.ReadDir("/proc/self/fd")
-	if err != nil {
-		return 0, fmt.Errorf("read /proc/self/fd: %w", err)
-	}
-	for _, entry := range entries {
-		target, err := os.Readlink(filepath.Join("/proc/self/fd", entry.Name()))
-		if err != nil || target != path {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join("/proc/self/fdinfo", entry.Name()))
-		if err != nil {
-			return 0, fmt.Errorf("read fdinfo for fd %s: %w", entry.Name(), err)
-		}
-		for _, line := range strings.Split(string(data), "\n") {
-			const prefix = "flags:"
-			if !strings.HasPrefix(line, prefix) {
-				continue
-			}
-			flags, err := strconv.ParseInt(strings.TrimSpace(line[len(prefix):]), 8, 64)
-			if err != nil {
-				return 0, fmt.Errorf("parse fdinfo flags %q: %w", line, err)
-			}
-			return int(flags) & syscall.O_ACCMODE, nil
-		}
-		return 0, fmt.Errorf("fdinfo for fd %s has no flags line", entry.Name())
-	}
-	return 0, fmt.Errorf("no open fd found for %s", path)
 }
 
 func TestStore_ConcurrentPutAcrossProcesses(t *testing.T) {
@@ -359,7 +297,8 @@ func TestStore_ConcurrentPutAcrossProcesses(t *testing.T) {
 }
 
 // Each attempt uses its own Store instance, like TestStore_ConcurrentPut,
-// exercising the real cross-process file lock, not just the in-process mutex.
+// exercising the real cross-process database access, not just the
+// in-process mutex.
 func TestStore_ReserveUpSlotSerializesConcurrentReservations(t *testing.T) {
 	dir := t.TempDir()
 	const limit = 3
@@ -395,12 +334,8 @@ func TestStore_ReserveUpSlotSerializesConcurrentReservations(t *testing.T) {
 		t.Fatalf("approved = %d, want exactly %d (the declared limit) despite %d concurrent attempts", approved, limit, attempts)
 	}
 
-	sf, err := NewStore(dir).loadE()
-	if err != nil {
-		t.Fatalf("loadE: %v", err)
-	}
-	if len(sf.UpReservations) != limit {
-		t.Errorf("len(UpReservations) = %d, want %d", len(sf.UpReservations), limit)
+	if got := reservationCount(t, NewStore(dir)); got != limit {
+		t.Errorf("reservation count = %d, want %d", got, limit)
 	}
 }
 
@@ -416,14 +351,11 @@ func TestStore_ReleaseUpSlotDropsTheNamedReservation(t *testing.T) {
 	if err := store.ReleaseUpSlot("childA"); err != nil {
 		t.Fatalf("ReleaseUpSlot: %v", err)
 	}
-	sf, err := store.loadE()
-	if err != nil {
-		t.Fatalf("loadE: %v", err)
-	}
-	if _, ok := sf.UpReservations["childA"]; ok {
+	names := reservationNames(t, store)
+	if names["childA"] {
 		t.Error("childA's reservation should be gone after ReleaseUpSlot")
 	}
-	if _, ok := sf.UpReservations["childB"]; !ok {
+	if !names["childB"] {
 		t.Error("childB's reservation should survive releasing childA's")
 	}
 }
@@ -486,14 +418,14 @@ func deadPID(t *testing.T) int {
 	return cmd.Process.Pid
 }
 
-func TestStore_ReserveUpSlotSupersedesItsOwnPriorReservation(t *testing.T) {
+func TestStore_ReserveUpSlotSupersedesAReservationWithNoLivePID(t *testing.T) {
 	store := NewStore(t.TempDir())
-	plantReservation(t, store, "childA", UpReservation{Parent: "parent1", At: time.Now()})
+	// PID 0 is never live (processAlive's own pid<=0 guard); ReserveUpSlot
+	// itself always stamps a real os.Getpid(), so the only way such a row
+	// exists is a planted fixture like this one.
+	plantReservation(t, store, "childA", UpReservation{Parent: "parent1", At: time.Now(), PID: 0})
 
 	sawItself := false
-	// ReserveUpSlot records the new reservation into this same map right
-	// after fn returns, so the assertion must happen inside fn — checking
-	// the map afterward would see the write this attempt itself just made.
 	approved, err := store.ReserveUpSlot("childA", "parent1", func(_ map[string]*domain.Session, reservations map[string]UpReservation) bool {
 		_, sawItself = reservations["childA"]
 		return true
@@ -502,7 +434,7 @@ func TestStore_ReserveUpSlotSupersedesItsOwnPriorReservation(t *testing.T) {
 		t.Fatalf("ReserveUpSlot: approved=%v err=%v", approved, err)
 	}
 	if sawItself {
-		t.Error("a reservation attempt saw its own prior (fresh, non-expired) reservation as if it were a sibling's")
+		t.Error("a reservation attempt saw its own PID-0 (never-live) prior reservation as if it were a live sibling's")
 	}
 }
 
@@ -512,37 +444,57 @@ func TestStore_DeleteClearsTheSessionsUpReservation(t *testing.T) {
 	if err := store.Put(&domain.Session{Name: "childA", CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	plantReservation(t, store, "childA", UpReservation{Parent: "parent1", At: now})
+	plantReservation(t, store, "childA", UpReservation{Parent: "parent1", At: now, PID: os.Getpid()})
 
 	if err := store.Delete("childA"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	sf, err := store.loadE()
-	if err != nil {
-		t.Fatalf("loadE: %v", err)
-	}
-	if _, ok := sf.UpReservations["childA"]; ok {
+	if names := reservationNames(t, store); names["childA"] {
 		t.Error("Delete should have cleared childA's reservation")
 	}
 }
 
-// plantReservation writes res directly, bypassing ReserveUpSlot's own
-// PID/timestamp stamping — for planting a specific PID or backdated time.
+// plantReservation writes a reservation directly, bypassing ReserveUpSlot's
+// own PID/timestamp stamping — for planting a specific PID or backdated time.
 func plantReservation(t *testing.T, store *Store, child string, res UpReservation) {
 	t.Helper()
-	if err := store.withFileLock(func() error {
-		sf, err := store.loadLocked()
-		if err != nil {
-			return err
-		}
-		if sf.UpReservations == nil {
-			sf.UpReservations = make(map[string]UpReservation)
-		}
-		sf.UpReservations[child] = res
-		return store.saveLocked(sf)
+	db, err := store.dbHandle()
+	if err != nil {
+		t.Fatalf("plantReservation: %v", err)
+	}
+	if err := db.WithImmediateTx(context.Background(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(context.Background(),
+			`INSERT INTO up_reservations (child_session_name, parent_name, pid, reserved_at) VALUES (?, ?, ?, ?)
+			 ON CONFLICT(child_session_name) DO UPDATE SET parent_name=excluded.parent_name, pid=excluded.pid, reserved_at=excluded.reserved_at`,
+			child, res.Parent, res.PID, res.At.UTC().Format(time.RFC3339Nano))
+		return err
 	}); err != nil {
 		t.Fatalf("plantReservation: %v", err)
 	}
+}
+
+// reservationNames/reservationCount inspect the up_reservations table
+// directly for assertions the public API has no reason to expose.
+func reservationNames(t *testing.T, store *Store) map[string]bool {
+	t.Helper()
+	db, err := store.dbHandle()
+	if err != nil {
+		t.Fatalf("reservationNames: %v", err)
+	}
+	reservations, err := db.ListUpReservations(context.Background())
+	if err != nil {
+		t.Fatalf("ListUpReservations: %v", err)
+	}
+	names := make(map[string]bool, len(reservations))
+	for name := range reservations {
+		names[name] = true
+	}
+	return names
+}
+
+func reservationCount(t *testing.T, store *Store) int {
+	t.Helper()
+	return len(reservationNames(t, store))
 }
 
 func TestStorePutHelperProcess(t *testing.T) {
@@ -595,33 +547,6 @@ func TestStore_Persistence(t *testing.T) {
 	}
 }
 
-func TestLoad_BackfillsAliasFromResourceID(t *testing.T) {
-	dir := t.TempDir()
-	statePath := filepath.Join(dir, "state.json")
-	// A session written without an explicit alias was looked up by its
-	// resource id, so loading must make that lookup keep working.
-	state := `{
-  "version": 7,
-  "sessions": {
-    "org/repo-1": {
-      "session_name": "org/repo-1",
-      "resource_id": "https://example.test/org/repo/items/1"
-    }
-  }
-}`
-	if err := os.WriteFile(statePath, []byte(state), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	store := NewStore(dir)
-	s := store.Get("org/repo-1")
-	if s == nil {
-		t.Fatal("session not loaded")
-	}
-	if s.Alias != "https://example.test/org/repo/items/1" {
-		t.Errorf("Alias = %q, want it backfilled from the resource id", s.Alias)
-	}
-}
-
 func TestFindByAlias(t *testing.T) {
 	store := NewStore(t.TempDir())
 	url := "https://github.com/org/repo/issues/9"
@@ -639,175 +564,65 @@ func TestFindByAlias(t *testing.T) {
 	}
 }
 
-func TestStore_CorruptedStateFileFailsWritesInsteadOfOverwriting(t *testing.T) {
+// TestStore_UnreadableDatabaseFailsWritesInsteadOfSilentlyInitializing
+// carries forward the JSON store's refuse-to-initialize guarantee onto
+// SQLite: a file that exists but is not a valid database must fail every
+// read and write path rather than being silently treated as a fresh, empty
+// store.
+func TestStore_UnreadableDatabaseFailsWritesInsteadOfSilentlyInitializing(t *testing.T) {
 	dir := t.TempDir()
-	statePath := filepath.Join(dir, "state.json")
-	corrupt := []byte("{not valid json")
-	if err := os.WriteFile(statePath, corrupt, 0644); err != nil {
+	garbage := []byte("this is not a sqlite database file, just garbage bytes of substantial length\x00\x01\x02")
+	if err := os.WriteFile(filepath.Join(dir, "store.db"), garbage, 0644); err != nil {
 		t.Fatal(err)
 	}
 	store := NewStore(dir)
 
+	if err := store.CheckReadable(); err == nil {
+		t.Fatal("CheckReadable() over an unreadable database must fail")
+	}
 	if err := store.Put(&domain.Session{Name: "org/repo-1"}); err == nil {
-		t.Fatal("Put() over a corrupted state file must fail, not silently overwrite it")
+		t.Fatal("Put() over an unreadable database must fail, not silently initialize an empty one")
 	}
 	if err := store.Update("org/repo-1", func(*domain.Session) error { return nil }); err == nil {
-		t.Fatal("Update() over a corrupted state file must fail, not silently overwrite it")
+		t.Fatal("Update() over an unreadable database must fail")
 	}
 	if err := store.Delete("org/repo-1"); err == nil {
-		t.Fatal("Delete() over a corrupted state file must fail, not silently overwrite it")
+		t.Fatal("Delete() over an unreadable database must fail")
 	}
+	if _, err := store.AllE(); err == nil {
+		t.Fatal("AllE() over an unreadable database must fail")
+	}
+	if _, err := store.GetE("org/repo-1"); err == nil {
+		t.Fatal("GetE() over an unreadable database must fail")
+	}
+}
 
-	data, err := os.ReadFile(statePath)
+// TestStore_RejectsDatabaseNewerThanBinarySupports carries forward the
+// JSON store's newer-version rejection onto SQLite's own applied-migration
+// ledger.
+func TestStore_RejectsDatabaseNewerThanBinarySupports(t *testing.T) {
+	dir := t.TempDir()
+	seed := NewStore(dir)
+	if err := seed.CheckReadable(); err != nil {
+		t.Fatalf("seed CheckReadable: %v", err)
+	}
+	db, err := seed.dbHandle()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("seed dbHandle: %v", err)
 	}
-	if string(data) != string(corrupt) {
-		t.Fatalf("corrupted state file was rewritten: got %q, want unchanged %q", data, corrupt)
-	}
-}
-
-func TestStore_StateVersionMismatchFailsWritesInsteadOfOverwriting(t *testing.T) {
-	tests := []struct {
-		name      string
-		version   int
-		wantParts []string
-	}{
-		{
-			name:    "older",
-			version: 6,
-			wantParts: []string{
-				"state schema version mismatch",
-				"got 6",
-				"want 7",
-				"go run ./plugins/legacy-migration/cmd/legacy-migration",
-			},
-		},
-		{
-			name:    "newer",
-			version: 8,
-			wantParts: []string{
-				"state schema version mismatch",
-				"got 8",
-				"want 7",
-				"newer",
-			},
-		},
+	if err := db.WithImmediateTx(context.Background(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(context.Background(), "INSERT INTO goose_db_version (version_id, is_applied) VALUES (99999999999999, 1)")
+		return err
+	}); err != nil {
+		t.Fatalf("plant future version row: %v", err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			dir := t.TempDir()
-			statePath := filepath.Join(dir, "state.json")
-			original := []byte(fmt.Sprintf(`{
-  "version": %d,
-  "sessions": {
-    "org/repo-1": {
-      "session_name": "org/repo-1",
-      "workspace_dir_path": "/tmp/workdir"
-    }
-  }
-}`, tt.version))
-			if err := os.WriteFile(statePath, original, 0644); err != nil {
-				t.Fatal(err)
-			}
-			store := NewStore(dir)
-
-			if err := store.CheckReadable(); err == nil {
-				t.Fatal("CheckReadable() over a mismatched state version must fail")
-			}
-			if _, err := store.AllE(); err == nil {
-				t.Fatal("AllE() over a mismatched state version must fail")
-			}
-			if _, err := store.GetE("org/repo-1"); err == nil {
-				t.Fatal("GetE() over a mismatched state version must fail")
-			}
-			if _, err := store.FindByAliasE("https://example.test/org/repo/items/1"); err == nil {
-				t.Fatal("FindByAliasE() over a mismatched state version must fail")
-			}
-
-			err := store.Put(&domain.Session{Name: "org/repo-2"})
-			if err == nil {
-				t.Fatal("Put() over a mismatched state version must fail, not silently overwrite it")
-			}
-			for _, part := range tt.wantParts {
-				if !strings.Contains(err.Error(), part) {
-					t.Fatalf("error = %q, want it to contain %q", err.Error(), part)
-				}
-			}
-
-			data, err := os.ReadFile(statePath)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if string(data) != string(original) {
-				t.Fatalf("mismatched state file was rewritten: got %q, want unchanged %q", data, original)
-			}
-		})
+	store := NewStore(dir)
+	err = store.CheckReadable()
+	if err == nil {
+		t.Fatal("CheckReadable() over a database newer than this binary supports must fail")
 	}
-}
-
-func TestStore_UnmigratedLayerTaskIDFailsLoudInsteadOfZeroingEffectID(t *testing.T) {
-	tests := []struct {
-		name     string
-		layerRaw string
-	}{
-		{
-			name:     "pre-rename task_id field still present",
-			layerRaw: `{"task_id": "some-effect", "status": "produced"}`,
-		},
-		{
-			name:     "effect_id present but empty",
-			layerRaw: `{"effect_id": "", "status": "produced"}`,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			dir := t.TempDir()
-			statePath := filepath.Join(dir, "state.json")
-			original := []byte(fmt.Sprintf(`{
-  "version": %d,
-  "sessions": {
-    "org/repo-1": {
-      "session_name": "org/repo-1",
-      "workspace_dir_path": "/tmp/workdir",
-      "tasks": {
-        "nested-task": {
-          "scope": "session",
-          "status": "produced",
-          "layers": [%s]
-        }
-      }
-    }
-  }
-}`, contract.SchemaVersion, tt.layerRaw))
-			if err := os.WriteFile(statePath, original, 0644); err != nil {
-				t.Fatal(err)
-			}
-			store := NewStore(dir)
-
-			if err := store.CheckReadable(); err == nil {
-				t.Fatal("CheckReadable() over a pre-rename layers[].task_id record must fail loud, not load-then-zero effect_id")
-			} else if !strings.Contains(err.Error(), "effect_id") || !strings.Contains(err.Error(), "task-layer-effect-id-migration.md") {
-				t.Fatalf("error = %q, want it to name effect_id and the migration doc", err.Error())
-			}
-
-			if _, err := store.AllE(); err == nil {
-				t.Fatal("AllE() over a pre-rename layer record must fail loud")
-			}
-
-			if err := store.Put(&domain.Session{Name: "org/repo-2"}); err == nil {
-				t.Fatal("Put() over a pre-rename layer record must fail loud, not silently write effect_id=\"\"")
-			}
-
-			data, err := os.ReadFile(statePath)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if string(data) != string(original) {
-				t.Fatalf("pre-rename state file was rewritten: got %q, want unchanged %q", data, original)
-			}
-		})
+	if !strings.Contains(err.Error(), "newer than this binary supports") {
+		t.Fatalf("error = %q, want it to name the newer-than-supported condition", err.Error())
 	}
 }

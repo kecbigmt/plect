@@ -108,7 +108,7 @@ func Destroy(cfg *config.Config, store *state.Store, params DestroyParams) (*Des
 
 	// Persist any TaskState changes (status flips to cleaned) before we
 	// delete the entry, in case workspace directory removal fails and the
-	// user wants to inspect state.json post hoc.
+	// user wants to inspect the persisted checkpoint post hoc.
 	session.UpdatedAt = time.Now()
 	putBestEffort(store, session, "post-run-cleanup checkpoint")
 
