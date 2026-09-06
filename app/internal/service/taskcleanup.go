@@ -75,6 +75,7 @@ func TaskCleanup(cfg *config.Config, store *state.Store, params TaskCleanupParam
 	if err != nil {
 		return nil, err
 	}
+	params.Observer = withNodeResultRecording(store, resolvedName, params.Observer)
 	flushPendingDeliveryLogged(cfg, store, resolvedName)
 
 	st := session.Tasks[params.Instance]

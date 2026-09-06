@@ -46,7 +46,7 @@ queue_dir = { from = "nodes.worker.outputs.queue_dir" }
 [[goal_reviewer.event.channel]]
 name    = "runtime"
 uses    = "official.codex.exec_delivery"
-include = ["plect.instruction", "user.emit", "plect.terminal.*"]
+include = ["plect.instruction", "user.emit", "plect.terminal.*", "plect.node.result"]
 
 [goal_reviewer.event.channel.inputs]
 queue_dir = { from = "nodes.worker.outputs.queue_dir" }

@@ -56,6 +56,19 @@ capture   = { terminal = "capture" }
 message   = { expr = "'[' + event.type + '] ' + (event.body != '' ? event.body : event.summary)" }
 ```
 
+## Selecting events
+
+A channel definition only fixes delivery; a workflow's own
+`[[<id>.event.channel]]` binding (see [`workflows.md`](workflows.md#event-channels))
+selects one and lists the event-type globs it relays with `include`:
+
+```toml
+[[coding.event.channel]]
+name    = "runtime"
+uses    = "delivery"
+include = ["plect.instruction", "plect.node.result"]
+```
+
 ## Parameters
 
 `[<id>.input_schema]` declares the channel's parameters per key: a `type`, a

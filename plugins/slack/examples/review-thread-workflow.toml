@@ -50,7 +50,7 @@ thread_ts  = { from = "nodes.slack_thread.outputs.thread_ts" }
 [[pr_review_with_slack.event.channel]]
 name    = "thread_status"
 uses    = "official.slack.status"
-include = ["plect.status_message"]
+include = ["plect.status_message", "plect.node.result"]
 
 # No per-event `status`/`text` input here: an [event.channel.inputs] binding
 # resolves from session/node outputs only (the same surface a node's own
@@ -58,7 +58,9 @@ include = ["plect.status_message"]
 # delivered event's own content at this binding site. The `status` channel
 # itself carries the event's body-or-summary verbatim into the thread's
 # status line (see channels/status.toml), so a `plect.status_message` event
-# with an empty body and summary clears the thread's status.
+# with an empty body and summary clears the thread's status, and a
+# `plect.node.result` event surfaces a node's setup/cleanup/liveness outcome
+# there the same way.
 [pr_review_with_slack.event.channel.inputs]
 base_url   = { from = "session.inputs.slack_base_url" }
 channel_id = { from = "nodes.slack_thread.outputs.channel_id" }

@@ -34,6 +34,7 @@ func createWithWorkflowSetup(cfg *config.Config, store *state.Store, params Crea
 	if guardErr := checkSessionGuard(cfg, sessionName); guardErr != nil {
 		return nil, guardErr
 	}
+	params.Observer = withNodeResultRecording(store, sessionName, params.Observer)
 
 	now := time.Now()
 	var session *domain.Session
