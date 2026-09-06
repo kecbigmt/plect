@@ -1,12 +1,8 @@
 //go:build browser
 
-// Browser-level acceptance for the /app/ shell's read/live milestone: a
-// real Chromium against the committed /app/ build, served by the real
-// service/state stack over httptest.NewServer, exactly as
-// acceptance_test.go's HTTP-level suite already does — this file adds the
-// browser on top of that same seam. Fixtures are seeded directly through
-// state.Store/service.PublishEvent, never through a mutation UI, matching
-// this milestone's read/live-only scope.
+// Drives a real Chromium against the committed /app/ build over
+// acceptance_test.go's own real service/state seam, since fixtures seeded
+// through state.Store/service.PublishEvent need no mutation UI.
 package webui
 
 import (
@@ -51,41 +47,6 @@ func browserOrigin(t *testing.T, store *state.Store, cfg *Config) (string, *Live
 	return srv.URL, svc
 }
 
-// blockFirstHistoryRequest returns a middleware that holds up the first
-// GET /api/v1/events?session=<session> request until release is called,
-// so a test can force that session's read to be genuinely in flight (not
-// merely hope it hasn't settled yet) at a chosen point. Only the first
-// matching request blocks; every later request for the same session (e.g.
-// after switching back to it) passes straight through.
-func blockFirstHistoryRequest(session string) (mw func(http.Handler) http.Handler, started <-chan struct{}, release func()) {
-	startedCh := make(chan struct{})
-	releaseCh := make(chan struct{})
-	var once sync.Once
-	mw = func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/api/v1/events" && r.URL.Query().Get("session") == session {
-				blocked := false
-				once.Do(func() {
-					blocked = true
-					close(startedCh)
-				})
-				if blocked {
-					<-releaseCh
-				}
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
-	release = func() {
-		select {
-		case <-releaseCh:
-		default:
-			close(releaseCh)
-		}
-	}
-	return mw, startedCh, release
-}
-
 func seedSession(t *testing.T, store *state.Store, sess *domain.Session) {
 	t.Helper()
 	now := time.Now()
@@ -107,12 +68,8 @@ func publish(t *testing.T, svc *LiveService, session string, p service.EventPubl
 	}
 }
 
-// Given a fresh Go-served build with a real session hierarchy, recorded
-// utterance and unknown-type events, and auth_token configured,
-// When a browser signs in and navigates the tree into a child session,
-// Then it can inspect that session's resource and read its history —
-// covering the milestone's login, hierarchy navigation, session
-// detail/resource inspection, and history reading criteria in one flow.
+// Acceptance: sign-in, hierarchy navigation, session detail/resource
+// inspection, and history reading in one flow.
 func TestBrowserAcceptance_LoginNavigatesHierarchyAndShowsHistory(t *testing.T) {
 	store := state.NewStore(t.TempDir())
 	seedSession(t, store, &domain.Session{Name: "browser-root", ResourceID: "https://github.com/browser-accept/issues/1"})
@@ -191,9 +148,8 @@ func TestBrowserAcceptance_LoginNavigatesHierarchyAndShowsHistory(t *testing.T) 
 	requireNoConsoleErrors(t, errs)
 }
 
-// Given a session already open in the browser with no prior history,
-// When an event is published directly through the service (not the UI),
-// Then it appears in the timeline without a page reload.
+// Acceptance: an event published directly through the service appears in
+// an open session's timeline without a page reload.
 func TestBrowserAcceptance_LiveEventArrivesWithoutReload(t *testing.T) {
 	store := state.NewStore(t.TempDir())
 	seedSession(t, store, &domain.Session{Name: "browser-live-1"})
@@ -219,10 +175,8 @@ func TestBrowserAcceptance_LiveEventArrivesWithoutReload(t *testing.T) {
 	requireNoConsoleErrors(t, errs)
 }
 
-// Given a live timeline that is interrupted mid-connection,
-// When an event is published during the outage and the connection recovers,
-// Then that event appears exactly once, and the events shown before the
-// interruption remain visible — no duplicate, no silent gap.
+// Acceptance: reconnecting after an interruption delivers an event
+// published during the gap exactly once, dropping nothing shown before it.
 func TestBrowserAcceptance_ReconnectRecoversWithoutDuplicateOrGap(t *testing.T) {
 	store := state.NewStore(t.TempDir())
 	seedSession(t, store, &domain.Session{Name: "browser-reconnect-1"})
@@ -249,8 +203,6 @@ func TestBrowserAcceptance_ReconnectRecoversWithoutDuplicateOrGap(t *testing.T) 
 		t.Fatalf("simulate connection interruption: %v", err)
 	}
 
-	// Activity created while the browser is offline — the client cannot see
-	// this until it reconnects.
 	publish(t, svc, "browser-reconnect-1", service.EventPublishParams{Type: event.TypeUserNote, Summary: "arrived-during-the-gap"})
 
 	if err := ctx.SetOffline(false); err != nil {
@@ -274,26 +226,15 @@ func TestBrowserAcceptance_ReconnectRecoversWithoutDuplicateOrGap(t *testing.T) 
 	}
 }
 
-// Given a first session whose history read is deliberately held pending on
-// the server (blockFirstHistoryRequest), and a second, unrelated session,
-// When the browser switches to the second session while that read is still
-// in flight, and the first session's read is only then allowed to reach
-// the browser,
-// Then the second session's view never shows the first session's content —
-// neither before the pending read resolves nor once its late response
-// finally arrives — and an event published to the first session's
-// now-unselected stream does not leak in either. Switching back restores
-// the first session's own history, including what arrived while it was
-// unselected, and its prior scroll position.
+// Acceptance: switching away from a session whose history read is still
+// pending, and back, isolates each session's content and restores the
+// first session's scroll position.
 func TestBrowserAcceptance_SwitchingSessionsIsolatesPendingStream(t *testing.T) {
 	const scrollableEventCount = 30
 	store := state.NewStore(t.TempDir())
 	seedSession(t, store, &domain.Session{Name: "browser-switch-a"})
 	seedSession(t, store, &domain.Session{Name: "browser-switch-b"})
 
-	// Only this test needs a's history read held pending, so the gate wraps
-	// the handler directly here rather than becoming a second, one-consumer
-	// parameter on the shared browserOrigin helper.
 	svcCfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -305,8 +246,34 @@ func TestBrowserAcceptance_SwitchingSessionsIsolatesPendingStream(t *testing.T) 
 	s.busClientFn = func() *event.Client {
 		return &event.Client{BaseURL: bus.URL, HTTP: http.DefaultClient}
 	}
-	blockA, aRequestStarted, releaseA := blockFirstHistoryRequest("browser-switch-a")
-	srv := httptest.NewServer(blockA(s.Routes()))
+
+	// Holds the first GET /api/v1/events?session=browser-switch-a request
+	// open until releaseA runs, so a's read is provably pending, not merely
+	// assumed so, at the point the test switches away from it.
+	aRequestStarted := make(chan struct{})
+	aReleaseCh := make(chan struct{})
+	var aBlockOnce sync.Once
+	releaseA := func() {
+		select {
+		case <-aReleaseCh:
+		default:
+			close(aReleaseCh)
+		}
+	}
+	routes := s.Routes()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/events" && r.URL.Query().Get("session") == "browser-switch-a" {
+			blocked := false
+			aBlockOnce.Do(func() {
+				blocked = true
+				close(aRequestStarted)
+			})
+			if blocked {
+				<-aReleaseCh
+			}
+		}
+		routes.ServeHTTP(w, r)
+	}))
 	t.Cleanup(srv.Close)
 	// Registered after srv's own cleanup above, so it runs first (t.Cleanup
 	// is LIFO): a failure anywhere below must not leave the intercepted
@@ -421,10 +388,8 @@ func TestBrowserAcceptance_SwitchingSessionsIsolatesPendingStream(t *testing.T) 
 	requireNoConsoleErrors(t, errs)
 }
 
-// Given a session tree with several siblings,
-// When the browser drives it by keyboard alone,
-// Then arrow keys move the roving tab stop between rows and Enter selects
-// the focused row — the WAI-ARIA treeview pattern SessionTree.tsx implements.
+// Acceptance: arrow keys move the roving tab stop between tree rows and
+// Enter selects the focused row (SessionTree.tsx's WAI-ARIA treeview).
 func TestBrowserAcceptance_KeyboardNavigatesSessionTree(t *testing.T) {
 	store := state.NewStore(t.TempDir())
 	for _, name := range []string{"browser-kb-a", "browser-kb-b", "browser-kb-c"} {
@@ -467,10 +432,8 @@ func TestBrowserAcceptance_KeyboardNavigatesSessionTree(t *testing.T) {
 	requireNoConsoleErrors(t, errs)
 }
 
-// Given a narrow viewport,
-// When a session and its details are opened,
-// Then the sidebar and detail pane render as a temporary overlay rather than
-// a persistent column (docs/design/web-ui.md's narrow-screen rule).
+// Acceptance: a narrow viewport renders the sidebar and detail pane as
+// overlays instead of persistent columns (docs/design/web-ui.md).
 func TestBrowserAcceptance_NarrowViewportUsesOverlayDetailPane(t *testing.T) {
 	store := state.NewStore(t.TempDir())
 	seedSession(t, store, &domain.Session{Name: "browser-narrow-1"})
@@ -513,9 +476,8 @@ func TestBrowserAcceptance_NarrowViewportUsesOverlayDetailPane(t *testing.T) {
 	requireNoConsoleErrors(t, errs)
 }
 
-// A bounded dense-tree/long-timeline example: enough siblings and history
-// that the tree and the timeline are not trivially small, small enough to
-// stay a fast, deterministic test.
+// Acceptance: a bounded dense tree and long timeline (40 siblings, 40
+// events) render completely.
 func TestBrowserAcceptance_DenseTreeAndLongTimelineRenderBounded(t *testing.T) {
 	const siblingCount = 40
 	const eventCount = 40

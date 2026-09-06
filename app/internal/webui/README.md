@@ -173,42 +173,45 @@ sessions. This is the real-runtime procedure referenced from this
 milestone's PR body; it needs an operator with a real `plect-web` deployment
 to run and observe, and cannot be automated as a CI check.
 
-1. **Generate an isolated auth token and config**, so the sign-in step
-   below is actually exercised (network trust with no `auth_token` is the
-   default, but this milestone's login criterion needs the gated path).
-   `plect-web`'s own `config.toml` is the only thing this touches: it reads
-   `$HOME/.config/plect-web/config.toml` with no override of its own, so
-   pointing `$HOME` at a throwaway directory for this shell session isolates
-   it completely, with nothing existing to overwrite and nothing to restore
-   afterward. `XDG_CONFIG_HOME`/`XDG_DATA_HOME` are re-pinned to their real
-   values first, so the actual plect declarations and session state this
-   procedure is meant to exercise stay real, not just the auth token:
+1. **Generate an isolated auth token, config, and env file**, so the
+   sign-in step below is actually exercised (network trust with no
+   `auth_token` is the default, but this milestone's login criterion needs
+   the gated path). `plect-web`'s own `config.toml` is the only thing this
+   touches: it reads `$HOME/.config/plect-web/config.toml` with no override
+   of its own, so a throwaway `$HOME` isolates it completely — nothing
+   existing is overwritten. The plugin/catalog cache has no XDG override
+   either (always `~/.cache/plect`, `DefaultCacheRoot` in
+   `app/internal/plugins/cache.go`), so it is shared back in via a symlink
+   rather than left unresolvable:
    ```bash
-   real_home="$HOME"
-   export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$real_home/.config}"
-   export XDG_DATA_HOME="${XDG_DATA_HOME:-$real_home/.local/share}"
-   export HOME="$(mktemp -d)"
-   # The plugin/catalog cache has no XDG override of its own (always
-   # ~/.cache/plect, DefaultCacheRoot in app/internal/plugins/cache.go) —
-   # sharing it via a symlink is what keeps a workflow's plugins resolvable
-   # under the isolated $HOME above, same as the real deployment.
-   ln -s "$real_home/.cache" "$HOME/.cache"
-   (umask 077 && mkdir -p "$HOME/.config/plect-web")
+   smoke_home="$(mktemp -d)"
+   smoke_env="$(mktemp)"
+   (umask 077 && mkdir -p "$smoke_home/.config/plect-web")
+   ln -s "$HOME/.cache" "$smoke_home/.cache"
    token="$(head -c32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-   (umask 077 && printf 'auth_token = "%s"\n' "$token" > "$HOME/.config/plect-web/config.toml")
+   (umask 077 && printf 'auth_token = "%s"\n' "$token" > "$smoke_home/.config/plect-web/config.toml")
+   cat > "$smoke_env" <<ENV
+   HOME=$smoke_home
+   XDG_CONFIG_HOME=$HOME/.config
+   XDG_DATA_HOME=$HOME/.local/share
+   ENV
    printf 'auth_token: %s\n' "$token"   # sign in with this value in step 3
    ```
-   Only running `plect-web` itself needs this isolated `$HOME` (step 2, and
-   step 8's second bind — reuse this same session rather than a fresh
-   `mktemp -d`, which would pick a different, token-less directory). Step
-   5's `plect event publish` is a plain CLI command: it never reads
-   `plect-web`'s config, so any ordinary terminal (with the real `$HOME`)
-   resolves the same real state without any of the exports above.
-2. **Build and run** against real state — `plect-web` picks up the
-   `config.toml` written above automatically:
+   `$smoke_env`'s `HOME` isolates only `plect-web`'s own config; its
+   `XDG_CONFIG_HOME`/`XDG_DATA_HOME` are captured from the real `$HOME`
+   above (before the heredoc), so the real plect declarations and session
+   state this procedure is meant to exercise stay real. Only running
+   `plect-web` itself needs `$smoke_env` (step 2, and step 8's second
+   bind — reuse the same file rather than generating a new one, which
+   would pick a different, token-less `$smoke_home`). Step 5's
+   `plect event publish` is a plain CLI command that never reads
+   `plect-web`'s config, so it needs none of this, in any terminal.
+2. **Build and run** against real state, sourcing `$smoke_env` in a
+   subshell so its variables apply only to this one process, never to the
+   surrounding shell:
    ```bash
    go build -o /tmp/plect-web ./app/cmd/plect-web
-   /tmp/plect-web --host 127.0.0.1 --port 8787
+   (set -a && source "$smoke_env" && set +a && /tmp/plect-web --host 127.0.0.1 --port 8787)
    ```
 3. **Sign in.** Navigate to `http://127.0.0.1:8787/app/`, confirm the
    redirect to `/login`, sign in with the token step 1 printed, and confirm
@@ -229,11 +232,13 @@ to run and observe, and cannot be automated as a CI check.
    select a different one; confirm no cross-session content leaks, then
    switch back and confirm the first session's reading position (scroll
    offset) and selection are unchanged.
-8. **VPN access.** Bind to the host's private network address
-   (`--host <vpn-ip> --port <port>`, reusing the same `config.toml` from
-   step 1) and confirm a second device on that network can sign in and
-   reach the same milestone. Never commit the actual VPN address used for
-   this check.
+8. **VPN access.** Bind to the host's private network address, reusing
+   `$smoke_env` from step 1:
+   ```bash
+   (set -a && source "$smoke_env" && set +a && /tmp/plect-web --host <vpn-ip> --port <port>)
+   ```
+   Confirm a second device on that network can sign in and reach the same
+   milestone. Never commit the actual VPN address used for this check.
 9. **Keyboard and narrow layout.** Tab into the session tree, drive it with
    arrow keys/Home/End/Enter, and confirm visible focus rings throughout.
    Resize the browser (or use a phone on the VPN) to a narrow width and
@@ -243,6 +248,11 @@ to run and observe, and cannot be automated as a CI check.
     sessions or a long-running session's history, confirm the tree and
     timeline remain usable (no visible hang, no missing rows) rather than
     only ever exercising the small fixtures above.
+11. **Clean up.** Remove the token-bearing directory and env file step 1
+    created — nothing else was touched, so this is the only cleanup:
+    ```bash
+    rm -rf "$smoke_home" "$smoke_env"
+    ```
 
 This procedure has no automated pass/fail signal; each step's expected
 observation is stated so it can be followed without this repository's issue
