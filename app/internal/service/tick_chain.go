@@ -4,8 +4,10 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/config"
+	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/eventlog"
 	"github.com/kecbigmt/plecture/app/internal/state"
 	"github.com/kecbigmt/plecture/contracts/event"
@@ -57,13 +59,22 @@ func publishAlreadyActiveChainKick(cfg *config.Config, store *state.Store, workS
 
 const chainAttemptReasonCap = "cap"
 
-// chainAttemptFingerprint is "" for any outcome that is not a cap refusal —
-// the value that ends a streak (see syncChainAttemptStreak).
 func chainAttemptFingerprint(capRefused bool, target string) string {
 	if !capRefused || target == "" {
 		return ""
 	}
 	return chainAttemptReasonCap + "|" + target
+}
+
+// sessionGeneration scopes a session's chain-attempt markers to this
+// particular incarnation of its name: destroy-then-recreate under the same
+// name is a fresh identity, and CreatedAt is what distinguishes it from
+// whatever the name pointed to before.
+func sessionGeneration(s *domain.Session) string {
+	if s == nil {
+		return ""
+	}
+	return s.CreatedAt.Format(time.RFC3339Nano)
 }
 
 // syncChainAttemptStreak atomically compares-and-sets the persisted
@@ -74,16 +85,16 @@ func chainAttemptFingerprint(capRefused bool, target string) string {
 // resolved-then-refused-again recurrence looks identical to a continuing one
 // — so TickSession keeps this boundary marker instead, synced for every
 // chain on every tick regardless of outcome.
-func syncChainAttemptStreak(store *state.Store, sessionName, instance, chainID, newFingerprint string) (previous string, won bool, err error) {
-	return eventlog.NewStore(store.Dir()).SwapChainAttempt(sessionName, instance, chainID, newFingerprint)
+func syncChainAttemptStreak(store *state.Store, sessionName, instance, chainID, generation, newFingerprint string) (previous string, won bool, err error) {
+	return eventlog.NewStore(store.Dir()).SwapChainAttempt(sessionName, instance, chainID, generation, newFingerprint)
 }
 
 // revertChainAttemptStreak compensates a syncChainAttemptStreak win (claimed)
 // whose event never actually got published, restoring previous — but only if
 // the marker still holds claimed. See eventlog.Store.RevertChainAttempt for
 // why the restore must stay conditional.
-func revertChainAttemptStreak(store *state.Store, sessionName, instance, chainID, claimed, previous string) error {
-	_, err := eventlog.NewStore(store.Dir()).RevertChainAttempt(sessionName, instance, chainID, claimed, previous)
+func revertChainAttemptStreak(store *state.Store, sessionName, instance, chainID, generation, claimed, previous string) error {
+	_, err := eventlog.NewStore(store.Dir()).RevertChainAttempt(sessionName, instance, chainID, generation, claimed, previous)
 	return err
 }
 

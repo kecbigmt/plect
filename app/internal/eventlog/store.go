@@ -173,22 +173,16 @@ func (s *Store) ReadTombstone(session string) (data []byte, ok bool, err error) 
 	return data, true, nil
 }
 
-// SwapChainAttempt atomically compares-and-sets one small durable fact in a
-// session's own directory: the last chain-attempt fingerprint TickSession
-// recorded for one (instance, chainID) pair (see service.chainAttemptFingerprint
-// — a plect.chain.attempt cap-refusal streak marker; empty clears it). The
-// read, compare, and write all happen under the same exclusive per-session
-// lock Append uses, so two callers racing on the same key can never both see
-// their value win: only the first reports won=true, and the second finds the
-// key already at newFingerprint. previous is the value from just before the
-// call, for a caller whose side effect (publishing the event the fingerprint
-// claims) then fails to compensate with RevertChainAttempt. This is
-// process-local bookkeeping, deliberately kept out of contracts/state's
-// Session/TaskState — those are the CLI/plugin data contract, cross-module
-// and independently versioned, while this never leaves TickSession's own
-// decision-making.
-func (s *Store) SwapChainAttempt(session, instance, chainID, newFingerprint string) (previous string, won bool, err error) {
-	key := instance + "\x00" + chainID
+// SwapChainAttempt atomically compares-and-sets a plect.chain.attempt
+// cap-refusal streak marker (see service.chainAttemptFingerprint), scoped by
+// generation (a session's CreatedAt) so a session destroyed and recreated
+// under the same name never inherits — or, via some stale in-flight tick
+// still racing the destroy, resurrects — its predecessor's marker: the two
+// generations never share a key, regardless of how the destroy and any
+// leftover tick against the old generation interleave. previous is the value
+// from just before this call, for RevertChainAttempt.
+func (s *Store) SwapChainAttempt(session, instance, chainID, generation, newFingerprint string) (previous string, won bool, err error) {
+	key := chainAttemptKey(instance, chainID, generation)
 	err = s.withChainAttemptsLocked(session, func(attempts map[string]string) bool {
 		previous = attempts[key]
 		if previous == newFingerprint {
@@ -202,16 +196,13 @@ func (s *Store) SwapChainAttempt(session, instance, chainID, newFingerprint stri
 }
 
 // RevertChainAttempt compensates a SwapChainAttempt win whose side effect
-// failed, swapping the marker from claimed back to previous — but only if it
-// still holds claimed. Unconditionally restoring previous would be wrong
-// once anything else has moved the marker past claimed: a concurrent tick
-// starting its own, later streak (a different target, or the predicate
-// resolving and refiring) would have that legitimate transition silently
-// erased, and the next tick would publish a duplicate event for it. Finding
-// the marker already past claimed instead means someone else has already
-// dealt with it, so there is nothing for this caller to compensate.
-func (s *Store) RevertChainAttempt(session, instance, chainID, claimed, previous string) (reverted bool, err error) {
-	key := instance + "\x00" + chainID
+// failed, restoring previous — but only if the marker still holds exactly
+// claimed. Restoring unconditionally would erase a legitimate later
+// transition (a concurrent tick's own, newer streak) if one has since won;
+// finding the marker already past claimed means that already happened, so
+// there is nothing here for this caller to compensate.
+func (s *Store) RevertChainAttempt(session, instance, chainID, generation, claimed, previous string) (reverted bool, err error) {
+	key := chainAttemptKey(instance, chainID, generation)
 	err = s.withChainAttemptsLocked(session, func(attempts map[string]string) bool {
 		if attempts[key] != claimed {
 			return false
@@ -223,18 +214,19 @@ func (s *Store) RevertChainAttempt(session, instance, chainID, claimed, previous
 	return reverted, err
 }
 
-// ClearChainAttempts removes every chain-attempt marker for session. Unlike
-// the tombstone, which deliberately survives `plect destroy` so a
-// destroyed session's record stays legible, this bookkeeping has no
-// meaning once the session is gone: a later session created under the same
-// (reused) name is a fresh identity, and inheriting the old markers would
-// wrongly suppress that new session's first genuine refusal as if it were
-// a continuing streak.
+// ClearChainAttempts removes every chain-attempt marker for session,
+// including any left by earlier generations — a hygiene sweep, not a
+// correctness requirement now that SwapChainAttempt/RevertChainAttempt scope
+// each generation to its own key.
 func (s *Store) ClearChainAttempts(session string) error {
 	if err := os.Remove(s.chainAttemptsPath(session)); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("eventlog: chain attempts: remove: %w", err)
 	}
 	return nil
+}
+
+func chainAttemptKey(instance, chainID, generation string) string {
+	return instance + "\x00" + chainID + "\x00" + generation
 }
 
 func setChainAttempt(attempts map[string]string, key, value string) {

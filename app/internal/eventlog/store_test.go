@@ -100,7 +100,7 @@ func TestTombstoneRoundTrip(t *testing.T) {
 func TestSwapChainAttempt_ReportsPreviousAndWon(t *testing.T) {
 	s := NewStore(t.TempDir())
 
-	previous, won, err := s.SwapChainAttempt("work1", "work", "review", "cap|target")
+	previous, won, err := s.SwapChainAttempt("work1", "work", "review", "gen1", "cap|target")
 	if err != nil {
 		t.Fatalf("SwapChainAttempt (first): %v", err)
 	}
@@ -108,7 +108,7 @@ func TestSwapChainAttempt_ReportsPreviousAndWon(t *testing.T) {
 		t.Fatalf("first swap: previous=%q won=%v, want \"\"/true", previous, won)
 	}
 
-	previous, won, err = s.SwapChainAttempt("work1", "work", "review", "cap|target")
+	previous, won, err = s.SwapChainAttempt("work1", "work", "review", "gen1", "cap|target")
 	if err != nil {
 		t.Fatalf("SwapChainAttempt (unchanged): %v", err)
 	}
@@ -116,7 +116,7 @@ func TestSwapChainAttempt_ReportsPreviousAndWon(t *testing.T) {
 		t.Fatalf("unchanged swap: previous=%q won=%v, want \"cap|target\"/false", previous, won)
 	}
 
-	previous, won, err = s.SwapChainAttempt("work1", "work", "review", "")
+	previous, won, err = s.SwapChainAttempt("work1", "work", "review", "gen1", "")
 	if err != nil {
 		t.Fatalf("SwapChainAttempt (clear): %v", err)
 	}
@@ -128,14 +128,14 @@ func TestSwapChainAttempt_ReportsPreviousAndWon(t *testing.T) {
 func TestRevertChainAttempt_DoesNotOverwriteANewerTransition(t *testing.T) {
 	s := NewStore(t.TempDir())
 
-	if _, won, err := s.SwapChainAttempt("work1", "work", "review", "cap|A"); err != nil || !won {
+	if _, won, err := s.SwapChainAttempt("work1", "work", "review", "gen1", "cap|A"); err != nil || !won {
 		t.Fatalf("claim A: won=%v err=%v", won, err)
 	}
-	if previous, won, err := s.SwapChainAttempt("work1", "work", "review", "cap|B"); err != nil || !won || previous != "cap|A" {
+	if previous, won, err := s.SwapChainAttempt("work1", "work", "review", "gen1", "cap|B"); err != nil || !won || previous != "cap|A" {
 		t.Fatalf("claim B: previous=%q won=%v err=%v", previous, won, err)
 	}
 
-	reverted, err := s.RevertChainAttempt("work1", "work", "review", "cap|A", "")
+	reverted, err := s.RevertChainAttempt("work1", "work", "review", "gen1", "cap|A", "")
 	if err != nil {
 		t.Fatalf("RevertChainAttempt: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestRevertChainAttempt_DoesNotOverwriteANewerTransition(t *testing.T) {
 		t.Fatal("reverted = true, want false: the marker had already moved past what this caller claimed")
 	}
 
-	if previous, won, err := s.SwapChainAttempt("work1", "work", "review", "cap|B"); err != nil || won || previous != "cap|B" {
+	if previous, won, err := s.SwapChainAttempt("work1", "work", "review", "gen1", "cap|B"); err != nil || won || previous != "cap|B" {
 		t.Fatalf("marker after the stale revert: previous=%q won=%v err=%v, want \"cap|B\"/false/nil", previous, won, err)
 	}
 }
@@ -151,13 +151,13 @@ func TestRevertChainAttempt_DoesNotOverwriteANewerTransition(t *testing.T) {
 func TestClearChainAttempts_RemovesEveryMarkerForTheSession(t *testing.T) {
 	s := NewStore(t.TempDir())
 
-	if _, _, err := s.SwapChainAttempt("work1", "work", "review", "cap|A"); err != nil {
+	if _, _, err := s.SwapChainAttempt("work1", "work", "review", "gen1", "cap|A"); err != nil {
 		t.Fatalf("SwapChainAttempt: %v", err)
 	}
 	if err := s.ClearChainAttempts("work1"); err != nil {
 		t.Fatalf("ClearChainAttempts: %v", err)
 	}
-	if previous, won, err := s.SwapChainAttempt("work1", "work", "review", "cap|A"); err != nil || !won || previous != "" {
+	if previous, won, err := s.SwapChainAttempt("work1", "work", "review", "gen1", "cap|A"); err != nil || !won || previous != "" {
 		t.Fatalf("after clear: previous=%q won=%v err=%v, want \"\"/true/nil", previous, won, err)
 	}
 
@@ -166,11 +166,35 @@ func TestClearChainAttempts_RemovesEveryMarkerForTheSession(t *testing.T) {
 	}
 }
 
-// A cap refusal's spawn attempt and a background reactor's own tick can race
-// on the same session; SwapChainAttempt's read-compare-write must happen
-// under one lock so at most one of them ever wins the same transition —
-// otherwise both would go on to publish their own plect.chain.attempt event
-// for what is really one refusal.
+// A tick still evaluating a session's old generation can race its destroy:
+// ClearChainAttempts is unlocked (a plain file remove) and best-effort, so
+// that stale tick's own SwapChainAttempt can land after the clear and
+// recreate the file. Scoping the key by generation is what actually defeats
+// this, independent of ordering: the stale write lands under the old
+// generation's key, which the recreated session's own generation never reads.
+func TestSwapChainAttempt_StaleGenerationWriteAfterClearDoesNotSuppressANewGeneration(t *testing.T) {
+	s := NewStore(t.TempDir())
+
+	if _, won, err := s.SwapChainAttempt("work1", "work", "review", "gen1", "cap|A"); err != nil || !won {
+		t.Fatalf("gen1 claim: won=%v err=%v", won, err)
+	}
+	if err := s.ClearChainAttempts("work1"); err != nil {
+		t.Fatalf("ClearChainAttempts: %v", err)
+	}
+	// The stale tick's write lands after the clear, recreating the file.
+	if _, won, err := s.SwapChainAttempt("work1", "work", "review", "gen1", "cap|A"); err != nil || !won {
+		t.Fatalf("stale gen1 rewrite: won=%v err=%v", won, err)
+	}
+
+	previous, won, err := s.SwapChainAttempt("work1", "work", "review", "gen2", "cap|A")
+	if err != nil {
+		t.Fatalf("gen2 claim: %v", err)
+	}
+	if previous != "" || !won {
+		t.Fatalf("gen2 claim: previous=%q won=%v, want \"\"/true — the stale gen1 write must not suppress it", previous, won)
+	}
+}
+
 func TestSwapChainAttempt_ConcurrentIdenticalSwapsExactlyOneWins(t *testing.T) {
 	s := NewStore(t.TempDir())
 	const n = 20
@@ -182,7 +206,7 @@ func TestSwapChainAttempt_ConcurrentIdenticalSwapsExactlyOneWins(t *testing.T) {
 	for i := range n {
 		go func(i int) {
 			defer wg.Done()
-			_, w, err := s.SwapChainAttempt("work1", "work", "review", "cap|target")
+			_, w, err := s.SwapChainAttempt("work1", "work", "review", "gen1", "cap|target")
 			won[i], errs[i] = w, err
 		}(i)
 	}
