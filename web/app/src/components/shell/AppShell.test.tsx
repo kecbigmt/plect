@@ -137,6 +137,14 @@ describe("AppShell session selection", () => {
   it("selecting a session shows its name in the header and in the detail pane, without leaking a previous session's detail", async () => {
     vi.mocked(fetch).mockImplementation((input: RequestInfo | URL) => {
       const url = String(input instanceof Request ? input.url : input);
+      // Conversation's own history fetch is irrelevant to this test, so it
+      // resolves immediately to an empty page rather than falling into the
+      // catch-all session-list branch below — otherwise its shape mismatch
+      // (no `events` array) puts Conversation into an error state that
+      // races the assertions this test actually cares about.
+      if (url.includes("/events?")) {
+        return Promise.resolve(jsonResponse({ events: [] }));
+      }
       if (url.includes("/sessions/team%2Fb")) {
         return new Promise(() => {});
       }
