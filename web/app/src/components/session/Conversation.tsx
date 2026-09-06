@@ -95,16 +95,10 @@ export function Conversation({
   );
 }
 
-// Only the two conversational types contracts/event itself defines — a
-// user's own input and a task instruction delivered to a runtime — render
-// as a message; every other type, including any provider- or plugin-
-// defined type this UI has never heard of, stays on the compact path with
-// its type, source, summary, body, and metadata still fully visible
-// (docs/design/web-ui.md's amendment: unknown types stay compact). Never
-// inferred from the session's current status, and never widened to "any
-// body-bearing inbound/outbound record" — that would let an unrecognized
-// type borrow a layout that hides its own type and summary behind a
-// message bubble.
+// Only the two conversational types contracts/event itself defines get
+// message styling; a producer-defined type this UI does not recognize
+// stays on the compact path by default, rather than adopting message
+// styling on the strength of direction and body alone.
 const UTTERANCE_TYPES: ReadonlySet<string> = new Set(["user.emit", "plect.instruction"]);
 
 function isUtterance(event: SessionEvent): boolean {
