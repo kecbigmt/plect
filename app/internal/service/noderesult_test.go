@@ -7,6 +7,7 @@ import (
 
 	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/eventlog"
+	"github.com/kecbigmt/plecture/app/internal/state"
 	"github.com/kecbigmt/plecture/contracts/event"
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
@@ -151,6 +152,13 @@ func TestUp_PopulationMemberRepairRecordsNodeResultWithoutUpTransition(t *testin
 	seedSession(t, store, sessionName, "acct", 1, "default", map[string]*contract.TaskState{
 		"pane": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Outputs: map[string]any{}},
 	})
+	if err := store.UpdatePopulation("default/pop", func(population *state.PopulationState) error {
+		population.Workflow = "default"
+		population.Name = "pop"
+		return nil
+	}); err != nil {
+		t.Fatalf("seed population: %v", err)
+	}
 	if err := store.Update(sessionName, func(s *domain.Session) error {
 		s.Population = &contract.PopulationProvenance{Workflow: "default", Name: "pop"}
 		return nil
