@@ -182,6 +182,12 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	f := parseFilter(r)
 	f.Limit = 0 // a live stream is unbounded; Limit only applies to list paging
 
+	streamID, start, ok := resumeParam(r)
+	if !ok {
+		http.Error(w, "invalid resume token", http.StatusBadRequest)
+		return
+	}
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -190,7 +196,6 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 
 	ctx := r.Context()
-	streamID, start := resumeParam(r)
 	// A fresh stream (no resume cursor) with ?tail=N replays only the most recent
 	// N matching records instead of the whole log — the durable log is unbounded
 	// and survives destroy, so an unscoped replay could flood a new subscriber.
@@ -290,14 +295,17 @@ func tailParam(r *http.Request) int {
 	return n
 }
 
-// resumeParam reads a resume token (Last-Event-ID header, else ?since); malformed or absent resolves to a fresh-connect ("", 0).
-func resumeParam(r *http.Request) (streamID string, seq int64) {
+// resumeParam reads a resume token (Last-Event-ID header, else ?since). Absent resolves to a fresh-connect ("", 0, true); present-but-unparseable reports ok=false rather than silently falling back to a connection the client never asked for.
+func resumeParam(r *http.Request) (streamID string, seq int64, ok bool) {
 	v := r.Header.Get("Last-Event-ID")
 	if v == "" {
 		v = r.URL.Query().Get("since")
 	}
-	streamID, seq, _ = event.ParseResumeToken(v)
-	return streamID, seq
+	if v == "" {
+		return "", 0, true
+	}
+	streamID, seq, ok = event.ParseResumeToken(v)
+	return streamID, seq, ok
 }
 
 func parseFilter(r *http.Request) event.Filter {

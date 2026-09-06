@@ -18,6 +18,7 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/dispatch"
 	"github.com/kecbigmt/plecture/app/internal/eventbus"
 	"github.com/kecbigmt/plecture/app/internal/eventlog"
+	"github.com/kecbigmt/plecture/app/internal/persistence"
 	"github.com/kecbigmt/plecture/app/internal/pluginservice"
 	"github.com/kecbigmt/plecture/app/internal/population"
 	"github.com/kecbigmt/plecture/app/internal/reactor"
@@ -147,6 +148,11 @@ restart, within one refresh interval.`,
 		populationWG.Wait()
 		svcWG.Wait() // let the service supervisor stop every running plugin service
 		hub.Close()  // cancel any reader still alive after subscribers/dispatchers/reactors left
+		// Every consumer sharing the state/event database (dispatchers, reactors,
+		// the session hub) has now stopped using it, so this process — the
+		// deterministic owner that opened it — closes the pool it shares with
+		// state.Store rather than leaving it open for the rest of the exit path.
+		_ = persistence.CloseShared(filepath.Join(stateStore.Dir(), "store.db"))
 		if serveErr != nil && serveErr != http.ErrServerClosed {
 			return serveErr
 		}

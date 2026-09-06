@@ -1,7 +1,6 @@
 package service
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,7 +11,6 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/eventlog"
-	"github.com/kecbigmt/plecture/app/internal/state"
 	"github.com/kecbigmt/plecture/app/internal/task"
 	"github.com/kecbigmt/plecture/contracts/event"
 	contract "github.com/kecbigmt/plecture/contracts/state"
@@ -307,14 +305,6 @@ func TestTickSession_ChainCapAttemptEventRecordsNewStreakAfterPredicateGoesUnmet
 	}
 }
 
-// blockLogFile arms a one-shot failure for store's next eventlog.Append (see
-// blockEventsDir in check_test.go for why file-level fault injection no
-// longer reaches it).
-func blockLogFile(t *testing.T, store *state.Store) {
-	t.Helper()
-	eventlog.FailNextAppend(store.Dir(), errors.New("simulated publish failure"))
-}
-
 func TestTickSession_ChainCapAttemptEventRetriesAfterPublishFailure(t *testing.T) {
 	store := testStore(t)
 	// No [done_when]: this instance's own done_when action would also try to
@@ -339,7 +329,7 @@ all = [ { check = "resource.state.checks_status", in = ["SUCCESS"] } ]
 	seedReviewWork(t, store, "work1", map[string]any{"checks_status": "SUCCESS"})
 	setParent(t, store, "work1", "parent1")
 
-	blockLogFile(t, store)
+	blockEventsDir(t, store)
 
 	res, err := TickSession(cfg, store, TickParams{SessionName: "work1", SkipRefresh: true})
 	if err != nil {

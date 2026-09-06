@@ -36,12 +36,6 @@ type Store struct {
 	logger *slog.Logger
 }
 
-// dbCache shares one *persistence.DB per database path across every Store value for that path, since Store is constructed fresh per call throughout this codebase and would otherwise leak one connection pool per call in a resident process.
-var (
-	dbCacheMu sync.Mutex
-	dbCache   = map[string]*persistence.DB{}
-)
-
 // Root returns the events directory this store reads/writes (for diagnostics —
 // e.g. confirming the resident process and writers resolve the same log tree).
 func (s *Store) Root() string { return s.root }
@@ -60,21 +54,16 @@ func NewStore(dir string) *Store {
 	return &Store{dir: dir, root: filepath.Join(dir, "events"), logger: slog.Default()}
 }
 
+// dbHandle opens (or reuses) the database via persistence.EnsureCurrentShared,
+// the same process-wide shared pool state.Store draws on for the same
+// directory: Store is constructed fresh per call throughout this codebase,
+// and without sharing each would leak its own connection pool in a resident
+// process.
 func (s *Store) dbHandle() (*persistence.DB, error) {
-	return dbHandleForPath(filepath.Join(s.dir, "store.db"))
-}
-
-func dbHandleForPath(path string) (*persistence.DB, error) {
-	dbCacheMu.Lock()
-	defer dbCacheMu.Unlock()
-	if db, ok := dbCache[path]; ok {
-		return db, nil
-	}
-	db, err := persistence.EnsureCurrent(context.Background(), path)
+	db, err := persistence.EnsureCurrentShared(context.Background(), filepath.Join(s.dir, "store.db"))
 	if err != nil {
 		return nil, fmt.Errorf("eventlog: open database: %w", err)
 	}
-	dbCache[path] = db
 	return db, nil
 }
 
@@ -357,11 +346,23 @@ func (s *Store) ReadFromStream(session, streamID string, cursor int64) (evs []ev
 	if len(oldEvs) > 0 {
 		return oldEvs, oldSeqs, streamID, tailSeq(oldSeqs, cursor), nil
 	}
-	newEvs, newSeqs, _, err := db.ListCurrentEventsFrom(context.Background(), session, 0)
-	if err != nil {
-		return nil, nil, current, 0, fmt.Errorf("eventlog: read stream: %w", err)
+	// streamID is exhausted: move to the very next incarnation in creation
+	// order, not straight to current — two or more rotations since the last
+	// call would otherwise skip an intermediate incarnation's events entirely.
+	nextID := current
+	if ids, lerr := db.EventStreamIDsBySession(context.Background(), session); lerr == nil {
+		for i, id := range ids {
+			if id == streamID && i+1 < len(ids) {
+				nextID = ids[i+1]
+				break
+			}
+		}
 	}
-	return newEvs, newSeqs, current, tailSeq(newSeqs, 0), nil
+	newEvs, newSeqs, err := db.ListEventsFromStreamID(context.Background(), nextID, session, 0)
+	if err != nil {
+		return nil, nil, nextID, 0, fmt.Errorf("eventlog: read stream: %w", err)
+	}
+	return newEvs, newSeqs, nextID, tailSeq(newSeqs, 0), nil
 }
 
 func tailSeq(seqs []int64, fallback int64) int64 {

@@ -582,6 +582,59 @@ func TestFollowDeliversNewEvents(t *testing.T) {
 	}
 }
 
+// TestReadFromStream_TraversesEveryIntermediateIncarnation pins that two
+// rotations landing between a caller's calls do not skip the intermediate
+// incarnation: draining a superseded stream must advance to the very next
+// one in creation order, not jump straight to whatever is current.
+func TestReadFromStream_TraversesEveryIntermediateIncarnation(t *testing.T) {
+	store := NewStore(t.TempDir())
+	const session = "o/r-1"
+
+	stream1, err := store.NewStream(session)
+	if err != nil {
+		t.Fatalf("new stream 1: %v", err)
+	}
+	if _, _, _, err := store.Append(event.Event{SessionName: session, Type: "user.note", Body: "s1", Direction: event.Internal}); err != nil {
+		t.Fatalf("append to stream 1: %v", err)
+	}
+
+	if _, err := store.NewStream(session); err != nil { // stream2: intermediate, gets its own event
+		t.Fatalf("new stream 2: %v", err)
+	}
+	if _, _, _, err := store.Append(event.Event{SessionName: session, Type: "user.note", Body: "s2", Direction: event.Internal}); err != nil {
+		t.Fatalf("append to stream 2: %v", err)
+	}
+
+	if _, err := store.NewStream(session); err != nil { // stream3: current
+		t.Fatalf("new stream 3: %v", err)
+	}
+	if _, _, _, err := store.Append(event.Event{SessionName: session, Type: "user.note", Body: "s3", Direction: event.Internal}); err != nil {
+		t.Fatalf("append to stream 3: %v", err)
+	}
+
+	// A caller that last read stream1 (past its one event) before both
+	// further rotations happened; both intermediate and current events must
+	// still arrive, in order, across repeated calls.
+	var got []string
+	streamID, cur := stream1, int64(2)
+	for i := 0; i < 6 && len(got) < 2; i++ {
+		evs, _, resolved, next, err := store.ReadFromStream(session, streamID, cur)
+		if err != nil {
+			t.Fatalf("iteration %d: %v", i, err)
+		}
+		for _, ev := range evs {
+			got = append(got, ev.Body)
+		}
+		if resolved != "" {
+			streamID = resolved
+		}
+		cur = next
+	}
+	if len(got) != 2 || got[0] != "s2" || got[1] != "s3" {
+		t.Fatalf("delivered %v, want [s2 s3] (the intermediate incarnation must not be skipped)", got)
+	}
+}
+
 // TestResidentPathsShareOneConnectionPerDatabase pins deterministic pool ownership: every resident service path constructs a fresh eventlog.Store per call, so reusing the identical *persistence.DB across many such calls (not a fresh one each time) is what "no handles left open" means here.
 func TestResidentPathsShareOneConnectionPerDatabase(t *testing.T) {
 	dir := t.TempDir()
@@ -608,10 +661,11 @@ func TestResidentPathsShareOneConnectionPerDatabase(t *testing.T) {
 		}
 	}
 
-	dbCacheMu.Lock()
-	current := dbCache[filepath.Join(dir, "store.db")]
-	dbCacheMu.Unlock()
+	current, err := NewStore(dir).dbHandle()
+	if err != nil {
+		t.Fatalf("final dbHandle: %v", err)
+	}
 	if current != first {
-		t.Fatal("the cached connection changed across 50 fresh Store values over the same directory; want the same one reused throughout, not a new pool opened per call")
+		t.Fatal("the shared connection changed across 50 fresh Store values over the same directory; want the same one reused throughout, not a new pool opened per call")
 	}
 }

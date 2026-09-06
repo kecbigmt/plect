@@ -6,6 +6,7 @@ import (
 
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/domain"
+	"github.com/kecbigmt/plecture/app/internal/eventlog"
 	"github.com/kecbigmt/plecture/app/internal/state"
 	"github.com/kecbigmt/plecture/contracts/event"
 )
@@ -250,11 +251,8 @@ func TestEventPageRejectsStaleGenerationCursor(t *testing.T) {
 	}
 }
 
-// A destroyed session's event history has no FK to its state-store row, so
-// it survives a destroy and a same-name recreate reuses the same stream —
-// a cursor issued before the destroy must still be accepted afterward, not
-// rejected as stale.
-func TestEventPageAcceptsCursorAcrossSessionDeleteAndRecreateUnderSameName(t *testing.T) {
+// A real session create mints a new incarnation's stream, unlike a plain publish into whatever stream already exists, so a cursor issued before a destroy + same-name recreate must be rejected as stale against the new incarnation.
+func TestEventPageRejectsCursorAcrossSessionDeleteAndRecreateUnderSameName(t *testing.T) {
 	store := state.NewStore(t.TempDir())
 	const session = "owner/repo-7"
 	if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote}); err != nil {
@@ -268,12 +266,17 @@ func TestEventPageAcceptsCursorAcrossSessionDeleteAndRecreateUnderSameName(t *te
 	if err := store.Delete(session); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
+	if _, err := eventlog.NewStore(store.Dir()).NewStream(session); err != nil {
+		t.Fatalf("new stream on recreate: %v", err)
+	}
 	if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote}); err != nil {
 		t.Fatalf("publish after recreate: %v", err)
 	}
 
-	if _, err := EventPage(nil, store, session, EventPageParams{Cursor: page.NextCursor}); err != nil {
-		t.Fatalf("cursor from before destroy rejected after recreate: %v", err)
+	_, err = EventPage(nil, store, session, EventPageParams{Cursor: page.NextCursor})
+	var svcErr *Error
+	if !errors.As(err, &svcErr) || svcErr.Code != ErrInvalidInput {
+		t.Fatalf("cursor from before a real destroy+recreate = %v, want ErrInvalidInput (stale against the new incarnation)", err)
 	}
 }
 

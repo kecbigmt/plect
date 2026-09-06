@@ -115,6 +115,20 @@ func (db *DB) EventStreamSessions(ctx context.Context) ([]string, error) {
 	return names, err
 }
 
+// EventStreamIDsBySession returns every incarnation's stream id for session, oldest first, so a caller draining a superseded stream can find the very next incarnation even when more than one rotation happened since it last read.
+func (db *DB) EventStreamIDsBySession(ctx context.Context, session string) ([]string, error) {
+	var ids []string
+	err := db.WithReadTx(ctx, func(tx *sql.Tx) error {
+		rows, err := sqlcgen.New(tx).ListEventStreamIDsBySession(ctx, session)
+		if err != nil {
+			return fmt.Errorf("list event stream ids for %q: %w", session, err)
+		}
+		ids = rows
+		return nil
+	})
+	return ids, err
+}
+
 // ListEventsFrom returns every event of session's current stream at or
 // after sequence `since` (inclusive), in ascending sequence order, alongside
 // each event's own sequence (parallel slices, index-aligned). A session
@@ -170,6 +184,17 @@ func (db *DB) ListEventsFromStreamID(ctx context.Context, streamID, session stri
 	var seqs []int64
 	err := db.WithReadTx(ctx, func(tx *sql.Tx) error {
 		q := sqlcgen.New(tx)
+		// streamID rides in from a caller-controlled resume token, so its ownership is checked rather than trusted.
+		owner, oerr := q.GetEventStreamSessionName(ctx, streamID)
+		if oerr != nil {
+			if errors.Is(oerr, sql.ErrNoRows) {
+				return nil
+			}
+			return fmt.Errorf("get owner of stream %q: %w", streamID, oerr)
+		}
+		if owner != session {
+			return fmt.Errorf("stream %q does not belong to session %q", streamID, session)
+		}
 		rows, err := q.ListEventsFromByStream(ctx, sqlcgen.ListEventsFromByStreamParams{
 			StreamID: streamID,
 			Sequence: since,

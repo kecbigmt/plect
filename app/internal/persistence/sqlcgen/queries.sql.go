@@ -123,6 +123,17 @@ func (q *Queries) GetEventStreamIDBySession(ctx context.Context, sessionName str
 	return id, err
 }
 
+const getEventStreamSessionName = `-- name: GetEventStreamSessionName :one
+SELECT session_name FROM event_streams WHERE id = ?
+`
+
+func (q *Queries) GetEventStreamSessionName(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRowContext(ctx, getEventStreamSessionName, id)
+	var session_name string
+	err := row.Scan(&session_name)
+	return session_name, err
+}
+
 const getPopulation = `-- name: GetPopulation :one
 
 SELECT workflow, name FROM populations WHERE workflow = ? AND name = ?
@@ -403,6 +414,33 @@ func (q *Queries) ListChildSessionNames(ctx context.Context, parentSessionName s
 			return nil, err
 		}
 		items = append(items, name)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listEventStreamIDsBySession = `-- name: ListEventStreamIDsBySession :many
+SELECT id FROM event_streams WHERE session_name = ? ORDER BY created_at ASC
+`
+
+func (q *Queries) ListEventStreamIDsBySession(ctx context.Context, sessionName string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listEventStreamIDsBySession, sessionName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err

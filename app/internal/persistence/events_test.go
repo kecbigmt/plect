@@ -281,3 +281,27 @@ func TestSetEventCursor_RejectsMissingCurrentStream(t *testing.T) {
 		t.Fatal("set cursor on a session with no current stream succeeded, want error")
 	}
 }
+
+// TestListEventsFromStreamID_RejectsAStreamBelongingToAnotherSession pins
+// that a caller-supplied stream id (a bus reconnect's resume token) cannot be
+// used to read and relabel another session's events as the caller's own.
+func TestListEventsFromStreamID_RejectsAStreamBelongingToAnotherSession(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+
+	victimStream, err := db.CreateEventStream(ctx, "victim/session")
+	if err != nil {
+		t.Fatalf("create victim stream: %v", err)
+	}
+	if _, err := db.AppendEvent(ctx, event.Event{ID: "e1", SessionName: "victim/session", Time: time.Now().UTC(), Type: "secret", Source: "test", Direction: event.Internal}); err != nil {
+		t.Fatalf("append to victim: %v", err)
+	}
+	if _, err := db.CreateEventStream(ctx, "attacker/session"); err != nil {
+		t.Fatalf("create attacker stream: %v", err)
+	}
+
+	evs, _, err := db.ListEventsFromStreamID(ctx, victimStream, "attacker/session", 0)
+	if err == nil {
+		t.Fatalf("reading another session's stream by id succeeded, want an ownership error; got events %+v", evs)
+	}
+}

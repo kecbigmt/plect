@@ -209,6 +209,27 @@ func TestBus_StreamResume(t *testing.T) {
 	}
 }
 
+// TestBus_StreamRejectsMalformedResumeToken pins that a Last-Event-ID that
+// isn't a valid "<streamID>:<seq>" resume token (a pre-cutover raw sequence,
+// or garbage) is rejected before any SSE bytes are written, rather than
+// silently falling back to a fresh connect and serving whatever session the
+// query param names anyway.
+func TestBus_StreamRejectsMalformedResumeToken(t *testing.T) {
+	_, baseURL, _ := newTestBus(t, "")
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/v1/stream?session="+url.QueryEscape("o/r-1"), nil)
+	req.Header.Set("Last-Event-ID", "128") // pre-cutover raw sequence, not a resume token
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (rejected before dialing SSE)", resp.StatusCode)
+	}
+}
+
 // An idle stream (no events) periodically emits a keepalive comment so the
 // connection is not torn down for inactivity.
 func TestBus_StreamKeepAlive(t *testing.T) {

@@ -180,6 +180,12 @@ DELETE FROM up_reservations WHERE child_session_name = ?;
 -- name: GetEventStreamIDBySession :one
 SELECT id FROM event_streams WHERE session_name = ? ORDER BY created_at DESC LIMIT 1;
 
+-- name: GetEventStreamSessionName :one
+SELECT session_name FROM event_streams WHERE id = ?;
+
+-- name: ListEventStreamIDsBySession :many
+SELECT id FROM event_streams WHERE session_name = ? ORDER BY created_at ASC;
+
 -- name: InsertEventStream :exec
 INSERT INTO event_streams (id, session_name, created_at) VALUES (?, ?, ?);
 
