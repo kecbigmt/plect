@@ -122,9 +122,6 @@ func TestSchema_RejectsOutOfSetBooleanColumns(t *testing.T) {
 	}
 }
 
-// TestSchema_RejectsUpReservationsWithBothOrNeitherParentShape proves the
-// XOR CHECK on up_reservations: exactly one of a real parent_session_name
-// and virtual_root may hold, never both and never neither.
 func TestSchema_RejectsUpReservationsWithBothOrNeitherParentShape(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
