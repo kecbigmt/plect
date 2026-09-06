@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -93,6 +94,128 @@ func TestTombstoneRoundTrip(t *testing.T) {
 	got, _, _ = s.ReadTombstone("o/r-1")
 	if string(got) != string(overwrite) {
 		t.Errorf("ReadTombstone after overwrite = %s, want %s", got, overwrite)
+	}
+}
+
+func TestSwapChainAttempt_ReportsPreviousAndWon(t *testing.T) {
+	s := NewStore(t.TempDir())
+
+	previous, won, err := s.SwapChainAttempt("work1", "work", "review", "gen1", "cap|target")
+	if err != nil {
+		t.Fatalf("SwapChainAttempt (first): %v", err)
+	}
+	if previous != "" || !won {
+		t.Fatalf("first swap: previous=%q won=%v, want \"\"/true", previous, won)
+	}
+
+	previous, won, err = s.SwapChainAttempt("work1", "work", "review", "gen1", "cap|target")
+	if err != nil {
+		t.Fatalf("SwapChainAttempt (unchanged): %v", err)
+	}
+	if previous != "cap|target" || won {
+		t.Fatalf("unchanged swap: previous=%q won=%v, want \"cap|target\"/false", previous, won)
+	}
+
+	previous, won, err = s.SwapChainAttempt("work1", "work", "review", "gen1", "")
+	if err != nil {
+		t.Fatalf("SwapChainAttempt (clear): %v", err)
+	}
+	if previous != "cap|target" || !won {
+		t.Fatalf("clearing swap: previous=%q won=%v, want \"cap|target\"/true", previous, won)
+	}
+}
+
+func TestRevertChainAttempt_DoesNotOverwriteANewerTransition(t *testing.T) {
+	s := NewStore(t.TempDir())
+
+	if _, won, err := s.SwapChainAttempt("work1", "work", "review", "gen1", "cap|A"); err != nil || !won {
+		t.Fatalf("claim A: won=%v err=%v", won, err)
+	}
+	if previous, won, err := s.SwapChainAttempt("work1", "work", "review", "gen1", "cap|B"); err != nil || !won || previous != "cap|A" {
+		t.Fatalf("claim B: previous=%q won=%v err=%v", previous, won, err)
+	}
+
+	reverted, err := s.RevertChainAttempt("work1", "work", "review", "gen1", "cap|A", "")
+	if err != nil {
+		t.Fatalf("RevertChainAttempt: %v", err)
+	}
+	if reverted {
+		t.Fatal("reverted = true, want false: the marker had already moved past what this caller claimed")
+	}
+
+	if previous, won, err := s.SwapChainAttempt("work1", "work", "review", "gen1", "cap|B"); err != nil || won || previous != "cap|B" {
+		t.Fatalf("marker after the stale revert: previous=%q won=%v err=%v, want \"cap|B\"/false/nil", previous, won, err)
+	}
+}
+
+func TestClearChainAttempts_RemovesEveryMarkerForTheSession(t *testing.T) {
+	s := NewStore(t.TempDir())
+
+	if _, _, err := s.SwapChainAttempt("work1", "work", "review", "gen1", "cap|A"); err != nil {
+		t.Fatalf("SwapChainAttempt: %v", err)
+	}
+	if err := s.ClearChainAttempts("work1"); err != nil {
+		t.Fatalf("ClearChainAttempts: %v", err)
+	}
+	if previous, won, err := s.SwapChainAttempt("work1", "work", "review", "gen1", "cap|A"); err != nil || !won || previous != "" {
+		t.Fatalf("after clear: previous=%q won=%v err=%v, want \"\"/true/nil", previous, won, err)
+	}
+
+	if err := s.ClearChainAttempts("never-existed"); err != nil {
+		t.Fatalf("ClearChainAttempts on a session with no markers: %v", err)
+	}
+}
+
+func TestSwapChainAttempt_StaleGenerationWriteAfterClearDoesNotSuppressANewGeneration(t *testing.T) {
+	s := NewStore(t.TempDir())
+
+	if _, won, err := s.SwapChainAttempt("work1", "work", "review", "gen1", "cap|A"); err != nil || !won {
+		t.Fatalf("gen1 claim: won=%v err=%v", won, err)
+	}
+	if err := s.ClearChainAttempts("work1"); err != nil {
+		t.Fatalf("ClearChainAttempts: %v", err)
+	}
+	if _, won, err := s.SwapChainAttempt("work1", "work", "review", "gen1", "cap|A"); err != nil || !won {
+		t.Fatalf("stale gen1 rewrite: won=%v err=%v", won, err)
+	}
+
+	previous, won, err := s.SwapChainAttempt("work1", "work", "review", "gen2", "cap|A")
+	if err != nil {
+		t.Fatalf("gen2 claim: %v", err)
+	}
+	if previous != "" || !won {
+		t.Fatalf("gen2 claim: previous=%q won=%v, want \"\"/true — the stale gen1 write must not suppress it", previous, won)
+	}
+}
+
+func TestSwapChainAttempt_ConcurrentIdenticalSwapsExactlyOneWins(t *testing.T) {
+	s := NewStore(t.TempDir())
+	const n = 20
+
+	var wg sync.WaitGroup
+	won := make([]bool, n)
+	errs := make([]error, n)
+	wg.Add(n)
+	for i := range n {
+		go func(i int) {
+			defer wg.Done()
+			_, w, err := s.SwapChainAttempt("work1", "work", "review", "gen1", "cap|target")
+			won[i], errs[i] = w, err
+		}(i)
+	}
+	wg.Wait()
+
+	wins := 0
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("SwapChainAttempt[%d]: %v", i, err)
+		}
+		if won[i] {
+			wins++
+		}
+	}
+	if wins != 1 {
+		t.Fatalf("wins = %d, want exactly 1 of %d concurrent identical swaps", wins, n)
 	}
 }
 

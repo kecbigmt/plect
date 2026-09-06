@@ -4,8 +4,10 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/config"
+	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/eventlog"
 	"github.com/kecbigmt/plecture/app/internal/state"
 	"github.com/kecbigmt/plecture/contracts/event"
@@ -53,6 +55,71 @@ func publishAlreadyActiveChainKick(cfg *config.Config, store *state.Store, workS
 		return false, err
 	}
 	return true, nil
+}
+
+const chainAttemptReasonCap = "cap"
+
+func chainAttemptFingerprint(capRefused bool, target string) string {
+	if !capRefused || target == "" {
+		return ""
+	}
+	return chainAttemptReasonCap + "|" + target
+}
+
+// sessionGeneration scopes a session's chain-attempt markers to this
+// particular incarnation of its name: destroy-then-recreate under the same
+// name is a fresh identity, and CreatedAt is what distinguishes it from
+// whatever the name pointed to before.
+func sessionGeneration(s *domain.Session) string {
+	if s == nil {
+		return ""
+	}
+	return s.CreatedAt.Format(time.RFC3339Nano)
+}
+
+// syncChainAttemptStreak atomically compares-and-sets the persisted
+// chain-attempt streak marker for one instance's chain, reporting the prior
+// value (for revertChainAttemptStreak) and whether this call is the one that
+// changed it. The event log alone cannot tell an interrupted refusal streak
+// from an uninterrupted one — it only ever records a refusal, so a
+// resolved-then-refused-again recurrence looks identical to a continuing one
+// — so TickSession keeps this boundary marker instead, synced for every
+// chain on every tick regardless of outcome.
+func syncChainAttemptStreak(store *state.Store, sessionName, instance, chainID, generation, newFingerprint string) (previous string, won bool, err error) {
+	return eventlog.NewStore(store.Dir()).SwapChainAttempt(sessionName, instance, chainID, generation, newFingerprint)
+}
+
+// revertChainAttemptStreak compensates a syncChainAttemptStreak win (claimed)
+// whose event never actually got published, restoring previous — but only if
+// the marker still holds claimed. See eventlog.Store.RevertChainAttempt for
+// why the restore must stay conditional.
+func revertChainAttemptStreak(store *state.Store, sessionName, instance, chainID, generation, claimed, previous string) error {
+	_, err := eventlog.NewStore(store.Dir()).RevertChainAttempt(sessionName, instance, chainID, generation, claimed, previous)
+	return err
+}
+
+// publishChainCapAttempt appends one plect.chain.attempt event to the ticking
+// session's own log (workSession) when its chain's spawn was refused by the
+// parent's max_up_children cap. The caller (TickSession) only calls this once
+// syncChainAttemptStreak has confirmed the refusal starts a new streak.
+func publishChainCapAttempt(cfg *config.Config, store *state.Store, workSession string, sp ChainSpawn) error {
+	if sp.TargetSession == "" {
+		return nil
+	}
+	_, err := EventPublish(cfg, store, workSession, EventPublishParams{
+		Type:      event.TypeChainAttempt,
+		Source:    event.SourceTick,
+		Direction: event.Internal,
+		Summary:   fmt.Sprintf("chain %s refused: parent at its max_up_children cap (target %s)", sp.ChainID, sp.TargetSession),
+		Body:      strings.Join(sp.Warnings, "\n"),
+		Metadata: map[string]string{
+			"chain_id": sp.ChainID,
+			"instance": sp.Instance,
+			"target":   sp.TargetSession,
+			"reason":   chainAttemptReasonCap,
+		},
+	})
+	return err
 }
 
 func chainKickDedupKey(workSession string, sp ChainSpawn) string {

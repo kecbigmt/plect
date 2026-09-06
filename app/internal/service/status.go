@@ -165,7 +165,7 @@ func Status(cfg *config.Config, store *state.Store, identifier string) (*StatusR
 
 	displayTitle := sessionDisplayTitle(cfg, session)
 
-	_, computed, chainPlan, err := evaluateSessionActions(cfg, store, sessionName, false, "")
+	_, _, computed, chainPlan, err := evaluateSessionActions(cfg, store, sessionName, false, "")
 	if err != nil {
 		return nil, err
 	}

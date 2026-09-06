@@ -106,6 +106,7 @@ func TestPlectEventNamespaceConstants(t *testing.T) {
 		"tick review":     TypeTickReviewRequired,
 		"tick escalated":  TypeTickEscalated,
 		"judge recorded":  TypeJudgeRecorded,
+		"chain attempt":   TypeChainAttempt,
 	}
 	for name, got := range cases {
 		if got == "" {

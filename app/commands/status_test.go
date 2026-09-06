@@ -85,7 +85,7 @@ func TestStatusChainDetailLine_NotFiredDetail(t *testing.T) {
 	}{
 		{"when unmet", service.StatusChain{BlockedReason: "when_unmet"}, "not-fired (when not satisfied)"},
 		{"missing outputs", service.StatusChain{BlockedReason: "outputs_missing", MissingOutputs: []string{"pr_url"}}, "not-fired (missing outputs: pr_url)"},
-		{"fired", service.StatusChain{Fired: true, TargetSession: "s2"}, "fired (s2)"},
+		{"fired but unspawned", service.StatusChain{Fired: true, TargetSession: "s2"}, "eligible (s2)"},
 		{"already active", service.StatusChain{AlreadyActive: true, TargetSession: "s2"}, "already-active (s2)"},
 	}
 	for _, tt := range tests {

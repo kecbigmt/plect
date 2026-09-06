@@ -110,3 +110,15 @@ func releaseChildCapSlot(store *state.Store, childSessionName string) {
 	}
 	_ = store.ReleaseUpSlot(childSessionName) // best-effort: a retry or Destroy still recovers it
 }
+
+// asChildCapExceeded reports whether err is specifically the structured
+// max_up_children cap rejection reserveChildCapSlot returns through Up, as
+// opposed to any other Up failure — the distinction TickSession's chain spawn
+// reports as a typed cap-refused outcome rather than a generic warning.
+func asChildCapExceeded(err error) (*Error, bool) {
+	svcErr, ok := err.(*Error)
+	if !ok || svcErr.Code != ErrChildCapExceeded {
+		return nil, false
+	}
+	return svcErr, true
+}
