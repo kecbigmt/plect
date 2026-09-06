@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/contracts/event"
 )
 
@@ -226,5 +227,49 @@ func TestSetEventCursor_CreatesStreamWhenNoEventExistsYet(t *testing.T) {
 	gen, err := db.EventStreamID(ctx, session)
 	if err != nil || gen == "" {
 		t.Fatalf("gen after seeding a cursor with no events = %q (err=%v), want non-empty", gen, err)
+	}
+}
+
+// TestEventStreamID_SurvivesSessionDeleteAndRecreateUnderSameName pins that
+// destroying a session (deleting its sessions row, which has no bearing on
+// event_streams: there is no FK between them) and recreating one under the
+// same name reuses the same stream id and continues its sequence, rather
+// than starting a fresh stream. A v2 event.Cursor issued before the delete
+// therefore still names the correct, unbroken stream afterward.
+func TestEventStreamID_SurvivesSessionDeleteAndRecreateUnderSameName(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+	const session = "s1"
+	now := time.Now().UTC()
+
+	if err := db.PutSession(ctx, &domain.Session{Name: session, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("put session: %v", err)
+	}
+	first, err := db.AppendEvent(ctx, event.Event{ID: "e1", SessionName: session, Time: now, Type: "a", Direction: event.Internal})
+	if err != nil {
+		t.Fatalf("append before delete: %v", err)
+	}
+	streamBefore, err := db.EventStreamID(ctx, session)
+	if err != nil || streamBefore == "" {
+		t.Fatalf("stream id before delete = %q (err=%v), want non-empty", streamBefore, err)
+	}
+
+	if err := db.DeleteSession(ctx, session); err != nil {
+		t.Fatalf("delete session: %v", err)
+	}
+	if err := db.PutSession(ctx, &domain.Session{Name: session, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("put session (recreate): %v", err)
+	}
+
+	streamAfter, err := db.EventStreamID(ctx, session)
+	if err != nil || streamAfter != streamBefore {
+		t.Fatalf("stream id after recreate = %q (err=%v), want unchanged %q", streamAfter, err, streamBefore)
+	}
+	second, err := db.AppendEvent(ctx, event.Event{ID: "e2", SessionName: session, Time: now, Type: "b", Direction: event.Internal})
+	if err != nil {
+		t.Fatalf("append after recreate: %v", err)
+	}
+	if second != first+1 {
+		t.Fatalf("sequence after recreate = %d, want %d (continuing, not reset)", second, first+1)
 	}
 }

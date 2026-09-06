@@ -250,6 +250,33 @@ func TestEventPageRejectsStaleGenerationCursor(t *testing.T) {
 	}
 }
 
+// A destroyed session's event history has no FK to its state-store row, so
+// it survives a destroy and a same-name recreate reuses the same stream —
+// a cursor issued before the destroy must still be accepted afterward, not
+// rejected as stale.
+func TestEventPageAcceptsCursorAcrossSessionDeleteAndRecreateUnderSameName(t *testing.T) {
+	store := state.NewStore(t.TempDir())
+	const session = "owner/repo-7"
+	if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote}); err != nil {
+		t.Fatal(err)
+	}
+	page, err := EventPage(nil, store, session, EventPageParams{Filter: event.Filter{Limit: 1}})
+	if err != nil || page.NextCursor == "" {
+		t.Fatalf("setup page: err=%v cursor=%q", err, page.NextCursor)
+	}
+
+	if err := store.Delete(session); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote}); err != nil {
+		t.Fatalf("publish after recreate: %v", err)
+	}
+
+	if _, err := EventPage(nil, store, session, EventPageParams{Cursor: page.NextCursor}); err != nil {
+		t.Fatalf("cursor from before destroy rejected after recreate: %v", err)
+	}
+}
+
 // A cursor encoded under the retired byte-offset format must never be
 // reinterpreted as a sequence number.
 func TestEventPageRejectsOldVersionCursor(t *testing.T) {

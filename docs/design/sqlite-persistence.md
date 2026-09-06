@@ -379,6 +379,19 @@ selected event stream: `1` starts at the first row, and a cursor after event
 sequence `n` has `Off == n + 1`. `StreamID` is `event_streams.id`, and `Ord`
 is the requested order.
 
+Destroying a session deletes only its `sessions` row; `event_streams` has no
+foreign key to `sessions`, so a session's stream and its `events` rows are
+never deleted. Recreating a session under the same name reuses that existing
+`event_streams` row (matched by the `session_name` unique index) rather than
+minting a new id, and `events.sequence` continues from its prior maximum
+rather than restarting at 1. A stream is therefore one continuous log across
+a destroy and a same-name recreate, not two distinct incarnations, so a
+`StreamID` mismatch is never the outcome of that cycle: `EventPage` and
+`EventStreamResume` correctly accept a cursor issued before the destroy.
+`StreamID` guards a genuinely different stream (a cursor meant for another
+session, or a future stream-reset path with no live producer today), not
+destroy/recreate.
+
 `EventPage` decodes only version-2 cursors, validates `Ord` and `StreamID`
 against the selected stream, and reads `sequence >= Off` in ascending order.
 Its next cursor has the exclusive position after the final scanned event. It
