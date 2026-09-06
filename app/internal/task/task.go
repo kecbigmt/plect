@@ -42,6 +42,10 @@ type Resolved struct {
 	Scope   string // canonical scope ("session" | "run")
 	Setup   *lang.Action
 	Cleanup *lang.Action
+	// Health is the task's own `[health]` table for a plain (non-nested)
+	// node. A nested node's liveness composes from Layers instead, so this
+	// is nil whenever len(Layers) > 0.
+	Health *config.HealthConfig
 	// Terminal is the task's declared `[terminal]` table, or nil for a task
 	// that owns no interactive endpoint. See config.TerminalConfig.
 	Terminal *config.TerminalConfig
@@ -283,6 +287,7 @@ func ResolveDefinition(def config.TaskDefinition, nodeID string) (Resolved, erro
 		Scope:          scope,
 		Setup:          def.Setup,
 		Cleanup:        def.Cleanup,
+		Health:         def.Health,
 		SourcePath:     def.SourcePath,
 		From:           def.Ownership(),
 		Terminal:       terminal,
@@ -627,19 +632,32 @@ func observerOr(o Observer) Observer {
 // Stops at the first failure; subsequent tasks in the slice are not run.
 //
 // RunSetup is idempotent: a task whose persisted state is already
-// "produced" is skipped, so lifecycle commands (create / up) can be safely
-// retried after a partial failure. Tasks in any other state (absent,
-// "failed", "cleaned") are re-run with a fresh setup attempt. Task authors
-// must make their setup scripts cope with this by verifying the desired
-// state rather than blindly recreating; see README "Task model" section.
+// "produced" is reused, not blindly skipped — its declared [health.alive]
+// runs first, and only a passing probe (or a noop declaration) skips it.
+// A failing probe invalidates the node: it and its produced dependents are
+// cleaned in reverse dependency order, and the walk rebuilds them from
+// there. This lets lifecycle commands (create / up) both retry a partial
+// failure and converge a produced record that no longer names anything
+// live. Tasks in any other state (absent, "failed", "cleaned") are re-run
+// with a fresh setup attempt. Task authors must make their setup scripts
+// cope with this by verifying the desired state rather than blindly
+// recreating; see README "Task model" section.
 func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, tasks map[string]*contract.TaskState, observer Observer) error {
 	obs := observerOr(observer)
 	terminalOwner := terminalOwnerIn(ordered)
 	for _, r := range ordered {
 		session = withFreshTerminalOutputs(session, terminalOwner, tasks)
 		if existing, ok := tasks[r.NodeID]; ok && existing != nil && existing.Status == contract.TaskStatusProduced {
-			obs.OnSkip(r.Scope, r.NodeID, "already produced")
-			continue
+			if aliveErr := verifyLiveness(goCtx, r, session, existing); aliveErr == nil {
+				obs.OnSkip(r.Scope, r.NodeID, "already produced")
+				continue
+			} else if invalidateErr := invalidateProducedNode(goCtx, r, ordered, aliveErr, session, tasks, obs); invalidateErr != nil {
+				return invalidateErr
+			}
+			// Falls through to the setup path below: r (and any dependent
+			// invalidateProducedNode cleaned) no longer reads "produced", so
+			// this iteration rebuilds r now and the walk rebuilds a cleaned
+			// dependent when it reaches that dependent's own turn.
 		}
 		obs.OnStart(r.Scope, r.NodeID)
 		now := time.Now()
