@@ -121,7 +121,8 @@ func TestEventsStreamJSON_ResumesBusFromDecodedCursor(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body would confirm since= assertion inside fakeBusJSON", resp.StatusCode)
 	}
-	_, _ = bufio.NewReader(resp.Body).ReadString('\n') // waits for the handler to write the first line
+	// Reading the first line synchronizes with the handler before gotResumeCursor is checked.
+	_, _ = bufio.NewReader(resp.Body).ReadString('\n')
 	if svc.gotResumeCursor != "some-opaque-token" {
 		t.Errorf("resume cursor = %q", svc.gotResumeCursor)
 	}

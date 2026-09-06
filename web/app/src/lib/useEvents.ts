@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 
 import { fetchEventPage, type SessionEvent, type SessionEventPage } from "@/lib/eventsApi";
@@ -57,10 +57,14 @@ export function useLiveEvents(sessionName: string | null, historyReady: boolean,
   const [liveEvents, setLiveEvents] = useState<SessionEvent[]>([]);
   const [state, setState] = useState<EventStreamState>("connecting");
   const [owner, setOwner] = useState(sessionName);
+  const controllerRef = useRef<AbortController | null>(null);
 
-  // Not an effect: an effect commits one render late, painting the previous
-  // session's state under the new one first.
+  // Aborts the previous session's connection here, not only in the effect
+  // cleanup below: that cleanup runs on the next passive-effect flush, after
+  // this render has already committed, leaving a window where an in-flight
+  // callback from the old connection could still reach these setters.
   if (sessionName !== owner) {
+    controllerRef.current?.abort();
     setOwner(sessionName);
     setLiveEvents([]);
     setState("connecting");
@@ -71,6 +75,7 @@ export function useLiveEvents(sessionName: string | null, historyReady: boolean,
       return;
     }
     const controller = new AbortController();
+    controllerRef.current = controller;
     openEventStream(
       sessionName,
       resumeCursor,
@@ -80,8 +85,8 @@ export function useLiveEvents(sessionName: string | null, historyReady: boolean,
             return;
           }
           setLiveEvents((prev) => (prev.some((e) => e.id === event.id) ? prev : [...prev, event]));
-          // Invalidated, not derived from the event, since not every state
-          // change emits one.
+          // Direct derivation would be incomplete: not every state change
+          // emits an event.
           queryClient.invalidateQueries({ queryKey: sessionDetailQueryKey(sessionName) });
           queryClient.invalidateQueries({ queryKey: sessionListQueryKey() });
         },

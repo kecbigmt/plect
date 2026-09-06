@@ -168,8 +168,8 @@ func (s *Server) Routes() http.Handler {
 	// (net/http's ServeMux routes the most specific match), so this still
 	// resolves here regardless of registration order.
 	mux.HandleFunc("GET /api/v1/bootstrap", s.handleBootstrap)
-	// The React shell's live timeline (events_stream_json.go): a sibling to
-	// GET /api/v1/events, not part of the generated contract.
+	// events_stream_json.go: generated contracts do not own SSE replay
+	// semantics, so this route is hand-written like the bootstrap one above.
 	mux.HandleFunc("GET /api/v1/events/stream", s.handleSessionEventsStreamJSON)
 
 	// Lifecycle mutations. A {name...} wildcard must be the final path segment,

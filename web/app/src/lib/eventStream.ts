@@ -1,16 +1,12 @@
 import type { SessionEvent } from "@/lib/eventsApi";
 
-// The live-timeline connection module (docs/design/web-ui-event-history.md's
-// "The live subscription" — see there for why this hand-rolls fetch() +
-// ReadableStream instead of using EventSource).
-//
-// Reconnect: full-jitter backoff, BACKOFF_INITIAL_MS (0.5s) doubling by
-// BACKOFF_FACTOR up to BACKOFF_MAX_MS (15s); the attempt budget resets once a
-// connection is actually accepted. After MAX_RECONNECT_ATTEMPTS (8)
-// consecutive failures to connect, this gives up and reports "unavailable"
-// rather than retrying forever silently — a caller that wants to keep trying
-// calls openEventStream again, which resets the budget. A 401 reports
-// "auth-expired" immediately with no retry.
+// Reconnect policy (docs/design/web-ui-event-history.md's "The live
+// subscription"):
+//   initial   BACKOFF_INITIAL_MS      0.5s
+//   factor    BACKOFF_FACTOR          x2 per attempt
+//   cap       BACKOFF_MAX_MS          15s
+//   give-up   MAX_RECONNECT_ATTEMPTS  8 consecutive failures -> "unavailable"
+// A 401 reports "auth-expired" immediately, with no retry.
 
 export const BACKOFF_INITIAL_MS = 500;
 export const BACKOFF_FACTOR = 2;
@@ -68,9 +64,7 @@ type ConnectOutcome = { kind: "aborted" } | { kind: "auth-expired" } | { kind: "
 function dispatchFrame(raw: string, onEvent: (event: SessionEvent) => void): void {
   try {
     onEvent(JSON.parse(raw) as SessionEvent);
-  } catch {
-    // dropped
-  }
+  } catch {}
 }
 
 async function connectOnce(

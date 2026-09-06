@@ -435,7 +435,7 @@ describe("Conversation", () => {
           ),
         );
       }
-      return Promise.resolve(jsonResponse({ events: [] })); // no nextCursor: no log exists yet
+      return Promise.resolve(jsonResponse({ events: [] }));
     });
 
     renderConversation("team/a");
