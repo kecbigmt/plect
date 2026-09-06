@@ -594,7 +594,7 @@ func TestReadFromStream_TraversesEveryIntermediateIncarnation(t *testing.T) {
 		t.Fatalf("append to stream 1: %v", err)
 	}
 
-	if _, err := store.NewStream(session); err != nil { // stream2: intermediate, gets its own event
+	if _, err := store.NewStream(session); err != nil {
 		t.Fatalf("new stream 2: %v", err)
 	}
 	if _, _, _, err := store.Append(event.Event{SessionName: session, Type: "user.note", Body: "s2", Direction: event.Internal}); err != nil {
@@ -608,9 +608,6 @@ func TestReadFromStream_TraversesEveryIntermediateIncarnation(t *testing.T) {
 		t.Fatalf("append to stream 3: %v", err)
 	}
 
-	// A caller that last read stream1 (past its one event) before both
-	// further rotations happened; both intermediate and current events must
-	// still arrive, in order, across repeated calls.
 	var got []string
 	streamID, cur := stream1, int64(2)
 	for i := 0; i < 6 && len(got) < 2; i++ {
@@ -643,7 +640,7 @@ func TestReadFromStream_EmptyIntermediateIncarnationDoesNotStopTheWalk(t *testin
 		t.Fatalf("append to stream 1: %v", err)
 	}
 
-	if _, err := store.NewStream(session); err != nil { // stream2: intermediate, never gets an event
+	if _, err := store.NewStream(session); err != nil {
 		t.Fatalf("new stream 2: %v", err)
 	}
 

@@ -115,8 +115,6 @@ func TestEventsStream_RelaysRenderedRows(t *testing.T) {
 	if !sawPing {
 		t.Error("keepalive comment was not forwarded to the browser")
 	}
-	// The bus's raw "id: 01GEN000:128" is re-encoded as an opaque v2 cursor,
-	// carrying the bus frame's own stream id, never a bare integer.
 	cur, err := event.DecodeCursor(gotID)
 	if err != nil {
 		t.Fatalf("resume id %q did not decode as an opaque cursor: %v", gotID, err)
@@ -136,8 +134,6 @@ func TestEventsStream_RawIntegerLastEventIDIsRejectedBeforeDialingBus(t *testing
 	var mu sync.Mutex
 	var gotCursors []string
 	svc := &fakeService{
-		// Stands in for service.EventStreamResume: rejects anything that
-		// isn't a decodable cursor, exactly as event.DecodeCursor would.
 		resumeFn: func(_, cursor string) (string, int64, error) {
 			mu.Lock()
 			gotCursors = append(gotCursors, cursor)

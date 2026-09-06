@@ -34,13 +34,7 @@ func startFakeChannelSocket(t *testing.T) (string, <-chan protocol.MessagePayloa
 	t.Cleanup(func() { ln.Close() })
 	recv := make(chan protocol.MessagePayload, 16)
 	go func() {
-		// unix_socket delivery dials a fresh connection per message and never
-		// waits for an ack, so the dispatcher's own send order is only
-		// observable here if this loop also reads each connection to
-		// completion before accepting the next: a goroutine per connection
-		// would let two accepted connections race to push to recv in
-		// whichever order their own reads happen to finish, independent of
-		// which was accepted (and thus sent) first.
+		// Reads each connection to completion before accepting the next: a goroutine per connection would let two race to push to recv out of send order.
 		for {
 			conn, err := ln.Accept()
 			if err != nil {

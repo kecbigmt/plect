@@ -25,13 +25,6 @@ func isolateMachineConfig(cfg *config.Config) {
 	cfg.Plugins = nil
 }
 
-// startEventBusRelay is a minimal bus that replays a session's events from
-// the real store over SSE, from an offset given by a "since" query parameter
-// (the bus's own "<streamID>:<seq>" resume-token format, see
-// event.EncodeResumeToken) — a stand-in for the real event bus daemon,
-// exercising the JSON relay layer (app/internal/webui/events_stream_json.go's
-// client side) and cursor decoding against a real service+eventlog stack,
-// not the bus's own fan-out.
 func startEventBusRelay(t *testing.T, cfg *config.Config, store *state.Store) *httptest.Server {
 	t.Helper()
 	bus := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -34,9 +34,6 @@ func testStore(t *testing.T) *state.Store {
 	return state.NewStore(t.TempDir())
 }
 
-// mustNewStream mints sessionName's event stream, matching what a real
-// session create does (createsetup.go), for a test that seeds state
-// directly via store.Put rather than through Create.
 func mustNewStream(t *testing.T, store *state.Store, sessionName string) {
 	t.Helper()
 	if _, err := eventlog.NewStore(store.Dir()).NewStream(sessionName); err != nil {

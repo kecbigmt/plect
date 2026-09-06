@@ -32,9 +32,6 @@ func TestEventsStreamJSON_RejectsInvalidCursor(t *testing.T) {
 	}
 }
 
-// fakeBusJSON mimics the bus's /v1/stream: it emits one frame whose id is the
-// bus's internal "<streamID>:<seq>" resume token. streamID defaults to
-// "01GEN000" when empty.
 func fakeBusJSON(t *testing.T, wantSince, streamID string) *httptest.Server {
 	t.Helper()
 	if streamID == "" {
