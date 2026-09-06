@@ -184,16 +184,20 @@ whole `state.json` file under `state.json.lock`
 (`app/internal/state/store.go`). SQLite replaces each callback with the
 following short transaction. No transaction contains an agent invocation,
 hook, workspace action, network call, terminal operation, or channel delivery.
+Every write transaction opens with `BEGIN IMMEDIATE` before reading rows. This
+reserves a write-capable SQLite snapshot for read-then-write callbacks;
+`busy_timeout` does not retry a deferred transaction's `SQLITE_BUSY_SNAPSHOT`
+upgrade.
 
 | Existing callback or append path | SQLite transaction | Behavioral contract |
 | --- | --- | --- |
 | `Put` | Upsert the session row, replace its task and completion rows, replace its population reference fields, and normalize the parent relation in one write transaction. | Preserves one durable checkpoint for the supplied session; it no longer rewrites unrelated sessions. |
 | `Update` | Read the named session and its task/completion rows, run the in-process callback, then write that session's changed rows in one write transaction. | Preserves read-modify-write atomicity and the missing-session error. The callback remains local and must not perform external work. |
 | `UpdatePopulation` | Read or create one population and its members, run the callback, then replace that population's members in one write transaction. | Preserves an atomic population snapshot without serializing unrelated sessions. |
-| `ReserveUpSlot` | Delete reservations whose recorded PID is no longer live, read the parent’s active children and reservations, enforce the cap, and insert the child reservation in one `BEGIN IMMEDIATE` transaction. | Preserves the live-holder rule and the rejection for an already-reserved child. |
+| `ReserveUpSlot` | Delete reservations whose recorded PID is no longer live, read the parent’s active children and reservations, enforce the cap, and insert the child reservation in one write transaction. | Preserves the live-holder rule and the rejection for an already-reserved child. |
 | `ReleaseUpSlot` | Delete the named reservation in one write transaction. | Remains idempotent and best-effort at its existing call sites. |
 | `Delete` | Delete the session, its tasks, completion state, reservations, and parent relation in one write transaction. | Preserves orphaning of children and preserves event history. Tombstone creation remains a separate step until the destroy path is deliberately made one database transaction. |
-| `eventlog.Store.Append` | Create the stream if absent, allocate sequence, and insert one event in one write transaction. | Preserves assigned ID/time, durable append, and per-session total order. |
+| `eventlog.Store.Append` | In one write transaction, create the stream if absent, read `NextEventSequence` from `MAX(sequence)`, and insert the event. | Preserves assigned ID/time, durable append, and per-session total order. |
 | `CommitCursor` | Upsert one consumer’s next sequence in one write transaction. | Preserves at-least-once dispatch and reactor restart behavior. |
 | `WriteTombstone` | Upsert one tombstone in one write transaction. | Preserves the fail-closed tombstone checkpoint. |
 
