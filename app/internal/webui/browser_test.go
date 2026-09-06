@@ -14,6 +14,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,8 +31,10 @@ import (
 // (startEventBusRelay, shared with the HTTP-level acceptance suite), and the
 // production Routes() — including the real, committed /app/ build — behind
 // an httptest server. cfg controls auth; pass &Config{} for the network-trust
-// default.
-func browserOrigin(t *testing.T, store *state.Store, cfg *Config) (string, *LiveService) {
+// default. Each middleware wraps the previous one, outermost first, so a
+// test can intercept a specific request (see blockFirstHistoryRequest)
+// before it reaches the real handler.
+func browserOrigin(t *testing.T, store *state.Store, cfg *Config, middleware ...func(http.Handler) http.Handler) (string, *LiveService) {
 	t.Helper()
 	svcCfg, err := config.Load()
 	if err != nil {
@@ -44,9 +48,48 @@ func browserOrigin(t *testing.T, store *state.Store, cfg *Config) (string, *Live
 	s.busClientFn = func() *event.Client {
 		return &event.Client{BaseURL: bus.URL, HTTP: http.DefaultClient}
 	}
-	srv := httptest.NewServer(s.Routes())
+	var h http.Handler = s.Routes()
+	for _, mw := range middleware {
+		h = mw(h)
+	}
+	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 	return srv.URL, svc
+}
+
+// blockFirstHistoryRequest returns a middleware that holds up the first
+// GET /api/v1/events?session=<session> request until release is called,
+// so a test can force that session's read to be genuinely in flight (not
+// merely hope it hasn't settled yet) at a chosen point. Only the first
+// matching request blocks; every later request for the same session (e.g.
+// after switching back to it) passes straight through.
+func blockFirstHistoryRequest(session string) (mw func(http.Handler) http.Handler, started <-chan struct{}, release func()) {
+	startedCh := make(chan struct{})
+	releaseCh := make(chan struct{})
+	var once sync.Once
+	mw = func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v1/events" && r.URL.Query().Get("session") == session {
+				blocked := false
+				once.Do(func() {
+					blocked = true
+					close(startedCh)
+				})
+				if blocked {
+					<-releaseCh
+				}
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+	release = func() {
+		select {
+		case <-releaseCh:
+		default:
+			close(releaseCh)
+		}
+	}
+	return mw, startedCh, release
 }
 
 func seedSession(t *testing.T, store *state.Store, sess *domain.Session) {
@@ -237,22 +280,46 @@ func TestBrowserAcceptance_ReconnectRecoversWithoutDuplicateOrGap(t *testing.T) 
 	}
 }
 
-// Given two unrelated sessions, each with their own recorded event,
-// When the browser switches from one to the other before settling,
-// Then the newly-selected session's own reading state is isolated: it never
-// shows the other session's content, and an event published to the
-// no-longer-selected session does not leak into the visible timeline.
-// Switching back restores that first session's own events.
+// Given a first session whose history read is deliberately held pending on
+// the server (blockFirstHistoryRequest), and a second, unrelated session,
+// When the browser switches to the second session while that read is still
+// in flight, and the first session's read is only then allowed to reach
+// the browser,
+// Then the second session's view never shows the first session's content —
+// neither before the pending read resolves nor once its late response
+// finally arrives — and an event published to the first session's
+// now-unselected stream does not leak in either. Switching back restores
+// the first session's own history, including what arrived while it was
+// unselected, and its prior scroll position.
 func TestBrowserAcceptance_SwitchingSessionsIsolatesPendingStream(t *testing.T) {
+	const scrollableEventCount = 30
 	store := state.NewStore(t.TempDir())
 	seedSession(t, store, &domain.Session{Name: "browser-switch-a"})
 	seedSession(t, store, &domain.Session{Name: "browser-switch-b"})
-	origin, svc := browserOrigin(t, store, &Config{})
-	publish(t, svc, "browser-switch-a", service.EventPublishParams{Type: event.TypeUserNote, Summary: "only-in-a"})
+
+	blockA, aRequestStarted, releaseA := blockFirstHistoryRequest("browser-switch-a")
+	origin, svc := browserOrigin(t, store, &Config{}, blockA)
+	for i := range scrollableEventCount {
+		publish(t, svc, "browser-switch-a", service.EventPublishParams{
+			Type: event.TypeUserNote, Summary: fmt.Sprintf("only-in-a-%02d", i),
+		})
+	}
 	publish(t, svc, "browser-switch-b", service.EventPublishParams{Type: event.TypeUserNote, Summary: "only-in-b"})
 
 	page := newBrowserPage(t)
 	errs := consoleErrors(t, page)
+
+	// A hard synchronization point on the network layer itself: once this
+	// fires, a's (late) response has actually reached the browser, not
+	// merely "probably already arrived by now".
+	aResponseReceived := make(chan struct{})
+	var aResponseOnce sync.Once
+	page.OnResponse(func(resp playwright.Response) {
+		if strings.Contains(resp.URL(), "/api/v1/events?") && strings.Contains(resp.URL(), "session=browser-switch-a") {
+			aResponseOnce.Do(func() { close(aResponseReceived) })
+		}
+	})
+
 	if _, err := page.Goto(origin + "/app/"); err != nil {
 		t.Fatalf("goto /app/: %v", err)
 	}
@@ -260,15 +327,39 @@ func TestBrowserAcceptance_SwitchingSessionsIsolatesPendingStream(t *testing.T) 
 	if err := page.GetByRole("treeitem", playwright.PageGetByRoleOptions{Name: "browser-switch-a"}).Click(); err != nil {
 		t.Fatalf("select a: %v", err)
 	}
-	if err := page.GetByRole("treeitem", playwright.PageGetByRoleOptions{Name: "browser-switch-b"}).Click(); err != nil {
-		t.Fatalf("select b before a settles: %v", err)
+	select {
+	case <-aRequestStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a's history request never reached the server")
 	}
 
+	if err := page.GetByRole("treeitem", playwright.PageGetByRoleOptions{Name: "browser-switch-b"}).Click(); err != nil {
+		t.Fatalf("select b while a's read is still genuinely pending: %v", err)
+	}
 	if err := expect.Locator(page.GetByText("only-in-b")).ToBeVisible(); err != nil {
 		t.Fatalf("b's own event should render: %v", err)
 	}
-	if err := expect.Locator(page.GetByText("only-in-a")).Not().ToBeVisible(); err != nil {
-		t.Fatalf("switching away from a before it settled must not leak a's content into b's view: %v", err)
+	if err := expect.Locator(page.GetByText("only-in-a-00")).Not().ToBeVisible(); err != nil {
+		t.Fatalf("switching away from a while its read is pending must not leak a's content into b's view: %v", err)
+	}
+
+	releaseA()
+	select {
+	case <-aResponseReceived:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a's released response never reached the browser")
+	}
+	// Force the event loop past whatever a's now-arrived (but abandoned)
+	// response scheduled, using a positive assertion as the fence: this
+	// marker is delivered through b's own live subscription, which shares
+	// the same JS task queue, so waiting for it to render only succeeds
+	// after a's late response has already been handled one way or another.
+	publish(t, svc, "browser-switch-b", service.EventPublishParams{Type: event.TypeUserNote, Summary: "b-marker-after-late-a-response"})
+	if err := expect.Locator(page.GetByText("b-marker-after-late-a-response")).ToBeVisible(); err != nil {
+		t.Fatalf("b's live marker should still arrive normally: %v", err)
+	}
+	if err := expect.Locator(page.GetByText("only-in-a-00")).Not().ToBeVisible(); err != nil {
+		t.Fatalf("a's late, released history response must not leak into b's now-settled view: %v", err)
 	}
 
 	publish(t, svc, "browser-switch-a", service.EventPublishParams{Type: event.TypeUserNote, Summary: "published-to-a-while-viewing-b"})
@@ -279,12 +370,49 @@ func TestBrowserAcceptance_SwitchingSessionsIsolatesPendingStream(t *testing.T) 
 	if err := page.GetByRole("treeitem", playwright.PageGetByRoleOptions{Name: "browser-switch-a"}).Click(); err != nil {
 		t.Fatalf("switch back to a: %v", err)
 	}
-	if err := expect.Locator(page.GetByText("only-in-a")).ToBeVisible(); err != nil {
+	conversation := page.GetByRole("region", playwright.PageGetByRoleOptions{Name: "Conversation"})
+	lastAEvent := fmt.Sprintf("only-in-a-%02d", scrollableEventCount-1)
+	if err := expect.Locator(conversation.GetByText(lastAEvent)).ToBeVisible(); err != nil {
 		t.Fatalf("a's own history should still be there after switching back: %v", err)
 	}
-	if err := expect.Locator(page.GetByText("published-to-a-while-viewing-b")).ToBeVisible(); err != nil {
+	if err := expect.Locator(conversation.GetByText("published-to-a-while-viewing-b")).ToBeVisible(); err != nil {
 		t.Fatalf("a's event published while it was unselected should show up once a is reselected: %v", err)
 	}
+
+	// Scroll-state restoration (docs/design/web-ui.md's shared-details
+	// contract): scroll a's conversation, switch away and back, and confirm
+	// the reading position survived the round trip. The scroll event is
+	// dispatched explicitly (native "scroll" events do not bubble, so
+	// setting scrollTop alone is not guaranteed to invoke Conversation.tsx's
+	// onScroll handler before the next line runs).
+	if _, err := conversation.Evaluate(`el => { el.scrollTop = el.scrollHeight; el.dispatchEvent(new Event("scroll")); }`, nil); err != nil {
+		t.Fatalf("scroll a's conversation: %v", err)
+	}
+	scrollBefore, err := conversation.Evaluate("el => el.scrollTop", nil)
+	if err != nil {
+		t.Fatalf("read scrollTop before switching away: %v", err)
+	}
+	if fmt.Sprint(scrollBefore) == "0" {
+		t.Fatal("test setup did not produce a scrollable conversation; seed more events")
+	}
+
+	if err := page.GetByRole("treeitem", playwright.PageGetByRoleOptions{Name: "browser-switch-b"}).Click(); err != nil {
+		t.Fatalf("switch away from a again: %v", err)
+	}
+	if err := page.GetByRole("treeitem", playwright.PageGetByRoleOptions{Name: "browser-switch-a"}).Click(); err != nil {
+		t.Fatalf("switch back to a again: %v", err)
+	}
+	if err := expect.Locator(conversation.GetByText(lastAEvent)).ToBeVisible(); err != nil {
+		t.Fatalf("a's history should render again after the second switch back: %v", err)
+	}
+	scrollAfter, err := conversation.Evaluate("el => el.scrollTop", nil)
+	if err != nil {
+		t.Fatalf("read scrollTop after switching back: %v", err)
+	}
+	if fmt.Sprint(scrollAfter) != fmt.Sprint(scrollBefore) {
+		t.Fatalf("scroll position not restored across the switch: before=%v after=%v", scrollBefore, scrollAfter)
+	}
+
 	requireNoConsoleErrors(t, errs)
 }
 

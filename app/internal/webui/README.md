@@ -173,45 +173,57 @@ sessions. This is the real-runtime procedure referenced from this
 milestone's PR body; it needs an operator with a real `plect-web` deployment
 to run and observe, and cannot be automated as a CI check.
 
-1. **Build and run** against real state:
+1. **Generate a local auth token and config**, so the sign-in step below is
+   actually exercised rather than skipped (network trust with no
+   `auth_token` is the default, but this milestone's login criterion needs
+   the gated path). This file lives outside the repo and is never committed:
+   ```bash
+   mkdir -p ~/.config/plect-web
+   token="$(openssl rand -hex 32)"
+   cat > ~/.config/plect-web/config.toml <<TOML
+   auth_token = "$token"
+   TOML
+   printf 'auth_token: %s\n' "$token"   # sign in with this value in step 2
+   ```
+2. **Build and run** against real state — `plect-web` picks up the
+   `config.toml` written above automatically:
    ```bash
    go build -o /tmp/plect-web ./app/cmd/plect-web
-   /tmp/plect-web --host 127.0.0.1 --port 8787   # loopback, no auth_token: default
+   /tmp/plect-web --host 127.0.0.1 --port 8787
    ```
-2. **Sign in.** If `~/.config/plect-web/config.toml` sets `auth_token`,
-   navigate to `http://127.0.0.1:8787/app/`, confirm the redirect to
-   `/login`, sign in, and confirm landing back on `/app/`. Never commit a
-   real `auth_token` — keep it in a local, gitignored `config.toml` or an
-   env-file the operator manages outside this repo.
-3. **Hierarchy and detail.** Confirm the real session tree renders,
+3. **Sign in.** Navigate to `http://127.0.0.1:8787/app/`, confirm the
+   redirect to `/login`, sign in with the token step 1 printed, and confirm
+   landing back on `/app/`.
+4. **Hierarchy and detail.** Confirm the real session tree renders,
    expand/collapse a parent with children, select a session with a real
    `resource_id`/branch, open Details, and confirm the resource renders as
    a link (HTTP(S)) or copyable text (everything else).
-4. **History and live update.** Open a session with recorded history,
+5. **History and live update.** Open a session with recorded history,
    confirm it renders, then from another terminal publish a real event
    (`plect event publish <session> --type user.emit --summary "smoke test"`)
    and confirm it appears without a page reload.
-5. **Interrupt and recover.** While a session's conversation is open,
+6. **Interrupt and recover.** While a session's conversation is open,
    disconnect the host's network (or block the port), publish another event
    from a machine that still has state-store access, reconnect, and confirm
    the event appears exactly once with no gap in what was already shown.
-6. **Switch sessions.** Select a session, then before it finishes loading
+7. **Switch sessions.** Select a session, then before it finishes loading
    select a different one; confirm no cross-session content leaks, then
-   switch back and confirm the first session's reading position and
-   selection are unchanged.
-7. **VPN access.** Bind to the host's private network address
-   (`--host <vpn-ip> --port <port>`, with `auth_token` set) and confirm a
-   second device on that network can sign in and reach the same milestone.
-   Never commit the actual VPN address or token used for this check.
-8. **Keyboard and narrow layout.** Tab into the session tree, drive it with
+   switch back and confirm the first session's reading position (scroll
+   offset) and selection are unchanged.
+8. **VPN access.** Bind to the host's private network address
+   (`--host <vpn-ip> --port <port>`, reusing the same `config.toml` from
+   step 1) and confirm a second device on that network can sign in and
+   reach the same milestone. Never commit the actual VPN address used for
+   this check.
+9. **Keyboard and narrow layout.** Tab into the session tree, drive it with
    arrow keys/Home/End/Enter, and confirm visible focus rings throughout.
    Resize the browser (or use a phone on the VPN) to a narrow width and
    confirm the sidebar and detail pane become overlays, not persistent
    columns.
-9. **Dense tree / long timeline.** Against a real deployment with many
-   sessions or a long-running session's history, confirm the tree and
-   timeline remain usable (no visible hang, no missing rows) rather than
-   only ever exercising the small fixtures above.
+10. **Dense tree / long timeline.** Against a real deployment with many
+    sessions or a long-running session's history, confirm the tree and
+    timeline remain usable (no visible hang, no missing rows) rather than
+    only ever exercising the small fixtures above.
 
 This procedure has no automated pass/fail signal; each step's expected
 observation is stated so it can be followed without this repository's issue
