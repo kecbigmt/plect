@@ -127,7 +127,8 @@ Pin tool versions and the Community Edition distribution explicitly. Normal
 builds consume committed generated code; users do not need Atlas or sqlc.
 The workflow must run without Atlas login, cloud services, or proprietary
 features. Use a SQLite in-memory development database for planning; no
-container service is required. Do not depend on CE-excluded objects such as views or triggers
+container service is required. Do not depend on CE-excluded objects such as
+views or triggers
 without revisiting how their declarations remain under the same authority.
 
 CI verifies reproducible generation and that applying the migration history
@@ -164,8 +165,9 @@ of a conversion; migration tests must establish that meaning.
 The JSON/JSONL-to-SQLite transition is a one-time import with stopped writers,
 a coherent backup, validation, and an explicit cutover. Preserve identity,
 event ordering, consumer progress, generation/tombstone semantics, and dynamic
-values. Translate file-offset cursors deliberately rather than treating them
-as database row identifiers. Do not retain permanent dual writes or silently
+values. Translate server-held file-offset cursors deliberately rather than
+treating them as database row identifiers. Do not retain permanent dual
+writes or silently
 fall back to the old files after cutover. Account for old binaries that still
 understand only the legacy layout. Leaving `state.json` absent is insufficient:
 legacy code treats absence as a fresh store. The cutover procedure must leave
@@ -175,6 +177,14 @@ That marker contains no live state and is not a fallback store. Because some
 legacy read paths suppress errors, verify startup and mutation behavior, not
 just the header parser, and document which older versions are outside the
 supported upgrade path.
+
+Client-held pagination and stream-resume cursors are invalidated at cutover,
+not translated by the importer. Bump `contracts/event.CursorVersion` and
+reject pre-cutover raw byte-offset SSE IDs rather than interpreting them as
+SQLite positions. Clients discard expired cursors and refetch according to
+[the event-history recovery contract](../design/web-ui-event-history.md).
+Verify reconnection from a browser left open across the upgrade, including
+that an invalid `Last-Event-ID` cannot silently become a valid position.
 
 Follow the repository's pre-1.0 policy: document the supported upgrade path,
 backup, and recovery procedure in `docs/migrations/` in the same change that
@@ -187,8 +197,9 @@ application, and declaration equivalence. Exercise old-data upgrades,
 interrupted migrations and restart, concurrent startup/migration exclusion,
 unsupported-version rejection, and the initial import. Include the actual
 SQLite JSON expressions in the sqlc/Atlas compatibility checks. Characterize
-existing update callbacks before moving them into database transactions. Exact lock mechanics,
-the migration command/startup interaction, and table layout require a focused
+existing update callbacks before moving them into database transactions.
+Exact lock mechanics, the migration command/startup interaction, and table
+layout require a focused
 implementation design; they are not implied by selecting SQLite.
 
 ## Consequences
@@ -236,7 +247,7 @@ event logs and sidecars otherwise retain their own locking, lifecycle,
 backup, and recovery rules. `ListAcross` already reads and merges multiple
 session logs for cross-session history. One database allows related event and
 consumption metadata to migrate together and permits atomic state/event
-updates where existing service operations require them. This is a maintenance
+updates where a service operation later requires them. This is a maintenance
 tradeoff, not evidence of a present query bottleneck or a claim that every
 state change must produce an event. The import and cursor-validation cost is
 materially higher; combined storage is justified by removing the old event
