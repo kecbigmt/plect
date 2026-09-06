@@ -10,6 +10,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { Sidebar } from "@/components/shell/Sidebar";
 import { DetailPane } from "@/components/shell/DetailPane";
 import { SessionHeader } from "@/components/session/SessionHeader";
+import { Conversation } from "@/components/session/Conversation";
 
 // Narrower than this, the sidebar and detail pane move into an overlay
 // instead of a persistent column (docs/design/web-ui.md: "Narrow screens use
@@ -108,9 +109,12 @@ export function AppShell({ bootstrap }: { bootstrap: BootstrapInfo }) {
         {isWide && (
           <aside className="w-56 shrink-0 border-r border-border">{sidebar}</aside>
         )}
-        <main className="flex min-w-0 flex-1 flex-col overflow-auto">
+        <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
           {selectedName ? (
-            <SessionHeader sessionName={selectedName} onOpenDetails={() => setDetailOpen(true)} />
+            <>
+              <SessionHeader sessionName={selectedName} onOpenDetails={() => setDetailOpen(true)} />
+              <Conversation sessionName={selectedName} onSelectSession={selectSession} />
+            </>
           ) : (
             <p className="p-4 text-sm text-muted-foreground">Select a session to view it.</p>
           )}
