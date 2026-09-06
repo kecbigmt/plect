@@ -52,16 +52,41 @@ incomplete run, and record what happened to each node attempt.
 It already observes the effect's own outputs, resolved inputs, session, and
 workspace, and exit zero already means that its owned surface is present. At
 `plect up`, core runs that action for every produced node, including a
-session-scoped node that does not participate in the periodic run health
-composition. A non-zero exit, an unresolved required value, timeout, or invalid
-action configuration means that node cannot be reused.
+session-scoped node. A non-zero exit, an unresolved required value, timeout,
+or invalid action configuration means that node cannot be reused.
 
-The ordinary health cycle executes probes only for produced run-scoped nodes,
-but it also inspects every current-plan run-scoped task record for failed or
-missing nodes. It reports a liveness or structural failure but never repairs it
-automatically. Repair occurs only during an explicit `plect up`; this avoids
-making a periodic observation cycle mutate external resources or retry a
-provider action without operator or workflow intent.
+Plan health has a terminal evaluation boundary. While `plect up` is walking a
+plan, it does not evaluate nodes that the walk has not reached as missing:
+those nodes are pending setup, not unhealthy. During that interval status keeps
+the last completed health result and the health cycle neither publishes a new
+verdict nor escalates it. Core evaluates the frozen plan only after the `up`
+attempt returns.
+
+After a successful `up`, every planned node has completed setup and health
+evaluates its produced entries. After an aborted `up`, the failed entry and
+every unattempted current-plan entry are structural failures, so the completed
+attempt reports `unhealthy` with the first such node named. `run` remains
+binary: an aborted attempt with a produced run-scoped prefix reads `up` with
+`unhealthy` health; one that produces no run-scoped node reads `down` with
+`unhealthy` health in status. The periodic health cycle remains gated on
+`run = up`, so the latter has no health escalation until a later successful
+`up` produces a run surface.
+
+For a completed run that is up, the ordinary health cycle executes liveness
+probes for produced nodes of either scope and inspects every current-plan task
+record for failed or missing nodes. It reports a liveness or structural failure
+but never repairs it automatically. Repair occurs only during an explicit
+`plect up`; this avoids making a periodic observation cycle mutate external
+resources or retry a provider action without operator or workflow intent.
+
+The migration adds `[health].alive` to `gh_app_guard`, `slack_subscribe`,
+`gh_guard`, and `worktree`. Once their session is up, each participates in the
+same plan health evaluation even where its own scope is `session`. Losing one
+therefore produces the ordinary `health.unhealthy` escalation to the nearest
+live parent, with the failing effect named. The next `plect up` observes the
+failed liveness check, reconstructs the affected node and its dependents, and
+clears the condition after the rebuilt plan passes health. A health sweep only
+reports and escalates; it never runs cleanup or setup to repair the effect.
 
 ```toml
 [gh_app_guard]
@@ -158,7 +183,7 @@ consider one.
 |---|---|---|
 | Do not build this | prompt | Rejected. Dispatchers would keep reconstructing partial failure by comparing task maps against workflow plans. |
 | Add `degraded` to the run state | core | Rejected. It changes a binary capacity signal into a tri-state value and makes every current run consumer decide whether `degraded` is up-like. |
-| Compose health over the current plan | core | Recommended. Health can name a failed or missing node, while `run` keeps its capacity meaning. |
+| Compose health over the completed current plan | core | Recommended. Health can name a failed or missing node, while `run` keeps its capacity meaning. |
 
 #### Recommendation
 
@@ -168,22 +193,23 @@ consider one.
 `down`. This keeps `run` as the capacity and cleanup signal consumed by child
 capacity, population presence, and `plect down`.
 
-Health composes over every current-plan run-scoped node rather than only the
-produced subset. A produced node evaluates its declared `alive` probe in the
-ordinary way. A failed or missing node makes the session `unhealthy` directly,
-with a reason naming the node and its failed dependency or setup error. That
-rule also covers a failed `reuse = "record"` node, which has no existence probe
-to run. Activity continues to compose from produced instances only.
+Health composes over every current-plan node, not only the produced subset or
+the run-scoped subset. A produced node evaluates its declared `alive` probe in
+the ordinary way. A failed or missing node makes the session `unhealthy`
+directly, with a reason naming the node and its failed dependency or setup
+error. That rule also covers a failed `reuse = "record"` node, which has no
+existence probe to run. Activity continues to compose from produced run-scoped
+instances only.
 
 A stale task entry for a node no longer in the workflow contributes to neither
-run nor health; stale-node cleanup owns that lifecycle. A failed session-scoped
-node blocks create or repair, but it does not itself change the run-scoped
-health report.
+run nor health; stale-node cleanup owns that lifecycle. A failed or missing
+session-scoped node changes the completed plan health report, but not the
+binary run state.
 
 `plect ls --json` keeps its existing binary `run` value and reports the
-incomplete run through `health`; the health report's `Reason` names the failed
+incomplete plan through `health`; the health report's `Reason` names the failed
 or missing node. The human table likewise reports `up` with `unhealthy` when a
-produced prefix is missing a required run-scoped node.
+produced prefix is missing a required node of either scope.
 
 ```json
 [
@@ -422,10 +448,11 @@ configuration-language change. The one-time migration is:
    changed plugins.
 
 `plect ls --json` consumers retain the existing binary `run` enum. Health
-reports now name failed or missing current-plan run nodes. A session whose plan
-cannot be resolved retains its derived run state from task records and reports
-the plan-resolution error as health evaluation failure for that session; one
-broken workflow does not prevent other sessions from being listed.
+reports now name failed or missing completed current-plan nodes. It never
+interprets not-yet-attempted nodes during an active `up` as missing. A session
+whose plan cannot be resolved retains its derived run state from task records
+and reports the plan-resolution error as health evaluation failure for that
+session; one broken workflow does not prevent other sessions from being listed.
 
 Node-result events make setup progress and failure visible to session
 channels, event subscribers, and population-produced sessions without changing
@@ -450,11 +477,15 @@ after owner ratification.
 
 ### Add a separate validity mechanism
 
-Rejected. The shipped setup-bearing effects do not demonstrate a reuse
-condition stricter than liveness. A second probe would duplicate existing
-`[health].alive` actions for run-scoped surfaces and add a new lifecycle member
-without a concrete consumer. Session-scoped effects use the same probe at
-`plect up` without joining periodic run health.
+Rejected. The shipped catalog has 14 setup-bearing effects. Four already
+declare `alive`: `pane`, `runtime`, `codex`, and `exec_runtime`. The migration
+classifies the other ten without a third case: `gh_app_guard`,
+`slack_subscribe`, `gh_guard`, and `worktree` gain `alive`; `thread_workspace`,
+`codex_initial_prompt`, `claude_initial_prompt`, `slack_thread`,
+`local_okf`, and `goal_bootstrap` declare `reuse = "record"`. No effect has a
+reuse condition stricter than liveness. A `valid` action would therefore
+duplicate an existing liveness probe or be unused, adding a lifecycle member
+without a concrete consumer.
 
 ### Store liveness as a second durable truth
 
@@ -486,7 +517,7 @@ is the lifecycle unit, so the event is node-scoped.
 
 ### Let workflows declare custom incomplete-health rules
 
-Rejected. A failed or missing current-plan run node is a core health fact.
+Rejected. A failed or missing current-plan node is a core health fact.
 Letting workflows redefine it would put two authorities behind the health
 report and force dispatchers to re-learn each workflow's private meaning.
 
