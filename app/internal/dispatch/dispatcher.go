@@ -66,14 +66,18 @@ func (d *sessionDispatcher) run(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		s := d.state.Get(d.session)
-		if s == nil {
+		s, err := d.state.GetE(d.session)
+		if err != nil {
+			// An unreadable store must never read as "destroyed": that would
+			// permanently exit this loop (nothing restarts it) instead of
+			// retrying once the store recovers.
+			slog.Default().Error("dispatcher: read session state failed", "session", d.session, "error", err)
+		} else if s == nil {
 			return // destroyed
-		}
-		// Skip (don't exit) while run scope is down so a fast down/up resumes
-		// without the supervisor and this goroutine desyncing; the supervisor
-		// owns teardown.
-		if d.cfg.RunScopeUp(s) {
+		} else if d.cfg.RunScopeUp(s) {
+			// Skip (don't exit) while run scope is down so a fast down/up
+			// resumes without the supervisor and this goroutine desyncing;
+			// the supervisor owns teardown.
 			d.drain(ctx, s, &startGen)
 		}
 		select {

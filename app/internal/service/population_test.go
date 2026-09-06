@@ -8,8 +8,24 @@ import (
 	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/domain"
+	"github.com/kecbigmt/plecture/app/internal/state"
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
+
+// seedPopulationRowForTest upserts an empty population row so a test can
+// Up a session referencing it directly (sessions.population_workflow/name
+// FK), matching production's own order where the engine always creates the
+// population before admitting a session into it.
+func seedPopulationRowForTest(t *testing.T, store *state.Store, p *contract.PopulationProvenance) {
+	t.Helper()
+	if err := store.UpdatePopulation(p.Workflow+"/"+p.Name, func(population *state.PopulationState) error {
+		population.Workflow = p.Workflow
+		population.Name = p.Name
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestUpPopulationProvenanceCannotAdoptAnExistingSession(t *testing.T) {
 	store := testStore(t)
@@ -20,6 +36,7 @@ func TestUpPopulationProvenanceCannotAdoptAnExistingSession(t *testing.T) {
 	writeSetupWorkflow(t, cfg, "agent", capProviderCreatingWorkspace("agent", workdir))
 	resource := "https://example.test/cases/owned"
 	owner := &contract.PopulationProvenance{Workflow: "agent", Name: "first"}
+	seedPopulationRowForTest(t, store, owner)
 	result, err := Up(cfg, store, UpParams{Identifier: resource, Workflow: "agent", Population: owner})
 	if err != nil {
 		t.Fatalf("first Up: %v", err)
@@ -46,6 +63,7 @@ func TestChainStyleDispatchCannotAdoptAPopulationSession(t *testing.T) {
 	writeSetupWorkflow(t, cfg, "agent", capProviderCreatingWorkspace("agent", workdir))
 	resource := "https://example.test/cases/owned"
 	owner := &contract.PopulationProvenance{Workflow: "agent", Name: "dispatch"}
+	seedPopulationRowForTest(t, store, owner)
 	if _, err := Up(cfg, store, UpParams{Identifier: resource, Workflow: "agent", Population: owner}); err != nil {
 		t.Fatalf("population Up: %v", err)
 	}

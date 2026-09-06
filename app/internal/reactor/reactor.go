@@ -124,11 +124,16 @@ func (r *sessionReactor) run(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		s := r.state.Get(r.session)
-		if s == nil {
+		s, err := r.state.GetE(r.session)
+		if err != nil {
+			// An unreadable store must never read as "destroyed": that would
+			// permanently exit this loop (nothing restarts it) instead of
+			// retrying once the store recovers. Log and keep the loop alive
+			// to try again on the next wake/tick.
+			r.logger.Error("reactor: read session state failed", "session", r.session, "error", err)
+		} else if s == nil {
 			return // destroyed
-		}
-		if r.cfg.RunScopeUp(s) {
+		} else if r.cfg.RunScopeUp(s) {
 			r.drain(ctx, &startGen)
 		}
 		select {
@@ -279,7 +284,11 @@ func (r *sessionReactor) refreshTickConfig() {
 		return
 	}
 	cfg := r.cfgFn()
-	s := r.state.Get(r.session)
+	s, err := r.state.GetE(r.session)
+	if err != nil {
+		slog.Default().Warn("reactor: read session state failed; keeping the previous [tick] declaration", "session", r.session, "error", err)
+		return
+	}
 	if cfg == nil || s == nil {
 		return
 	}
@@ -312,7 +321,11 @@ func (r *sessionReactor) checkHeartbeat(ctx context.Context) {
 	if r.tick.Heartbeat.Duration <= 0 {
 		return
 	}
-	s := r.state.Get(r.session)
+	s, err := r.state.GetE(r.session)
+	if err != nil {
+		slog.Default().Warn("reactor: read session state failed; skipping this heartbeat sweep", "session", r.session, "error", err)
+		return
+	}
 	if s == nil || !r.cfg.RunScopeUp(s) {
 		return
 	}
@@ -341,7 +354,11 @@ func (r *sessionReactor) checkHealth(ctx context.Context) {
 	if ctx.Err() != nil {
 		return
 	}
-	s := r.state.Get(r.session)
+	s, err := r.state.GetE(r.session)
+	if err != nil {
+		slog.Default().Warn("reactor: read session state failed; skipping this healthcheck sweep", "session", r.session, "error", err)
+		return
+	}
 	if s == nil || !r.cfg.RunScopeUp(s) {
 		return
 	}
@@ -362,7 +379,11 @@ func (r *sessionReactor) checkChannelHealth(ctx context.Context) {
 	if ctx.Err() != nil {
 		return
 	}
-	s := r.state.Get(r.session)
+	s, err := r.state.GetE(r.session)
+	if err != nil {
+		slog.Default().Warn("reactor: read session state failed; skipping this channel-health sweep", "session", r.session, "error", err)
+		return
+	}
 	if s == nil || !r.cfg.RunScopeUp(s) {
 		return
 	}
@@ -408,14 +429,24 @@ func (r *sessionReactor) updateBackoff(ctx context.Context) {
 }
 
 func (r *sessionReactor) lastFingerprint() string {
-	if s := r.state.Get(r.session); s != nil && s.TickBackoff != nil {
+	s, err := r.state.GetE(r.session)
+	if err != nil {
+		slog.Default().Warn("reactor: read session state failed; treating last fingerprint as unset", "session", r.session, "error", err)
+		return ""
+	}
+	if s != nil && s.TickBackoff != nil {
 		return s.TickBackoff.LastFingerprint
 	}
 	return ""
 }
 
 func (r *sessionReactor) lastLogPosition() int64 {
-	if s := r.state.Get(r.session); s != nil && s.TickBackoff != nil {
+	s, err := r.state.GetE(r.session)
+	if err != nil {
+		slog.Default().Warn("reactor: read session state failed; treating last log position as unset", "session", r.session, "error", err)
+		return 0
+	}
+	if s != nil && s.TickBackoff != nil {
 		return s.TickBackoff.LastLogPosition
 	}
 	return 0

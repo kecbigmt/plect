@@ -27,15 +27,21 @@ func serviceHooks(cfg func() *config.Config, store *state.Store, def Definition,
 			return upPopulation(cfg, store, def, provenance, resource, inputs)
 		},
 		Destroy: func(_ context.Context, session, resource string, force bool) error {
-			current := store.Get(session)
+			current, err := store.GetE(session)
+			if err != nil {
+				return fmt.Errorf("read session %q state: %w", session, err)
+			}
 			if current == nil || current.Population == nil || *current.Population != *provenance || current.ResourceID != resource {
 				return &populationConflictError{session: session, reason: fmt.Sprintf("session %q no longer has matching workflow-population provenance", session)}
 			}
-			_, err := service.Destroy(cfg(), store, service.DestroyParams{Identifier: session, Force: force})
+			_, err = service.Destroy(cfg(), store, service.DestroyParams{Identifier: session, Force: force})
 			return err
 		},
 		EnsureInitial: func(_ context.Context, session, taskID, resource string) error {
-			current := store.Get(session)
+			current, err := store.GetE(session)
+			if err != nil {
+				return fmt.Errorf("read session %q state: %w", session, err)
+			}
 			if current == nil {
 				return fmt.Errorf("session %q disappeared before initial task setup", session)
 			}
@@ -48,7 +54,7 @@ func serviceHooks(cfg func() *config.Config, store *state.Store, def Definition,
 				}
 				return fmt.Errorf("session %q initial task is %q; clean it before population setup can retry", session, existing.Status)
 			}
-			_, err := service.TaskSetup(cfg(), store, service.TaskSetupParams{
+			_, err = service.TaskSetup(cfg(), store, service.TaskSetupParams{
 				TaskID: taskID, SessionName: session, Name: "initial", Resource: resource,
 			})
 			return err
@@ -64,7 +70,11 @@ func upPopulation(cfg func() *config.Config, store *state.Store, def Definition,
 	if err != nil {
 		return UpOutcome{}, err
 	}
-	if current := store.Get(name); current != nil {
+	current, err := store.GetE(name)
+	if err != nil {
+		return UpOutcome{}, fmt.Errorf("read session %q state: %w", name, err)
+	}
+	if current != nil {
 		if current.Population == nil || *current.Population != *provenance || current.ResourceID != resource {
 			return UpOutcome{}, &populationConflictError{session: name, reason: fmt.Sprintf("session %q is owned by another lifecycle authority", name)}
 		}

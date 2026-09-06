@@ -522,7 +522,7 @@ func SetConversation(cfg *config.Config, store *state.Store, identifier string, 
 // SetMessage updates the session-level self-reported status message. An empty
 // text unsets it (Session.Message becomes nil) rather than persisting a
 // blank, since a blank line would look identical to "message never set" in
-// display but consume an object in state.json.
+// display but consume a stored object.
 func SetMessage(cfg *config.Config, store *state.Store, identifier string, text string) error {
 	sessionName, session, err := resolveSession(cfg, store, identifier)
 	if err != nil {

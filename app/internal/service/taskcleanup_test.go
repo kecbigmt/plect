@@ -160,15 +160,18 @@ func TestTaskCleanup_ReclaimsRegardlessOfTaskID(t *testing.T) {
 // When the cleanup script fails, TaskCleanup persists the failed status so
 // it's inspectable for retry. If that persist itself fails, the error must
 // not be discarded — it's the only sign the failed status never landed.
-// The cleanup script corrupts state.json itself before exiting non-zero, so
+// The cleanup script deletes the session itself before exiting non-zero, so
 // the persist attempted right after the (already-successful) session lookup
 // is what fails.
 func TestTaskCleanup_JoinsPersistFailureWithCleanupFailure(t *testing.T) {
 	store := testStore(t)
-	statePath := filepath.Join(store.Dir(), "state.json")
+	t.Setenv("PLECT_SERVICE_DELETE_SESSION_HELPER", "1")
+	// The cleanup script deletes the session out from under the pending
+	// persist (simulating a racing `plect destroy`) and fails itself, so
+	// both failures must be joined into the returned error.
 	cfg := writeWorkflowFixture(t, t.TempDir(), "coding",
 		[]taskFixture{{id: "work", scope: "session", setup: `echo '{}'`,
-			cleanup: "printf '{not valid json' > " + statePath + " && exit 1"}},
+			cleanup: deleteSessionCommand(store.Dir(), "o/r-1") + " && exit 1"}},
 		[]nodeFixture{{id: "work"}},
 	)
 	seedSession(t, store, "o/r-1", "o/r", 1, "coding", map[string]*contract.TaskState{})
@@ -181,8 +184,11 @@ func TestTaskCleanup_JoinsPersistFailureWithCleanupFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error: the cleanup script fails and the post-failure persist also fails")
 	}
-	if !strings.Contains(err.Error(), "state:") {
-		t.Errorf("expected the persist failure to be joined into the returned error, got: %s", err.Error())
+	if !strings.Contains(err.Error(), "exit status 1") {
+		t.Errorf("expected the cleanup script's own failure in the joined error, got: %s", err.Error())
+	}
+	if !strings.Contains(err.Error(), "no state entry") {
+		t.Errorf("expected the persist failure (session deleted concurrently) to be joined into the returned error, got: %s", err.Error())
 	}
 }
 

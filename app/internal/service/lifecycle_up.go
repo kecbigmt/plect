@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 	"time"
 
@@ -73,7 +74,10 @@ func Up(cfg *config.Config, store *state.Store, params UpParams) (*UpResult, err
 			return nil, tagErr
 		}
 		sessionName := disp.Name + "+" + tag
-		existing := store.Get(sessionName)
+		existing, err := store.GetE(sessionName)
+		if err != nil {
+			return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("read session %q state: %v", sessionName, err)}
+		}
 		if existing != nil {
 			switch {
 			case params.Population != nil && !samePopulation(existing.Population, params.Population):
@@ -204,8 +208,12 @@ func Up(cfg *config.Config, store *state.Store, params UpParams) (*UpResult, err
 		return nil, &Error{Code: ErrExecutionFailed, Message: setupErr.Error()}
 	}
 	// Reflect nested-written keys (merged onto disk above, not our in-memory
-	// map) in the result the same way Create does.
-	if refreshed := store.Get(sessionName); refreshed != nil {
+	// map) in the result the same way Create does. The merge above already
+	// persisted successfully, so a failure here only means the returned
+	// view may be stale, not that anything was lost.
+	if refreshed, err := store.GetE(sessionName); err != nil {
+		slog.Warn("read session state for post-merge refresh failed; returning the pre-refresh view", "session", sessionName, "error", err)
+	} else if refreshed != nil {
 		session = refreshed
 	}
 	recordLifecycle(store, sessionName, "up", "run-scoped tasks produced")
@@ -225,7 +233,9 @@ func cleanupStaleWorkflowNodes(cfg *config.Config, store *state.Store, sessionNa
 	if err := persistStaleWorkflowCleanup(store, sessionName, session, stale); err != nil {
 		return &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to save session state: %v", err)}
 	}
-	if refreshed := store.Get(sessionName); refreshed != nil {
+	if refreshed, err := store.GetE(sessionName); err != nil {
+		slog.Warn("read session state for post-cleanup refresh failed; returning the pre-refresh view", "session", sessionName, "error", err)
+	} else if refreshed != nil {
 		*session = *refreshed
 		if session.Tasks == nil {
 			session.Tasks = make(map[string]*contract.TaskState)

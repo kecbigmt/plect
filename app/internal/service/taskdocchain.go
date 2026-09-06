@@ -80,7 +80,14 @@ func evalDocumentChain(cfg *config.Config, store *state.Store, def config.Docume
 	sp.Fired = true
 	if name, err := resolveSpawnSessionName(cfg, resource, def.Workflow, sp.Tag); err == nil && name != "" {
 		sp.TargetSession = name
-		if existing := store.Get(name); existing != nil && existing.Population == nil {
+		existing, getErr := store.GetE(name)
+		if getErr != nil {
+			// Fail closed: an unreadable store cannot prove the target is
+			// absent, and treating it as absent risks spawning a duplicate
+			// session for a chain that is already active.
+			sp.AlreadyActive = true
+			sp.Warnings = append(sp.Warnings, fmt.Sprintf("could not check whether %q is already active: %v", name, getErr))
+		} else if existing != nil && existing.Population == nil {
 			sp.AlreadyActive = true
 		}
 	}

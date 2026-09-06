@@ -142,3 +142,31 @@ func (db *DB) WithImmediateTx(ctx context.Context, fn func(*sql.Tx) error) error
 	}
 	return nil
 }
+
+// WithReadTx runs fn inside one read transaction on the read pool so every
+// query fn issues sees the same consistent snapshot. SQLite (even a
+// deferred, non-IMMEDIATE transaction) fixes its snapshot at the
+// transaction's first statement and holds it until the transaction ends,
+// so two queries inside the same fn can never straddle a concurrent
+// writer's commit and observe two different points in time — the failure
+// mode a caller issuing separate autocommit queries against db.read would
+// be exposed to instead. There is nothing to commit in a read-only
+// transaction, so it is always rolled back regardless of fn's outcome. It
+// goes through the same access gate as WithImmediateTx, so a read also
+// waits behind an in-flight migration and refuses on an unsupported
+// schema version rather than reading through it.
+func (db *DB) WithReadTx(ctx context.Context, fn func(*sql.Tx) error) error {
+	unlock, err := db.enterNormalAccess(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	tx, err := db.read.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin read transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	return fn(tx)
+}

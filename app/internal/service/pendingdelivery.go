@@ -19,7 +19,7 @@ import (
 // re-check — so the failure is a retry candidate on the session's next
 // activity rather than a lost one-shot attempt. Kept out of
 // contracts/state.Session (a separately pseudo-version-pinned module this
-// change must not touch) and rooted next to state.json instead, as a pure
+// change must not touch) and rooted next to the runtime database instead, as a pure
 // implementation detail of this package's own retry behavior.
 type pendingDeliveryFile struct {
 	Subscribe   map[string][]string `json:"subscribe,omitempty"`
@@ -155,7 +155,12 @@ func sweepOrphanedPendingDeliveries(cfg *config.Config, store *state.Store, sess
 	}
 	delete(orphaned, sessionName)
 	for name := range orphaned {
-		if store.Get(name) != nil {
+		session, err := store.GetE(name)
+		if err != nil {
+			slog.Default().Warn("pending delivery sweep: failed to check session", "session", name, "error", err)
+			continue // fail closed: an unreadable session is not provably gone, so it is not swept as orphaned
+		}
+		if session != nil {
 			continue
 		}
 		for _, err := range flushPendingDelivery(cfg, store, name) {

@@ -70,7 +70,14 @@ func Destroy(cfg *config.Config, store *state.Store, params DestroyParams) (*Des
 	// clears ParentSession on every child, and plect up never re-adopts an
 	// orphan, so a silent destroy permanently severs the tree. --force makes
 	// that orphaning an explicit, reported choice instead.
-	if children := childNames(store.All(), sessionName); len(children) > 0 {
+	allSessions, err := store.AllE()
+	if err != nil {
+		// An unreadable store must never read as "no children": store.Delete
+		// unconditionally clears ParentSession on every child, so proceeding
+		// on a fabricated empty child list would silently orphan a real one.
+		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("read session state: %v", err)}
+	}
+	if children := childNames(allSessions, sessionName); len(children) > 0 {
 		if !params.Force {
 			return nil, &Error{
 				Code: ErrHasChildren,
@@ -109,7 +116,7 @@ func Destroy(cfg *config.Config, store *state.Store, params DestroyParams) (*Des
 
 	// Persist any TaskState changes (status flips to cleaned) before we
 	// delete the entry, in case workspace directory removal fails and the
-	// user wants to inspect state.json post hoc.
+	// user wants to inspect the persisted checkpoint post hoc.
 	session.UpdatedAt = time.Now()
 	putBestEffort(store, session, "post-run-cleanup checkpoint")
 

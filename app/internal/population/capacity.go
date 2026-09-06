@@ -50,7 +50,11 @@ func (c *capacityCoordinator) up(_ context.Context, def Definition, resource str
 	if c.pendingExistingAhead(def, resource) {
 		return UpOutcome{}, fmt.Errorf("an existing population member has a pending up request and takes priority")
 	}
-	for _, candidate := range c.idleCandidates() {
+	candidates, err := c.idleCandidates()
+	if err != nil {
+		return UpOutcome{}, fmt.Errorf("find idle candidates to free capacity: %w", err)
+	}
+	for _, candidate := range candidates {
 		if _, downErr := service.Down(c.cfg(), c.state, service.DownParams{Identifier: candidate.session}); downErr != nil {
 			c.record(candidate, event.TypeWorkflowPopulationFailure, "down", downErr.Error())
 			continue
@@ -99,8 +103,11 @@ type idleCandidate struct {
 	last     time.Time
 }
 
-func (c *capacityCoordinator) idleCandidates() []idleCandidate {
-	sessions := c.state.All()
+func (c *capacityCoordinator) idleCandidates() ([]idleCandidate, error) {
+	sessions, err := c.state.AllE()
+	if err != nil {
+		return nil, fmt.Errorf("read session state: %w", err)
+	}
 	var candidates []idleCandidate
 	for sessionName, session := range sessions {
 		if session == nil || session.Population == nil || !logicalVirtualRootChild(session) || !c.cfg().RunScopeUp(session) {
@@ -112,7 +119,13 @@ func (c *capacityCoordinator) idleCandidates() []idleCandidate {
 			continue
 		}
 		population, err := c.state.Population(key)
-		if err != nil || population == nil {
+		if err != nil {
+			// One session's population lookup failing does not invalidate
+			// the whole candidate sweep; it is simply not idle-eligible
+			// this pass.
+			continue
+		}
+		if population == nil {
 			continue
 		}
 		member := population.Members[session.ResourceID]
@@ -151,7 +164,7 @@ func (c *capacityCoordinator) idleCandidates() []idleCandidate {
 		}
 		return candidates[i].session < candidates[j].session
 	})
-	return candidates
+	return candidates, nil
 }
 
 func (c *capacityCoordinator) latestInbound(session string) (time.Time, error) {

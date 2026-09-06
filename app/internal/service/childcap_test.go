@@ -346,3 +346,25 @@ func TestReserveChildCapSlot_ForceRecreateReservationStillBlocksASibling(t *test
 		t.Fatalf("err = %v, want ErrChildCapExceeded", err)
 	}
 }
+
+// TestReserveChildCapSlot_FailsClosedWhenParentUnreadable proves an
+// unreadable store never falls back to "no cap"/nil parent: that fallback
+// used to be the only way store.Get's swallowed error could surface here,
+// letting a cap silently be bypassed while the store cannot even prove the
+// parent exists.
+func TestReserveChildCapSlot_FailsClosedWhenParentUnreadable(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "store.db"), []byte("not a database"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store := state.NewStore(dir)
+	cfg := &config.Config{BaseDir: t.TempDir()}
+
+	reserved, err := reserveChildCapSlot(cfg, store, "newchild", "parent1", false)
+	if reserved {
+		t.Error("reserved = true over an unreadable store, want false")
+	}
+	if err == nil {
+		t.Fatal("reserveChildCapSlot over an unreadable store must fail, not silently allow the reservation")
+	}
+}

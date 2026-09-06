@@ -19,7 +19,11 @@ func checkLifecycleRelationGuard(store *state.Store, targetName, op string) *Err
 	if caller == "" {
 		return nil
 	}
-	switch rel := domain.RelationFromTarget(store.All(), caller, targetName); rel {
+	sessions, err := store.AllE()
+	if err != nil {
+		return &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("read session state: %v", err)}
+	}
+	switch rel := domain.RelationFromTarget(sessions, caller, targetName); rel {
 	case domain.RelationSelf, domain.RelationChild, domain.RelationDescendant:
 		return nil
 	default:

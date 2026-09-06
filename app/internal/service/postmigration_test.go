@@ -1,60 +1,59 @@
 package service
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/state"
+	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// postMigrationStateJSON is a state directory in the shape the one-time
-// identity migration leaves behind: sessions carry only the canonical
-// resource id and the create-time alias, with no legacy provider-shaped
-// identity keys at all.
-const postMigrationStateJSON = `{
-  "version": 7,
-  "sessions": {
-    "acme/widgets-1+claude": {
-      "session_name": "acme/widgets-1+claude",
-      "resource_id": "https://example.test/acme/widgets/items/1",
-      "alias": "https://example.test/acme/widgets/items/1",
-      "branch": "item/1+claude",
-      "workspace_dir_path": "/tmp/workdirs/acme-widgets-1-claude",
-      "workflow": "coding",
-      "tasks": {
-        "@workflow": {
-          "scope": "session",
-          "status": "produced",
-          "outputs": {"workspace_dir": "/tmp/workdirs/acme-widgets-1-claude"}
-        }
-      },
-      "created_at": "2024-01-01T00:00:00Z",
-      "updated_at": "2024-01-01T00:00:00Z"
-    },
-    "standalone": {
-      "session_name": "standalone",
-      "resource_id": "standalone",
-      "alias": "standalone",
-      "workspace_dir_path": "/tmp/workdirs/standalone",
-      "created_at": "2024-01-01T00:00:00Z",
-      "updated_at": "2024-01-01T00:00:00Z"
-    }
-  }
-}`
-
-// writePostMigrationState materializes the post-migration fixture in a temp
-// state directory and returns a store rooted there.
+// writePostMigrationState seeds a store with sessions in the shape the
+// one-time identity migration leaves behind: canonical resource id and
+// create-time alias, with no legacy provider-shaped identity keys at all.
+// It builds these through the store's own Put, the same as any real
+// session write — the fixture predates the SQLite storage cutover as a
+// literal legacy state.json blob, but its subject (a post-migration
+// session's identity shape) has nothing to do with the storage format
+// underneath, so it survives the cutover as ordinary seeded sessions.
 func writePostMigrationState(t *testing.T) *state.Store {
 	t.Helper()
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(postMigrationStateJSON), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return state.NewStore(dir)
+	store := state.NewStore(t.TempDir())
+	seedPostMigrationSession(t, store, "acme/widgets-1+claude", "https://example.test/acme/widgets/items/1",
+		"item/1+claude", "coding", "/tmp/workdirs/acme-widgets-1-claude")
+	seedPostMigrationSession(t, store, "standalone", "standalone", "", "", "/tmp/workdirs/standalone")
+	return store
 }
 
-// TestPostMigrationState_LoadsIdentityFields pins that a state file with no
+func seedPostMigrationSession(t *testing.T, store *state.Store, name, resourceID, branch, workflow, workspaceDirPath string) {
+	t.Helper()
+	createdAt := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	session := &domain.Session{
+		Name:             name,
+		ResourceID:       resourceID,
+		Alias:            resourceID,
+		Branch:           branch,
+		Workflow:         workflow,
+		WorkspaceDirPath: workspaceDirPath,
+		CreatedAt:        createdAt,
+		UpdatedAt:        createdAt,
+	}
+	if workflow != "" {
+		session.Tasks = map[string]*contract.TaskState{
+			contract.WorkflowPseudoNodeID: {
+				Scope:   contract.TaskScopeSession,
+				Status:  contract.TaskStatusProduced,
+				Outputs: map[string]any{contract.OutputKeyWorkspaceDir: workspaceDirPath},
+			},
+		}
+	}
+	if err := store.Put(session); err != nil {
+		t.Fatalf("seed %q: %v", name, err)
+	}
+}
+
+// TestPostMigrationState_LoadsIdentityFields pins that a session with no
 // legacy identity keys loads with its canonical identity intact.
 func TestPostMigrationState_LoadsIdentityFields(t *testing.T) {
 	store := writePostMigrationState(t)
@@ -135,39 +134,14 @@ func TestPostMigrationState_WorkspaceDirFromSession(t *testing.T) {
 }
 
 // TestPostMigrationState_ResolverDispatchOverPostMigrationState is the
-// end-to-end check that the current code operates on a state directory in
-// post-migration shape: a session recorded there is found by the same
-// resolver dispatch a fresh create would use, so a migrated session is
+// end-to-end check that the current code operates correctly against a
+// session in post-migration shape: a session recorded there is found by the
+// same resolver dispatch a fresh create would use, so a migrated session is
 // reused rather than duplicated.
 func TestPostMigrationState_ResolverDispatchOverPostMigrationState(t *testing.T) {
-	dir := t.TempDir()
-	statePath := filepath.Join(dir, "state.json")
-	migrated := `{
-  "version": 7,
-  "sessions": {
-    "acme/widgets-42+gh": {
-      "session_name": "acme/widgets-42+gh",
-      "resource_id": "https://github.com/acme/widgets/issues/42",
-      "alias": "https://github.com/acme/widgets/issues/42",
-      "workflow": "gh",
-      "branch": "issue/42+gh",
-      "workspace_dir_path": "/tmp/workdirs/issue-42-gh",
-      "tasks": {
-        "@workflow": {
-          "scope": "session",
-          "status": "produced",
-          "outputs": {"workspace_dir": "/tmp/workdirs/issue-42-gh"}
-        }
-      },
-      "created_at": "2024-01-01T00:00:00Z",
-      "updated_at": "2024-01-01T00:00:00Z"
-    }
-  }
-}`
-	if err := os.WriteFile(statePath, []byte(migrated), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	store := state.NewStore(dir)
+	store := state.NewStore(t.TempDir())
+	seedPostMigrationSession(t, store, "acme/widgets-42+gh", "https://github.com/acme/widgets/issues/42",
+		"issue/42+gh", "gh", "/tmp/workdirs/issue-42-gh")
 
 	cfg := writeWorkflowFixture(t, t.TempDir(), "gh",
 		[]taskFixture{{id: "noop", scope: "session", setup: "echo '{}'"}},

@@ -67,7 +67,14 @@ func (sup *Supervisor) Run(ctx context.Context) {
 
 func (sup *Supervisor) reconcile(ctx context.Context, active map[string]context.CancelFunc, skip map[string]bool, wg *sync.WaitGroup) {
 	cfg := sup.cfg()
-	sessions := sup.state.All()
+	sessions, err := sup.state.AllE()
+	if err != nil {
+		// An unreadable store must never read as "every session is gone":
+		// the loop below would then cancel every currently-running
+		// dispatcher. Skip this cycle entirely and retry on the next poll.
+		sup.logger.Error("dispatch: read session state failed; skipping this reconcile pass", "error", err)
+		return
+	}
 	for name, s := range sessions {
 		if _, running := active[name]; running || skip[name] || !cfg.RunScopeUp(s) {
 			continue

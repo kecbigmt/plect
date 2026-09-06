@@ -4,8 +4,100 @@
 
 package sqlcgen
 
-type PersistenceSmoke struct {
-	ID        int64
-	Note      string
-	CreatedAt string
+import (
+	"database/sql"
+)
+
+type NodeInstance struct {
+	SessionName string
+	NodeID      string
+	Scope       string
+	Status      string
+	Sequence    int64
+	FinalizedAt sql.NullString
+	RecordJson  string
+}
+
+type Population struct {
+	Workflow string
+	Name     string
+}
+
+type PopulationMember struct {
+	Workflow         string
+	Name             string
+	ResourceID       string
+	SessionName      sql.NullString
+	Generation       int64
+	AcceptedAt       sql.NullString
+	LastAppearance   sql.NullString
+	LastInbound      sql.NullString
+	Tombstoned       bool
+	PendingUp        bool
+	DecisionKind     sql.NullString
+	DecisionReason   sql.NullString
+	ItemJson         string
+	LastBlockersJson string
+}
+
+type Session struct {
+	Name               string
+	ParentSessionName  sql.NullString
+	RootSessionName    sql.NullString
+	ResourceID         sql.NullString
+	Alias              sql.NullString
+	Workflow           string
+	WorkspaceDir       sql.NullString
+	PopulationWorkflow sql.NullString
+	PopulationName     sql.NullString
+	CreatedAt          string
+	UpdatedAt          string
+	RecordJson         string
+}
+
+type TaskDoneWhenJudge struct {
+	TaskInstanceID string
+	LeafID         string
+	Action         string
+	Reason         string
+	Revision       string
+	JudgeSession   string
+	JudgeWorkflow  sql.NullString
+	Relation       string
+	CreatedAt      string
+}
+
+type TaskDoneWhenState struct {
+	TaskInstanceID       string
+	HeartbeatTicks       int64
+	HeartbeatEscalations int64
+	LastAction           sql.NullString
+	LastFingerprint      sql.NullString
+	LastReason           sql.NullString
+	LastUnsatisfiedJson  string
+	LastBody             sql.NullString
+	EscalatedAt          sql.NullString
+	EscalateReason       sql.NullString
+}
+
+type TaskInstance struct {
+	ID           string
+	SessionName  string
+	InstanceName string
+	TaskID       string
+	Scope        string
+	Status       string
+	Sequence     int64
+	Resource     sql.NullString
+	Named        bool
+	FinalizedAt  sql.NullString
+	RecordJson   string
+}
+
+type UpReservation struct {
+	ChildSessionName  string
+	ParentSessionName sql.NullString
+	VirtualRoot       bool
+	Pid               int64
+	ReservedAt        string
 }

@@ -3,7 +3,6 @@ package service
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -116,21 +115,24 @@ echo '{"workspace_dir":"%s"}'
 }
 
 // The initial_task dispatcher is a session node whose setup shells out to a
-// nested `plect task setup … --name initial` that writes its instance straight
-// to state.json. Create's session-tasks persist must overlay (mergeTasks),
-// not blind-Put, or that nested write is clobbered. This stands in for the real
-// dispatcher with a jq writer so the merge is exercised without a plect binary.
+// nested `plect task setup … --name initial` that writes its instance
+// straight to the store. Create's session-tasks persist must overlay
+// (mergeTasks), not blind-Put, or that nested write is clobbered. This
+// stands in for the real dispatcher with the nested-write test helper
+// (nestedwrite_helper_test.go) so the merge is exercised through the real
+// store API without a plect binary.
 func TestCreate_SessionNodeNestedWriteSurvives(t *testing.T) {
-	if _, err := exec.LookPath("jq"); err != nil {
-		t.Skip("jq not available")
-	}
 	store := testStore(t)
 	workdir := filepath.Join(t.TempDir(), "wd")
-	t.Setenv("SP", filepath.Join(store.Dir(), "state.json"))
+	t.Setenv("PLECT_SERVICE_NESTED_WRITE_HELPER", "1")
 
-	// dispatcher writes a sibling "initial" key to disk (mimicking the nested
-	// `plect task setup`), then produces normally.
-	dispatcher := `jq '.sessions["org/repo-11+claude"].tasks.initial={"scope":"session","status":"produced","dynamic":true,"task_id":"work","name":"initial","outputs":{"instruction":"start work"}}' "$SP" > "$SP.tmp" && mv "$SP.tmp" "$SP"
+	// dispatcher writes a sibling "initial" key straight to the store
+	// (mimicking the nested `plect task setup`), then produces normally.
+	dispatcher := nestedWriteCommand(t, store.Dir(), "org/repo-11+claude", nestedWritePatch{
+		Tasks: map[string]*contract.TaskState{
+			"initial": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, Dynamic: true, TaskID: "work", Name: "initial", Outputs: map[string]any{"instruction": "start work"}},
+		},
+	}) + `
 echo '{}'`
 	cfg := writeWorkflowFixture(t, t.TempDir(), "claude",
 		[]taskFixture{{id: "dispatcher", scope: "session", setup: dispatcher}},

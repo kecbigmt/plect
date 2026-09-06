@@ -10,8 +10,6 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/state"
 )
 
-const virtualRootCapParent = "@virtual-root"
-
 // reserveChildCapSlot decides inside ReserveUpSlot's locked snapshot rather
 // than an unlocked read, so two racing `plect up` processes can't both
 // admit past the cap.
@@ -28,10 +26,13 @@ func reserveChildCapSlot(cfg *config.Config, store *state.Store, childSessionNam
 			return false, nil
 		}
 		limit = *cfg.MaxUpChildren
-		capParent = virtualRootCapParent
+		capParent = domain.VirtualRootReservationParent
 		capLabel = "virtual root"
 	} else {
-		parent := store.Get(parentSessionName)
+		parent, err := store.GetE(parentSessionName)
+		if err != nil {
+			return false, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("load parent %s: %v", parentSessionName, err)}
+		}
 		if parent == nil {
 			return false, nil
 		}

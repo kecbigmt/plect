@@ -390,6 +390,13 @@ all = [ { judge_pending = "ac-met" } ]
 	writeWorkflowFile(t, cfg, "codex", "")
 	seedReviewWork(t, store, "owner/repo-1", map[string]any{"checks_status": "SUCCESS", "revision": "sha1"})
 	seedSession(t, store, "owner/repo-1+review-work", "owner/repo", 1, "codex", nil)
+	if err := store.UpdatePopulation("codex/standing", func(population *state.PopulationState) error {
+		population.Workflow = "codex"
+		population.Name = "standing"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.Update("owner/repo-1+review-work", func(session *domain.Session) error {
 		session.Population = &contract.PopulationProvenance{Workflow: "codex", Name: "standing"}
 		return nil

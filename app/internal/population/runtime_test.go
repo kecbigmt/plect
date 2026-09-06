@@ -19,7 +19,7 @@ func TestFailedInitialTaskIsNotAcceptedAsSuccessfullyInstalled(t *testing.T) {
 		Tasks: map[string]*contract.TaskState{
 			"initial": {
 				Name: "initial", TaskID: "work", Resource: "urn:case:a",
-				Dynamic: true, Status: contract.TaskStatusFailed,
+				Scope: contract.TaskScopeSession, Dynamic: true, Status: contract.TaskStatusFailed,
 			},
 		},
 	}); err != nil {
@@ -28,6 +28,20 @@ func TestFailedInitialTaskIsNotAcceptedAsSuccessfullyInstalled(t *testing.T) {
 	hooks := serviceHooks(func() *config.Config { return nil }, store, Definition{}, nil)
 	if err := hooks.EnsureInitial(context.Background(), "member", "work", "urn:case:a"); err == nil {
 		t.Fatal("failed initial task was accepted as installed")
+	}
+}
+
+// seedPopulationRow upserts an empty population row so a test can put a
+// session referencing it directly (sessions.population_workflow/name FK)
+// without going through the engine's own admission flow.
+func seedPopulationRow(t *testing.T, store *state.Store, def Definition) {
+	t.Helper()
+	if err := store.UpdatePopulation(populationKey(def), func(population *state.PopulationState) error {
+		population.Workflow = def.Workflow.Address
+		population.Name = def.Population.Name
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -42,6 +56,7 @@ command = "true"
 	}
 	definition := definitions[0]
 	store := state.NewStore(t.TempDir())
+	seedPopulationRow(t, store, definition)
 	provenance := &contract.PopulationProvenance{Workflow: definition.Workflow.Address, Name: definition.Population.Name}
 	name, err := service.ResolvePopulationSessionName(cfg, definition.Workflow.Address, "urn:case:a")
 	if err != nil {
@@ -83,6 +98,7 @@ type = "object"
 	}
 	definition := definitions[0]
 	store := state.NewStore(t.TempDir())
+	seedPopulationRow(t, store, definition)
 	provenance := &contract.PopulationProvenance{Workflow: definition.Workflow.Address, Name: definition.Population.Name}
 	up := func() UpOutcome {
 		t.Helper()

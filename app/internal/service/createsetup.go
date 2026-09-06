@@ -38,7 +38,11 @@ func createWithWorkflowSetup(cfg *config.Config, store *state.Store, params Crea
 
 	now := time.Now()
 	var session *domain.Session
-	if existing := store.Get(sessionName); existing != nil {
+	existing, err := store.GetE(sessionName)
+	if err != nil {
+		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to check for an existing session %q: %v", sessionName, err)}
+	}
+	if existing != nil {
 		if params.Population != nil && !samePopulation(existing.Population, params.Population) {
 			return nil, populationCollision(sessionName, existing.Population, params.Population)
 		}
@@ -152,7 +156,11 @@ func createWithWorkflowSetup(cfg *config.Config, store *state.Store, params Crea
 	if tasksErr != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: tasksErr.Error()}
 	}
-	if refreshed := store.Get(sessionName); refreshed != nil {
+	refreshed, err := store.GetE(sessionName)
+	if err != nil {
+		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to reload session %q after setup: %v", sessionName, err)}
+	}
+	if refreshed != nil {
 		session = refreshed
 	}
 
