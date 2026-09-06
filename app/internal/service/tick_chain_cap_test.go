@@ -9,6 +9,7 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/eventlog"
+	"github.com/kecbigmt/plecture/app/internal/task"
 	"github.com/kecbigmt/plecture/contracts/event"
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
@@ -185,7 +186,6 @@ func TestTickSession_ChainCapAttemptEventRecordsNewStreakAfterSpawnAndDestroy(t 
 		t.Fatalf("chain-attempt events after the first refusal = %d, want 1: %+v", len(evs), evs)
 	}
 
-	// Capacity frees: the retried fire spawns the target.
 	if err := store.Update("sibling", func(s *domain.Session) error {
 		s.Tasks["run_node"].Status = contract.TaskStatusCleaned
 		return nil
@@ -206,8 +206,6 @@ func TestTickSession_ChainCapAttemptEventRecordsNewStreakAfterSpawnAndDestroy(t 
 		t.Fatalf("Destroy(target): %v", err)
 	}
 
-	// The parent fills back up to its cap, so the chain's next fire against
-	// the same derived target is refused again — a second, distinct streak.
 	if err := store.Update("sibling", func(s *domain.Session) error {
 		s.Tasks["run_node"].Status = contract.TaskStatusProduced
 		return nil
@@ -228,5 +226,79 @@ func TestTickSession_ChainCapAttemptEventRecordsNewStreakAfterSpawnAndDestroy(t 
 	}
 	if len(evs2) != 2 {
 		t.Fatalf("chain-attempt events across two refusal streaks = %d, want 2 (one per streak): %+v", len(evs2), evs2)
+	}
+}
+
+func TestTickSession_ChainCapAttemptEventRecordsNewStreakAfterPredicateGoesUnmetAndTrueAgain(t *testing.T) {
+	store := testStore(t)
+	cfg := writeWorkflowFixture(t, t.TempDir(), "wf",
+		[]taskFixture{workTaskWithChain(capReviewChainFixture)},
+		[]nodeFixture{{id: "work"}})
+	writeWorkflowFile(t, cfg, "reviewer_wf", "")
+	writeCapWorkflow(t, cfg.BaseDir, "parent_wf", intPtr(1))
+
+	seedSession(t, store, "parent1", "acct", 1, "parent_wf", nil)
+	seedSession(t, store, "sibling", "acct", 2, "", upTasks())
+	setParent(t, store, "sibling", "parent1")
+	seedReviewWork(t, store, "work1", map[string]any{"checks_status": "SUCCESS", "revision": "sha1"})
+	setParent(t, store, "work1", "parent1")
+
+	if _, err := TickSession(cfg, store, TickParams{SessionName: "work1", SkipRefresh: true}); err != nil {
+		t.Fatalf("TickSession(1): %v", err)
+	}
+	evs, _, _, err := eventlog.NewStore(store.Dir()).List("work1", 0, event.Filter{Types: []string{event.TypeChainAttempt}})
+	if err != nil {
+		t.Fatalf("List(1): %v", err)
+	}
+	if len(evs) != 1 {
+		t.Fatalf("chain-attempt events after the first refusal = %d, want 1: %+v", len(evs), evs)
+	}
+
+	if err := store.Update("work1", func(s *domain.Session) error {
+		st := s.Tasks["work"]
+		st.DoneWhen.Judges = map[string]*contract.DoneWhenJudge{
+			"ac-met": {
+				LeafID:          "ac-met",
+				Action:          task.JudgeActionApprove,
+				Revision:        "sha1",
+				ReviewerSession: "some-reviewer",
+				Relation:        string(domain.RelationSibling),
+			},
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("record a satisfying verdict at the current revision: %v", err)
+	}
+
+	res, err := TickSession(cfg, store, TickParams{SessionName: "work1", SkipRefresh: true})
+	if err != nil {
+		t.Fatalf("TickSession(2): %v", err)
+	}
+	sp, ok := findSpawn(res.Chains, "review")
+	if !ok || sp.Fired {
+		t.Fatalf("expected the chain to stop firing once the judge leaf is satisfied, got %+v", sp)
+	}
+
+	if err := store.Update("work1", func(s *domain.Session) error {
+		s.Tasks["work"].Observed.State["revision"] = "sha2"
+		return nil
+	}); err != nil {
+		t.Fatalf("advance the observed revision past the recorded verdict: %v", err)
+	}
+
+	res2, err := TickSession(cfg, store, TickParams{SessionName: "work1", SkipRefresh: true})
+	if err != nil {
+		t.Fatalf("TickSession(3): %v", err)
+	}
+	sp2, ok := findSpawn(res2.Chains, "review")
+	if !ok || !sp2.CapRefused {
+		t.Fatalf("expected the chain to refire and be cap-refused again, got %+v", sp2)
+	}
+	evs2, _, _, err := eventlog.NewStore(store.Dir()).List("work1", 0, event.Filter{Types: []string{event.TypeChainAttempt}})
+	if err != nil {
+		t.Fatalf("List(2): %v", err)
+	}
+	if len(evs2) != 2 {
+		t.Fatalf("chain-attempt events across two refusal streaks separated by a satisfied judge = %d, want 2 (one per streak): %+v", len(evs2), evs2)
 	}
 }

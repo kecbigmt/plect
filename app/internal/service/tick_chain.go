@@ -4,9 +4,9 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/config"
+	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/eventlog"
 	"github.com/kecbigmt/plecture/app/internal/state"
 	"github.com/kecbigmt/plecture/contracts/event"
@@ -58,50 +58,60 @@ func publishAlreadyActiveChainKick(cfg *config.Config, store *state.Store, workS
 
 const chainAttemptReasonCap = "cap"
 
+// chainAttemptFingerprint is the contract.TaskState.ChainAttempts[chainID]
+// value that marks an ongoing cap-refusal streak; any other outcome —
+// spawned, already-active, or the predicate not holding at all — fingerprints
+// as "", which is what ends a streak.
+func chainAttemptFingerprint(capRefused bool, target string) string {
+	if !capRefused || target == "" {
+		return ""
+	}
+	return chainAttemptReasonCap + "|" + target
+}
+
+// syncChainAttemptStreak persists newFingerprint for one instance's chain and
+// reports whether it actually changed. The event log alone cannot tell an
+// interrupted refusal streak from an uninterrupted one — it only ever
+// records a refusal, so a resolved-then-refused-again recurrence looks
+// identical to a continuing one — so TickSession keeps this boundary marker
+// instead, updated for every chain on every tick regardless of outcome.
+func syncChainAttemptStreak(store *state.Store, sessionName, instance, chainID, newFingerprint string) (changed bool, err error) {
+	session := store.Get(sessionName)
+	if session == nil {
+		return false, nil
+	}
+	if st := session.Tasks[instance]; st == nil || st.ChainAttempts[chainID] == newFingerprint {
+		return false, nil
+	}
+	if err := store.Update(sessionName, func(s *domain.Session) error {
+		st := s.Tasks[instance]
+		if st == nil {
+			return nil
+		}
+		if newFingerprint == "" {
+			delete(st.ChainAttempts, chainID)
+			return nil
+		}
+		if st.ChainAttempts == nil {
+			st.ChainAttempts = map[string]string{}
+		}
+		st.ChainAttempts[chainID] = newFingerprint
+		return nil
+	}); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // publishChainCapAttempt appends one plect.chain.attempt event to the ticking
 // session's own log (workSession) when its chain's spawn was refused by the
-// parent's max_up_children cap. It dedupes against that session's own recent
-// chain-attempt events on (chain_id, instance, target, reason), but only
-// within the current refusal streak: a later recurrence of the identical
-// tuple, once targetSpawnedSince proves the derived target actually spawned
-// and was torn down in between, is a new streak and gets its own event —
-// matching evalDocumentChain's own reasoning that a cap-refused entry never
-// keeps a target's identity from resolving the same way twice.
+// parent's max_up_children cap. The caller (TickSession) only calls this once
+// syncChainAttemptStreak has confirmed the refusal starts a new streak.
 func publishChainCapAttempt(cfg *config.Config, store *state.Store, workSession string, sp ChainSpawn) error {
 	if sp.TargetSession == "" {
 		return nil
 	}
-	log := eventlog.NewStore(store.Dir())
-	evs, _, _, err := log.List(workSession, 0, event.Filter{
-		Types:   []string{event.TypeChainAttempt},
-		Sources: []string{event.SourceTick},
-	})
-	if err != nil {
-		return err
-	}
-	var lastMatch *event.Event
-	for i := range evs {
-		ev := &evs[i]
-		if ev.Metadata["chain_id"] != sp.ChainID ||
-			ev.Metadata["instance"] != sp.Instance ||
-			ev.Metadata["target"] != sp.TargetSession ||
-			ev.Metadata["reason"] != chainAttemptReasonCap {
-			continue
-		}
-		if lastMatch == nil || ev.Time.After(lastMatch.Time) {
-			lastMatch = ev
-		}
-	}
-	if lastMatch != nil {
-		spawned, err := targetSpawnedSince(cfg, store, sp.TargetSession, lastMatch.Time)
-		if err != nil {
-			return err
-		}
-		if !spawned {
-			return nil
-		}
-	}
-	_, err = EventPublish(cfg, store, workSession, EventPublishParams{
+	_, err := EventPublish(cfg, store, workSession, EventPublishParams{
 		Type:      event.TypeChainAttempt,
 		Source:    event.SourceTick,
 		Direction: event.Internal,
@@ -115,25 +125,6 @@ func publishChainCapAttempt(cfg *config.Config, store *state.Store, workSession 
 		},
 	})
 	return err
-}
-
-// targetSpawnedSince reports whether target was actually created after t —
-// evidence that an earlier refusal's streak ended (capacity freed and the
-// chain fired) before a later refusal for the identical tuple began a new
-// one. A currently-live session newer than t is that evidence directly; a
-// torn-down one leaves it in its tombstone's CreatedAt, since a cap refusal
-// is only ever reported for a target that does not presently exist —
-// evalDocumentChain reports an existing one as already-active instead of
-// retrying the fire.
-func targetSpawnedSince(cfg *config.Config, store *state.Store, target string, t time.Time) (bool, error) {
-	if s := store.Get(target); s != nil && s.CreatedAt.After(t) {
-		return true, nil
-	}
-	tomb, err := lookupTombstone(cfg, store, target)
-	if err != nil {
-		return false, err
-	}
-	return tomb != nil && tomb.CreatedAt.After(t), nil
 }
 
 func chainKickDedupKey(workSession string, sp ChainSpawn) string {

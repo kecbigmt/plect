@@ -66,6 +66,7 @@ func TickSession(cfg *config.Config, store *state.Store, params TickParams) (*Ch
 
 	chains := make([]ChainSpawn, 0, len(chainPlan))
 	for _, sp := range chainPlan {
+		capRefused := false
 		if sp.Fired && !sp.AlreadyActive {
 			up, err := Up(cfg, store, UpParams{
 				Identifier:    sp.Resource,
@@ -86,10 +87,8 @@ func TickSession(cfg *config.Config, store *state.Store, params TickParams) (*Ch
 				// once capacity frees, so it is reported as its own typed
 				// outcome rather than folded into "spawn failed:".
 				sp.CapRefused = true
+				capRefused = true
 				sp.Warnings = append(sp.Warnings, svcErr.Message)
-				if pubErr := publishChainCapAttempt(cfg, store, resolvedName, sp); pubErr != nil {
-					sp.Warnings = append(sp.Warnings, fmt.Sprintf("chain-attempt event failed: %v", pubErr))
-				}
 			case err != nil:
 				sp.Warnings = append(sp.Warnings, fmt.Sprintf("spawn failed: %v", err))
 			default:
@@ -104,6 +103,21 @@ func TickSession(cfg *config.Config, store *state.Store, params TickParams) (*Ch
 				sp.KickDelivered = true
 			} else {
 				sp.KickDebounced = true
+			}
+		}
+		// Every chain syncs its streak marker every tick, fired or not: a
+		// cap-refusal streak can also end by the predicate going unmet (a
+		// judge verdict recorded, say) and holding true again later with no
+		// spawn in between, which only this per-tick sync — not the event
+		// log — can tell apart from an uninterrupted streak.
+		fingerprint := chainAttemptFingerprint(capRefused, sp.TargetSession)
+		newStreak, syncErr := syncChainAttemptStreak(store, resolvedName, sp.Instance, sp.ChainID, fingerprint)
+		switch {
+		case syncErr != nil:
+			sp.Warnings = append(sp.Warnings, fmt.Sprintf("chain-attempt bookkeeping failed: %v", syncErr))
+		case capRefused && newStreak:
+			if pubErr := publishChainCapAttempt(cfg, store, resolvedName, sp); pubErr != nil {
+				sp.Warnings = append(sp.Warnings, fmt.Sprintf("chain-attempt event failed: %v", pubErr))
 			}
 		}
 		chains = append(chains, sp)
