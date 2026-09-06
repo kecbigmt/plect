@@ -1,0 +1,170 @@
+package service
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/kecbigmt/plecture/app/internal/config"
+	"github.com/kecbigmt/plecture/app/internal/domain"
+	"github.com/kecbigmt/plecture/app/internal/eventlog"
+	"github.com/kecbigmt/plecture/contracts/event"
+	contract "github.com/kecbigmt/plecture/contracts/state"
+)
+
+// capReviewChainFixture is workTaskWithChain's "review" chain with no
+// resource/inputs projections — the cap refusal below happens before any of
+// those would matter, since reserveChildCapSlot runs inside Up, ahead of
+// Create.
+const capReviewChainFixture = `
+[[chains]]
+id       = "review"
+workflow = "codex"
+[chains.when]
+all = [ { judge_pending = "ac-met" } ]
+`
+
+// writeSpawnableWorkflowFile is writeWorkflowFile's real-spawn counterpart:
+// its provider actually creates the reviewer's workspace directory and
+// reports it under the key Up expects (rather than writeWorkflowFile's fixed,
+// differently-keyed echoed outputs), and it declares the one node a workflow
+// needs to be buildable at all — needed only by the test below that must
+// observe a spawn actually succeed once the cap frees, not just a derived
+// target name.
+func writeSpawnableWorkflowFile(t *testing.T, cfg *config.Config, id, workspaceDir string) {
+	t.Helper()
+	tasksDir := filepath.Join(cfg.BaseDir, "tasks")
+	workflowsDir := filepath.Join(cfg.BaseDir, "workflows")
+	providersDir := filepath.Join(cfg.BaseDir, "workspaces")
+	for _, dir := range []string{tasksDir, workflowsDir, providersDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	noopID := id + "_noop"
+	noopDoc := effectFixtureDoc(taskFixture{id: noopID, scope: "session", setup: "echo '{}'"})
+	if err := os.WriteFile(filepath.Join(tasksDir, noopID+".toml"), []byte(noopDoc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	provID, prov := providerAside(id, providerCreatingWorkspace(id, workspaceDir))
+	wf := fmt.Sprintf("[%s]\nkind = \"workflow\"\nworkspace_provider = %q\n\n[[%s.nodes]]\nuses = %q\n", id, provID, id, noopID)
+	if err := os.WriteFile(filepath.Join(workflowsDir, id+".toml"), []byte(wf), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(providersDir, provID+".toml"), []byte(prov), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestTickSession_ChainCapRefusalReportsTypedOutcomeAndEmitsChainAttemptEvent
+// exercises issue #452's first two acceptance criteria: a cap-refused spawn
+// is reported as its own typed outcome (not folded into a generic "spawn
+// failed:" warning), and records exactly one plect.chain.attempt event on
+// the ticking session's own log — deduplicated across a refusal streak.
+func TestTickSession_ChainCapRefusalReportsTypedOutcomeAndEmitsChainAttemptEvent(t *testing.T) {
+	store := testStore(t)
+	cfg := writeWorkflowFixture(t, t.TempDir(), "wf",
+		[]taskFixture{workTaskWithChain(capReviewChainFixture)},
+		[]nodeFixture{{id: "work"}})
+	writeWorkflowFile(t, cfg, "codex", "")
+	writeCapWorkflow(t, cfg.BaseDir, "parent_wf", intPtr(1))
+
+	seedSession(t, store, "parent1", "acct", 1, "parent_wf", nil)
+	seedSession(t, store, "sibling", "acct", 2, "", upTasks())
+	setParent(t, store, "sibling", "parent1")
+	seedReviewWork(t, store, "owner/repo-1", map[string]any{"checks_status": "SUCCESS", "revision": "sha1"})
+	setParent(t, store, "owner/repo-1", "parent1")
+
+	res, err := TickSession(cfg, store, TickParams{SessionName: "owner/repo-1", SkipRefresh: true})
+	if err != nil {
+		t.Fatalf("TickSession: %v", err)
+	}
+	sp, ok := findSpawn(res.Chains, "review")
+	if !ok || !sp.Fired || sp.Spawned || sp.AlreadyActive || !sp.CapRefused {
+		t.Fatalf("expected a cap-refused typed outcome, got %+v", sp)
+	}
+	if sp.TargetSession == "" {
+		t.Fatalf("expected a derived target session even though the spawn was refused, got %+v", sp)
+	}
+	if store.Get(sp.TargetSession) != nil {
+		t.Fatalf("cap refusal must create no target session, found %q", sp.TargetSession)
+	}
+	if len(sp.Warnings) == 0 {
+		t.Fatalf("expected the cap error surfaced as a warning, got none")
+	}
+
+	evs, _, _, err := eventlog.NewStore(store.Dir()).List("owner/repo-1", 0, event.Filter{Types: []string{event.TypeChainAttempt}})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(evs) != 1 {
+		t.Fatalf("chain-attempt events = %d, want 1: %+v", len(evs), evs)
+	}
+	if got := evs[0].Metadata; got["chain_id"] != "review" || got["instance"] != "work" || got["target"] != sp.TargetSession || got["reason"] != "cap" {
+		t.Fatalf("chain-attempt metadata = %+v, want chain_id=review instance=work target=%s reason=cap", got, sp.TargetSession)
+	}
+	if evs[0].Source != event.SourceTick {
+		t.Fatalf("chain-attempt source = %q, want %q", evs[0].Source, event.SourceTick)
+	}
+
+	// A second refusal streak on unchanged state records nothing further.
+	if _, err := TickSession(cfg, store, TickParams{SessionName: "owner/repo-1", SkipRefresh: true}); err != nil {
+		t.Fatalf("TickSession(2): %v", err)
+	}
+	evs2, _, _, err := eventlog.NewStore(store.Dir()).List("owner/repo-1", 0, event.Filter{Types: []string{event.TypeChainAttempt}})
+	if err != nil {
+		t.Fatalf("List(2): %v", err)
+	}
+	if len(evs2) != 1 {
+		t.Fatalf("chain-attempt events after a second refusal = %d, want still 1 (deduped)", len(evs2))
+	}
+}
+
+// TestTickSession_ChainSpawnsOnceCapacityFreesAfterCapRefusal exercises issue
+// #452's third acceptance criterion: once the sibling occupying the cap goes
+// down, the next tick retries the same (idempotent) fire and actually spawns
+// it — the refusal was never a persisted "blocked" state.
+func TestTickSession_ChainSpawnsOnceCapacityFreesAfterCapRefusal(t *testing.T) {
+	store := testStore(t)
+	cfg := writeWorkflowFixture(t, t.TempDir(), "wf",
+		[]taskFixture{workTaskWithChain(capReviewChainFixture)},
+		[]nodeFixture{{id: "work"}})
+	writeSpawnableWorkflowFile(t, cfg, "codex", filepath.Join(t.TempDir(), "reviewer-wd"))
+	writeCapWorkflow(t, cfg.BaseDir, "parent_wf", intPtr(1))
+
+	seedSession(t, store, "parent1", "acct", 1, "parent_wf", nil)
+	seedSession(t, store, "sibling", "acct", 2, "", upTasks())
+	setParent(t, store, "sibling", "parent1")
+	seedReviewWork(t, store, "owner/repo-1", map[string]any{"checks_status": "SUCCESS", "revision": "sha1"})
+	setParent(t, store, "owner/repo-1", "parent1")
+
+	res, err := TickSession(cfg, store, TickParams{SessionName: "owner/repo-1", SkipRefresh: true})
+	if err != nil {
+		t.Fatalf("TickSession: %v", err)
+	}
+	sp, _ := findSpawn(res.Chains, "review")
+	if !sp.CapRefused {
+		t.Fatalf("expected the first tick to be cap-refused, got %+v", sp)
+	}
+
+	// The sibling frees its slot.
+	if err := store.Update("sibling", func(s *domain.Session) error {
+		s.Tasks["run_node"].Status = contract.TaskStatusCleaned
+		return nil
+	}); err != nil {
+		t.Fatalf("bring sibling down: %v", err)
+	}
+
+	res2, err := TickSession(cfg, store, TickParams{SessionName: "owner/repo-1", SkipRefresh: true})
+	if err != nil {
+		t.Fatalf("TickSession(2): %v", err)
+	}
+	sp2, ok := findSpawn(res2.Chains, "review")
+	if !ok || !sp2.Fired || !sp2.Spawned || sp2.CapRefused {
+		t.Fatalf("expected the retried fire to spawn once capacity freed, got %+v", sp2)
+	}
+	if store.Get(sp2.TargetSession) == nil {
+		t.Fatalf("spawned target %q not persisted", sp2.TargetSession)
+	}
+}

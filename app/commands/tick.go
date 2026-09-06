@@ -27,9 +27,10 @@ pushes a done/escalate terminal event to the parent exactly once per instance.
 Against that same fact set it also fires
 [[chains]]: a chain whose when holds and whose wired outputs are present
 spawns its workflow (idempotent — an already-active target is reported, not
-re-spawned). Idempotent — safe to call repeatedly on unchanged state. Use
-"plect status" to read the same evaluation (including the chain plan) without
-acting on it.
+re-spawned; a spawn the parent's max_up_children cap refuses is reported
+cap-refused, not spawned, and retried on a later tick once capacity frees).
+Idempotent — safe to call repeatedly on unchanged state. Use "plect status"
+to read the same evaluation (including the chain plan) without acting on it.
 
 JSON actions are one of satisfied, wait, review_required, kick, or escalate.
 Each action carries heartbeat_budget (0 means unbounded), heartbeat_ticks, a
@@ -78,6 +79,8 @@ func chainSpawnStatus(sp service.ChainSpawn) string {
 		return "spawned " + sp.TargetSession
 	case sp.AlreadyActive:
 		return "already-active " + sp.TargetSession
+	case sp.CapRefused:
+		return "cap-refused " + sp.TargetSession
 	case sp.Fired:
 		return "fired"
 	default:

@@ -55,6 +55,53 @@ func publishAlreadyActiveChainKick(cfg *config.Config, store *state.Store, workS
 	return true, nil
 }
 
+// chainAttemptReasonCap is the sole Metadata["reason"] a chain-attempt event
+// carries today — see TypeChainAttempt.
+const chainAttemptReasonCap = "cap"
+
+// publishChainCapAttempt appends one plect.chain.attempt event to the ticking
+// session's own log (workSession) when its chain's spawn was refused by the
+// parent's max_up_children cap. It dedupes against that session's own recent
+// chain-attempt events on (chain_id, instance, target, reason): while none of
+// those change, a refusal streak records once rather than once per tick, and
+// a later fire of the same chain against a different target (a new instance,
+// or a re-derived target after the input it names moves on) is its own event.
+func publishChainCapAttempt(cfg *config.Config, store *state.Store, workSession string, sp ChainSpawn) error {
+	if sp.TargetSession == "" {
+		return nil
+	}
+	log := eventlog.NewStore(store.Dir())
+	evs, _, _, err := log.List(workSession, 0, event.Filter{
+		Types:   []string{event.TypeChainAttempt},
+		Sources: []string{event.SourceTick},
+	})
+	if err != nil {
+		return err
+	}
+	for _, ev := range evs {
+		if ev.Metadata["chain_id"] == sp.ChainID &&
+			ev.Metadata["instance"] == sp.Instance &&
+			ev.Metadata["target"] == sp.TargetSession &&
+			ev.Metadata["reason"] == chainAttemptReasonCap {
+			return nil
+		}
+	}
+	_, err = EventPublish(cfg, store, workSession, EventPublishParams{
+		Type:      event.TypeChainAttempt,
+		Source:    event.SourceTick,
+		Direction: event.Internal,
+		Summary:   fmt.Sprintf("chain %s refused: parent at its max_up_children cap (target %s)", sp.ChainID, sp.TargetSession),
+		Body:      strings.Join(sp.Warnings, "\n"),
+		Metadata: map[string]string{
+			"chain_id": sp.ChainID,
+			"instance": sp.Instance,
+			"target":   sp.TargetSession,
+			"reason":   chainAttemptReasonCap,
+		},
+	})
+	return err
+}
+
 func chainKickDedupKey(workSession string, sp ChainSpawn) string {
 	sum := sha256.Sum256([]byte(strings.Join([]string{
 		workSession,

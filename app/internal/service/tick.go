@@ -79,9 +79,20 @@ func TickSession(cfg *config.Config, store *state.Store, params TickParams) (*Ch
 			// discard the done_when actions already published/persisted above,
 			// nor the other chains' results — it is reported on this entry only,
 			// so the next tick can retry the same (idempotent) fire.
-			if err != nil {
+			switch svcErr, isCapRefusal := asChildCapExceeded(err); {
+			case isCapRefusal:
+				// A cap refusal is not a generic execution failure: the fire
+				// remains eligible and this same entry is retried next tick
+				// once capacity frees, so it is reported as its own typed
+				// outcome rather than folded into "spawn failed:".
+				sp.CapRefused = true
+				sp.Warnings = append(sp.Warnings, svcErr.Message)
+				if pubErr := publishChainCapAttempt(cfg, store, resolvedName, sp); pubErr != nil {
+					sp.Warnings = append(sp.Warnings, fmt.Sprintf("chain-attempt event failed: %v", pubErr))
+				}
+			case err != nil:
 				sp.Warnings = append(sp.Warnings, fmt.Sprintf("spawn failed: %v", err))
-			} else {
+			default:
 				sp.Spawned = true
 				sp.TargetSession = up.SessionName
 			}

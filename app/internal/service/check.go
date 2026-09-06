@@ -96,7 +96,10 @@ type CheckResult struct {
 	// already-active / blocked, with the reason — evaluated against the same
 	// facts as Actions. CheckSession (and plect status, which shares the same
 	// evaluation) always reports it as a dry-run plan (Spawned is always
-	// false); TickSession spawns each fired, not-already-active entry.
+	// false, so a fired entry is reported by its callers as eligible, not as
+	// having fired); TickSession spawns each fired, not-already-active entry
+	// and, on a cap refusal specifically, marks CapRefused instead of a
+	// generic spawn failure.
 	Chains []ChainSpawn `json:"chains,omitempty"`
 }
 

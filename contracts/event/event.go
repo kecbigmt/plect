@@ -85,7 +85,16 @@ const (
 	// *target* work session's log (not the reviewer's) whenever a judge
 	// verdict is recorded, independent of any `[tick]` declaration — the tick
 	// reactor always reacts to it by ticking that target session.
-	TypeJudgeRecorded             = "plect.judge.recorded"
+	TypeJudgeRecorded = "plect.judge.recorded"
+	// TypeChainAttempt records a [[chains]] spawn attempt that fired but
+	// created no session — today the only producer is a parent's
+	// max_up_children cap refusal (Metadata["reason"] = "cap"). It is
+	// appended to the *ticking* session's own log, not the derived target's
+	// (which does not exist), so a dispatcher walking the subtree sees the
+	// refusal without re-running `plect status`. A tick dedupes on
+	// (chain_id, instance, target, reason) so a refusal streak records once,
+	// not once per tick.
+	TypeChainAttempt              = "plect.chain.attempt"
 	TypeWorkflowPopulationDestroy = "plect.workflow_population.destroy"
 	TypeWorkflowPopulationDown    = "plect.workflow_population.down"
 	// TypeWorkflowPopulationUp means the member's session just transitioned
