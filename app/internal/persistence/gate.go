@@ -73,20 +73,28 @@ func (g *accessGate) accessShared() (func(), error) {
 }
 
 // enterShared is the full normal-access protocol every read, write
-// transaction, and even the initial connection Open must go through: the
-// bounded coordination probe, then the access lock held shared. Once a
-// migrator holds the coordination lock exclusively (recording intent),
-// every new enterShared call waits behind it (or refuses after
-// migrationWait) instead of reaching accessShared at all, which is what
-// stops a new operation from entering after intent is recorded. An
-// operation that already passed the probe and is holding accessShared when
-// intent is recorded is unaffected — accessExclusive waits for it, per
-// design.
+// transaction, and even the initial connection Open must go through: it
+// holds the coordination lock shared across the access lock acquisition,
+// bounded by migrationWait, rather than releasing the coordination lock
+// before requesting the access lock. Release-then-acquire would leave a gap
+// between the two calls in which a migrator could take the coordination
+// lock exclusively — recording intent — while this operation is still on
+// its way in, which would defeat the exclusion the coordination lock exists
+// to provide. Once accessShared succeeds, the coordination lock is
+// released; this operation is now the kind accessExclusive itself waits
+// out, per design.
 func (g *accessGate) enterShared(ctx context.Context) (func(), error) {
-	if err := g.waitUntilNoMigrationInProgress(ctx); err != nil {
+	unlockCoord, err := g.acquireCoordination(ctx, syscall.LOCK_SH)
+	if err != nil {
 		return nil, err
 	}
-	return g.accessShared()
+	unlockAccess, err := g.accessShared()
+	if err != nil {
+		unlockCoord()
+		return nil, err
+	}
+	unlockCoord()
+	return unlockAccess, nil
 }
 
 // accessExclusive is held for the duration of a migration. It waits for
@@ -99,20 +107,6 @@ func (g *accessGate) accessExclusive() (func(), error) {
 		return nil, fmt.Errorf("persistence: acquire exclusive access lock: %w", err)
 	}
 	return unlock, nil
-}
-
-// waitUntilNoMigrationInProgress is the brief coordination check every
-// normal access performs before touching the access gate: it waits for the
-// coordination lock to be available shared, bounded by migrationWait, and
-// releases it immediately rather than holding it — the coordination lock is
-// only ever held for the durations described on accessGate.
-func (g *accessGate) waitUntilNoMigrationInProgress(ctx context.Context) error {
-	unlock, err := g.acquireCoordination(ctx, syscall.LOCK_SH)
-	if err != nil {
-		return err
-	}
-	unlock()
-	return nil
 }
 
 // acquireCoordinationExclusive is what a process calls once it has decided

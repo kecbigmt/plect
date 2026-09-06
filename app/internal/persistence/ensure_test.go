@@ -224,17 +224,65 @@ func TestEnsureCurrent_InterruptedMigrationPreservesEvidenceAndResumesAfterFix(t
 	}
 }
 
+// TestEnsureCurrent_ConcurrentFreshOpenNeverCollides is the direct
+// regression test for the same first-touch race
+// app/internal/persistence/lock.go's narrow flock (in a sibling PR) closed
+// separately: several processes pinging the same not-yet-existent database
+// file for the first time race on creating its WAL and shared-memory
+// sidecars. Open's own coordination-lock guard (see open.go) is what
+// prevents that here, with no dedicated lock file.
+func TestEnsureCurrent_ConcurrentFreshOpenNeverCollides(t *testing.T) {
+	ctx := context.Background()
+	path := testDBPath(t)
+	fsys := migrationFixture(map[string]string{"00001_a.sql": migrationA})
+
+	const n = 5
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	dbs := make([]*DB, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			dbs[i], errs[i] = ensureCurrent(ctx, path, fsys)
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("goroutine %d: ensureCurrent: %v", i, err)
+		}
+		if dbs[i] != nil {
+			dbs[i].Close()
+		}
+	}
+
+	verify, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open for verification: %v", err)
+	}
+	defer verify.Close()
+	verify.migrations = fsys
+	current, target, err := verify.version(ctx)
+	if err != nil {
+		t.Fatalf("version: %v", err)
+	}
+	if current != target || current != 1 {
+		t.Fatalf("version after concurrent fresh open = (%d, %d), want (1, 1)", current, target)
+	}
+}
+
 func TestEnsureCurrent_ConcurrentStartupOnlyOneMigratesAndBothSucceed(t *testing.T) {
 	ctx := context.Background()
 	path := testDBPath(t)
 	fsys := migrationFixture(map[string]string{"00001_a.sql": migrationA, "00002_b.sql": migrationBOK})
 
 	// Bring the database to version 1 first, uncontended, so this test
-	// exercises the scenario the acceptance criteria describe — several
+	// isolates the scenario the acceptance criteria describe — several
 	// processes racing to apply a pending migration to an already-existing
-	// database — rather than several raw *sql.DB pools racing SQLite's own
-	// WAL bootstrap on a brand-new file, which is a driver-level stress case
-	// this test isn't about.
+	// database — from the fresh-open race
+	// TestEnsureCurrent_ConcurrentFreshOpenNeverCollides covers separately.
 	seed, err := ensureCurrent(ctx, path, migrationFixture(map[string]string{"00001_a.sql": migrationA}))
 	if err != nil {
 		t.Fatalf("seed ensureCurrent: %v", err)
@@ -278,12 +326,11 @@ func TestEnsureCurrent_ConcurrentStartupOnlyOneMigratesAndBothSucceed(t *testing
 	}
 }
 
-// TestAccessGate_WaitUntilNoMigrationInProgressWaitsForCoordinationLock
-// proves the general "wait, don't refuse immediately" shape of the
-// coordination probe: it blocks while another holder has the coordination
-// lock exclusively and returns only once that holder releases it, rather
-// than either failing immediately or returning while the lock is still held.
-func TestAccessGate_WaitUntilNoMigrationInProgressWaitsForCoordinationLock(t *testing.T) {
+// TestAccessGate_EnterSharedWaitsForCoordinationLockRatherThanRefusingImmediately
+// proves the general "wait, don't refuse immediately" shape: enterShared
+// blocks while another holder has the coordination lock exclusively and
+// returns only once that holder releases it.
+func TestAccessGate_EnterSharedWaitsForCoordinationLockRatherThanRefusingImmediately(t *testing.T) {
 	path := testDBPath(t)
 	gate := newAccessGate(path)
 
@@ -299,12 +346,14 @@ func TestAccessGate_WaitUntilNoMigrationInProgressWaitsForCoordinationLock(t *te
 	time.AfterFunc(hold, unlock)
 
 	start := time.Now()
-	if err := gate.waitUntilNoMigrationInProgress(context.Background()); err != nil {
-		t.Fatalf("waitUntilNoMigrationInProgress: %v", err)
+	unlockAccess, err := gate.enterShared(context.Background())
+	if err != nil {
+		t.Fatalf("enterShared: %v", err)
 	}
+	defer unlockAccess()
 	elapsed := time.Since(start)
 	if elapsed < hold/2 {
-		t.Errorf("waitUntilNoMigrationInProgress returned after %s, want it blocked for roughly %s while the coordination lock was held", elapsed, hold)
+		t.Errorf("enterShared returned after %s, want it blocked for roughly %s while the coordination lock was held", elapsed, hold)
 	}
 }
 

@@ -3,8 +3,11 @@ package persistence
 import (
 	"context"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
+	"os"
+	"time"
 
 	"github.com/pressly/goose/v3"
 )
@@ -23,34 +26,71 @@ func migrationsSourceFS() fs.FS {
 	return sub
 }
 
-// Migrate defers entirely to goose's own applied-version ledger rather
-// than tracking a second record of what has run, so it is safe to call on
-// every startup: goose.Provider.Up is a no-op once the ledger shows every
-// embedded migration already applied.
-//
-// It holds the access gate's exclusive lock for the whole call, which is
-// what makes it safe to call directly (as this package's own tests do) as
-// well as through EnsureCurrent's coordinated runner: either way, no normal
-// access can observe a half-migrated schema, because accessExclusive waits
-// out every already-in-flight accessShared holder first. migrateAsRunner
-// (ensure.go) already holds accessExclusive itself by the time it needs to
-// apply migrations, so it calls migrateLocked directly — calling Migrate
-// there would request accessExclusive a second time on a different file
-// descriptor for the same lock file and deadlock against its own hold,
-// since flock is scoped to the open file description, not the process.
+// Migrate is the migration runner protocol in full — the only path that is
+// allowed to change store.db's schema, whether called directly (as this
+// package's own tests do for setup) or from EnsureCurrent: it records
+// intent by acquiring the coordination lock exclusively, waits out any
+// already-in-flight normal access by then acquiring the access lock
+// exclusively, rechecks the ledger under that exclusion (another process
+// may have already migrated, or the ledger may already be newer than this
+// binary supports), and preserves diagnostic evidence in the marker file
+// across a failure. It defers entirely to goose's own applied-version
+// ledger rather than tracking a second record of what has run, so it is
+// safe to call on every startup: goose.Provider.Up is a no-op once the
+// ledger shows every embedded migration already applied.
 func (db *DB) Migrate(ctx context.Context) error {
-	unlock, err := db.gate.accessExclusive()
+	gate := db.gate
+
+	unlockCoord, err := gate.acquireCoordinationExclusive(ctx)
 	if err != nil {
 		return err
 	}
-	defer unlock()
+	defer unlockCoord()
 
-	return db.migrateLocked(ctx)
+	unlockAccess, err := gate.accessExclusive()
+	if err != nil {
+		return err
+	}
+	defer unlockAccess()
+
+	current, target, err := db.versionLocked(ctx)
+	if err != nil {
+		return err
+	}
+	if err := refuseIfNewerThanSupported(current, target); err != nil {
+		return err
+	}
+	if current == target {
+		return nil
+	}
+
+	marker := migrationMarker{
+		PID:           os.Getpid(),
+		BinaryVersion: binaryVersion(),
+		StartedAt:     time.Now().UTC(),
+		Stage:         "migrating",
+	}
+	if err := writeMarker(gate.markerPath, marker); err != nil {
+		return err
+	}
+
+	if migrateErr := db.migrateLocked(ctx); migrateErr != nil {
+		marker.Stage = "failed"
+		marker.Error = migrateErr.Error()
+		if writeErr := writeMarker(gate.markerPath, marker); writeErr != nil {
+			return fmt.Errorf("%w (also failed to record failure evidence: %v)", migrateErr, writeErr)
+		}
+		return fmt.Errorf("persistence: migration failed, pre-migration state and failure evidence preserved at %s: %w", gate.markerPath, migrateErr)
+	}
+
+	if err := os.Remove(gate.markerPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("persistence: remove migration marker after success: %w", err)
+	}
+	return nil
 }
 
-// migrateLocked is Migrate's body without acquiring the access lock itself;
-// see Migrate's doc comment for why a caller that already holds
-// accessExclusive must call this instead.
+// migrateLocked applies pending migrations without acquiring any lock
+// itself; only Migrate calls it, already holding accessExclusive.
 func (db *DB) migrateLocked(ctx context.Context) error {
 	provider, err := goose.NewProvider(goose.DialectSQLite3, db.write, db.migrations)
 	if err != nil {
@@ -63,10 +103,8 @@ func (db *DB) migrateLocked(ctx context.Context) error {
 }
 
 // version returns the goose ledger's currently applied version and the
-// highest version this binary's migration source declares. It goes through
-// enterShared, like any other normal access, so a call racing a migrator
-// that has already recorded intent waits (or refuses) instead of reading
-// through to a schema that is about to change.
+// highest version this binary's migration source declares, via
+// enterShared like any other normal access.
 func (db *DB) version(ctx context.Context) (current, target int64, err error) {
 	unlock, err := db.gate.enterShared(ctx)
 	if err != nil {
@@ -78,9 +116,7 @@ func (db *DB) version(ctx context.Context) (current, target int64, err error) {
 }
 
 // versionLocked is version's body without acquiring the access gate
-// itself; migrateAsRunner (ensure.go) calls it directly while already
-// holding accessExclusive, for the same self-deadlock reason documented on
-// Migrate.
+// itself; Migrate calls it directly while already holding accessExclusive.
 func (db *DB) versionLocked(ctx context.Context) (current, target int64, err error) {
 	provider, err := goose.NewProvider(goose.DialectSQLite3, db.write, db.migrations)
 	if err != nil {

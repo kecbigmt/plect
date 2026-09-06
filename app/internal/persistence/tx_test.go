@@ -57,12 +57,6 @@ func TestWithImmediateTx_ReservesWriterLockBeforeFnRunsAnyStatement(t *testing.T
 	}
 }
 
-// TestWithImmediateTx_WaitsForMigrationIntentBeforeEnteringCallback proves
-// WithImmediateTx goes through enterShared (coordination probe, then the
-// access lock), not accessShared alone: once a migrator has recorded intent
-// by holding the coordination lock exclusively, a fresh WithImmediateTx call
-// must wait behind it rather than racing straight to the access lock and
-// entering its callback.
 func TestWithImmediateTx_WaitsForMigrationIntentBeforeEnteringCallback(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()

@@ -46,10 +46,7 @@ func TestStorageMigrate_IsANoOpOnASecondRun(t *testing.T) {
 	}
 }
 
-// TestRootPersistentPreRun_CreatesStoreDBForEveryCommand proves
-// persistence.EnsureCurrent runs from root.go's PersistentPreRunE for a
-// command that has nothing to do with storage, not only from the explicit
-// `storage migrate` command.
+// Unlike the storage migrate tests above, this runs an unrelated command.
 func TestRootPersistentPreRun_CreatesStoreDBForEveryCommand(t *testing.T) {
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)

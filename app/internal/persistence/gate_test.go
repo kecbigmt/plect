@@ -69,15 +69,10 @@ func TestAccessGate_AccessExclusiveBlocksAccessShared(t *testing.T) {
 	unlockShared()
 }
 
-// TestAccessGate_EnterSharedWaitsForCoordinationLockBeforeTakingAccessShared
-// is the regression test for the race a review of this package's first
-// version caught: accessShared alone lets a brand new operation race in the
-// instant nothing currently holds it exclusively, regardless of a migrator
-// that has already recorded intent by holding the coordination lock — flock
-// has no notion of a queued exclusive waiter deprioritizing a fresh shared
-// request. enterShared closes that gap by making the coordination probe a
-// mandatory prerequisite of every access-shared acquisition, not something
-// only EnsureCurrent's own outermost caller checks once.
+// flock grants a fresh shared request the instant nothing currently holds
+// the lock exclusively, regardless of a queued exclusive waiter, so
+// accessShared alone would let a new operation race a migrator that has
+// already recorded intent by holding the coordination lock.
 func TestAccessGate_EnterSharedWaitsForCoordinationLockBeforeTakingAccessShared(t *testing.T) {
 	path := testDBPath(t)
 	gate := newAccessGate(path)
@@ -120,6 +115,59 @@ func TestAccessGate_EnterSharedWaitsForCoordinationLockBeforeTakingAccessShared(
 		r.unlock()
 	case <-time.After(2 * time.Second):
 		t.Fatal("enterShared never proceeded after the coordination lock was released")
+	}
+}
+
+// TestAccessGate_EnterSharedHoldsCoordinationLockUntilAccessSharedIsAcquired
+// is the deterministic regression test for the handoff gap a release-then-
+// acquire enterShared would have: it forces enterShared to block on
+// accessShared (by holding accessExclusive externally) and, while it is
+// stuck there, probes the coordination lock exclusively from outside. That
+// probe must fail — if enterShared had already released its
+// coordination-shared hold before accessShared succeeded, a migrator could
+// acquire the coordination lock and record intent in exactly this window,
+// while this operation is still on its way in.
+func TestAccessGate_EnterSharedHoldsCoordinationLockUntilAccessSharedIsAcquired(t *testing.T) {
+	path := testDBPath(t)
+	gate := newAccessGate(path)
+
+	unlockAccessExclusive, err := gate.accessExclusive()
+	if err != nil {
+		t.Fatalf("accessExclusive: %v", err)
+	}
+
+	type outcome struct {
+		unlock func()
+		err    error
+	}
+	result := make(chan outcome, 1)
+	go func() {
+		unlock, err := gate.enterShared(context.Background())
+		result <- outcome{unlock, err}
+	}()
+
+	// Give enterShared time to acquire the coordination lock and reach (and
+	// block on) accessShared.
+	time.Sleep(200 * time.Millisecond)
+
+	_, ok, err := tryFlockPath(gate.coordinationLockPath, syscall.LOCK_EX)
+	if err != nil {
+		t.Fatalf("tryFlockPath: %v", err)
+	}
+	if ok {
+		t.Fatal("acquired the coordination lock exclusively while enterShared was still blocked on accessShared — the coordination-to-access handoff is not atomic")
+	}
+
+	unlockAccessExclusive()
+
+	select {
+	case r := <-result:
+		if r.err != nil {
+			t.Fatalf("enterShared: %v", r.err)
+		}
+		r.unlock()
+	case <-time.After(2 * time.Second):
+		t.Fatal("enterShared never completed after accessExclusive was released")
 	}
 }
 
