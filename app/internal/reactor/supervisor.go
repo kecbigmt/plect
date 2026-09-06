@@ -28,7 +28,6 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/sessionhub"
 	"github.com/kecbigmt/plecture/app/internal/state"
 	"github.com/kecbigmt/plecture/app/internal/task"
-	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
 // deadmanInterval is the heartbeat-deadman sweep's own cadence — coarse,
@@ -131,7 +130,7 @@ func (sup *Supervisor) checkDeadman(ctx context.Context) {
 		return
 	}
 	for name, s := range sessions {
-		if !hasRunScopeUp(s.Tasks) {
+		if !cfg.RunScopeUp(s) {
 			continue
 		}
 		tc, err := resolveTickConfig(cfg, s)
@@ -168,6 +167,7 @@ func resolveTickConfig(cfg *config.Config, s *domain.Session) (config.TickConfig
 }
 
 func (sup *Supervisor) reconcile(ctx context.Context, active map[string]context.CancelFunc, wg *sync.WaitGroup) {
+	cfg := sup.cfg()
 	sessions, err := sup.state.AllE()
 	if err != nil {
 		// An unreadable store must never read as "every session is gone":
@@ -177,7 +177,7 @@ func (sup *Supervisor) reconcile(ctx context.Context, active map[string]context.
 		return
 	}
 	for name, s := range sessions {
-		if _, running := active[name]; running || !hasRunScopeUp(s.Tasks) {
+		if _, running := active[name]; running || !cfg.RunScopeUp(s) {
 			continue
 		}
 		r := sup.buildReactor(name, s)
@@ -186,7 +186,7 @@ func (sup *Supervisor) reconcile(ctx context.Context, active map[string]context.
 		wg.Go(func() { r.run(rctx) })
 	}
 	for name, cancel := range active {
-		if s, ok := sessions[name]; !ok || !hasRunScopeUp(s.Tasks) {
+		if s, ok := sessions[name]; !ok || !cfg.RunScopeUp(s) {
 			cancel()
 			delete(active, name)
 		}
@@ -227,13 +227,4 @@ func (sup *Supervisor) buildReactor(name string, s *domain.Session) *sessionReac
 		observer:    sup.observer,
 		logger:      sup.logger,
 	}
-}
-
-func hasRunScopeUp(tasks map[string]*contract.TaskState) bool {
-	for _, e := range tasks {
-		if e != nil && e.Scope == contract.TaskScopeRun && e.Status == contract.TaskStatusProduced {
-			return true
-		}
-	}
-	return false
 }

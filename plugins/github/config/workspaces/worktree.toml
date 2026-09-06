@@ -100,12 +100,17 @@ delete_branch         = { from = "cleanup.inputs.delete_branch", default = "" }
 delete_branch_default = { from = "inputs.delete_branch_default", default = "" }
 
 # subscribe binds a session to a resource at runtime (the `plect subscribe`
-# verb) — the same watcher subscription registry `cleanup` unsubscribes from
-# on destroy, additive, never replacing.
+# verb, and the implicit binding a session's own resource or a dynamic task's
+# --resource gets) — the same watcher subscription registry `cleanup`
+# unsubscribes from on destroy, additive, never replacing. --branch forwards
+# the current session's own workspace branch, empty unless this same
+# provider's own setup hook is what produced it, so the watcher's issue
+# polling can discover the linked PR for an issue session that never ran an
+# explicit `plect subscribe` on it.
 [worktree.subscribe]
 type = "exec"
 bin  = "github-watcher"
-args = ["subscribe", "--session", { from = "session.name" }, "--resource", { from = "resource.id" }]
+args = ["subscribe", "--session", { from = "session.name" }, "--resource", { from = "resource.id" }, "--branch", { from = "session.branch", default = "" }]
 
 # unsubscribe drops a single (session, resource) binding — the counterpart of
 # `subscribe`, run when a dynamic task instance bound to that resource is

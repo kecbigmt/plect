@@ -6,4 +6,4 @@ call[0]: "github-worktree" "cleanup" "--workspace-dir" "/spy/workspace" "--branc
 call[1]: "github-watcher" "unsubscribe" "--session" "acme/widget-1"
 
 == worktree / subscribe
-call[0]: "github-watcher" "subscribe" "--session" "acme/widget-1" "--resource" "example://acme/widget/1"
+call[0]: "github-watcher" "subscribe" "--session" "acme/widget-1" "--resource" "example://acme/widget/1" "--branch" ""

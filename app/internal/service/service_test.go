@@ -62,6 +62,41 @@ func TestList_SortsTrackedByName(t *testing.T) {
 	}
 }
 
+func TestList_UnresolvableWorkflowIsUnhealthyButOtherSessionsListNormally(t *testing.T) {
+	store := testStore(t)
+	cfg := currentPlanConfig(t, "true", "true") // only declares workflow "default"
+	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "ghost-workflow", map[string]*contract.TaskState{
+		"pane": {Scope: contract.TaskScopeRun, TaskID: "pane", Status: contract.TaskStatusProduced},
+	})
+	seedSession(t, store, "owner/repo-2", "owner/repo", 2, "default", map[string]*contract.TaskState{
+		"pane":  {Scope: contract.TaskScopeRun, TaskID: "pane", Status: contract.TaskStatusProduced},
+		"agent": {Scope: contract.TaskScopeRun, TaskID: "agent", Status: contract.TaskStatusProduced},
+	})
+
+	entries, err := List(cfg, store)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	byName := make(map[string]ListEntry, len(entries))
+	for _, e := range entries {
+		byName[e.SessionName] = e
+	}
+	broken, ok := byName["owner/repo-1"]
+	if !ok {
+		t.Fatal("owner/repo-1 missing from List results")
+	}
+	if broken.Health != domain.HealthUnhealthy {
+		t.Errorf("broken session Health = %q, want unhealthy", broken.Health)
+	}
+	healthy, ok := byName["owner/repo-2"]
+	if !ok {
+		t.Fatal("owner/repo-2 missing from List results")
+	}
+	if healthy.Health != domain.HealthHealthy {
+		t.Errorf("other session Health = %q, want healthy — one broken workflow must not affect it", healthy.Health)
+	}
+}
+
 func TestResolveSession_ByURL(t *testing.T) {
 	store := testStore(t)
 	// No session in store → should fail with session_not_found

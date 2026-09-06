@@ -133,7 +133,7 @@ func (r *sessionReactor) run(ctx context.Context) {
 			r.logger.Error("reactor: read session state failed", "session", r.session, "error", err)
 		} else if s == nil {
 			return // destroyed
-		} else if hasRunScopeUp(s.Tasks) {
+		} else if r.cfg.RunScopeUp(s) {
 			r.drain(ctx, &startGen)
 		}
 		select {
@@ -321,12 +321,12 @@ func (r *sessionReactor) checkHeartbeat(ctx context.Context) {
 	if r.tick.Heartbeat.Duration <= 0 {
 		return
 	}
-	s, err := r.state.GetE(r.session)
+s, err := r.state.GetE(r.session)
 	if err != nil {
 		slog.Default().Warn("reactor: read session state failed; skipping this heartbeat sweep", "session", r.session, "error", err)
 		return
 	}
-	if s == nil || !hasRunScopeUp(s.Tasks) {
+	if s == nil || !r.cfg.RunScopeUp(s) {
 		return
 	}
 	if !s.LastTickAt.IsZero() {
@@ -354,12 +354,12 @@ func (r *sessionReactor) checkHealth(ctx context.Context) {
 	if ctx.Err() != nil {
 		return
 	}
-	s, err := r.state.GetE(r.session)
+s, err := r.state.GetE(r.session)
 	if err != nil {
 		slog.Default().Warn("reactor: read session state failed; skipping this healthcheck sweep", "session", r.session, "error", err)
 		return
 	}
-	if s == nil || !hasRunScopeUp(s.Tasks) {
+	if s == nil || !r.cfg.RunScopeUp(s) {
 		return
 	}
 	fn := r.healthcheckFn
@@ -379,12 +379,12 @@ func (r *sessionReactor) checkChannelHealth(ctx context.Context) {
 	if ctx.Err() != nil {
 		return
 	}
-	s, err := r.state.GetE(r.session)
+s, err := r.state.GetE(r.session)
 	if err != nil {
 		slog.Default().Warn("reactor: read session state failed; skipping this channel-health sweep", "session", r.session, "error", err)
 		return
 	}
-	if s == nil || !hasRunScopeUp(s.Tasks) {
+	if s == nil || !r.cfg.RunScopeUp(s) {
 		return
 	}
 	fn := r.channelHealthFn

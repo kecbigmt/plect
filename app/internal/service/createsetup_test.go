@@ -201,6 +201,49 @@ args    = ["-c", 'printf "%s\n%s\n" "$1" "$2" > "$3"', "provider",
 	}
 }
 
+// An issue session's own subscribe wiring at create time must carry the
+// branch its workspace provider's setup hook produced, not just its name and
+// resource — this is what lets the GitHub workspace provider's subscribe
+// hook forward a session branch to the shipped watcher's linked-PR
+// discovery for an issue resource, without a `plect subscribe` action ever
+// running.
+func TestCreate_ResourceSubscribeCarriesSetupProducedBranch(t *testing.T) {
+	store := testStore(t)
+	workdir := filepath.Join(t.TempDir(), "wd")
+	subRec := filepath.Join(t.TempDir(), "sub-rec")
+
+	cfg := writeWorkflowFixture(t, t.TempDir(), "wf",
+		[]taskFixture{{id: "probe", scope: "session", setup: `echo '{}'`}},
+		[]nodeFixture{{id: "probe"}})
+	extra := providerRunningScript("wf", fmt.Sprintf(`mkdir -p %s
+echo '{"workspace_dir":"%s","branch":"issue/9"}'
+`, workdir, workdir)) + `
+[wf.subscribe]
+type    = "exec"
+command = "sh"
+args    = ["-c", 'printf "%s" "$1" > "$2"', "provider",
+  { from = "session.branch" }, "` + subRec + `"]
+`
+	writeSetupWorkflow(t, cfg, "wf", extra)
+
+	url := "https://github.com/org/repo/issues/9"
+	result, err := Create(cfg, store, CreateParams{URL: url})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if result.Branch != "issue/9" {
+		t.Fatalf("precondition: Branch = %q, want issue/9", result.Branch)
+	}
+
+	got, readErr := os.ReadFile(subRec)
+	if readErr != nil {
+		t.Fatalf("subscribe hook did not run: %v", readErr)
+	}
+	if string(got) != "issue/9" {
+		t.Errorf("subscribe hook saw session.branch = %q, want issue/9", got)
+	}
+}
+
 // A resource no workspace provider hooks for must leave Create unaffected:
 // no subscribe hook to run means nothing queued for retry either.
 func TestCreate_NoDeliverableResourceBehavesAsBefore(t *testing.T) {

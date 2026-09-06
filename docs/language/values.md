@@ -112,7 +112,7 @@ receiving everything and relying on a later check to reject the rest.
 | Workspace provider `name` | `match.<capture>` |
 | Workspace provider `setup` | `resource.id`, `session.name`, `session.inputs.<key>`, `inputs.<key>`, `prev.<key>`, `config.workspace_dirs_root` |
 | Workspace provider `cleanup` | `self.outputs.<key>`, `inputs.<key>`, `cleanup.inputs.<key>`, `session.name`, `config.workspace_dirs_root`, `force` |
-| Workspace provider `subscribe` | `session.name`, `resource.id` |
+| Workspace provider `subscribe` | `session.name`, `session.branch`, `resource.id` |
 | Workspace provider `unsubscribe` | `session.name`, `resource.id` |
 | Resource observer `observe` | `resource.id`, `workspace.dir`, `workspace.branch` |
 | Resource observer `finalize` | `resource.id`, `session.name`, `resource.revision`, `judges` |

@@ -15,7 +15,6 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/state"
 	"github.com/kecbigmt/plecture/app/internal/task"
 	"github.com/kecbigmt/plecture/contracts/event"
-	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
 // dispatcherConsumer is this consumer's cursor name. The cursor is durable per
@@ -32,7 +31,11 @@ const fallbackDrain = 5 * time.Second
 // once by the supervisor; session outputs are re-read per drain so a down/up
 // that re-created the runtime (new socket path) is picked up.
 type sessionDispatcher struct {
-	session  string
+	session string
+	// cfg is the resolved config as of dispatcher build, matching channels/
+	// defs below: used only for the run-scope gate, which does not need to
+	// react to a config change mid-drain the way the reactor's does.
+	cfg      *config.Config
 	channels []config.EventChannel
 	defs     map[string]config.ChannelDefinition
 	log      *eventlog.Store
@@ -71,7 +74,7 @@ func (d *sessionDispatcher) run(ctx context.Context) {
 			slog.Default().Error("dispatcher: read session state failed", "session", d.session, "error", err)
 		} else if s == nil {
 			return // destroyed
-		} else if hasRunScopeUp(s.Tasks) {
+		} else if d.cfg.RunScopeUp(s) {
 			// Skip (don't exit) while run scope is down so a fast down/up
 			// resumes without the supervisor and this goroutine desyncing;
 			// the supervisor owns teardown.
@@ -250,13 +253,4 @@ func (d *sessionDispatcher) recordFailure(ctx context.Context, ev event.Event, c
 		return
 	}
 	_, _, _, _ = d.log.Append(channel.ChannelErrorEvent(ev, channelName, attempts, cause))
-}
-
-func hasRunScopeUp(tasks map[string]*contract.TaskState) bool {
-	for _, e := range tasks {
-		if e != nil && e.Scope == contract.TaskScopeRun && e.Status == contract.TaskStatusProduced {
-			return true
-		}
-	}
-	return false
 }

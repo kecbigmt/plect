@@ -245,7 +245,7 @@ func TestE2E_GithubWorkspaceProviderWiresAndDropsEventDelivery(t *testing.T) {
 	const session = "testowner/testrepo-42+review"
 	const resource = "https://github.com/testowner/testrepo/pull/42"
 
-	wired, err := subscribeIfWired(cfg, session, resource)
+	wired, err := subscribeIfWired(cfg, session, resource, "")
 	if err != nil {
 		t.Fatalf("subscribeIfWired: %v", err)
 	}
@@ -267,6 +267,55 @@ func TestE2E_GithubWorkspaceProviderWiresAndDropsEventDelivery(t *testing.T) {
 	subs = watcherSubscriptions(t, home)
 	if len(subs) != 0 {
 		t.Fatalf("subscriptions after unsubscribeIfWired = %v, want none", subs)
+	}
+}
+
+// TestE2E_GithubWorkspaceProviderSubscribeForwardsBranch pins the issue this
+// package's subscribeIfWired call cannot see on its own: an issue session's
+// branch must reach the real github-watcher's persisted subscription through
+// the shipped worktree.toml's `subscribe` hook, since the watcher's own
+// linked-PR discovery for an issue resource reads it from there.
+func TestE2E_GithubWorkspaceProviderSubscribeForwardsBranch(t *testing.T) {
+	root := repoRoot(t)
+	mounted := buildWorkspaceProviderBinaries(t, root)
+	workspacesDir := filepath.Join(mounted[0].Dir, "config", "workspaces")
+	if err := os.MkdirAll(workspacesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	shipped, err := os.ReadFile(filepath.Join(root, "plugins", "github", "config", "workspaces", "worktree.toml"))
+	if err != nil {
+		t.Fatalf("read shipped github workspace provider: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspacesDir, "github.toml"), shipped, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{PluginDirs: []string{mounted[0].Dir}, Plugins: mounted}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", "")
+
+	const session = "testowner/testrepo-42+review"
+	const resource = "https://github.com/testowner/testrepo/issues/42"
+	const branch = "issue/42+review"
+
+	if _, err := subscribeIfWired(cfg, session, resource, branch); err != nil {
+		t.Fatalf("subscribeIfWired: %v", err)
+	}
+	subs := watcherSubscriptions(t, home)
+	if len(subs) != 1 {
+		t.Fatalf("subscriptions after subscribeIfWired = %v, want exactly one", subs)
+	}
+	for _, raw := range subs {
+		var sub struct {
+			Branch string `json:"branch"`
+		}
+		if err := json.Unmarshal(raw, &sub); err != nil {
+			t.Fatalf("parse persisted subscription: %v", err)
+		}
+		if sub.Branch != branch {
+			t.Errorf("persisted subscription branch = %q, want %q", sub.Branch, branch)
+		}
 	}
 }
 

@@ -99,6 +99,211 @@ func TestEvaluateHealth_FailingAliveProbeIsUnhealthy(t *testing.T) {
 	}
 }
 
+// currentPlanConfig declares two run-scoped nodes, "pane" and "agent", each a
+// plain effect whose only declaration is the given [health.alive] command.
+func currentPlanConfig(t *testing.T, paneAlive, agentAlive string) *config.Config {
+	t.Helper()
+	return writeWorkflowFixture(t, t.TempDir(), "default", []taskFixture{
+		{id: "pane", scope: contract.TaskScopeRun, alive: paneAlive},
+		{id: "agent", scope: contract.TaskScopeRun, alive: agentAlive},
+	}, []nodeFixture{{id: "pane"}, {id: "agent"}})
+}
+
+func TestEvaluateHealth_FailedCurrentPlanNodeIsUnhealthyNamingNodeAndError(t *testing.T) {
+	store := testStore(t)
+	cfg := currentPlanConfig(t, "true", "true")
+	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+		"pane":  {Scope: contract.TaskScopeRun, TaskID: "pane", Status: contract.TaskStatusProduced},
+		"agent": {Scope: contract.TaskScopeRun, TaskID: "agent", Status: contract.TaskStatusFailed, Error: "claude not detected within 120s"},
+	})
+
+	report, err := EvaluateHealth(cfg, store, "owner/repo-1")
+	if err != nil {
+		t.Fatalf("EvaluateHealth: %v", err)
+	}
+	if report.State() != domain.HealthUnhealthy {
+		t.Fatalf("report = %+v, state = %q, want unhealthy (a failed current-plan node)", report, report.State())
+	}
+	if !strings.Contains(report.Reason, "agent") || !strings.Contains(report.Reason, "claude not detected within 120s") {
+		t.Fatalf("reason = %q, want it to name the failed node and its setup error", report.Reason)
+	}
+	sess, err := store.GetE("owner/repo-1")
+	if err != nil {
+		t.Fatalf("GetE: %v", err)
+	}
+	if sessionRunState(cfg, sess) != domain.RunUp {
+		t.Fatalf("run = %q, want up (a run-scoped node produced)", sessionRunState(cfg, sess))
+	}
+}
+
+func TestEvaluateHealth_MissingCurrentPlanNodeIsUnhealthyNamingNode(t *testing.T) {
+	store := testStore(t)
+	cfg := currentPlanConfig(t, "true", "true")
+	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+		"pane": {Scope: contract.TaskScopeRun, TaskID: "pane", Status: contract.TaskStatusProduced},
+		// "agent" is declared by the workflow but has no task state at all.
+	})
+
+	report, err := EvaluateHealth(cfg, store, "owner/repo-1")
+	if err != nil {
+		t.Fatalf("EvaluateHealth: %v", err)
+	}
+	if report.State() != domain.HealthUnhealthy {
+		t.Fatalf("report = %+v, state = %q, want unhealthy (a missing current-plan node)", report, report.State())
+	}
+	if !strings.Contains(report.Reason, "agent") {
+		t.Fatalf("reason = %q, want it to name the missing node", report.Reason)
+	}
+}
+
+func TestEvaluateHealth_EveryCurrentPlanNodeProducedAndPassingIsHealthy(t *testing.T) {
+	store := testStore(t)
+	cfg := currentPlanConfig(t, "true", "true")
+	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+		"pane":  {Scope: contract.TaskScopeRun, TaskID: "pane", Status: contract.TaskStatusProduced},
+		"agent": {Scope: contract.TaskScopeRun, TaskID: "agent", Status: contract.TaskStatusProduced},
+	})
+
+	report, err := EvaluateHealth(cfg, store, "owner/repo-1")
+	if err != nil {
+		t.Fatalf("EvaluateHealth: %v", err)
+	}
+	if report.State() != domain.HealthHealthy {
+		t.Fatalf("report = %+v, state = %q, want healthy", report, report.State())
+	}
+}
+
+func TestEvaluateHealth_CleanedCurrentPlanNodesAreNotUnhealthyAfterDown(t *testing.T) {
+	store := testStore(t)
+	// A failing alive command on both nodes proves cleaned nodes are never
+	// probed at all — if they were, this would read unhealthy instead.
+	cfg := currentPlanConfig(t, "false", "false")
+	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+		"pane":  {Scope: contract.TaskScopeRun, TaskID: "pane", Status: contract.TaskStatusCleaned},
+		"agent": {Scope: contract.TaskScopeRun, TaskID: "agent", Status: contract.TaskStatusCleaned},
+	})
+
+	report, err := EvaluateHealth(cfg, store, "owner/repo-1")
+	if err != nil {
+		t.Fatalf("EvaluateHealth: %v", err)
+	}
+	if report.State() == domain.HealthUnhealthy {
+		t.Fatalf("report = %+v, state = %q, want no verdict for a down session", report, report.State())
+	}
+	sess, err := store.GetE("owner/repo-1")
+	if err != nil {
+		t.Fatalf("GetE: %v", err)
+	}
+	if sessionRunState(cfg, sess) != domain.RunDown {
+		t.Fatalf("run = %q, want down", sessionRunState(cfg, sess))
+	}
+}
+
+func TestEvaluateHealth_NoProducedRunScopedNodeAfterAbortedFirstUpIsNotUnhealthy(t *testing.T) {
+	store := testStore(t)
+	cfg := currentPlanConfig(t, "true", "true")
+	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+		"pane": {Scope: contract.TaskScopeRun, TaskID: "pane", Status: contract.TaskStatusFailed, Error: "setup failed"},
+		// "agent" never attempted since "pane" failed first.
+	})
+
+	report, err := EvaluateHealth(cfg, store, "owner/repo-1")
+	if err != nil {
+		t.Fatalf("EvaluateHealth: %v", err)
+	}
+	if report.State() == domain.HealthUnhealthy {
+		t.Fatalf("report = %+v, state = %q, want no verdict (no run-scoped node ever produced)", report, report.State())
+	}
+
+	hc, err := HealthcheckSession(cfg, store, HealthcheckParams{SessionName: "owner/repo-1"})
+	if err != nil {
+		t.Fatalf("HealthcheckSession: %v", err)
+	}
+	if hc.Pushed {
+		t.Fatalf("report = %+v, want no escalation for a session that never came up", hc)
+	}
+}
+
+func TestEvaluateHealth_StaleTaskEntryContributesNothing(t *testing.T) {
+	store := testStore(t)
+	cfg := writeWorkflowFixture(t, t.TempDir(), "default", []taskFixture{
+		{id: "pane", scope: contract.TaskScopeRun, alive: "true"},
+		{id: "stale_runtime", scope: contract.TaskScopeRun, alive: "false"},
+	}, []nodeFixture{{id: "pane"}}) // "stale_runtime" keeps a definition but no node uses it anymore.
+	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+		"pane":          {Scope: contract.TaskScopeRun, TaskID: "pane", Status: contract.TaskStatusProduced},
+		"stale_runtime": {Scope: contract.TaskScopeRun, TaskID: "stale_runtime", Status: contract.TaskStatusProduced},
+	})
+
+	report, err := EvaluateHealth(cfg, store, "owner/repo-1")
+	if err != nil {
+		t.Fatalf("EvaluateHealth: %v", err)
+	}
+	if report.State() != domain.HealthHealthy {
+		t.Fatalf("report = %+v, state = %q, want healthy (the stale node's failing probe must not count)", report, report.State())
+	}
+}
+
+func TestEvaluateHealth_StaleProducedNodeAloneReadsDownWithNoVerdict(t *testing.T) {
+	store := testStore(t)
+	cfg := currentPlanConfig(t, "true", "true") // declares only "pane" and "agent"
+	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+		// "removed_node" is a stale record: the workflow above no longer
+		// declares any node using it. Neither "pane" nor "agent" has any
+		// task state at all.
+		"removed_node": {Scope: contract.TaskScopeRun, TaskID: "removed_node", Status: contract.TaskStatusProduced},
+	})
+
+	report, err := EvaluateHealth(cfg, store, "owner/repo-1")
+	if err != nil {
+		t.Fatalf("EvaluateHealth: %v", err)
+	}
+	if report.State() == domain.HealthUnhealthy {
+		t.Fatalf("report = %+v, state = %q, want no verdict (only a stale entry is produced)", report, report.State())
+	}
+	sess, err := store.GetE("owner/repo-1")
+	if err != nil {
+		t.Fatalf("GetE: %v", err)
+	}
+	if sessionRunState(cfg, sess) != domain.RunDown {
+		t.Fatalf("run = %q, want down (the only produced entry is stale)", sessionRunState(cfg, sess))
+	}
+}
+
+// A failed session-scoped node already blocks create/repair elsewhere, which
+// is why this report does not also need to cover it.
+func TestEvaluateHealth_FailedSessionScopedNodeDoesNotAffectRunScopedHealthReport(t *testing.T) {
+	store := testStore(t)
+	cfg := writeWorkflowFixture(t, t.TempDir(), "default", []taskFixture{
+		{id: "guard", scope: contract.TaskScopeSession, alive: "false"},
+		{id: "pane", scope: contract.TaskScopeRun, alive: "true"},
+	}, []nodeFixture{{id: "guard"}, {id: "pane"}})
+	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+		"guard": {Scope: contract.TaskScopeSession, TaskID: "guard", Status: contract.TaskStatusFailed, Error: "guard missing"},
+		"pane":  {Scope: contract.TaskScopeRun, TaskID: "pane", Status: contract.TaskStatusProduced},
+	})
+
+	report, err := EvaluateHealth(cfg, store, "owner/repo-1")
+	if err != nil {
+		t.Fatalf("EvaluateHealth: %v", err)
+	}
+	if report.State() != domain.HealthHealthy {
+		t.Fatalf("report = %+v, state = %q, want healthy (a failed session-scoped node is out of scope for this report)", report, report.State())
+	}
+}
+
+func TestEvaluateHealth_UnresolvableWorkflowReturnsError(t *testing.T) {
+	store := testStore(t)
+	cfg := currentPlanConfig(t, "true", "true") // only declares workflow "default"
+	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "ghost-workflow", map[string]*contract.TaskState{
+		"pane": {Scope: contract.TaskScopeRun, TaskID: "pane", Status: contract.TaskStatusProduced},
+	})
+
+	if _, err := EvaluateHealth(cfg, store, "owner/repo-1"); err == nil {
+		t.Fatal("expected a plan-resolution error for a session whose workflow no longer resolves")
+	}
+}
+
 // A healthcheck must see its own node's resolved inputs (e.g. tmux_session),
 // not just .Self outputs — needed to re-derive stale pid/session_id/
 // socket_path when the pane's process restarts under it.
@@ -356,7 +561,7 @@ func TestSessionRunAndHealthState_AliveProbeBacked(t *testing.T) {
 			seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", tt.tasks)
 
 			s := store.Get("owner/repo-1")
-			if gotRun := sessionRunState(s); gotRun != tt.wantRun {
+			if gotRun := sessionRunState(cfg, s); gotRun != tt.wantRun {
 				t.Errorf("sessionRunState = %q, want %q", gotRun, tt.wantRun)
 			}
 			if gotHealth := sessionHealthState(cfg, store, "owner/repo-1"); gotHealth != tt.wantHealth {

@@ -96,7 +96,7 @@ func Up(cfg *config.Config, store *state.Store, params UpParams) (*UpResult, err
 		// Before Create: a rejected new child must leave no state entry.
 		// ForceRecreate excludes even an up target, since it tears the
 		// child down and rebuilds — the slot must stay reserved through that.
-		targetAlreadyUp := existing != nil && sessionRunState(existing) == domain.RunUp && !params.ForceRecreate
+		targetAlreadyUp := existing != nil && sessionRunState(cfg, existing) == domain.RunUp && !params.ForceRecreate
 		parentSessionName := ""
 		if existing != nil {
 			parentSessionName = existing.ParentSession
@@ -150,7 +150,7 @@ func Up(cfg *config.Config, store *state.Store, params UpParams) (*UpResult, err
 	// Mirrors the matched branch's reservation above, for a bare-name
 	// session going straight from down to up.
 	if !matched {
-		targetAlreadyUp := sessionRunState(session) == domain.RunUp && !params.ForceRecreate
+		targetAlreadyUp := sessionRunState(cfg, session) == domain.RunUp && !params.ForceRecreate
 		reserved, capErr := reserveChildCapSlot(cfg, store, sessionName, session.ParentSession, targetAlreadyUp)
 		if capErr != nil {
 			return nil, capErr

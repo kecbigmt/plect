@@ -160,7 +160,7 @@ func Status(cfg *config.Config, store *state.Store, identifier string) (*StatusR
 	}
 
 	wtExists := fileExists(session.WorkspaceDirPath)
-	runState := sessionRunState(session)
+	runState := sessionRunState(cfg, session)
 	healthReport, healthState := sessionHealthReport(cfg, store, sessionName)
 
 	displayTitle := sessionDisplayTitle(cfg, session)
