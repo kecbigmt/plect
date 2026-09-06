@@ -80,9 +80,11 @@ func (db *DB) AllSessions(ctx context.Context) (map[string]*domain.Session, erro
 }
 
 // FindSessionsByAlias returns every session whose create-time alias equals
-// alias, as of one consistent snapshot (see GetSession). An empty alias
-// never matches, since that is the column's own unset-value default and
-// matching it would surface every alias-less session as a hit.
+// alias, as of one consistent snapshot (see GetSession). An empty alias is
+// rejected before querying: an alias-less session stores NULL, not "", so
+// alias = "" would simply match no row, but a caller passing "" almost
+// certainly means "unset" and this makes that a guaranteed empty result
+// rather than an incidental one.
 func (db *DB) FindSessionsByAlias(ctx context.Context, alias string) ([]*domain.Session, error) {
 	if alias == "" {
 		return nil, nil

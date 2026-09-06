@@ -74,7 +74,7 @@ nothing beyond its columns serializes to `"{}"`.
 | `task_done_when_judges` | `(task_instance_id, leaf_id)` primary key and task-instance foreign key; `judge_session`/nullable `judge_workflow` remain stored facts | action, reason, revision, relation, and creation time | `DoneWhenState.Judges` (dynamic instances only) |
 | `populations` | `(workflow, name)` primary key | none | `state.json` `populations` map key and value |
 | `population_members` | `(workflow, name, resource_id)` primary key and `populations(workflow, name)` foreign key; nullable `session_name` | item, generation, timestamps, flags, `decision_kind`/`decision_reason`, blockers | `PopulationState.Members` |
-| `up_reservations` | `child_session_name` primary key; `parent_name`, `pid`, `reserved_at` | none | `state.json` `up_reservations` |
+| `up_reservations` | `child_session_name` primary key; nullable `parent_session_name`, `virtual_root`, `pid`, `reserved_at` | none | `state.json` `up_reservations` |
 | `pending_deliveries` | `(session_name, resource_id, operation)` primary key; `operation` is subscribe or unsubscribe | none | `pending_delivery.json` |
 | `event_streams` | `session_name` primary key; `generation` | none | each event directory and its `.gen` file |
 | `events` | `event_id` primary key; `(session_name, sequence)` unique and references `event_streams` | type, source, direction, summary, body, metadata, delivery mode, and recorded time | each `log.jsonl` record |
@@ -121,6 +121,16 @@ does not already live in `instance_name` itself. `finalized_at` on both
 `status`: `plect task finalize` can record completion while status stays
 `produced`, awaiting a later `plect task cleanup`, so it is a timestamp
 fact rather than a state folded into `status`'s CHECK.
+
+`up_reservations.parent_session_name` is nullable rather than carrying a
+`"@virtual-root"` sentinel string: a reservation counted against the
+virtual root's own `max_up_children` cap (a parentless session, or one
+whose parent is the `root:` pseudo-parent) has no real parent to name, so
+`parent_session_name` is `NULL` and `virtual_root` is `1` instead — a CHECK
+enforces that exactly one of the two holds. The sentinel itself
+(`domain.VirtualRootReservationParent`) still exists as a Go-level value at
+the `state.Store`/`ReserveUpSlot` call-site boundary, translated to and
+from these two columns only inside the persistence package.
 
 `Session.Tasks` splits across `node_instances` and `task_instances` by
 whether the entry is a static workflow-DAG node (including the `@workflow`
@@ -427,6 +437,13 @@ alongside the database. The command reads the following runtime paths.
 | `pending_delivery.json` | Decode subscribe and unsubscribe maps; require non-empty session and resource values; deduplicate entries into `pending_deliveries`. |
 | `pending_delivery.json.lock` | Confirm it is not held before import; do not copy it. |
 | `delivery-locks/<escaped-session>.lock` | Confirm no lock is held; do not copy it. The delivery decision keeps its service-level serialization through a database-backed lock/transaction. |
+
+The importer inserts every `populations` row before any `sessions` row that
+references it: `sessions.population_workflow`/`population_name` is a
+composite foreign key to `populations(workflow, name)`, so a session whose
+legacy `Population` field names a population the legacy `populations` map
+never recorded (state predating that field, or a hand-edited file) fails
+import rather than promoting a database with an unsatisfiable reference.
 
 The importer rejects unknown regular files inside a legacy event-session
 directory and reports their paths; it does not silently discard a prospective

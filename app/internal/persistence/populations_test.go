@@ -129,3 +129,41 @@ func TestUpdatePopulation_MembersMapIsNeverNilInsideFn(t *testing.T) {
 		t.Error("fn saw a nil Members map; callers index it directly and would panic")
 	}
 }
+
+func TestUpdatePopulation_LastDecisionRoundTripsThroughDecisionKindAndReason(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name         string
+		lastDecision string
+	}{
+		{"empty", ""},
+		{"bare kind", "plect.workflow_population.destroy"},
+		{"kind with reason", "plect.workflow_population.destroy_deferred:blocked on open PR"},
+		{"reason containing a colon", "plect.workflow_population.destroy:blocked: awaiting review"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			key := "wf/" + tc.name
+			if err := db.UpdatePopulation(ctx, key, func(p *domain.PopulationState) error {
+				p.Workflow, p.Name = splitPopulationKey(key)
+				p.Members["r1"] = &domain.PopulationMember{ResourceID: "r1", LastDecision: tc.lastDecision}
+				return nil
+			}); err != nil {
+				t.Fatalf("UpdatePopulation: %v", err)
+			}
+
+			got, err := db.Population(ctx, key)
+			if err != nil {
+				t.Fatalf("Population: %v", err)
+			}
+			member := got.Members["r1"]
+			if member == nil {
+				t.Fatal("member r1 missing")
+			}
+			if member.LastDecision != tc.lastDecision {
+				t.Errorf("LastDecision = %q, want %q", member.LastDecision, tc.lastDecision)
+			}
+		})
+	}
+}

@@ -93,9 +93,6 @@ RETURNING id;
 -- name: DeleteTaskInstanceByName :exec
 DELETE FROM task_instances WHERE session_name = ? AND instance_name = ?;
 
--- name: DeleteTaskInstancesForSession :exec
-DELETE FROM task_instances WHERE session_name = ?;
-
 -- Task done_when states
 
 -- name: InsertTaskDoneWhenState :exec
@@ -163,13 +160,15 @@ INSERT INTO population_members (
 -- Up-slot reservations
 
 -- name: ListUpReservations :many
-SELECT child_session_name, parent_name, pid, reserved_at FROM up_reservations ORDER BY child_session_name;
+SELECT child_session_name, parent_session_name, virtual_root, pid, reserved_at
+FROM up_reservations ORDER BY child_session_name;
 
 -- name: UpsertUpReservation :exec
-INSERT INTO up_reservations (child_session_name, parent_name, pid, reserved_at)
-VALUES (?, ?, ?, ?)
+INSERT INTO up_reservations (child_session_name, parent_session_name, virtual_root, pid, reserved_at)
+VALUES (?, ?, ?, ?, ?)
 ON CONFLICT(child_session_name) DO UPDATE SET
-    parent_name = excluded.parent_name,
+    parent_session_name = excluded.parent_session_name,
+    virtual_root = excluded.virtual_root,
     pid = excluded.pid,
     reserved_at = excluded.reserved_at;
 

@@ -37,7 +37,7 @@ func (db *DB) ReserveUpSlot(ctx context.Context, childName, parentName string, f
 			if err != nil {
 				return fmt.Errorf("parse reservation %q reserved_at: %w", row.ChildSessionName, err)
 			}
-			live[row.ChildSessionName] = domain.UpReservation{Parent: row.ParentName, At: reservedAt, PID: int(row.Pid)}
+			live[row.ChildSessionName] = domain.UpReservation{Parent: reservationParentFromColumns(row.ParentSessionName, row.VirtualRoot), At: reservedAt, PID: int(row.Pid)}
 		}
 		if _, held := live[childName]; held {
 			return domain.ErrUpAlreadyReserved
@@ -64,11 +64,13 @@ func (db *DB) ReserveUpSlot(ctx context.Context, childName, parentName string, f
 			return nil
 		}
 
+		parentSessionName, virtualRoot := reservationColumnsFromParent(parentName)
 		if err := q.UpsertUpReservation(ctx, sqlcgen.UpsertUpReservationParams{
-			ChildSessionName: childName,
-			ParentName:       parentName,
-			Pid:              int64(os.Getpid()),
-			ReservedAt:       formatTime(time.Now()),
+			ChildSessionName:  childName,
+			ParentSessionName: parentSessionName,
+			VirtualRoot:       virtualRoot,
+			Pid:               int64(os.Getpid()),
+			ReservedAt:        formatTime(time.Now()),
 		}); err != nil {
 			return fmt.Errorf("upsert up-slot reservation %q: %w", childName, err)
 		}
@@ -86,6 +88,25 @@ func (db *DB) ReleaseUpSlot(ctx context.Context, childName string) error {
 		}
 		return nil
 	})
+}
+
+// reservationColumnsFromParent translates the domain-level parent value
+// (a real session name, or domain.VirtualRootReservationParent) into the
+// column pair that stores it without the sentinel: NULL/true for the
+// virtual root, the name/false otherwise.
+func reservationColumnsFromParent(parent string) (parentSessionName sql.NullString, virtualRoot bool) {
+	if parent == domain.VirtualRootReservationParent {
+		return sql.NullString{}, true
+	}
+	return sql.NullString{String: parent, Valid: true}, false
+}
+
+// reservationParentFromColumns is reservationColumnsFromParent's inverse.
+func reservationParentFromColumns(parentSessionName sql.NullString, virtualRoot bool) string {
+	if virtualRoot {
+		return domain.VirtualRootReservationParent
+	}
+	return parentSessionName.String
 }
 
 // processAlive treats PID reuse (a crashed holder's PID reassigned to an

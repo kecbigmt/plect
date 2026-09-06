@@ -156,11 +156,13 @@ func TestDeleteSession_ClearsTheSessionsUpReservation(t *testing.T) {
 func plantReservationForTest(t *testing.T, db *DB, child, parent string, pid int, at time.Time) {
 	t.Helper()
 	q := sqlcgen.New(db.write)
+	parentSessionName, virtualRoot := reservationColumnsFromParent(parent)
 	if err := q.UpsertUpReservation(context.Background(), sqlcgen.UpsertUpReservationParams{
-		ChildSessionName: child,
-		ParentName:       parent,
-		Pid:              int64(pid),
-		ReservedAt:       formatTime(at),
+		ChildSessionName:  child,
+		ParentSessionName: parentSessionName,
+		VirtualRoot:       virtualRoot,
+		Pid:               int64(pid),
+		ReservedAt:        formatTime(at),
 	}); err != nil {
 		t.Fatalf("plantReservationForTest: %v", err)
 	}

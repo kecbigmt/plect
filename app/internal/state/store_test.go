@@ -468,11 +468,16 @@ func plantReservation(t *testing.T, store *Store, child string, res UpReservatio
 	if err != nil {
 		t.Fatalf("plantReservation: %v", err)
 	}
+	virtualRoot := res.Parent == domain.VirtualRootReservationParent
+	var parentSessionName any
+	if !virtualRoot {
+		parentSessionName = res.Parent
+	}
 	if err := db.WithImmediateTx(context.Background(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(context.Background(),
-			`INSERT INTO up_reservations (child_session_name, parent_name, pid, reserved_at) VALUES (?, ?, ?, ?)
-			 ON CONFLICT(child_session_name) DO UPDATE SET parent_name=excluded.parent_name, pid=excluded.pid, reserved_at=excluded.reserved_at`,
-			child, res.Parent, res.PID, res.At.UTC().Format(reservedAtTestLayout))
+			`INSERT INTO up_reservations (child_session_name, parent_session_name, virtual_root, pid, reserved_at) VALUES (?, ?, ?, ?, ?)
+			 ON CONFLICT(child_session_name) DO UPDATE SET parent_session_name=excluded.parent_session_name, virtual_root=excluded.virtual_root, pid=excluded.pid, reserved_at=excluded.reserved_at`,
+			child, parentSessionName, virtualRoot, res.PID, res.At.UTC().Format(reservedAtTestLayout))
 		return err
 	}); err != nil {
 		t.Fatalf("plantReservation: %v", err)

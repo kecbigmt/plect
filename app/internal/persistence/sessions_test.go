@@ -433,11 +433,6 @@ func TestPutSession_ReplacesTasksRatherThanAccumulating(t *testing.T) {
 	}
 }
 
-// TestPutSession_DynamicInstanceCleanupThenSetupYieldsFreshDoneWhenHistory
-// complements TestPutSession_DynamicInstanceIDStableAcrossOrdinaryUpdate: id
-// stability holds only across writes that still name the same instance, so
-// a cleanup must still yield a fresh id and a clean done_when/judge history
-// on the next setup under the same name.
 func TestPutSession_DynamicInstanceCleanupThenSetupYieldsFreshDoneWhenHistory(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
@@ -485,10 +480,6 @@ func TestPutSession_DynamicInstanceCleanupThenSetupYieldsFreshDoneWhenHistory(t 
 	}
 }
 
-// TestPutSession_DynamicInstanceIDStableAcrossOrdinaryUpdate proves a
-// dynamic instance's id is a stable identity, not a per-write artifact: two
-// consecutive Puts that both still declare the same instance name preserve
-// the row's id, so done_when/judge history keyed by that id survives too.
 func TestPutSession_DynamicInstanceIDStableAcrossOrdinaryUpdate(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
@@ -526,10 +517,6 @@ func TestPutSession_DynamicInstanceIDStableAcrossOrdinaryUpdate(t *testing.T) {
 	}
 }
 
-// TestPutSessionAndGetSession_RoundTripsPopulationThroughColumnsNotBlob
-// proves a session's population reference round-trips through
-// sessions.population_workflow/population_name rather than a field embedded
-// in record_json, and clearing it back to nil clears both columns.
 func TestPutSessionAndGetSession_RoundTripsPopulationThroughColumnsNotBlob(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
@@ -587,11 +574,9 @@ func TestPutSessionAndGetSession_RoundTripsPopulationThroughColumnsNotBlob(t *te
 	}
 }
 
-// TestPutSession_RecordJsonOmitsZeroValuedColumnDuplicates proves a minimal
-// session and a minimal dynamic task instance's record_json blobs carry
-// none of the fields that a relational column now owns, not even as
-// empty-string/zero-value JSON keys — a second, disagreeing authority for
-// anyone reading the blob directly.
+// A zero-valued duplicate of a column would read as a second, disagreeing
+// authority to anyone inspecting record_json directly, rather than as
+// merely wasted bytes.
 func TestPutSession_RecordJsonOmitsZeroValuedColumnDuplicates(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()

@@ -14,9 +14,10 @@ import (
 
 // splitPopulationKey recovers a population's (workflow, name) domain
 // identity from the "workflow/name" string callers use as a JSON map key
-// and in-memory lookup key. It splits on the LAST slash: a workflow address
-// can itself contain slashes, but a population name cannot, so the last
-// segment is always the name.
+// and in-memory lookup key. It splits on the last slash — safe because a
+// workflow address is dot-separated (plecture.schema.json's staticReference
+// grammar) and a population name is a plain identifier, so neither half can
+// itself contain a slash.
 func splitPopulationKey(key string) (workflow, name string) {
 	i := strings.LastIndex(key, "/")
 	if i < 0 {

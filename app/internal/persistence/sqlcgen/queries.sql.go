@@ -85,15 +85,6 @@ func (q *Queries) DeleteTaskInstanceByName(ctx context.Context, arg DeleteTaskIn
 	return err
 }
 
-const deleteTaskInstancesForSession = `-- name: DeleteTaskInstancesForSession :exec
-DELETE FROM task_instances WHERE session_name = ?
-`
-
-func (q *Queries) DeleteTaskInstancesForSession(ctx context.Context, sessionName string) error {
-	_, err := q.db.ExecContext(ctx, deleteTaskInstancesForSession, sessionName)
-	return err
-}
-
 const deleteUpReservation = `-- name: DeleteUpReservation :exec
 DELETE FROM up_reservations WHERE child_session_name = ?
 `
@@ -644,7 +635,8 @@ func (q *Queries) ListTaskInstances(ctx context.Context, sessionName string) ([]
 
 const listUpReservations = `-- name: ListUpReservations :many
 
-SELECT child_session_name, parent_name, pid, reserved_at FROM up_reservations ORDER BY child_session_name
+SELECT child_session_name, parent_session_name, virtual_root, pid, reserved_at
+FROM up_reservations ORDER BY child_session_name
 `
 
 // Up-slot reservations
@@ -659,7 +651,8 @@ func (q *Queries) ListUpReservations(ctx context.Context) ([]UpReservation, erro
 		var i UpReservation
 		if err := rows.Scan(
 			&i.ChildSessionName,
-			&i.ParentName,
+			&i.ParentSessionName,
+			&i.VirtualRoot,
 			&i.Pid,
 			&i.ReservedAt,
 		); err != nil {
@@ -812,25 +805,28 @@ func (q *Queries) UpsertTaskInstance(ctx context.Context, arg UpsertTaskInstance
 }
 
 const upsertUpReservation = `-- name: UpsertUpReservation :exec
-INSERT INTO up_reservations (child_session_name, parent_name, pid, reserved_at)
-VALUES (?, ?, ?, ?)
+INSERT INTO up_reservations (child_session_name, parent_session_name, virtual_root, pid, reserved_at)
+VALUES (?, ?, ?, ?, ?)
 ON CONFLICT(child_session_name) DO UPDATE SET
-    parent_name = excluded.parent_name,
+    parent_session_name = excluded.parent_session_name,
+    virtual_root = excluded.virtual_root,
     pid = excluded.pid,
     reserved_at = excluded.reserved_at
 `
 
 type UpsertUpReservationParams struct {
-	ChildSessionName string
-	ParentName       string
-	Pid              int64
-	ReservedAt       string
+	ChildSessionName  string
+	ParentSessionName sql.NullString
+	VirtualRoot       bool
+	Pid               int64
+	ReservedAt        string
 }
 
 func (q *Queries) UpsertUpReservation(ctx context.Context, arg UpsertUpReservationParams) error {
 	_, err := q.db.ExecContext(ctx, upsertUpReservation,
 		arg.ChildSessionName,
-		arg.ParentName,
+		arg.ParentSessionName,
+		arg.VirtualRoot,
 		arg.Pid,
 		arg.ReservedAt,
 	)

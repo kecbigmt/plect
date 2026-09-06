@@ -157,7 +157,7 @@ func TestWithImmediateTx_RollsBackOnFnError(t *testing.T) {
 
 	wantErr := context.Canceled
 	err := db.WithImmediateTx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, "INSERT INTO up_reservations (child_session_name, parent_name, pid, reserved_at) VALUES (?, ?, ?, ?)", "rolled-back-child", "parent1", 1, "2026-01-01T00:00:00.000000000Z"); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO up_reservations (child_session_name, parent_session_name, virtual_root, pid, reserved_at) VALUES (?, ?, 0, ?, ?)", "rolled-back-child", "parent1", 1, "2026-01-01T00:00:00.000000000Z"); err != nil {
 			t.Fatalf("exec: %v", err)
 		}
 		return wantErr

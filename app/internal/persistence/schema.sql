@@ -188,10 +188,17 @@ CREATE TABLE population_members (
 );
 
 -- No foreign key to sessions: a reservation exists for a child session that
--- does not exist yet (it is being created).
+-- does not exist yet (it is being created); parent_session_name likewise
+-- names a parent that may not exist yet, and NULL rather than a sentinel
+-- string means "counted against the virtual root's own cap" (a parentless
+-- session, or one whose parent is the "root:" pseudo-parent) — the domain
+-- layer's VirtualRootReservationParent sentinel lives only in Go, never in
+-- this column.
 CREATE TABLE up_reservations (
     child_session_name TEXT PRIMARY KEY,
-    parent_name TEXT NOT NULL,
+    parent_session_name TEXT,
+    virtual_root boolean NOT NULL DEFAULT 0 CHECK (virtual_root IN (0, 1)),
     pid INTEGER NOT NULL,
-    reserved_at TEXT NOT NULL
+    reserved_at TEXT NOT NULL,
+    CHECK ((parent_session_name IS NOT NULL) != (virtual_root = 1))
 );

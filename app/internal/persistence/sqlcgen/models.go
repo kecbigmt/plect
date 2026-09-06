@@ -95,8 +95,9 @@ type TaskInstance struct {
 }
 
 type UpReservation struct {
-	ChildSessionName string
-	ParentName       string
-	Pid              int64
-	ReservedAt       string
+	ChildSessionName  string
+	ParentSessionName sql.NullString
+	VirtualRoot       bool
+	Pid               int64
+	ReservedAt        string
 }
