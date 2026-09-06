@@ -181,45 +181,98 @@ func (s *Store) ReadTombstone(session string) (data []byte, ok bool, err error) 
 // lock Append uses, so two callers racing on the same key can never both see
 // their value win: only the first reports won=true, and the second finds the
 // key already at newFingerprint. previous is the value from just before the
-// call, returned so a caller whose side effect (e.g. publishing the event
-// the fingerprint marks) failed after winning can compensate by swapping
-// back to it. This is process-local bookkeeping, deliberately kept out of
-// contracts/state's Session/TaskState — those are the CLI/plugin data
-// contract, cross-module and independently versioned, while this never
-// leaves TickSession's own decision-making.
+// call, for a caller whose side effect (publishing the event the fingerprint
+// claims) then fails to compensate with RevertChainAttempt. This is
+// process-local bookkeeping, deliberately kept out of contracts/state's
+// Session/TaskState — those are the CLI/plugin data contract, cross-module
+// and independently versioned, while this never leaves TickSession's own
+// decision-making.
 func (s *Store) SwapChainAttempt(session, instance, chainID, newFingerprint string) (previous string, won bool, err error) {
+	key := instance + "\x00" + chainID
+	err = s.withChainAttemptsLocked(session, func(attempts map[string]string) bool {
+		previous = attempts[key]
+		if previous == newFingerprint {
+			return false
+		}
+		won = true
+		setChainAttempt(attempts, key, newFingerprint)
+		return true
+	})
+	return previous, won, err
+}
+
+// RevertChainAttempt compensates a SwapChainAttempt win whose side effect
+// failed, swapping the marker from claimed back to previous — but only if it
+// still holds claimed. Unconditionally restoring previous would be wrong
+// once anything else has moved the marker past claimed: a concurrent tick
+// starting its own, later streak (a different target, or the predicate
+// resolving and refiring) would have that legitimate transition silently
+// erased, and the next tick would publish a duplicate event for it. Finding
+// the marker already past claimed instead means someone else has already
+// dealt with it, so there is nothing for this caller to compensate.
+func (s *Store) RevertChainAttempt(session, instance, chainID, claimed, previous string) (reverted bool, err error) {
+	key := instance + "\x00" + chainID
+	err = s.withChainAttemptsLocked(session, func(attempts map[string]string) bool {
+		if attempts[key] != claimed {
+			return false
+		}
+		reverted = true
+		setChainAttempt(attempts, key, previous)
+		return true
+	})
+	return reverted, err
+}
+
+// ClearChainAttempts removes every chain-attempt marker for session. Unlike
+// the tombstone, which deliberately survives `plect destroy` so a
+// destroyed session's record stays legible, this bookkeeping has no
+// meaning once the session is gone: a later session created under the same
+// (reused) name is a fresh identity, and inheriting the old markers would
+// wrongly suppress that new session's first genuine refusal as if it were
+// a continuing streak.
+func (s *Store) ClearChainAttempts(session string) error {
+	if err := os.Remove(s.chainAttemptsPath(session)); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("eventlog: chain attempts: remove: %w", err)
+	}
+	return nil
+}
+
+func setChainAttempt(attempts map[string]string, key, value string) {
+	if value == "" {
+		delete(attempts, key)
+		return
+	}
+	attempts[key] = value
+}
+
+// withChainAttemptsLocked runs fn against session's chain-attempt markers
+// under its exclusive per-session lock (the same one Append uses), writing
+// the result back only when fn reports a change — the shared plumbing
+// SwapChainAttempt and RevertChainAttempt each apply their own compare
+// logic through.
+func (s *Store) withChainAttemptsLocked(session string, fn func(attempts map[string]string) (changed bool)) error {
 	dir := s.sessionDir(session)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", false, fmt.Errorf("eventlog: mkdir: %w", err)
+		return fmt.Errorf("eventlog: mkdir: %w", err)
 	}
 	unlock, err := flock(s.lockPath(session), syscall.LOCK_EX)
 	if err != nil {
-		return "", false, err
+		return err
 	}
 	defer unlock()
 
 	attempts, err := s.readChainAttemptsLocked(session)
 	if err != nil {
-		return "", false, err
+		return err
 	}
-	key := instance + "\x00" + chainID
-	previous = attempts[key]
-	if previous == newFingerprint {
-		return previous, false, nil
-	}
-	if newFingerprint == "" {
-		delete(attempts, key)
-	} else {
-		attempts[key] = newFingerprint
+	if !fn(attempts) {
+		return nil
 	}
 	data, merr := json.Marshal(attempts)
 	if merr != nil {
-		return previous, false, fmt.Errorf("eventlog: chain attempts: marshal: %w", merr)
+		return fmt.Errorf("eventlog: chain attempts: marshal: %w", merr)
 	}
-	if werr := atomicfile.Write(s.chainAttemptsPath(session), data); werr != nil {
-		return previous, false, werr
-	}
-	return previous, true, nil
+	return atomicfile.Write(s.chainAttemptsPath(session), data)
 }
 
 func (s *Store) readChainAttemptsLocked(session string) (map[string]string, error) {

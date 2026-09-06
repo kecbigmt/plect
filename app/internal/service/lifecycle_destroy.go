@@ -155,6 +155,10 @@ func Destroy(cfg *config.Config, store *state.Store, params DestroyParams) (*Des
 		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to delete state entry: %v", err)}
 	}
 
+	if err := eventlog.NewStore(store.Dir()).ClearChainAttempts(sessionName); err != nil {
+		result.CleanupWarnings = append(result.CleanupWarnings, fmt.Sprintf("chain-attempt bookkeeping cleanup: %v", err))
+	}
+
 	// After the delete, so unwireDeliveryOnTeardown's fresh read sees the
 	// session as gone rather than skipping the unsubscribe as still needed.
 	if _, errMsg := unwireDeliveryOnTeardown(cfg, store, sessionName, session.ResourceID); errMsg != "" {

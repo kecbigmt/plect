@@ -125,6 +125,47 @@ func TestSwapChainAttempt_ReportsPreviousAndWon(t *testing.T) {
 	}
 }
 
+func TestRevertChainAttempt_DoesNotOverwriteANewerTransition(t *testing.T) {
+	s := NewStore(t.TempDir())
+
+	if _, won, err := s.SwapChainAttempt("work1", "work", "review", "cap|A"); err != nil || !won {
+		t.Fatalf("claim A: won=%v err=%v", won, err)
+	}
+	if previous, won, err := s.SwapChainAttempt("work1", "work", "review", "cap|B"); err != nil || !won || previous != "cap|A" {
+		t.Fatalf("claim B: previous=%q won=%v err=%v", previous, won, err)
+	}
+
+	reverted, err := s.RevertChainAttempt("work1", "work", "review", "cap|A", "")
+	if err != nil {
+		t.Fatalf("RevertChainAttempt: %v", err)
+	}
+	if reverted {
+		t.Fatal("reverted = true, want false: the marker had already moved past what this caller claimed")
+	}
+
+	if previous, won, err := s.SwapChainAttempt("work1", "work", "review", "cap|B"); err != nil || won || previous != "cap|B" {
+		t.Fatalf("marker after the stale revert: previous=%q won=%v err=%v, want \"cap|B\"/false/nil", previous, won, err)
+	}
+}
+
+func TestClearChainAttempts_RemovesEveryMarkerForTheSession(t *testing.T) {
+	s := NewStore(t.TempDir())
+
+	if _, _, err := s.SwapChainAttempt("work1", "work", "review", "cap|A"); err != nil {
+		t.Fatalf("SwapChainAttempt: %v", err)
+	}
+	if err := s.ClearChainAttempts("work1"); err != nil {
+		t.Fatalf("ClearChainAttempts: %v", err)
+	}
+	if previous, won, err := s.SwapChainAttempt("work1", "work", "review", "cap|A"); err != nil || !won || previous != "" {
+		t.Fatalf("after clear: previous=%q won=%v err=%v, want \"\"/true/nil", previous, won, err)
+	}
+
+	if err := s.ClearChainAttempts("never-existed"); err != nil {
+		t.Fatalf("ClearChainAttempts on a session with no markers: %v", err)
+	}
+}
+
 // A cap refusal's spawn attempt and a background reactor's own tick can race
 // on the same session; SwapChainAttempt's read-compare-write must happen
 // under one lock so at most one of them ever wins the same transition —

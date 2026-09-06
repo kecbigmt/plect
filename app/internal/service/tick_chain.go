@@ -57,10 +57,8 @@ func publishAlreadyActiveChainKick(cfg *config.Config, store *state.Store, workS
 
 const chainAttemptReasonCap = "cap"
 
-// chainAttemptFingerprint is the eventlog.Store.SwapChainAttempt value that
-// marks an ongoing cap-refusal streak; any other outcome — spawned,
-// already-active, or the predicate not holding at all — fingerprints as "",
-// which is what ends a streak.
+// chainAttemptFingerprint is "" for any outcome that is not a cap refusal —
+// the value that ends a streak (see syncChainAttemptStreak).
 func chainAttemptFingerprint(capRefused bool, target string) string {
 	if !capRefused || target == "" {
 		return ""
@@ -80,12 +78,12 @@ func syncChainAttemptStreak(store *state.Store, sessionName, instance, chainID, 
 	return eventlog.NewStore(store.Dir()).SwapChainAttempt(sessionName, instance, chainID, newFingerprint)
 }
 
-// revertChainAttemptStreak restores a chain's streak marker to previous — the
-// compensation for a syncChainAttemptStreak win whose event never actually
-// got published, so the next tick retries the publish instead of the marker
-// permanently claiming an event that was never recorded.
-func revertChainAttemptStreak(store *state.Store, sessionName, instance, chainID, previous string) error {
-	_, _, err := eventlog.NewStore(store.Dir()).SwapChainAttempt(sessionName, instance, chainID, previous)
+// revertChainAttemptStreak compensates a syncChainAttemptStreak win (claimed)
+// whose event never actually got published, restoring previous — but only if
+// the marker still holds claimed. See eventlog.Store.RevertChainAttempt for
+// why the restore must stay conditional.
+func revertChainAttemptStreak(store *state.Store, sessionName, instance, chainID, claimed, previous string) error {
+	_, err := eventlog.NewStore(store.Dir()).RevertChainAttempt(sessionName, instance, chainID, claimed, previous)
 	return err
 }
 

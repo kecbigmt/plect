@@ -121,7 +121,7 @@ func TickSession(cfg *config.Config, store *state.Store, params TickParams) (*Ch
 			// rather than left to silently swallow the event forever.
 			if pubErr := publishChainCapAttempt(cfg, store, resolvedName, sp); pubErr != nil {
 				sp.Warnings = append(sp.Warnings, fmt.Sprintf("chain-attempt event failed: %v", pubErr))
-				if revertErr := revertChainAttemptStreak(store, resolvedName, sp.Instance, sp.ChainID, previous); revertErr != nil {
+				if revertErr := revertChainAttemptStreak(store, resolvedName, sp.Instance, sp.ChainID, fingerprint, previous); revertErr != nil {
 					sp.Warnings = append(sp.Warnings, fmt.Sprintf("chain-attempt bookkeeping rollback failed: %v", revertErr))
 				}
 			}
