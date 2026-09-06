@@ -453,13 +453,11 @@ func TestPutSession_DynamicInstanceCleanupThenSetupYieldsFreshDoneWhenHistory(t 
 		t.Fatalf("PutSession (seed): %v", err)
 	}
 
-	// Cleanup: the instance is dropped entirely.
 	cleaned := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now}
 	if err := db.PutSession(ctx, cleaned); err != nil {
 		t.Fatalf("PutSession (cleanup): %v", err)
 	}
 
-	// Setup: a new instance under the same instance_name, with no done_when yet.
 	recreated := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Tasks: map[string]*contract.TaskState{
 		"initial": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, Dynamic: true, TaskID: "work", Name: "initial"},
 	}}
@@ -574,9 +572,6 @@ func TestPutSessionAndGetSession_RoundTripsPopulationThroughColumnsNotBlob(t *te
 	}
 }
 
-// A zero-valued duplicate of a column would read as a second, disagreeing
-// authority to anyone inspecting record_json directly, rather than as
-// merely wasted bytes.
 func TestPutSession_RecordJsonOmitsZeroValuedColumnDuplicates(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()

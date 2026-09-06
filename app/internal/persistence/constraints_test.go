@@ -121,3 +121,20 @@ func TestSchema_RejectsOutOfSetBooleanColumns(t *testing.T) {
 		t.Fatalf("insert with pending_up=-1: err = %v, want a CHECK constraint failure", err)
 	}
 }
+
+// TestSchema_RejectsUpReservationsWithBothOrNeitherParentShape proves the
+// XOR CHECK on up_reservations: exactly one of a real parent_session_name
+// and virtual_root may hold, never both and never neither.
+func TestSchema_RejectsUpReservationsWithBothOrNeitherParentShape(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+
+	if _, err := db.write.ExecContext(ctx,
+		"INSERT INTO up_reservations (child_session_name, parent_session_name, virtual_root, pid, reserved_at) VALUES ('c1', 'parent1', 1, 1, '2024-01-01T00:00:00.000000000Z')"); err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
+		t.Fatalf("insert with both parent_session_name and virtual_root=1: err = %v, want a CHECK constraint failure", err)
+	}
+	if _, err := db.write.ExecContext(ctx,
+		"INSERT INTO up_reservations (child_session_name, parent_session_name, virtual_root, pid, reserved_at) VALUES ('c2', NULL, 0, 1, '2024-01-01T00:00:00.000000000Z')"); err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
+		t.Fatalf("insert with neither parent_session_name nor virtual_root: err = %v, want a CHECK constraint failure", err)
+	}
+}

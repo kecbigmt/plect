@@ -191,6 +191,39 @@ func reservationNames(t *testing.T, db *DB) map[string]bool {
 	return names
 }
 
+func TestReserveUpSlot_VirtualRootParentRoundTripsThroughNullAndBoolean(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+
+	if _, err := db.ReserveUpSlot(ctx, "childA", domain.VirtualRootReservationParent, func(_ map[string]*domain.Session, _ map[string]domain.UpReservation) bool {
+		return true
+	}); err != nil {
+		t.Fatalf("ReserveUpSlot: %v", err)
+	}
+
+	var parentSessionName sql.NullString
+	var virtualRoot bool
+	if err := db.write.QueryRowContext(ctx,
+		"SELECT parent_session_name, virtual_root FROM up_reservations WHERE child_session_name = 'childA'").
+		Scan(&parentSessionName, &virtualRoot); err != nil {
+		t.Fatalf("query raw columns: %v", err)
+	}
+	if parentSessionName.Valid || !virtualRoot {
+		t.Fatalf("parent_session_name = %+v, virtual_root = %v, want NULL and true (never the sentinel string in a column)", parentSessionName, virtualRoot)
+	}
+
+	var seenParent string
+	if _, err := db.ReserveUpSlot(ctx, "childB", "unrelated", func(_ map[string]*domain.Session, reservations map[string]domain.UpReservation) bool {
+		seenParent = reservations["childA"].Parent
+		return true
+	}); err != nil {
+		t.Fatalf("ReserveUpSlot: %v", err)
+	}
+	if seenParent != domain.VirtualRootReservationParent {
+		t.Fatalf("reservations[childA].Parent = %q, want %q", seenParent, domain.VirtualRootReservationParent)
+	}
+}
+
 func currentPID() int { return os.Getpid() }
 
 func deadPIDForTest(t *testing.T) int {
