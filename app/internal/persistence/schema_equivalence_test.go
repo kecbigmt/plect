@@ -272,8 +272,6 @@ func indexPredicate(t *testing.T, ctx context.Context, handle *sql.DB, index str
 		// partial, so there is no predicate to find.
 		return ""
 	}
-	// See maskStringLiterals: a value like 'anywhere' would otherwise let
-	// LastIndex match "WHERE" inside the literal instead of the keyword.
 	masked := strings.ToUpper(maskStringLiterals(createSQL.String))
 	where := strings.LastIndex(masked, "WHERE")
 	if where == -1 {
@@ -282,15 +280,11 @@ func indexPredicate(t *testing.T, ctx context.Context, handle *sql.DB, index str
 	return normalizeSQLFragment(createSQL.String[where+len("WHERE"):])
 }
 
-// maskStringLiterals returns a same-length copy of s with every character
-// inside a single-quoted string literal (its delimiting quotes excluded)
-// replaced with 'x'. Keyword search and paren-depth counting must run
-// against this masked text rather than s itself: a string literal is free
-// to contain "CHECK", "WHERE", or unbalanced parentheses as ordinary data,
-// and treating those as syntax would misidentify where a clause starts or
-// ends. Because masking preserves length and the position of every
-// non-literal character, an index found in the masked text locates the
-// same character in the original s.
+// maskStringLiterals masks string-literal content so callers can search
+// for keywords and count parens without a literal's own contents (which
+// are free to contain "CHECK", "WHERE", or a stray paren) being mistaken
+// for syntax; the result stays the same length, so an index found in it
+// still locates the same character in s.
 func maskStringLiterals(s string) string {
 	b := []byte(s)
 	inString := false
@@ -384,12 +378,9 @@ func tableChecks(t *testing.T, ctx context.Context, handle *sql.DB, table string
 	return extractChecks(createSQL)
 }
 
-// extractChecks finds each standalone "CHECK" keyword in a CREATE TABLE
-// statement and captures its parenthesized expression by tracking paren
-// depth, rather than matching to the first ")" — a CHECK expression is
-// free to contain its own nested parentheses, as schema.sql's own
-// sessions-table example does. It scans maskStringLiterals(createTableSQL)
-// but slices createTableSQL itself at the indexes found there.
+// extractChecks captures each CHECK expression by tracking paren depth
+// rather than matching to the first ")", since one is free to contain its
+// own nested parentheses, as schema.sql's own sessions-table example does.
 func extractChecks(createTableSQL string) []string {
 	masked := strings.ToUpper(maskStringLiterals(createTableSQL))
 	var checks []string
