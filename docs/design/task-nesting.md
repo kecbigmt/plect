@@ -167,6 +167,11 @@ Nesting fields:
 | `[terminal]` | no | terminal table | An interactive endpoint for a nesting chain whose other layers declare none. |
 | `[health]` | no | health table | Liveness and activity probes for the resources this layer brings up. |
 
+A layer declaring `[setup]` declares `[health].alive`, as an executable probe
+or as `type = "noop"`; the rule applies independently to every layer, and a
+`noop` layer does not suppress an inner layer's own executable probe. See
+[`health-declaration.md`](health-declaration.md).
+
 The nested effect's effective scope is the innermost one's scope. If an outer
 effect declares `scope`, it must match the scope of its next inner effect, and
 the rule repeats down the nesting chain.

@@ -168,19 +168,22 @@ func healthFrom(def *lang.Definition, path string) (*HealthConfig, error) {
 		return nil, fmt.Errorf("`health` is a table")
 	}
 	health := &HealthConfig{}
-	for _, probe := range []struct {
-		name   string
-		target **lang.Action
-	}{
-		{"alive", &health.Alive},
-		{"activity", &health.Activity},
-	} {
-		action, err := actionIn(tbl, probe.name, path, def.ID+".health")
+	// alive is the one probe admitting the noop variant — the language's
+	// mandatory-declaration rule has already checked which position this is,
+	// so this second parse only needs to read it back, through the same
+	// ParseAliveAction the validator used.
+	if raw, ok := tbl["alive"]; ok {
+		action, err := lang.ParseAliveAction(raw, lang.Position{File: path, Path: def.ID + ".health.alive"})
 		if err != nil {
 			return nil, err
 		}
-		*probe.target = action
+		health.Alive = action
 	}
+	activity, err := actionIn(tbl, "activity", path, def.ID+".health")
+	if err != nil {
+		return nil, err
+	}
+	health.Activity = activity
 	return health, nil
 }
 

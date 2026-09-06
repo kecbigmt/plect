@@ -414,6 +414,34 @@
       ],
       "$comment": "PLECTURE-CFG-ACTION-TYPE-UNKNOWN for an unknown type; PLECTURE-CFG-ACTION-VARIANT when a field of the other variant is present."
     },
+    "noopAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type"
+      ],
+      "description": "An action that does nothing and exits zero: a deliberate non-observation, legal only under [health.alive].",
+      "properties": {
+        "type": {
+          "const": "noop"
+        }
+      }
+    },
+    "aliveAction": {
+      "type": "object",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/execAction"
+        },
+        {
+          "$ref": "#/$defs/shellAction"
+        },
+        {
+          "$ref": "#/$defs/noopAction"
+        }
+      ],
+      "$comment": "PLECTURE-CFG-ACTION-TYPE-UNKNOWN for an unknown type; PLECTURE-CFG-ACTION-VARIANT when a field of the other variant is present. The only site admitting the noop variant alongside exec and shell."
+    },
     "schemaDocument": {
       "type": "object",
       "description": "A JSON Schema document, inline in TOML. Plecture annotations such as mutable may extend it. Plecture tagged values may not appear in it.",
@@ -501,7 +529,7 @@
       "additionalProperties": false,
       "properties": {
         "alive": {
-          "$ref": "#/$defs/action"
+          "$ref": "#/$defs/aliveAction"
         },
         "activity": {
           "$ref": "#/$defs/action"
@@ -750,7 +778,24 @@
           "description": "The task owns an interactive endpoint. At most one task in a plan declares it."
         }
       },
-      "$comment": "PLECTURE-CFG-FIELD-UNKNOWN: the effect grammar is closed, and the completion contract is not in it."
+      "if": {
+        "required": [
+          "setup"
+        ]
+      },
+      "then": {
+        "required": [
+          "health"
+        ],
+        "properties": {
+          "health": {
+            "required": [
+              "alive"
+            ]
+          }
+        }
+      },
+      "$comment": "PLECTURE-CFG-FIELD-UNKNOWN: the effect grammar is closed, and the completion contract is not in it. PLECTURE-CFG-HEALTH-ALIVE-REQUIRED when setup is declared without [health.alive]."
     },
     "workflowDefinition": {
       "type": "object",

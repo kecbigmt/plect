@@ -45,6 +45,13 @@ script = 'tmux kill-session -t "$session_name" 2>/dev/null || true'
 [pane.cleanup.bind]
 session_name = { from = "self.outputs.session_name" }
 
+[pane.health.alive]
+type   = "shell"
+script = 'tmux has-session -t "$session_name"'
+
+[pane.health.alive.bind]
+session_name = { from = "self.outputs.session_name" }
+
 [pane.outputs_schema]
 type     = "object"
 required = ["session_name"]
@@ -83,6 +90,9 @@ type = "exec"
 bin  = "github-issue-pr"
 args = ["render-instruction"]
 
+[render.health.alive]
+type = "noop"
+
 [render.outputs.bind]
 checks_status = { from = "resource.state.checks_status" }
 
@@ -96,7 +106,12 @@ checks_status = { type = "string" }
 ## Health
 
 `[health]` declares this effect's contribution to session health: an `alive`
-probe and an `activity` probe, each an action.
+probe and an `activity` probe, each an action. A setup-bearing effect declares
+`[health.alive]`: an executable probe, as below, or, when its produced record
+is deliberately never re-observed, `type = "noop"` (see
+[`actions.md`](actions.md#noop)). The rule applies independently to every
+layer of a nesting chain — a `noop` layer passes the liveness AND without
+suppressing an inner layer's own executable probe.
 
 <!-- fixture: effects/health.toml -->
 ```toml
@@ -161,6 +176,13 @@ script = 'printf %s "$session_name"'
 
 [pane.setup.bind]
 session_name = { from = "session.name" }
+
+[pane.health.alive]
+type   = "shell"
+script = 'tmux has-session -t "$session_name"'
+
+[pane.health.alive.bind]
+session_name = { from = "self.outputs.session_name" }
 
 [pane.terminal.attach]
 type   = "shell"
@@ -235,6 +257,9 @@ script = '''
 dir=$(mktemp -d)
 printf '{"guard_dir":"%s"}\n' "$dir"
 '''
+
+[guarded_runtime.health.alive]
+type = "noop"
 
 [guarded_runtime.locals_schema]
 type     = "object"
@@ -329,6 +354,7 @@ env     = { type = "object" }
 ## Validation rules
 
 - The effect grammar is closed: a completion field is not part of it.
+- An effect that declares `setup` declares `[health.alive]`.
 - `[outputs.bind]` reads `inner.outputs.*`, `locals.*`, or `inputs.*`, and no
   live root.
 - A nesting chain that reaches itself is a load error.

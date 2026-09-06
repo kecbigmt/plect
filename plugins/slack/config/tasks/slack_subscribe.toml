@@ -49,6 +49,14 @@ socket_path      = { from = "inputs.socket_path" }
 session_name     = { from = "session.name" }
 catch_up_through = { from = "inputs.catch_up_through", optional = true }
 
+[slack_subscribe.health.alive]
+type   = "shell"
+script = 'curl -sf --max-time 10 "$base_url/subscribers" | jq -e --arg ts "$thread_ts" "any(.[]; .thread_ts == \$ts)" >/dev/null'
+
+[slack_subscribe.health.alive.bind]
+base_url  = { from = "inputs.base_url" }
+thread_ts = { from = "self.outputs.thread_ts" }
+
 [slack_subscribe.cleanup]
 type   = "shell"
 script = 'curl -sf --max-time 10 -X DELETE "$base_url/subscribe?thread_ts=$thread_ts" >/dev/null 2>&1 || true'

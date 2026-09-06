@@ -363,6 +363,9 @@ scope = "session"
 [review.setup]
 type   = "shell"
 script = "true"
+
+[review.health.alive]
+type = "noop"
 `
 
 // The other half of the same rule: a user-owned document reaches catalog

@@ -29,6 +29,12 @@ args = [
   { from = "inputs.assignees", default = "" },
 ]
 
+# A scan-and-create sweep, not a surface of its own: the pursue_goal
+# instances it creates are what would need re-checking, and each is its own
+# session-scoped effect with its own liveness.
+[goal_bootstrap.health.alive]
+type = "noop"
+
 [goal_bootstrap.inputs_schema]
 type                 = "object"
 required             = ["owner"]

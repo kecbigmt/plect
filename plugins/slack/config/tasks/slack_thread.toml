@@ -36,6 +36,12 @@ channel_id   = { from = "inputs.channel_id" }
 root_text    = { from = "inputs.root_text" }
 session_name = { from = "session.name" }
 
+# Deliberately never re-observed: a deleted or archived Slack thread must not
+# be silently recreated, because a replacement thread would split the
+# conversation the original one held.
+[slack_thread.health.alive]
+type = "noop"
+
 [slack_thread.inputs_schema]
 type                 = "object"
 required             = ["base_url", "channel_id", "root_text"]

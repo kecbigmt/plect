@@ -9,6 +9,9 @@ type = "exec"
 bin  = "okf-goal"
 args = ["task", "bootstrap", "--assignees", { from = "inputs.assignees", default = "" }]
 
+[bootstrap.health.alive]
+type = "noop"
+
 [bootstrap.inputs_schema]
 type                 = "object"
 additionalProperties = false

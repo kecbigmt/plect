@@ -146,7 +146,9 @@ func TestShippedGithubOkf_BinReferencesResolveUnderArbitraryAlias(t *testing.T) 
 	}
 	for id, def := range taskDefs {
 		ctx := RenderContext{
-			Self:       map[string]any{},
+			// gh_guard/gh_app_guard's health.alive reads back the directory
+			// their own setup produced, the same way cleanup does.
+			Self:       map[string]any{"dir": "/tmp/plect-gh-guard.x"},
 			Prev:       map[string]any{},
 			Inputs:     inputs,
 			Session:    session,
@@ -158,7 +160,9 @@ func TestShippedGithubOkf_BinReferencesResolveUnderArbitraryAlias(t *testing.T) 
 			"health.alive":    def.Health.AliveProbe(),
 			"health.activity": def.Health.ActivityProbe(),
 		} {
-			if action == nil {
+			// A noop action deliberately runs nothing, so there is nothing
+			// for a resolution check to exercise.
+			if action == nil || action.Type == lang.ActionNoop {
 				continue
 			}
 			env := setupRoots(ctx)

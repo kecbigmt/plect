@@ -972,6 +972,9 @@ scope = "run"
 [tmux.setup]
 type   = "shell"
 script = "echo '{\"session_name\":\"abc\"}'"
+
+[tmux.health.alive]
+type = "noop"
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -986,6 +989,9 @@ script = "jq -nc --arg target \"$session_name\" '{target:$target}'"
 
 [agent.setup.bind]
 session_name = { from = "inputs.session_name" }
+
+[agent.health.alive]
+type = "noop"
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1073,6 +1079,9 @@ scope = "session"
 [noop.setup]
 type   = "shell"
 script = "echo '{}'"
+
+[noop.health.alive]
+type = "noop"
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1144,6 +1153,9 @@ scope = "run"
 [tmux.setup]
 type   = "shell"
 script = "echo '{\"session_name\":\"abc\"}'"
+
+[tmux.health.alive]
+type = "noop"
 
 [tmux.terminal.attach]
 type    = "exec"

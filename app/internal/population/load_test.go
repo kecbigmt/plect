@@ -56,6 +56,8 @@ scope = "run"
 [runtime.setup]
 type = "exec"
 command = "true"
+[runtime.health.alive]
+type = "noop"
 `)
 	writeDefinition(t, dir, "workflow", `[agent]
 kind = "workflow"

@@ -71,6 +71,9 @@ type = "exec"
 bin  = "agent-runtime"
 args = ["launch"]
 
+[runtime.health.alive]
+type = "noop"
+
 [review_session]
 kind               = "workflow"
 workspace_provider = "worktree"

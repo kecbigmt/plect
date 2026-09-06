@@ -42,7 +42,7 @@ func setUpConfigHome(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(baseDir, "tasks", "noop.toml"),
-		[]byte("[noop]\nkind = \"effect\"\nscope = \"session\"\n\n[noop.setup]\ntype = \"shell\"\nscript = \"echo '{}'\"\n"), 0o644); err != nil {
+		[]byte("[noop]\nkind = \"effect\"\nscope = \"session\"\n\n[noop.setup]\ntype = \"shell\"\nscript = \"echo '{}'\"\n\n[noop.health.alive]\ntype = \"noop\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }

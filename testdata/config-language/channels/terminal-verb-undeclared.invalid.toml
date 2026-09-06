@@ -20,6 +20,9 @@ type = "exec"
 bin  = "codex-exec-worker"
 args = ["start"]
 
+[worker.health.alive]
+type = "noop"
+
 [terminal_submit]
 kind   = "channel"
 type   = "shell"

@@ -100,6 +100,9 @@ scope = "run"
 type = "exec"
 bin  = "okf-goal"
 args = ["task", "bootstrap"]
+
+[goal.health.alive]
+type = "noop"
 `)
 
 	writeCatalogsToml(t, tmpHome, `

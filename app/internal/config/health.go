@@ -11,10 +11,13 @@ import (
 // both, or (by omitting the table) neither.
 //
 // Alive is the liveness probe: exit-code semantics, zero means the execution
-// surface is present. Activity is the activity probe: it writes a JSON
-// activity envelope on stdout whose opaque fingerprint core compares across
-// evaluations. A readiness-style third probe is deliberately absent — health
-// answers "is this surface present and moving", not "may traffic be sent".
+// surface is present. It may instead be a noop action, which declares that
+// this effect's produced record is deliberately never re-observed — a
+// systemd RemainAfterExit=-style choice, not the absence of one. Activity is
+// the activity probe: it writes a JSON activity envelope on stdout whose
+// opaque fingerprint core compares across evaluations. A readiness-style
+// third probe is deliberately absent — health answers "is this surface
+// present and moving", not "may traffic be sent".
 type HealthConfig struct {
 	Alive    *lang.Action
 	Activity *lang.Action

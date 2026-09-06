@@ -35,6 +35,9 @@ scope = "session"
 [noop.setup]
 type   = "shell"
 script = "echo '{}'"
+
+[noop.health.alive]
+type = "noop"
 `)
 	write(filepath.Join("workspaces", "space.toml"), `
 [space]
@@ -146,6 +149,9 @@ scope = "session"
 type   = "shell"
 script = "echo '{}'"
 
+[runner.health.alive]
+type = "noop"
+
 [runner.cleanup]
 type   = "shell"
 script = "exit 3"
@@ -158,6 +164,9 @@ scope = "session"
 [runner.setup]
 type   = "shell"
 script = "echo '{}'"
+
+[runner.health.alive]
+type = "noop"
 
 [runner.cleanup]
 type   = "shell"
@@ -217,6 +226,9 @@ scope = "session"
 type   = "shell"
 script = "echo '{}'"
 
+[runner.health.alive]
+type = "noop"
+
 [runner.cleanup]
 type   = "shell"
 script = "exit 3"
@@ -229,6 +241,9 @@ scope = "session"
 [runner.setup]
 type   = "shell"
 script = "echo '{}'"
+
+[runner.health.alive]
+type = "noop"
 
 [runner.cleanup]
 type   = "shell"

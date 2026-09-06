@@ -1,0 +1,11 @@
+# plect-fixture: result=invalid layer=structural diagnostic=PLECTURE-CFG-HEALTH-ALIVE-REQUIRED entry=definitions
+# reason: an effect whose surface can vanish must declare how its liveness is determined; leaving [health.alive] absent is not a neutral default.
+
+[runtime]
+kind  = "effect"
+scope = "run"
+
+[runtime.setup]
+type = "exec"
+bin  = "agent-runtime"
+args = ["launch"]

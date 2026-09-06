@@ -1,0 +1,24 @@
+# plect-fixture: result=valid entry=definitions
+# reason: a setup-bearing effect's liveness declaration may be an explicit non-observation instead of an executable probe.
+
+[write_instruction]
+kind  = "effect"
+scope = "session"
+
+[write_instruction.setup]
+type   = "shell"
+script = 'printf %s "$instruction"'
+
+[write_instruction.setup.bind]
+instruction = { from = "inputs.instruction" }
+
+[write_instruction.health.alive]
+type = "noop"
+
+[write_instruction.inputs_schema]
+type                 = "object"
+required             = ["instruction"]
+additionalProperties = false
+
+[write_instruction.inputs_schema.properties]
+instruction = { type = "string" }

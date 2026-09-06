@@ -24,6 +24,9 @@ scope = "run"
 type   = "shell"
 script = "echo '{}'"
 
+[tmux.health.alive]
+type = "noop"
+
 [tmux.terminal.send_text]
 type    = "exec"
 command = "tmux"
