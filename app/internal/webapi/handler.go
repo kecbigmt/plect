@@ -89,6 +89,19 @@ func handleGet(svc SessionReader) http.HandlerFunc {
 	}
 }
 
+// event.Filter/eventlog.List treat Limit<=0 as "unlimited" — a sentinel this
+// endpoint must never forward verbatim, since the durable log is unbounded
+// and survives destroy: an omitted or non-positive limit would otherwise
+// have the server scan, retain, convert, and serialize the entire log in one
+// response. defaultEventPageLimit is the page size used when the client
+// specifies no positive limit; maxEventPageLimit caps an explicit request so
+// a client cannot get the same unbounded read by asking for a very large
+// number instead of a non-positive one.
+const (
+	defaultEventPageLimit = 100
+	maxEventPageLimit     = 1000
+)
+
 // handleSessionEvents serves one page of a session's event history. Unlike
 // handleGet, an unknown session is not rejected up front: service.EventPage
 // resolves an identifier that names no known session by falling back to it
@@ -109,14 +122,21 @@ func handleSessionEvents(svc SessionReader) http.HandlerFunc {
 			writeValidationError(w, err.Error())
 			return
 		}
-		var limit int
+		limit := defaultEventPageLimit
 		if raw := q.Get("limit"); raw != "" {
 			n, cerr := strconv.Atoi(raw)
 			if cerr != nil {
 				writeValidationError(w, "limit must be an integer")
 				return
 			}
-			limit = n
+			// A non-positive value falls back to the default rather than
+			// being forwarded: it is never "unlimited" at this boundary.
+			if n > 0 {
+				limit = n
+			}
+		}
+		if limit > maxEventPageLimit {
+			limit = maxEventPageLimit
 		}
 
 		page, err := svc.EventPage(session, service.EventPageParams{

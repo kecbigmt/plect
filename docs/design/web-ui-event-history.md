@@ -64,8 +64,14 @@ already true of the existing contracts, not a new mechanism:
   how a cursor maps to the stream's own resume token) cannot skip an event
   published in the interval, because the interval is not what the cursor
   encodes — the log position is.
-- **Event IDs are globally unique and monotonic (ULIDs), so overlap is safe
-  to discard.** `docs/design/web-ui.md`'s Home section already states the
+- **Event IDs are globally unique and lexicographically sortable by
+  creation time (ULIDs), so overlap is safe to discard.** IDs are not
+  guaranteed strictly monotonic across processes — two events recorded by
+  different producers in the same millisecond carry no ordering guarantee
+  relative to each other, only each one's own uniqueness and rough time
+  order (the same "lexicographic = chronological" property
+  `contracts/event/cursor.go` already relies on for subtree keyset paging).
+  `docs/design/web-ui.md`'s Home section already states the
   rule this protocol relies on: deduplicate by event ID. A live subscription
   that conservatively replays a small tail before following forward (the same
   shape the existing bus SSE stream and the Go-templated Web UI's relay

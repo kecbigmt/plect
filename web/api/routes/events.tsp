@@ -52,7 +52,13 @@ interface SessionEvents {
     cursor?: string,
 
     @query
-    @doc("Page size. Omitted or non-positive uses the server's existing default.")
+    @doc("""
+      Page size. Omitted or non-positive uses the server's default (100); a
+      value above the server's maximum (1000) is capped rather than
+      rejected. The durable log is unbounded and survives destroy, so this
+      endpoint never returns an unbounded page regardless of what the
+      client asks for.
+      """)
     limit?: int32,
 
     @query

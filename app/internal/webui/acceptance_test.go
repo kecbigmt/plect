@@ -4,6 +4,7 @@ package webui
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -417,6 +418,52 @@ func TestAcceptance_ApiV1EventsUnknownSessionIsEmptyNotAnError(t *testing.T) {
 	}
 	if page.NextCursor != nil {
 		t.Errorf("NextCursor = %v, want absent for a session with no log at all", page.NextCursor)
+	}
+}
+
+// Acceptance: an omitted limit must still bound the read against the real
+// eventlog store, not just the package-level unit tests' fake —
+// event.Filter/eventlog.List treat Limit<=0 as "unlimited", so this proves
+// app/internal/webapi's own enforced default actually reaches it.
+//
+// Given a session with more events than the endpoint's default page size,
+// When GET /api/v1/events?session=<name> is served with no limit,
+// Then the response contains exactly that default page size, not every
+// event in the log, and a resume cursor for the events left unread.
+func TestAcceptance_ApiV1EventsOmittedLimitIsBoundedNotTheWholeLog(t *testing.T) {
+	store := state.NewStore(t.TempDir())
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	isolateMachineConfig(cfg)
+	svc := newLiveService(cfg, store)
+	const session = "acceptance/events-bounded"
+	// One more than app/internal/webapi's own defaultEventPageLimit (100): a
+	// page bounded at 100 must leave at least one event unread.
+	const seeded = 101
+	const wantDefaultLimit = 100
+	for i := range seeded {
+		if _, err := svc.PublishEvent(session, service.EventPublishParams{
+			Type: event.TypeUserNote, Summary: fmt.Sprintf("event-%d", i),
+		}); err != nil {
+			t.Fatalf("seed event %d: %v", i, err)
+		}
+	}
+
+	rec := get(t, svc, "/api/v1/events?session="+url.QueryEscape(session))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body)
+	}
+	var page webapiv1.EventPage
+	if err := json.NewDecoder(rec.Body).Decode(&page); err != nil {
+		t.Fatalf("decode EventPage: %v", err)
+	}
+	if len(page.Events) != wantDefaultLimit {
+		t.Fatalf("Events = %d, want exactly the enforced default page size %d (log has %d)", len(page.Events), wantDefaultLimit, seeded)
+	}
+	if page.NextCursor == nil {
+		t.Error("NextCursor = nil, want a resume cursor since more events remain unread")
 	}
 }
 

@@ -291,6 +291,68 @@ func TestHandleSessionEvents_InvalidOrderIsA400ValidationError(t *testing.T) {
 	}
 }
 
+// event.Filter/eventlog.List treat Limit<=0 as "unlimited" — an omitted
+// limit must never reach the service as 0, or a client asking for the
+// default page gets the entire durable log instead.
+func TestHandleSessionEvents_OmittedLimitUsesTheEnforcedDefaultNotZero(t *testing.T) {
+	svc := &fakeReader{}
+
+	rec := doRequest(t, svc, http.MethodGet, "/events?session=team/workspace-a")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body)
+	}
+	if svc.gotEventParams == nil || svc.gotEventParams.Filter.Limit != defaultEventPageLimit {
+		t.Fatalf("Filter.Limit = %v, want the enforced default %d, not the eventlog 'unlimited' sentinel 0", svc.gotEventParams, defaultEventPageLimit)
+	}
+}
+
+// An explicit non-positive limit (the same "unlimited" sentinel value at the
+// eventlog layer) must fall back to the default exactly like an omitted one,
+// not pass 0 or a negative number through.
+func TestHandleSessionEvents_NonPositiveLimitUsesTheEnforcedDefault(t *testing.T) {
+	for _, raw := range []string{"0", "-1", "-100"} {
+		svc := &fakeReader{}
+		rec := doRequest(t, svc, http.MethodGet, "/events?session=team/workspace-a&limit="+raw)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("limit=%s: status = %d, want 200; body: %s", raw, rec.Code, rec.Body)
+		}
+		if svc.gotEventParams == nil || svc.gotEventParams.Filter.Limit != defaultEventPageLimit {
+			t.Errorf("limit=%s: Filter.Limit = %v, want the enforced default %d", raw, svc.gotEventParams, defaultEventPageLimit)
+		}
+	}
+}
+
+// An explicit limit above the server's maximum is capped, not forwarded
+// verbatim — a client cannot get an unbounded read by asking for an
+// arbitrarily large number instead of a non-positive one.
+func TestHandleSessionEvents_OversizedLimitIsCappedAtTheMaximum(t *testing.T) {
+	svc := &fakeReader{}
+
+	rec := doRequest(t, svc, http.MethodGet, "/events?session=team/workspace-a&limit=1000000")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body)
+	}
+	if svc.gotEventParams == nil || svc.gotEventParams.Filter.Limit != maxEventPageLimit {
+		t.Errorf("Filter.Limit = %v, want capped at the maximum %d", svc.gotEventParams, maxEventPageLimit)
+	}
+}
+
+// A within-range explicit limit passes through unchanged.
+func TestHandleSessionEvents_InRangeLimitPassesThroughUnchanged(t *testing.T) {
+	svc := &fakeReader{}
+
+	rec := doRequest(t, svc, http.MethodGet, "/events?session=team/workspace-a&limit=25")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body)
+	}
+	if svc.gotEventParams == nil || svc.gotEventParams.Filter.Limit != 25 {
+		t.Errorf("Filter.Limit = %v, want 25", svc.gotEventParams)
+	}
+}
+
 func TestHandleSessionEvents_InvalidLimitIsA400ValidationError(t *testing.T) {
 	svc := &fakeReader{}
 
