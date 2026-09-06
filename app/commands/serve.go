@@ -49,6 +49,8 @@ Config (including which plugins are mounted) is re-resolved periodically, so
 a plugin enabled after this command started becomes visible without a
 restart, within one refresh interval.`,
 	Args: cobra.NoArgs,
+	// No persistence.EnsureCurrent call here: root.go's PersistentPreRunE
+	// already ran it, since this command has no PersistentPreRunE of its own.
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		socket := serveEventBusSocket
 		if socket == "" {

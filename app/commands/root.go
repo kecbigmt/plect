@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/kecbigmt/plecture/app/internal/confighome"
+	"github.com/kecbigmt/plecture/app/internal/persistence"
 	"github.com/kecbigmt/plecture/app/internal/state"
 	"github.com/spf13/cobra"
 )
@@ -43,7 +44,13 @@ identifier no resolver matches selects a workflow explicitly (see
 		if err := state.NewStore("").CheckReadable(); err != nil {
 			return err
 		}
-		return nil
+		// Keeps store.db's own schema current independently of the
+		// state.json check above, which covers session/task state only.
+		db, err := persistence.EnsureCurrent(cmd.Context(), persistence.DefaultPath())
+		if err != nil {
+			return err
+		}
+		return db.Close()
 	},
 }
 
