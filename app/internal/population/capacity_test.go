@@ -107,6 +107,18 @@ type = "object"
 
 func addCapacityMember(t *testing.T, def Definition, store *state.Store, logStore *eventlog.Store, name, resource string, created, cleared time.Time) {
 	t.Helper()
+	// The population row must exist before a session can reference it
+	// (sessions.population_workflow/population_name FK), matching
+	// production's own order: ApplyPoll/ApplyAppearance always upserts the
+	// population before Reconcile ever admits a session into it.
+	if err := store.UpdatePopulation(populationKey(def), func(population *state.PopulationState) error {
+		population.Workflow = def.Workflow.Address
+		population.Name = def.Population.Name
+		population.Members[resource] = &state.PopulationMember{ResourceID: resource, SessionName: name, Generation: 1}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.Put(&contract.Session{
 		Name:       name,
 		ResourceID: resource,
@@ -115,14 +127,6 @@ func addCapacityMember(t *testing.T, def Definition, store *state.Store, logStor
 			"runtime": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced},
 		},
 		CreatedAt: created,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.UpdatePopulation(populationKey(def), func(population *state.PopulationState) error {
-		population.Workflow = def.Workflow.Address
-		population.Name = def.Population.Name
-		population.Members[resource] = &state.PopulationMember{ResourceID: resource, SessionName: name, Generation: 1}
-		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}

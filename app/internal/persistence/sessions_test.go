@@ -2,11 +2,14 @@ package persistence
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/domain"
+	"github.com/kecbigmt/plecture/app/internal/persistence/sqlcgen"
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
@@ -522,5 +525,125 @@ func TestPutSession_DynamicInstanceIDStableAcrossOrdinaryUpdate(t *testing.T) {
 	task := got.Tasks["initial"]
 	if task == nil || task.DoneWhen == nil || task.DoneWhen.LastFingerprint != "new" {
 		t.Fatalf("task after update = %+v, want done_when.last_fingerprint = %q", task, "new")
+	}
+}
+
+// TestPutSessionAndGetSession_RoundTripsPopulationThroughColumnsNotBlob
+// proves M1's promoted-column resolution: a session's population reference
+// round-trips through sessions.population_workflow/population_name (not a
+// field embedded in record_json, per L1), and clearing it back to nil
+// clears both columns.
+func TestPutSessionAndGetSession_RoundTripsPopulationThroughColumnsNotBlob(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	if err := db.UpdatePopulation(ctx, "wf1/pop1", func(p *domain.PopulationState) error {
+		p.Workflow = "wf1"
+		p.Name = "pop1"
+		return nil
+	}); err != nil {
+		t.Fatalf("UpdatePopulation (seed): %v", err)
+	}
+
+	session := &domain.Session{
+		Name: "case42", CreatedAt: now, UpdatedAt: now,
+		Population: &contract.PopulationProvenance{Workflow: "wf1", Name: "pop1"},
+	}
+	if err := db.PutSession(ctx, session); err != nil {
+		t.Fatalf("PutSession: %v", err)
+	}
+
+	var recordJSON string
+	if err := db.WithReadTx(ctx, func(tx *sql.Tx) error {
+		row, err := sqlcgen.New(tx).GetSession(ctx, "case42")
+		if err != nil {
+			return err
+		}
+		recordJSON = row.RecordJson
+		return nil
+	}); err != nil {
+		t.Fatalf("read raw record_json: %v", err)
+	}
+	if strings.Contains(recordJSON, "population") {
+		t.Errorf("record_json = %s, want no \"population\" field (it must live in the promoted columns instead)", recordJSON)
+	}
+
+	got, err := db.GetSession(ctx, "case42")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if got.Population == nil || got.Population.Workflow != "wf1" || got.Population.Name != "pop1" {
+		t.Fatalf("Population = %+v, want {wf1 pop1}", got.Population)
+	}
+
+	got.Population = nil
+	if err := db.PutSession(ctx, got); err != nil {
+		t.Fatalf("PutSession (clear): %v", err)
+	}
+	cleared, err := db.GetSession(ctx, "case42")
+	if err != nil {
+		t.Fatalf("GetSession (after clear): %v", err)
+	}
+	if cleared.Population != nil {
+		t.Fatalf("Population after clear = %+v, want nil", cleared.Population)
+	}
+}
+
+// TestPutSession_RecordJsonOmitsZeroValuedColumnDuplicates proves L1: a
+// minimal session and a minimal dynamic task instance's record_json blobs
+// carry none of the fields that a relational column now owns, not even as
+// empty-string/zero-value JSON keys — a second, disagreeing authority for
+// anyone reading the blob directly.
+func TestPutSession_RecordJsonOmitsZeroValuedColumnDuplicates(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	session := &domain.Session{
+		Name: "case7", CreatedAt: now, UpdatedAt: now,
+		Tasks: map[string]*contract.TaskState{
+			"initial": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, Dynamic: true, TaskID: "work"},
+		},
+	}
+	if err := db.PutSession(ctx, session); err != nil {
+		t.Fatalf("PutSession: %v", err)
+	}
+
+	var sessionRecordJSON, taskRecordJSON string
+	if err := db.WithReadTx(ctx, func(tx *sql.Tx) error {
+		row, err := sqlcgen.New(tx).GetSession(ctx, "case7")
+		if err != nil {
+			return err
+		}
+		sessionRecordJSON = row.RecordJson
+		rows, err := sqlcgen.New(tx).ListTaskInstances(ctx, "case7")
+		if err != nil {
+			return err
+		}
+		if len(rows) != 1 {
+			t.Fatalf("task_instances rows = %d, want 1", len(rows))
+		}
+		taskRecordJSON = rows[0].RecordJson
+		return nil
+	}); err != nil {
+		t.Fatalf("read raw record_json: %v", err)
+	}
+
+	if sessionRecordJSON != "{}" {
+		t.Errorf("session record_json = %s, want {} (every field it carries has a column)", sessionRecordJSON)
+	}
+	for _, key := range []string{"session_name", "branch", "workspace_dir_path", "workflow", "created_at", "updated_at"} {
+		if strings.Contains(sessionRecordJSON, key) {
+			t.Errorf("session record_json = %s, must not mention column %q", sessionRecordJSON, key)
+		}
+	}
+	if taskRecordJSON != "{}" {
+		t.Errorf("task record_json = %s, want {} (every field it carries has a column)", taskRecordJSON)
+	}
+	for _, key := range []string{"scope", "status", "task_id", "resource", "name", "dynamic"} {
+		if strings.Contains(taskRecordJSON, key) {
+			t.Errorf("task record_json = %s, must not mention column %q", taskRecordJSON, key)
+		}
 	}
 }

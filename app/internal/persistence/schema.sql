@@ -20,6 +20,17 @@
 -- "2026-09-06T08:50:42.821423717Z"), or NULL when unset — never a
 -- variable-width fractional part, so lexical order equals time order. See
 -- timeconv.go.
+-- population_workflow/population_name are the session-side half of
+-- population membership: every write site that sets them (population's own
+-- admission hook, population/runtime.go's upPopulation) runs after that
+-- population's own row already exists (ApplyPoll/ApplyAppearance upsert
+-- `populations` before Reconcile ever calls admit), so the FK is always
+-- satisfiable at write time. population_members.session_name is recorded
+-- separately and is the authority for *current* membership (a tombstoned or
+-- reassigned member can disagree with a session that has not yet been
+-- destroyed or updated); these two columns are the authority for what a
+-- session itself was created under, which never changes for that session's
+-- lifetime once admission succeeds.
 CREATE TABLE sessions (
     name TEXT PRIMARY KEY,
     parent_session_name TEXT REFERENCES sessions(name) ON DELETE SET NULL,
@@ -28,11 +39,15 @@ CREATE TABLE sessions (
     alias TEXT,
     workflow TEXT NOT NULL,
     workspace_dir TEXT,
+    population_workflow TEXT,
+    population_name TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     record_json TEXT NOT NULL,
     CHECK (NOT (parent_session_name IS NOT NULL AND root_session_name IS NOT NULL)),
-    CHECK (root_session_name IS NULL OR root_session_name <> name)
+    CHECK (root_session_name IS NULL OR root_session_name <> name),
+    CHECK ((population_workflow IS NULL) = (population_name IS NULL)),
+    FOREIGN KEY (population_workflow, population_name) REFERENCES populations(workflow, name) ON DELETE SET NULL
 );
 
 CREATE INDEX sessions_alias_idx ON sessions(alias);

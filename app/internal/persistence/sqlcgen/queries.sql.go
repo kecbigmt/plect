@@ -123,7 +123,8 @@ func (q *Queries) GetPopulation(ctx context.Context, arg GetPopulationParams) (P
 
 const getSession = `-- name: GetSession :one
 SELECT name, parent_session_name, root_session_name, resource_id, alias,
-       workflow, workspace_dir, created_at, updated_at, record_json
+       workflow, workspace_dir, population_workflow, population_name,
+       created_at, updated_at, record_json
 FROM sessions WHERE name = ?
 `
 
@@ -138,6 +139,8 @@ func (q *Queries) GetSession(ctx context.Context, name string) (Session, error) 
 		&i.Alias,
 		&i.Workflow,
 		&i.WorkspaceDir,
+		&i.PopulationWorkflow,
+		&i.PopulationName,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.RecordJson,
@@ -411,7 +414,8 @@ func (q *Queries) ListPopulationMembers(ctx context.Context, arg ListPopulationM
 
 const listSessions = `-- name: ListSessions :many
 SELECT name, parent_session_name, root_session_name, resource_id, alias,
-       workflow, workspace_dir, created_at, updated_at, record_json
+       workflow, workspace_dir, population_workflow, population_name,
+       created_at, updated_at, record_json
 FROM sessions ORDER BY name
 `
 
@@ -432,6 +436,8 @@ func (q *Queries) ListSessions(ctx context.Context) ([]Session, error) {
 			&i.Alias,
 			&i.Workflow,
 			&i.WorkspaceDir,
+			&i.PopulationWorkflow,
+			&i.PopulationName,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.RecordJson,
@@ -451,7 +457,8 @@ func (q *Queries) ListSessions(ctx context.Context) ([]Session, error) {
 
 const listSessionsByAlias = `-- name: ListSessionsByAlias :many
 SELECT name, parent_session_name, root_session_name, resource_id, alias,
-       workflow, workspace_dir, created_at, updated_at, record_json
+       workflow, workspace_dir, population_workflow, population_name,
+       created_at, updated_at, record_json
 FROM sessions WHERE alias = ? ORDER BY name
 `
 
@@ -472,6 +479,8 @@ func (q *Queries) ListSessionsByAlias(ctx context.Context, alias sql.NullString)
 			&i.Alias,
 			&i.Workflow,
 			&i.WorkspaceDir,
+			&i.PopulationWorkflow,
+			&i.PopulationName,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.RecordJson,
@@ -697,8 +706,9 @@ const upsertSession = `-- name: UpsertSession :exec
 
 INSERT INTO sessions (
     name, parent_session_name, root_session_name, resource_id, alias,
-    workflow, workspace_dir, created_at, updated_at, record_json
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    workflow, workspace_dir, population_workflow, population_name,
+    created_at, updated_at, record_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(name) DO UPDATE SET
     parent_session_name = excluded.parent_session_name,
     root_session_name = excluded.root_session_name,
@@ -706,22 +716,26 @@ ON CONFLICT(name) DO UPDATE SET
     alias = excluded.alias,
     workflow = excluded.workflow,
     workspace_dir = excluded.workspace_dir,
+    population_workflow = excluded.population_workflow,
+    population_name = excluded.population_name,
     created_at = excluded.created_at,
     updated_at = excluded.updated_at,
     record_json = excluded.record_json
 `
 
 type UpsertSessionParams struct {
-	Name              string
-	ParentSessionName sql.NullString
-	RootSessionName   sql.NullString
-	ResourceID        sql.NullString
-	Alias             sql.NullString
-	Workflow          string
-	WorkspaceDir      sql.NullString
-	CreatedAt         string
-	UpdatedAt         string
-	RecordJson        string
+	Name               string
+	ParentSessionName  sql.NullString
+	RootSessionName    sql.NullString
+	ResourceID         sql.NullString
+	Alias              sql.NullString
+	Workflow           string
+	WorkspaceDir       sql.NullString
+	PopulationWorkflow sql.NullString
+	PopulationName     sql.NullString
+	CreatedAt          string
+	UpdatedAt          string
+	RecordJson         string
 }
 
 // Sessions
@@ -734,6 +748,8 @@ func (q *Queries) UpsertSession(ctx context.Context, arg UpsertSessionParams) er
 		arg.Alias,
 		arg.Workflow,
 		arg.WorkspaceDir,
+		arg.PopulationWorkflow,
+		arg.PopulationName,
 		arg.CreatedAt,
 		arg.UpdatedAt,
 		arg.RecordJson,

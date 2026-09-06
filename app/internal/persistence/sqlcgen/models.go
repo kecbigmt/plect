@@ -41,16 +41,18 @@ type PopulationMember struct {
 }
 
 type Session struct {
-	Name              string
-	ParentSessionName sql.NullString
-	RootSessionName   sql.NullString
-	ResourceID        sql.NullString
-	Alias             sql.NullString
-	Workflow          string
-	WorkspaceDir      sql.NullString
-	CreatedAt         string
-	UpdatedAt         string
-	RecordJson        string
+	Name               string
+	ParentSessionName  sql.NullString
+	RootSessionName    sql.NullString
+	ResourceID         sql.NullString
+	Alias              sql.NullString
+	Workflow           string
+	WorkspaceDir       sql.NullString
+	PopulationWorkflow sql.NullString
+	PopulationName     sql.NullString
+	CreatedAt          string
+	UpdatedAt          string
+	RecordJson         string
 }
 
 type TaskDoneWhenJudge struct {

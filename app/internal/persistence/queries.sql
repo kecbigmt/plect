@@ -3,8 +3,9 @@
 -- name: UpsertSession :exec
 INSERT INTO sessions (
     name, parent_session_name, root_session_name, resource_id, alias,
-    workflow, workspace_dir, created_at, updated_at, record_json
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    workflow, workspace_dir, population_workflow, population_name,
+    created_at, updated_at, record_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(name) DO UPDATE SET
     parent_session_name = excluded.parent_session_name,
     root_session_name = excluded.root_session_name,
@@ -12,23 +13,28 @@ ON CONFLICT(name) DO UPDATE SET
     alias = excluded.alias,
     workflow = excluded.workflow,
     workspace_dir = excluded.workspace_dir,
+    population_workflow = excluded.population_workflow,
+    population_name = excluded.population_name,
     created_at = excluded.created_at,
     updated_at = excluded.updated_at,
     record_json = excluded.record_json;
 
 -- name: GetSession :one
 SELECT name, parent_session_name, root_session_name, resource_id, alias,
-       workflow, workspace_dir, created_at, updated_at, record_json
+       workflow, workspace_dir, population_workflow, population_name,
+       created_at, updated_at, record_json
 FROM sessions WHERE name = ?;
 
 -- name: ListSessions :many
 SELECT name, parent_session_name, root_session_name, resource_id, alias,
-       workflow, workspace_dir, created_at, updated_at, record_json
+       workflow, workspace_dir, population_workflow, population_name,
+       created_at, updated_at, record_json
 FROM sessions ORDER BY name;
 
 -- name: ListSessionsByAlias :many
 SELECT name, parent_session_name, root_session_name, resource_id, alias,
-       workflow, workspace_dir, created_at, updated_at, record_json
+       workflow, workspace_dir, population_workflow, population_name,
+       created_at, updated_at, record_json
 FROM sessions WHERE alias = ? ORDER BY name;
 
 -- name: ListChildSessionNames :many

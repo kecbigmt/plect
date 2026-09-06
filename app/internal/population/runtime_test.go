@@ -31,6 +31,20 @@ func TestFailedInitialTaskIsNotAcceptedAsSuccessfullyInstalled(t *testing.T) {
 	}
 }
 
+// seedPopulationRow upserts an empty population row so a test can put a
+// session referencing it directly (sessions.population_workflow/name FK)
+// without going through the engine's own admission flow.
+func seedPopulationRow(t *testing.T, store *state.Store, def Definition) {
+	t.Helper()
+	if err := store.UpdatePopulation(populationKey(def), func(population *state.PopulationState) error {
+		population.Workflow = def.Workflow.Address
+		population.Name = def.Population.Name
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPopulationCannotAdoptSameProvenanceSessionForAnotherResource(t *testing.T) {
 	cfg := populationConfig(t, `[source.query.poll]
 type = "exec"
@@ -42,6 +56,7 @@ command = "true"
 	}
 	definition := definitions[0]
 	store := state.NewStore(t.TempDir())
+	seedPopulationRow(t, store, definition)
 	provenance := &contract.PopulationProvenance{Workflow: definition.Workflow.Address, Name: definition.Population.Name}
 	name, err := service.ResolvePopulationSessionName(cfg, definition.Workflow.Address, "urn:case:a")
 	if err != nil {
@@ -83,6 +98,7 @@ type = "object"
 	}
 	definition := definitions[0]
 	store := state.NewStore(t.TempDir())
+	seedPopulationRow(t, store, definition)
 	provenance := &contract.PopulationProvenance{Workflow: definition.Workflow.Address, Name: definition.Population.Name}
 	up := func() UpOutcome {
 		t.Helper()

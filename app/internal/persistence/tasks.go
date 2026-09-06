@@ -307,19 +307,53 @@ func doneWhenFromRow(dw sqlcgen.TaskDoneWhenState, judges map[string]*contract.D
 	}, nil
 }
 
+// nodeInstancePayload is a node_instances row's record_json shape: a
+// TaskState's fields with no relational column of their own on that table
+// (scope, status, sequence, and finalized_at are columns instead; see
+// marshalNodeInstanceRecord). Every field here carries omitempty/omitzero,
+// so an instance with nothing beyond its columns serializes to "{}" rather
+// than a page of zero-valued duplicates (e.g. "scope":"","status":"") that
+// would read as a second, disagreeing authority to anyone inspecting the
+// blob directly.
+type nodeInstancePayload struct {
+	TaskID        string                        `json:"task_id,omitempty"`
+	Inputs        map[string]any                `json:"inputs,omitempty"`
+	Outputs       map[string]any                `json:"outputs,omitempty"`
+	Resource      string                        `json:"resource,omitempty"`
+	Name          string                        `json:"name,omitempty"`
+	Layers        []contract.LayerState         `json:"layers,omitempty"`
+	State         map[string]any                `json:"state,omitempty"`
+	Observed      *contract.ResourceObservation `json:"observed,omitempty"`
+	DoneWhen      *contract.DoneWhenState       `json:"done_when,omitempty"`
+	ExtraDoneWhen json.RawMessage               `json:"extra_done_when,omitempty"`
+	SetupAt       time.Time                     `json:"setup_at,omitzero"`
+	FailedAt      time.Time                     `json:"failed_at,omitzero"`
+	CleanedAt     time.Time                     `json:"cleaned_at,omitzero"`
+	Error         string                        `json:"error,omitempty"`
+}
+
 // marshalNodeInstanceRecord serializes every TaskState field not already
 // carried by a relational column on node_instances (scope, status,
 // sequence, finalized_at). Unlike a dynamic instance, a node instance's
 // TaskID, Resource, Name, and DoneWhen (rare, and not relationally queried)
 // all stay embedded here rather than split out.
 func marshalNodeInstanceRecord(t *contract.TaskState) (string, error) {
-	clone := *t
-	clone.Scope = ""
-	clone.Status = ""
-	clone.Seq = 0
-	clone.Dynamic = false
-	clone.FinalizedAt = time.Time{}
-	data, err := json.Marshal(clone)
+	data, err := json.Marshal(nodeInstancePayload{
+		TaskID:        t.TaskID,
+		Inputs:        t.Inputs,
+		Outputs:       t.Outputs,
+		Resource:      t.Resource,
+		Name:          t.Name,
+		Layers:        t.Layers,
+		State:         t.State,
+		Observed:      t.Observed,
+		DoneWhen:      t.DoneWhen,
+		ExtraDoneWhen: t.ExtraDoneWhen,
+		SetupAt:       t.SetupAt,
+		FailedAt:      t.FailedAt,
+		CleanedAt:     t.CleanedAt,
+		Error:         t.Error,
+	})
 	if err != nil {
 		return "", err
 	}
@@ -327,27 +361,60 @@ func marshalNodeInstanceRecord(t *contract.TaskState) (string, error) {
 }
 
 func unmarshalNodeInstanceRecord(recordJSON string) (*contract.TaskState, error) {
-	var t contract.TaskState
-	if err := json.Unmarshal([]byte(recordJSON), &t); err != nil {
+	var p nodeInstancePayload
+	if err := json.Unmarshal([]byte(recordJSON), &p); err != nil {
 		return nil, err
 	}
-	return &t, nil
+	return &contract.TaskState{
+		TaskID:        p.TaskID,
+		Inputs:        p.Inputs,
+		Outputs:       p.Outputs,
+		Resource:      p.Resource,
+		Name:          p.Name,
+		Layers:        p.Layers,
+		State:         p.State,
+		Observed:      p.Observed,
+		DoneWhen:      p.DoneWhen,
+		ExtraDoneWhen: p.ExtraDoneWhen,
+		SetupAt:       p.SetupAt,
+		FailedAt:      p.FailedAt,
+		CleanedAt:     p.CleanedAt,
+		Error:         p.Error,
+	}, nil
+}
+
+// taskInstancePayload is a task_instances row's record_json shape: a
+// TaskState's fields with no relational column (task_instances' own
+// columns) and no dedicated table (task_done_when_states/judges own
+// DoneWhen). See nodeInstancePayload for why every field is optional.
+type taskInstancePayload struct {
+	Inputs        map[string]any                `json:"inputs,omitempty"`
+	Outputs       map[string]any                `json:"outputs,omitempty"`
+	Layers        []contract.LayerState         `json:"layers,omitempty"`
+	State         map[string]any                `json:"state,omitempty"`
+	Observed      *contract.ResourceObservation `json:"observed,omitempty"`
+	ExtraDoneWhen json.RawMessage               `json:"extra_done_when,omitempty"`
+	SetupAt       time.Time                     `json:"setup_at,omitzero"`
+	FailedAt      time.Time                     `json:"failed_at,omitzero"`
+	CleanedAt     time.Time                     `json:"cleaned_at,omitzero"`
+	Error         string                        `json:"error,omitempty"`
 }
 
 // marshalTaskRecord serializes every TaskState field not already carried by
 // a relational column or the task_done_when_states/judges tables.
 func marshalTaskRecord(t *contract.TaskState) (string, error) {
-	clone := *t
-	clone.TaskID = ""
-	clone.Scope = ""
-	clone.Status = ""
-	clone.Seq = 0
-	clone.Dynamic = false
-	clone.Resource = ""
-	clone.Name = ""
-	clone.DoneWhen = nil
-	clone.FinalizedAt = time.Time{}
-	data, err := json.Marshal(clone)
+	data, err := json.Marshal(taskInstancePayload{
+		Inputs:        t.Inputs,
+		Outputs:       t.Outputs,
+		Layers:        t.Layers,
+		State:         t.State,
+		Observed:      t.Observed,
+		ExtraDoneWhen: t.ExtraDoneWhen,
+		SetupAt:       t.SetupAt,
+		FailedAt:      t.FailedAt,
+		CleanedAt:     t.CleanedAt,
+		Error:         t.Error,
+	})
 	if err != nil {
 		return "", err
 	}
@@ -355,9 +422,20 @@ func marshalTaskRecord(t *contract.TaskState) (string, error) {
 }
 
 func unmarshalTaskRecord(recordJSON string) (*contract.TaskState, error) {
-	var t contract.TaskState
-	if err := json.Unmarshal([]byte(recordJSON), &t); err != nil {
+	var p taskInstancePayload
+	if err := json.Unmarshal([]byte(recordJSON), &p); err != nil {
 		return nil, err
 	}
-	return &t, nil
+	return &contract.TaskState{
+		Inputs:        p.Inputs,
+		Outputs:       p.Outputs,
+		Layers:        p.Layers,
+		State:         p.State,
+		Observed:      p.Observed,
+		ExtraDoneWhen: p.ExtraDoneWhen,
+		SetupAt:       p.SetupAt,
+		FailedAt:      p.FailedAt,
+		CleanedAt:     p.CleanedAt,
+		Error:         p.Error,
+	}, nil
 }

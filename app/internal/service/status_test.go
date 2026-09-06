@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/domain"
+	"github.com/kecbigmt/plecture/app/internal/state"
 	"github.com/kecbigmt/plecture/app/internal/task"
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
@@ -177,6 +178,13 @@ all = [
 		"revision":      "sha1",
 		"instruction":   "a very long unreferenced instruction blob",
 	})
+	if err := store.UpdatePopulation("wf/dispatch", func(population *state.PopulationState) error {
+		population.Workflow = "wf"
+		population.Name = "dispatch"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.Update("owner/repo-1", func(session *domain.Session) error {
 		session.Population = &contract.PopulationProvenance{Workflow: "wf", Name: "dispatch"}
 		return nil

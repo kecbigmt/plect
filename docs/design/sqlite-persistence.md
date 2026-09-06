@@ -54,14 +54,20 @@ with exactly nine fractional digits (for example
 variable-width fractional part, so lexical order equals time order; see
 `timeconv.go`.
 
-`record_json` never duplicates a value a relational column already carries:
-each table's write path zeroes those fields on the in-memory value before
-serializing it, so the column is the read authority and the blob holds only
-what has no column of its own.
+`record_json` never duplicates a value a relational column already carries.
+Each table's write path encodes its blob through a persistence-local payload
+type — a struct listing only the fields that genuinely have no column,
+every one of them `omitempty`/`omitzero` — rather than zeroing fields on
+`contracts/state`'s own types and marshaling those directly: a zeroed
+`contract.Session`/`TaskState` still emits its non-`omitempty` fields (an
+empty `session_name`, a year-1 `created_at`) as literal JSON keys, which
+would read as a second, disagreeing authority to anything inspecting the
+blob directly (an importer included). A session or task instance with
+nothing beyond its columns serializes to `"{}"`.
 
 | Table | Key and relational columns | JSON or scalar payload | Source |
 | --- | --- | --- | --- |
-| `sessions` | `name` primary key; nullable `parent_session_name` and `root_session_name`, each referencing `sessions(name)`; nullable `resource_id`, `alias`, `workspace_dir`; `workflow`, `created_at`, `updated_at` | conversation, message, inputs, health, channel-health, tick state, and other session fields | `state.json` `sessions` entries |
+| `sessions` | `name` primary key; nullable `parent_session_name` and `root_session_name`, each referencing `sessions(name)`; nullable `resource_id`, `alias`, `workspace_dir`, `population_workflow`, `population_name` (the pair also references `populations(workflow, name)`); `workflow`, `created_at`, `updated_at` | conversation, message, inputs, health, channel-health, tick state, and other session fields | `state.json` `sessions` entries |
 | `node_instances` | `(session_name, node_id)` primary key; session foreign key; `scope`, `status`, `sequence`, nullable `finalized_at` | task id, inputs, outputs, state, observed value, layers, lifecycle timestamps, error, done_when (rare, not relationally queried), and extra completion data | `state.json` `sessions.*.tasks` entries with `dynamic` unset |
 | `task_instances` | `id` (ULID, stable across every write that still names the same `(session_name, instance_name)`; re-minted only when a cleanup removes the row before a later setup recreates it) primary key; `(session_name, instance_name)` unique; session foreign key; `task_id`, `scope`, `status`, `sequence`, nullable `resource`, `named`, nullable `finalized_at` | inputs, outputs, state, observed value, layers, lifecycle timestamps, error, and extra completion data | `state.json` `sessions.*.tasks` entries with `dynamic: true` |
 | `task_done_when_states` | `task_instance_id` primary key and foreign key | counters, fingerprints, reason/body, escalation data | `TaskState.DoneWhen` (dynamic instances only) |
@@ -78,15 +84,27 @@ what has no column of its own.
 
 `population_members.session_name` is a recorded fact, not an enforced foreign
 key: admission can record a member's intended session name before that
-session's own row exists. `Session.Population` (the session-side copy of a
-member's workflow/name/resource_id) stays embedded in `sessions.record_json`
-rather than being derived from `population_members` at read time: the one
-write path that populates it (`population/engine.go`'s admission) creates the
-session through the population's own hook before it records the member row,
-so a read between those two steps would see a session with no population yet
-if the field were derived by join instead of stored directly. The two facts
-never legitimately disagree once both writes land; only their momentary
-ordering during admission does.
+session's own row exists. `Session.Population` (the session-side reference to
+the population that owns this session) is a genuinely separate authority
+from `population_members.session_name`, not a derivable join: the one write
+path that sets it (`population/engine.go`'s admission, via
+`population/runtime.go`'s `upPopulation`) creates the session through the
+population's own hook *before* it records the member row, so a read between
+those two steps would see a session with no population yet if the field were
+derived by join instead of stored on the session itself.
+`sessions.population_workflow`/`population_name` are that stored reference —
+promoted to nullable columns (not left in `record_json`) so the relationship
+is queryable and constrained the way the ADR requires relationships to be,
+with a composite foreign key to `populations(workflow, name)` and `ON DELETE
+SET NULL`. The foreign key is satisfiable at every write: `admit` only runs
+from `Reconcile`, which only runs once `e.state.Population` already found a
+row, and that row is upserted by `ApplyPoll`/`ApplyAppearance` before
+`Reconcile` is ever called — so a population always exists before any session
+references it. `population_members.session_name` remains the authority for
+*current* membership (a tombstoned or reassigned member can disagree with a
+session that has not yet been destroyed or updated); the promoted columns are
+the authority for what a session was created under, which does not change for
+that session's lifetime once admission succeeds.
 
 `(workflow, name)` is a population's own domain identity — a workflow's
 declared population, its config address plus population name — not the
@@ -166,11 +184,15 @@ CREATE TABLE sessions (
     alias TEXT,
     workflow TEXT NOT NULL,
     workspace_dir TEXT,
+    population_workflow TEXT,
+    population_name TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     record_json TEXT NOT NULL,
     CHECK (NOT (parent_session_name IS NOT NULL AND root_session_name IS NOT NULL)),
-    CHECK (root_session_name IS NULL OR root_session_name <> name)
+    CHECK (root_session_name IS NULL OR root_session_name <> name),
+    CHECK ((population_workflow IS NULL) = (population_name IS NULL)),
+    FOREIGN KEY (population_workflow, population_name) REFERENCES populations(workflow, name) ON DELETE SET NULL
 );
 
 CREATE INDEX sessions_alias_idx ON sessions(alias);

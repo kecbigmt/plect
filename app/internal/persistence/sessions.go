@@ -168,17 +168,25 @@ func (db *DB) writeSessionTx(ctx context.Context, tx *sql.Tx, s *domain.Session)
 		return fmt.Errorf("marshal session %q: %w", s.Name, err)
 	}
 
+	var populationWorkflow, populationName sql.NullString
+	if s.Population != nil {
+		populationWorkflow = sql.NullString{String: s.Population.Workflow, Valid: true}
+		populationName = sql.NullString{String: s.Population.Name, Valid: true}
+	}
+
 	if err := sqlcgen.New(tx).UpsertSession(ctx, sqlcgen.UpsertSessionParams{
-		Name:              s.Name,
-		ParentSessionName: parentCol,
-		RootSessionName:   rootCol,
-		ResourceID:        nullString(s.ResourceID),
-		Alias:             nullString(s.Alias),
-		Workflow:          s.Workflow,
-		WorkspaceDir:      nullString(s.WorkspaceDirPath),
-		CreatedAt:         formatTime(s.CreatedAt),
-		UpdatedAt:         formatTime(s.UpdatedAt),
-		RecordJson:        recordJSON,
+		Name:               s.Name,
+		ParentSessionName:  parentCol,
+		RootSessionName:    rootCol,
+		ResourceID:         nullString(s.ResourceID),
+		Alias:              nullString(s.Alias),
+		Workflow:           s.Workflow,
+		WorkspaceDir:       nullString(s.WorkspaceDirPath),
+		PopulationWorkflow: populationWorkflow,
+		PopulationName:     populationName,
+		CreatedAt:          formatTime(s.CreatedAt),
+		UpdatedAt:          formatTime(s.UpdatedAt),
+		RecordJson:         recordJSON,
 	}); err != nil {
 		return fmt.Errorf("upsert session %q: %w", s.Name, err)
 	}
@@ -282,6 +290,10 @@ func sessionFromRow(row sqlcgen.Session) (*domain.Session, error) {
 	s.Workflow = row.Workflow
 	s.WorkspaceDirPath = row.WorkspaceDir.String
 	s.ParentSession = deriveParentSession(row.ParentSessionName, row.RootSessionName)
+	s.Population = nil
+	if row.PopulationWorkflow.Valid && row.PopulationName.Valid {
+		s.Population = &contract.PopulationProvenance{Workflow: row.PopulationWorkflow.String, Name: row.PopulationName.String}
+	}
 
 	createdAt, err := parseTime(row.CreatedAt)
 	if err != nil {
@@ -318,24 +330,42 @@ func (db *DB) loadSessionExtras(ctx context.Context, q sqlcgen.DBTX, s *domain.S
 	return nil
 }
 
-// marshalSessionRecord serializes every Session field not already carried
-// by a relational column. Reusing contract.Session itself (rather than a
-// parallel struct) keeps this in sync with the contract for free; the
-// relational fields are zeroed first so they are never duplicated between
-// the column and the JSON blob.
+// sessionPayload is record_json's actual on-disk shape: every Session field
+// with no relational column of its own. Unlike contract.Session, every field
+// here can genuinely be absent, so each carries omitempty/omitzero — a fresh
+// session's blob is "{}" rather than a page of zero-valued columns
+// (session_name, branch, workspace_dir_path, year-1 timestamps) that would
+// read as a second, disagreeing copy of the relational row to anyone
+// inspecting the blob directly (the importer included). contract.Session
+// itself is unchanged; this type exists only at the persistence boundary.
+type sessionPayload struct {
+	Branch                  string                  `json:"branch,omitempty"`
+	Conversation            *contract.Conversation  `json:"conversation,omitempty"`
+	Message                 *contract.Message       `json:"message,omitempty"`
+	Inputs                  map[string]any          `json:"inputs,omitempty"`
+	Health                  *contract.HealthState   `json:"health,omitempty"`
+	ChannelValidationHealth *contract.ChannelHealth `json:"channel_validation_health,omitempty"`
+	ChannelDeliveryHealth   *contract.ChannelHealth `json:"channel_delivery_health,omitempty"`
+	LastTickAt              time.Time               `json:"last_tick_at,omitzero"`
+	TickBackoff             *contract.TickBackoff   `json:"tick_backoff,omitempty"`
+}
+
+// marshalSessionRecord serializes every Session field not already carried by
+// a relational column (name, resource_id, alias, workflow, workspace_dir,
+// population_workflow/name, parent/root_session_name, created_at,
+// updated_at) or derived at read time (children, tasks).
 func marshalSessionRecord(s *domain.Session) (string, error) {
-	clone := *s
-	clone.Name = ""
-	clone.ResourceID = ""
-	clone.ParentSession = ""
-	clone.Children = nil
-	clone.Alias = ""
-	clone.Workflow = ""
-	clone.WorkspaceDirPath = ""
-	clone.CreatedAt = time.Time{}
-	clone.UpdatedAt = time.Time{}
-	clone.Tasks = nil
-	data, err := json.Marshal(clone)
+	data, err := json.Marshal(sessionPayload{
+		Branch:                  s.Branch,
+		Conversation:            s.Conversation,
+		Message:                 s.Message,
+		Inputs:                  s.Inputs,
+		Health:                  s.Health,
+		ChannelValidationHealth: s.ChannelValidationHealth,
+		ChannelDeliveryHealth:   s.ChannelDeliveryHealth,
+		LastTickAt:              s.LastTickAt,
+		TickBackoff:             s.TickBackoff,
+	})
 	if err != nil {
 		return "", err
 	}
@@ -343,9 +373,19 @@ func marshalSessionRecord(s *domain.Session) (string, error) {
 }
 
 func unmarshalSessionRecord(recordJSON string) (*domain.Session, error) {
-	var s contract.Session
-	if err := json.Unmarshal([]byte(recordJSON), &s); err != nil {
+	var p sessionPayload
+	if err := json.Unmarshal([]byte(recordJSON), &p); err != nil {
 		return nil, err
 	}
-	return &s, nil
+	return &contract.Session{
+		Branch:                  p.Branch,
+		Conversation:            p.Conversation,
+		Message:                 p.Message,
+		Inputs:                  p.Inputs,
+		Health:                  p.Health,
+		ChannelValidationHealth: p.ChannelValidationHealth,
+		ChannelDeliveryHealth:   p.ChannelDeliveryHealth,
+		LastTickAt:              p.LastTickAt,
+		TickBackoff:             p.TickBackoff,
+	}, nil
 }
