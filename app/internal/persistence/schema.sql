@@ -149,18 +149,20 @@ CREATE TABLE populations (
     PRIMARY KEY (workflow, name)
 );
 
--- population_members is the single source for a session's population
--- membership: Session.Population is derived at read time by joining on
--- session_name rather than duplicated into sessions.record_json, since the
--- one write path that ever sets a session's Population field already
--- verifies (via the "owned by another lifecycle authority" conflict check)
--- that it agrees with the population this row will go on to record —
--- there is no code path where the two could legitimately disagree.
 -- session_name is a recorded fact, not an enforced foreign key: a poll or
 -- appearance can accept a member and record the session name it intends to
 -- create before that session's own row exists (ApplyPoll/ApplyAppearance
 -- run independently of session creation), so a hard reference would reject
--- a legitimate, momentarily-forward-pointing write.
+-- a legitimate, momentarily-forward-pointing write. This is deliberately a
+-- second authority from sessions.population_workflow/population_name (see
+-- that table): the one write path that sets a session's Population
+-- (population/engine.go's admission, via upPopulation) creates the session
+-- before it records this row's session_name, so a read between those two
+-- steps would see a session with no population yet if the session-side
+-- field were derived from this table by join instead of stored on the
+-- session itself. session_name here is the authority for current
+-- membership; sessions.population_workflow/name is the authority for what
+-- a session was created under.
 --
 -- decision_kind/decision_reason replace a single last_decision string that
 -- packed an event-type constant and an optional free-text reason into one

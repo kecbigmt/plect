@@ -434,11 +434,15 @@ func TestPutSession_ReplacesTasksRatherThanAccumulating(t *testing.T) {
 }
 
 // TestPutSession_DynamicInstanceCleanupThenSetupYieldsFreshDoneWhenHistory
-// proves a dynamic instance's id is minted fresh on every write: a cleanup
-// (dropping the instance) followed by a new setup under the same
-// instance_name must not resurrect the retired instance's done_when/judge
-// history, since a real cleanup+setup pair goes through two separate
-// PutSession/UpdateSession calls, not one.
+// proves the other half of M5's stable-id design: a cleanup (dropping the
+// instance from a write's Tasks map, so the row is deleted outright)
+// followed by a new setup under the same instance_name mints a fresh id —
+// unlike an ordinary update (see
+// TestPutSession_DynamicInstanceIDStableAcrossOrdinaryUpdate, which proves
+// the id is preserved there) — so the retired instance's done_when/judge
+// history never resurfaces on the new one. A real cleanup+setup pair goes
+// through two separate PutSession/UpdateSession calls, not one, which this
+// test mirrors.
 func TestPutSession_DynamicInstanceCleanupThenSetupYieldsFreshDoneWhenHistory(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
