@@ -1,7 +1,5 @@
-// Pure session-tree logic, independent of rendering: docs/design/web-ui.md
-// requires the tree to come only from `parentSession` (never from splitting
-// names on "/" or "+"), stable sibling ordering, and independent roots and
-// missing parents to remain visible rather than hidden or invented.
+// Kept free of any rendering concern so tree-shape decisions (grouping,
+// ordering, search) are unit-testable without mounting a component.
 import type { SessionSummary } from "@/lib/sessionsApi";
 
 export interface SessionTreeNode {
@@ -17,9 +15,9 @@ export interface SessionTreeRow {
 }
 
 // A parentless session's own implicit root (domain.ImplicitRootParent) is
-// scoped to that one session; a session opts into being its sibling by
-// naming that root explicitly as its own parentSession. Either way, the
-// root itself is a pseudo-parent, never an addressable, selectable session.
+// scoped to that one session; another session opts into being its sibling
+// by naming that root explicitly as its own parentSession. Either way, the
+// root itself is never an addressable session a row could point to.
 function isPseudoRootParent(parentSession: string | undefined): boolean {
   return parentSession === undefined || parentSession === "" || parentSession.startsWith("root:");
 }
@@ -32,11 +30,10 @@ function byNameAscending(a: SessionTreeNode, b: SessionTreeNode): number {
       : 0;
 }
 
-// buildSessionForest groups sessions by parentSession only. A session whose
-// declared parent is a pseudo-root, absent, or not present among the fetched
-// sessions (an orphan — the parent may exist server-side but not in this
-// list, or may have been destroyed) surfaces as its own top-level row rather
-// than being hidden or attached to an invented parent.
+// An orphan (a parentSession naming a session absent from this list — the
+// parent may exist server-side but not in this fetch, or may have been
+// destroyed) surfaces as its own top-level row rather than being dropped or
+// attached to an invented parent.
 export function buildSessionForest(sessions: SessionSummary[]): SessionTreeNode[] {
   const byName = new Map(sessions.map((s) => [s.sessionName, s]));
   const childrenByParent = new Map<string, SessionTreeNode[]>();
@@ -73,10 +70,9 @@ export function buildSessionForest(sessions: SessionSummary[]): SessionTreeNode[
   return roots.sort(byNameAscending);
 }
 
-// ancestorNames walks real parentSession links only, root-to-target order,
-// excluding the target itself. It stops (rather than inventing a node) at a
-// pseudo-root parent or at a parentSession that names a session absent from
-// this list.
+// Stops rather than inventing a node once it reaches a pseudo-root parent or
+// an orphaned parentSession, so a caller never expands a session that isn't
+// actually in the fetched list.
 export function ancestorNames(sessions: SessionSummary[], sessionName: string): string[] {
   const byName = new Map(sessions.map((s) => [s.sessionName, s]));
   const result: string[] = [];
@@ -113,11 +109,9 @@ function subtreeMatches(node: SessionTreeNode, query: string): boolean {
   return matchesSessionQuery(node.session, query) || node.children.some((c) => subtreeMatches(c, query));
 }
 
-// visibleTreeRows flattens the forest into display order. With no query,
-// only nodes in expandedNames reveal their children — expansion and
-// selection stay independent, per docs/design/web-ui.md. With a query, only
-// matches and their ancestors are shown, force-expanded, so a match is never
-// hidden behind a collapsed row.
+// A query force-expands every ancestor of a match rather than deferring to
+// expandedNames, so a match is never hidden behind a row the user never
+// expanded.
 export function visibleTreeRows(
   forest: SessionTreeNode[],
   expandedNames: ReadonlySet<string>,

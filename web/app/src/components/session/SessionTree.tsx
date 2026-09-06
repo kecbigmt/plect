@@ -15,10 +15,9 @@ export interface SessionTreeProps {
   onSelect: (sessionName: string) => void;
 }
 
-// A session is "unhealthy" independent of run state (docs/design/web-ui.md's
-// run/health dimensions table), so the dot's color takes health over run
-// only for that one negative case — every other combination just reflects
-// run, matching the reference prototype this tree's layout follows.
+// health and run are independent dimensions (a session can be up and
+// unhealthy), so unhealthy overrides the dot's color for that one negative
+// case; every other combination just reflects run.
 function dotClass(session: SessionSummary): string {
   if (session.health === "unhealthy") {
     return "bg-destructive";
@@ -26,12 +25,9 @@ function dotClass(session: SessionSummary): string {
   return session.run === "up" ? "bg-green-500" : "bg-muted-foreground/40";
 }
 
-// Renders docs/design/web-ui.md's session tree: built only from
-// parentSession (src/lib/sessionTree.ts), expansion kept independent of
-// selection, and a name/resource search that retains matches' ancestors.
 // Keyboard support follows the WAI-ARIA treeview pattern's roving tabindex,
-// scoped to one focusable control per row — the separate expand/collapse
-// button is a mouse convenience reachable by click, not by Tab, since
+// scoped to one focusable control per row: the separate expand/collapse
+// button stays reachable by click but out of the Tab sequence, since
 // ArrowLeft/ArrowRight already reach the same action from the row itself.
 export function SessionTree({
   sessions,

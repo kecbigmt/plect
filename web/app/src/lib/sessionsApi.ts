@@ -7,14 +7,10 @@ import type { components } from "@plecture/web-api/generated/typescript/schema";
 export type SessionSummary = components["schemas"]["SessionSummary"];
 export type SessionDetail = components["schemas"]["SessionDetail"];
 
-// Resolved against window.location.origin, not passed as a bare relative
-// path: plect-web serves this API at the same origin as the shell itself
-// (docs/design/web-ui.md's "initial Web UI connects to its own origin", "no
-// hard-coded localhost URLs"), and web/app/vite.config.ts proxies /api to
-// the real backend in development, so no configured base URL is needed —
-// only an absolute one, since openapi-fetch constructs a Request directly
-// and Node/undici's Request (unlike a browser's) rejects a relative URL
-// outright, with no document base to resolve it against.
+// Resolved to an absolute URL, not passed as a bare "/api/v1": openapi-fetch
+// constructs a Request directly, and Node/undici's Request (unlike a
+// browser's) rejects a relative URL outright, with no document base to
+// resolve it against.
 const baseUrl = new URL("/api/v1", window.location.origin).toString();
 
 // Built fresh per call rather than cached as a module-level singleton:

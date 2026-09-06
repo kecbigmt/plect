@@ -2,11 +2,9 @@ import { useSessionDetail } from "@/lib/useSessions";
 import { Button } from "@/components/ui/button";
 import { ResourceValue } from "@/components/session/ResourceValue";
 
-// docs/design/web-ui.md: "The header has no breadcrumbs and little vertical
-// space between name and resource. It also exposes Details..." (Up/Down are
-// this task's excluded scope — see the issue's scope boundary). The name
-// renders from the prop immediately; only the resource and run/health wait
-// on the detail fetch, which DetailPane shares via the same query key.
+// The name renders from the prop immediately, since it's already known from
+// the tree the user selected it in; only the resource and run/health wait on
+// the detail fetch, shared with DetailPane through the same query key.
 export function SessionHeader({
   sessionName,
   onOpenDetails,

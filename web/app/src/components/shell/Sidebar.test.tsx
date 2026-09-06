@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { Sidebar } from "@/components/shell/Sidebar";
@@ -11,9 +11,12 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-function renderSidebar(props: Partial<React.ComponentProps<typeof Sidebar>> = {}) {
-  const queryClient = new QueryClient();
-  return render(
+function renderSidebar(
+  props: Partial<React.ComponentProps<typeof Sidebar>> = {},
+  queryClient = new QueryClient(),
+) {
+  const scrollTopRef = props.scrollTopRef ?? { current: 0 };
+  const utils = render(
     <QueryClientProvider client={queryClient}>
       <Sidebar
         selectedName={null}
@@ -22,10 +25,12 @@ function renderSidebar(props: Partial<React.ComponentProps<typeof Sidebar>> = {}
         onQueryChange={vi.fn()}
         onToggleExpanded={vi.fn()}
         onSelect={vi.fn()}
+        scrollTopRef={scrollTopRef}
         {...props}
       />
     </QueryClientProvider>,
   );
+  return { ...utils, queryClient, scrollTopRef };
 }
 
 beforeEach(() => {
@@ -68,5 +73,29 @@ describe("Sidebar", () => {
     await waitFor(() =>
       expect(screen.getByRole("searchbox", { name: /search sessions/i })).toHaveValue("abc"),
     );
+  });
+
+  it("records the scroll offset into scrollTopRef as the user scrolls", async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ items: [], count: 0 }));
+    const { scrollTopRef } = renderSidebar();
+    const region = await screen.findByRole("region", { name: /session list/i });
+    fireEvent.scroll(region, { target: { scrollTop: 140 } });
+    expect(scrollTopRef.current).toBe(140);
+  });
+
+  it("restores a previously recorded scroll offset once remounted with the same ref", async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ items: [], count: 0 }));
+    const queryClient = new QueryClient();
+    const scrollTopRef = { current: 0 };
+
+    const first = renderSidebar({ scrollTopRef }, queryClient);
+    const firstRegion = await screen.findByRole("region", { name: /session list/i });
+    fireEvent.scroll(firstRegion, { target: { scrollTop: 90 } });
+    expect(scrollTopRef.current).toBe(90);
+    first.unmount(); // e.g. the narrow-layout sidebar Sheet closing
+
+    renderSidebar({ scrollTopRef }, queryClient); // e.g. the Sheet reopening
+    const secondRegion = await screen.findByRole("region", { name: /session list/i });
+    await waitFor(() => expect(secondRegion.scrollTop).toBe(90));
   });
 });

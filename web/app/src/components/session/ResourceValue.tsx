@@ -4,10 +4,9 @@ import { CheckIcon, CopyIcon } from "lucide-react";
 import { isWebUrl } from "@/lib/url";
 import { Button } from "@/components/ui/button";
 
-// docs/design/web-ui.md: "HTTP(S) resources open as links; other
-// identifiers remain visible and copyable without a generic Open action." A
-// remote server's filesystem path or a resolver-less id is not something
-// this UI can navigate to, so it stays plain text plus a copy affordance.
+// A remote server's filesystem path or a resolver-less id is not something
+// this UI can navigate to, so it stays plain text plus a copy affordance
+// instead of a broken or sanitized link.
 export function ResourceValue({ value }: { value: string }) {
   if (value === "") {
     return <span className="text-muted-foreground">—</span>;

@@ -2,13 +2,10 @@ import { SessionNotFoundError } from "@/lib/sessionsApi";
 import { useSessionDetail } from "@/lib/useSessions";
 import { ResourceValue } from "@/components/session/ResourceValue";
 
-// The shared optional detail-pane shell (docs/design/web-ui.md: "The right
-// pane is closed initially. Selecting a Session, Task, or Node replaces
-// its content..."). This slice only ever selects a Session; Task/Node
-// detail is a later slice's addition. Keyed on sessionName through
-// useSessionDetail, so switching sessions resets straight to a loading
-// state instead of carrying the previous session's data over — a stale
-// session's detail must never remain visible after the selection changes.
+// key={sessionName} forces a remount on every selection change, so switching
+// sessions resets straight to a loading state instead of carrying the
+// previous session's cached data over while the new one's request is still
+// in flight.
 export function DetailPane({ sessionName }: { sessionName: string | null }) {
   if (sessionName === null) {
     return (

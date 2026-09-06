@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
@@ -38,6 +38,31 @@ function stubMatchMedia(matches: boolean) {
       removeEventListener: vi.fn(),
     }),
   );
+}
+
+// A live variant of stubMatchMedia: set() flips `matches` and fires every
+// registered "change" listener, so a test can simulate an actual
+// wide<->narrow layout transition (a resize or an orientation change), not
+// just render each layout independently from a fresh mount.
+function stubLiveMatchMedia(initialMatches: boolean) {
+  let matches = initialMatches;
+  const listeners = new Set<() => void>();
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn().mockReturnValue({
+      get matches() {
+        return matches;
+      },
+      addEventListener: (_: string, listener: () => void) => listeners.add(listener),
+      removeEventListener: (_: string, listener: () => void) => listeners.delete(listener),
+    }),
+  );
+  return {
+    set(next: boolean) {
+      matches = next;
+      listeners.forEach((l) => l());
+    },
+  };
 }
 
 function renderShell() {
@@ -185,5 +210,46 @@ describe("AppShell session selection", () => {
     // transient force-expansion.
     await user.clear(screen.getByRole("searchbox", { name: /search sessions/i }));
     expect(screen.getByRole("treeitem", { name: /release\/config$/ })).toBeInTheDocument();
+  });
+});
+
+describe("AppShell sidebar scroll position", () => {
+  it("restores the scroll offset across a narrow-layout sheet close and reopen", async () => {
+    stubMatchMedia(false);
+    const user = userEvent.setup();
+    renderShell();
+
+    await user.click(screen.getByRole("button", { name: /open sessions/i }));
+    const firstRegion = await screen.findByRole("region", { name: /session list/i });
+    fireEvent.scroll(firstRegion, { target: { scrollTop: 175 } });
+
+    // Closing the Sheet unmounts Sidebar entirely.
+    await user.click(screen.getByRole("button", { name: /close/i }));
+    expect(screen.queryByRole("region", { name: /session list/i })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /open sessions/i }));
+    const secondRegion = await screen.findByRole("region", { name: /session list/i });
+    expect(secondRegion.scrollTop).toBe(175);
+  });
+
+  it("carries the scroll offset across a wide-to-narrow layout transition", async () => {
+    const layout = stubLiveMatchMedia(true);
+    const user = userEvent.setup();
+    renderShell();
+
+    const wideRegion = await screen.findByRole("region", { name: /session list/i });
+    fireEvent.scroll(wideRegion, { target: { scrollTop: 60 } });
+
+    // A resize/orientation change swaps the persistent aside for the
+    // narrow-layout Sheet — a full unmount of the wide Sidebar instance.
+    // The media-query listener fires outside of an event handler, so the
+    // resulting state update needs an explicit act() to flush before the
+    // next assertion (unlike a user-event click, which wraps this itself).
+    act(() => layout.set(false));
+    expect(screen.queryByRole("region", { name: /session list/i })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /open sessions/i }));
+    const narrowRegion = await screen.findByRole("region", { name: /session list/i });
+    expect(narrowRegion.scrollTop).toBe(60);
   });
 });

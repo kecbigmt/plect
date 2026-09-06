@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { PanelLeftIcon, PanelRightIcon } from "lucide-react";
 
 import type { BootstrapInfo } from "@/lib/bootstrap";
@@ -22,24 +22,24 @@ export function AppShell({ bootstrap }: { bootstrap: BootstrapInfo }) {
   // Closed initially, per docs/design/web-ui.md's shared-details contract.
   const [detailOpen, setDetailOpen] = useState(false);
 
-  // Owned here, above the sidebar's own mount boundary (a persistent aside
-  // on wide layouts, a Sheet's portal content on narrow ones — the two
-  // never coexist, and either can unmount on a layout change): selection,
-  // expansion, and search must survive both, per docs/design/web-ui.md's
-  // "Preserve expansion and scroll position."
+  // Owned here rather than inside Sidebar: a persistent aside (wide layout)
+  // and a Sheet's portal content (narrow layout) never coexist, and either
+  // can unmount on a layout change, which would reset state owned below it.
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [expandedNames, setExpandedNames] = useState<ReadonlySet<string>>(new Set());
   const [query, setQuery] = useState("");
-  // Shares its cache with Sidebar's own useSessionList() call (same query
-  // key) — this is only for computing the ancestor chain to expand, not a
-  // second fetch.
+  // A ref, not state, for the same reason — see Sidebar.tsx's own comment.
+  const sidebarScrollTopRef = useRef(0);
+  // Same query key as Sidebar's own useSessionList() call, so this shares
+  // its cache rather than issuing a second fetch; only used here to compute
+  // the ancestor chain to expand on selection.
   const sessionList = useSessionList();
 
   function selectSession(name: string) {
     setSelectedName(name);
-    // "Opening a session through another view expands its ancestors"
-    // (docs/design/web-ui.md) — every selection path funnels through here,
-    // so this holds regardless of how the session was reached.
+    // Every selection path (a tree click, a search result, a future link
+    // from elsewhere) funnels through here, so ancestors expand regardless
+    // of how the session was reached.
     const ancestors = ancestorNames(sessionList.data ?? [], name);
     if (ancestors.length > 0) {
       setExpandedNames((prev) => new Set([...prev, ...ancestors]));
@@ -69,6 +69,7 @@ export function AppShell({ bootstrap }: { bootstrap: BootstrapInfo }) {
       onQueryChange={setQuery}
       onToggleExpanded={toggleExpanded}
       onSelect={selectSession}
+      scrollTopRef={sidebarScrollTopRef}
     />
   );
   const detailPane = <DetailPane sessionName={selectedName} />;

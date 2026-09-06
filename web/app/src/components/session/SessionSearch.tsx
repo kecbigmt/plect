@@ -2,10 +2,9 @@ import { SearchIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
-// docs/design/web-ui.md: "Search session names and resources, retaining
-// ancestors of matching sessions." This component only owns the input;
-// src/lib/sessionTree.ts's matchesSessionQuery/visibleTreeRows do the
-// matching and ancestor retention against the value it reports.
+// Only owns the input value: src/lib/sessionTree.ts's matchesSessionQuery
+// and visibleTreeRows do the actual matching and ancestor retention against
+// whatever this reports.
 export function SessionSearch({
   value,
   onChange,
