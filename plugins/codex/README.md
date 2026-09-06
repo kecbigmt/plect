@@ -58,6 +58,7 @@ replacing them (the parameterization rung of
 |---|---|---|
 | `tasks/codex.toml`, `tasks/exec_runtime.toml` | `launch_env` | JSON object of environment variables exported on the launch line. Keys must be valid environment variable names; values are shell-quoted. |
 | `tasks/exec_runtime.toml` | `state_root` | Directory the worker's per-session queue and state live under. Empty = a temporary directory. |
+| `tasks/codex.toml`, `tasks/exec_runtime.toml` | `launch_timeout` | How long each launch-detection wait gives itself before giving up, as a `"<seconds>s"` token. Default `120s`. On timeout, or any other non-zero setup exit after the process was started, whatever was launched is terminated before the node fails, so a retry never collides with it. |
 | `channels/exec_delivery.toml` | `enqueue_timeout` | Per-attempt delivery deadline. Default `5s`. |
 | `channels/exec_delivery.toml` | `message_envelope` | Format of the queued message. Placeholders: `{type}`, `{body}`, `{summary}`, `{body_or_summary}`, `{url}`, `{url_suffix}`. Default `[{type}] {body_or_summary}{url_suffix}`. |
 

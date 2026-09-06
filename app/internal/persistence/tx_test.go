@@ -3,6 +3,8 @@ package persistence
 import (
 	"context"
 	"database/sql"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -53,6 +55,95 @@ func TestWithImmediateTx_ReservesWriterLockBeforeFnRunsAnyStatement(t *testing.T
 	}
 	if elapsed < hold/2 {
 		t.Errorf("second WithImmediateTx returned after %s, want it blocked for roughly %s while the first held the writer lock", elapsed, hold)
+	}
+}
+
+func TestWithImmediateTx_WaitsForMigrationIntentBeforeEnteringCallback(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	unlockCoord, ok, err := tryFlockPath(db.gate.coordinationLockPath, syscall.LOCK_EX)
+	if err != nil {
+		t.Fatalf("tryFlockPath: %v", err)
+	}
+	if !ok {
+		t.Fatal("tryFlockPath did not acquire the uncontended coordination lock")
+	}
+
+	entered := make(chan struct{})
+	txErr := make(chan error, 1)
+	go func() {
+		txErr <- db.WithImmediateTx(ctx, func(tx *sql.Tx) error {
+			close(entered)
+			return nil
+		})
+	}()
+
+	select {
+	case <-entered:
+		t.Fatal("WithImmediateTx's callback ran while a migrator held the coordination lock (recorded intent)")
+	case <-time.After(300 * time.Millisecond):
+		// expected: still waiting behind the coordination lock
+	}
+
+	unlockCoord()
+
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("WithImmediateTx never proceeded after the coordination lock was released")
+	}
+	if err := <-txErr; err != nil {
+		t.Fatalf("WithImmediateTx: %v", err)
+	}
+}
+
+// An already-open *DB does not itself observe a migration another handle
+// applies after it opened; only a fresh version check would. This proves
+// WithImmediateTx performs that check on every call rather than trusting
+// whatever EnsureCurrent last confirmed.
+func TestWithImmediateTx_RefusesOnceAnotherHandleMigratesPastWhatThisOneSupports(t *testing.T) {
+	ctx := context.Background()
+	path := testDBPath(t)
+	older := migrationFixture(map[string]string{"00001_a.sql": migrationA})
+	newer := migrationFixture(map[string]string{"00001_a.sql": migrationA, "00002_b.sql": migrationBOK})
+
+	oldHandle, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer oldHandle.Close()
+	oldHandle.migrations = older
+	if err := oldHandle.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate (old handle, to version 1): %v", err)
+	}
+
+	newHandle, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer newHandle.Close()
+	newHandle.migrations = newer
+	if err := newHandle.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate (new handle, to version 2): %v", err)
+	}
+
+	entered := false
+	err = oldHandle.WithImmediateTx(ctx, func(tx *sql.Tx) error {
+		entered = true
+		return nil
+	})
+	if err == nil {
+		t.Fatal("WithImmediateTx on a handle whose migrations stop at version 1 unexpectedly succeeded against a version-2 ledger")
+	}
+	if entered {
+		t.Error("WithImmediateTx's callback ran against a ledger version this handle does not support")
+	}
+	if !strings.Contains(err.Error(), "newer than this binary supports") {
+		t.Errorf("error = %q, want it to mention the binary does not support the ledger's version", err)
 	}
 }
 

@@ -10,6 +10,7 @@ require (
 	github.com/kecbigmt/plecture/contracts/event v0.0.0-20260820120124-c60a0d848ca1
 	github.com/kecbigmt/plecture/contracts/state v0.0.0-20260820120124-c60a0d848ca1
 	github.com/mark3labs/mcp-go v0.48.0
+	github.com/mxschmitt/playwright-go v0.6201.1
 	github.com/oklog/ulid/v2 v2.1.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/spf13/cobra v1.10.2
@@ -21,6 +22,7 @@ require (
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/cubicdaiya/gonp v1.0.4 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
+	github.com/deckarep/golang-set/v2 v2.8.0 // indirect
 	github.com/dprotaso/go-yit v0.0.0-20220510233725-9ba8df137936 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/fatih/structtag v1.2.0 // indirect
@@ -28,6 +30,7 @@ require (
 	github.com/go-openapi/jsonpointer v0.23.1 // indirect
 	github.com/go-openapi/swag/jsonname v0.26.0 // indirect
 	github.com/go-sql-driver/mysql v1.9.3 // indirect
+	github.com/go-stack/stack v1.8.1 // indirect
 	github.com/google/cel-go v0.26.1 // indirect
 	github.com/google/jsonschema-go v0.4.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect

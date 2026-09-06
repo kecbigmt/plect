@@ -57,14 +57,6 @@ func mountResolverOnlyWorkspaceProvider(t *testing.T, cfg *config.Config) {
 	}
 }
 
-// isolateMachineConfig strips the layers this machine owns, so a case that
-// loads a real config still answers only for what it declares itself.
-func isolateMachineConfig(cfg *config.Config) {
-	cfg.BaseDir = ""
-	cfg.PluginDirs = nil
-	cfg.Plugins = nil
-}
-
 // Acceptance: the real service stack (state.Store + service.List), driven
 // through the HTTP handler, surfaces a session that exists in the store.
 //
@@ -574,25 +566,7 @@ func TestAcceptance_ApiV1EventsStreamResumesFromTheHistoryEndpointsOwnCursor(t *
 
 	publish("third-arrived-during-the-gap")
 
-	// A minimal bus that replays from ?since= over the same real store —
-	// this test exercises the JSON relay/cursor-decode layer, not the bus's
-	// own fan-out.
-	bus := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		evs, offs, _, err := service.EventList(cfg, store, session, sinceFromQuery(r), event.Filter{})
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.WriteHeader(http.StatusOK)
-		w.(http.Flusher).Flush()
-		for i, ev := range evs {
-			b, _ := json.Marshal(ev)
-			fmt.Fprintf(w, "id: %d\ndata: %s\n\n", offs[i], b)
-		}
-		w.(http.Flusher).Flush()
-	}))
-	defer bus.Close()
+	bus := startEventBusRelay(t, cfg, store)
 
 	srv := httptest.NewServer(withBus(svc, bus.URL).Routes())
 	defer srv.Close()
@@ -624,14 +598,4 @@ func TestAcceptance_ApiV1EventsStreamResumesFromTheHistoryEndpointsOwnCursor(t *
 	if len(gotSummaries) != 1 || gotSummaries[0] != "third-arrived-during-the-gap" {
 		t.Fatalf("stream delivered %v, want exactly the event published after the cursor was issued", gotSummaries)
 	}
-}
-
-func sinceFromQuery(r *http.Request) int64 {
-	v := r.URL.Query().Get("since")
-	if v == "" {
-		return 0
-	}
-	var n int64
-	_, _ = fmt.Sscanf(v, "%d", &n)
-	return n
 }

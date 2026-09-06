@@ -27,6 +27,12 @@ scope = "run"
 #                  GitHub-specific guard switch of its own. A workflow that
 #                  wants the write guard wires this from the github plugin's
 #                  own gh_guard effect output.
+#   launch_timeout — when set, how long setup waits for the worker to signal
+#                  readiness before giving up, as a plain "<seconds>s" token
+#                  (e.g. "180s"). Default 120s. A cold pane can take well
+#                  over a fixed short window to start the worker even though
+#                  it did come up, so raise this rather than treat a
+#                  live-but-slow launch as a failure.
 #
 # codex_exec starts a headless worker (codex-exec-worker) instead of the
 # interactive Codex TUI, so instruction delivery is a queued `codex exec`/
@@ -37,6 +43,22 @@ scope = "run"
 [exec_runtime.setup]
 type   = "shell"
 script = '''
+# Terminates $1, but only once reconfirmed as the pane's own child — a pid
+# read from worker.pid (a workflow-configurable path) may be stale — and
+# reconfirmed again before the KILL escalation, since a process that
+# exited during the TERM grace period can have had its pid reused by then.
+terminate_if_owned() {
+  case "$1" in ''|0|*[!0-9]*) return 0 ;; esac
+  [ "$(ps -o ppid= -p "$1" 2>/dev/null | tr -d '[:space:]')" = "$PANE_PID" ] || return 0
+  kill -TERM "$1" 2>/dev/null
+  for _ in 1 2 3 4 5; do
+    sleep 0.5
+    kill -0 "$1" 2>/dev/null || break
+  done
+  [ "$(ps -o ppid= -p "$1" 2>/dev/null | tr -d '[:space:]')" = "$PANE_PID" ] && kill -KILL "$1" 2>/dev/null
+  true
+}
+
 # The reset drops any record a previous run left behind, so this run's
 # activity probe reports "no basis yet" until this run's first turn boundary
 # rather than inheriting a stale fingerprint.
@@ -98,37 +120,58 @@ MODEL="${model-}"
 EFFORT="${effort-}"
 [ -n "$EFFORT" ] && EXPORTS="${EXPORTS}export CODEX_MODEL_REASONING_EFFORT='$EFFORT'; "
 
-rm -f "$STATE_DIR/ready"
-# exec (not a bare command line): the worker replaces the pane shell, so the
-# pane PID *is* the worker PID — no child-PID search like the interactive
-# codex effect needs for the TUI, whose real PID differs from the launching
-# shell's.
+rm -f "$STATE_DIR/ready" "$STATE_DIR/worker.pid"
+# Resolved before anything is typed: this is the identity every cleanup
+# path below searches under, so a launch is only attempted once it exists.
+PANE_PID=$(sh -c "$terminal_pid" terminal-pid 2>/dev/null)
+if [ -z "$PANE_PID" ]; then
+  echo "could not resolve the pane's own pid before launch" >&2
+  exit 1
+fi
+# Not exec'd, so killing the worker cannot take the pane (or its
+# multiplexer session, a lifecycle this plugin does not own) down too. A
+# bash script's comm is always "bash", so worker.pid — written by the
+# worker itself — is this effect's only way to identify its own pid.
 #
 # The terminal verbs compose against whichever effect in this workflow
 # declares the interactive endpoint — never a concrete multiplexer named
 # here directly.
-sh -c "$send_text" terminal-send-text "${EXPORTS}exec $worker_bin '$QUEUE_DIR' '$STATE_DIR' '$PROFILE_NAME'"
+sh -c "$send_text" terminal-send-text "${EXPORTS}$worker_bin '$QUEUE_DIR' '$STATE_DIR' '$PROFILE_NAME'"
 sh -c "$send_keys" terminal-send-keys Enter
 
-PANE_PID=$(sh -c "$terminal_pid" terminal-pid)
-READY_TIMEOUT_SECONDS="${PLECT_CODEX_EXEC_READY_TIMEOUT_SECONDS:-30}"
+READY_TIMEOUT_SECONDS="${launch_timeout%s}"
+PID=""
 READY=0
 for _ in $(seq 1 $((READY_TIMEOUT_SECONDS * 2))); do
   sleep 0.5
   kill -0 "$PANE_PID" 2>/dev/null || continue
-  [ -f "$STATE_DIR/ready" ] && READY=1 && break
+  if [ -z "$PID" ] && [ -s "$STATE_DIR/worker.pid" ]; then
+    CANDIDATE=$(cat "$STATE_DIR/worker.pid")
+    case "$CANDIDATE" in ''|0|*[!0-9]*) CANDIDATE="" ;; esac
+    [ -n "$CANDIDATE" ] && [ "$(ps -o ppid= -p "$CANDIDATE" 2>/dev/null | tr -d '[:space:]')" = "$PANE_PID" ] && PID="$CANDIDATE"
+  fi
+  [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null && [ -f "$STATE_DIR/ready" ] && READY=1 && break
 done
 if [ "$READY" -ne 1 ]; then
-  echo "codex-exec worker not ready within ${READY_TIMEOUT_SECONDS}s under pane pid $PANE_PID" >&2
+  echo "codex-exec worker not ready within ${launch_timeout} under pane pid $PANE_PID" >&2
+  # A worker that never reported its own pid — stuck before that point, or
+  # its report was rejected above — is still the pane's one direct child:
+  # the only launch this script could have started here.
+  [ -z "$PID" ] && PID=$(pgrep -P "$PANE_PID" 2>/dev/null | head -1)
+  terminate_if_owned "$PID"
   exit 1
 fi
 
-jq -nc \
-  --argjson pid "$PANE_PID" \
+OUTPUT=$(jq -nc \
+  --argjson pid "$PID" \
   --arg queue_dir "$QUEUE_DIR" \
   --arg state_dir "$STATE_DIR" \
   --arg profile "$PROFILE_PATH" \
-  '{pid:$pid, queue_dir:$queue_dir, state_dir:$state_dir, profile_path:$profile}'
+  '{pid:$pid, queue_dir:$queue_dir, state_dir:$state_dir, profile_path:$profile}') || {
+    terminate_if_owned "$PID"
+    exit 1
+  }
+printf '%s\n' "$OUTPUT"
 '''
 
 [exec_runtime.setup.bind]
@@ -138,6 +181,7 @@ effort         = { from = "inputs.effort", optional = true }
 launch_env     = { from = "inputs.launch_env", optional = true }
 state_root     = { from = "inputs.state_root", optional = true }
 path_prepend   = { from = "inputs.path_prepend", optional = true }
+launch_timeout = { from = "inputs.launch_timeout", default = "120s" }
 prev_state_dir = { from = "prev.state_dir", optional = true }
 activity_bin   = { bin = "codex-agent-activity" }
 worker_bin     = { bin = "codex-exec-worker" }
@@ -214,6 +258,12 @@ state_root   = { type = "string", pattern = "^[A-Za-z0-9_./:-]*$" }
 # path_prepend: a plain path charset (no quotes, whitespace, or shell
 # metacharacters), same reasoning as model/effort above.
 path_prepend = { type = "string", pattern = "^[A-Za-z0-9_./:-]*$" }
+# launch_timeout: restricted to digits-plus-"s" so the setup script can strip
+# the suffix and use the result directly in shell arithmetic — no separate
+# duration parser needed, and no non-numeric value can reach $(( )). The
+# effective default of 120s is applied by this effect's own setup.bind
+# (`default = "120s"` on the launch_timeout binding), not by this key.
+launch_timeout = { type = "string", pattern = "^[1-9][0-9]*s$", default = "120s" }
 
 [exec_runtime.outputs_schema]
 type     = "object"

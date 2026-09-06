@@ -1,6 +1,24 @@
 #!/usr/bin/env sh
-# The pane's child (the scenario's own live process, per the pgrep stand-in
-# above) reports itself as the agent CLI, which is what the setup script's
-# kill-on-timeout branch is looking for.
+# comm: the pane's found child reports itself as the agent CLI. ppid:
+# answers whether a self-reported pid is really the pane's child, using
+# PLECT_EFFECT_PID as the pane's own identity so an unrelated pid can be
+# told apart from a real one.
 plect-effect-record ps "$@"
-printf 'claude\n'
+target=""
+prev=""
+for arg in "$@"; do
+  [ "$prev" = "-p" ] && target="$arg"
+  prev="$arg"
+done
+case "$*" in
+  *ppid=*)
+    if [ "$target" = "$PLECT_EFFECT_WORKER_PID" ]; then
+      printf '%s\n' "$PLECT_EFFECT_PID"
+    else
+      printf '%s\n' "1"
+    fi
+    ;;
+  *)
+    printf '%s\n' "claude"
+    ;;
+esac

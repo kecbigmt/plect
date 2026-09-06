@@ -63,10 +63,11 @@ func (s *Store) Dir() string {
 	return s.dir
 }
 
-// dbHandle opens and migrates the database on first use and memoizes the
-// handle; a failed attempt is not cached, so a transient error (e.g. a
-// directory not yet created) does not stick to the Store for its whole
-// lifetime.
+// dbHandle opens and migrates the database on first use (via
+// persistence.EnsureCurrent, the same gated entry point every plect command
+// goes through) and memoizes the handle; a failed attempt is not cached, so
+// a transient error (e.g. a concurrent migration still in flight) does not
+// stick to the Store for its whole lifetime.
 func (s *Store) dbHandle() (*persistence.DB, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -74,16 +75,9 @@ func (s *Store) dbHandle() (*persistence.DB, error) {
 		return s.db, nil
 	}
 
-	if err := os.MkdirAll(s.dir, 0755); err != nil {
-		return nil, fmt.Errorf("state: create data directory: %w", err)
-	}
-	db, err := persistence.Open(filepath.Join(s.dir, "store.db"))
+	db, err := persistence.EnsureCurrent(context.Background(), filepath.Join(s.dir, "store.db"))
 	if err != nil {
 		return nil, fmt.Errorf("state: open database: %w", err)
-	}
-	if err := db.Migrate(context.Background()); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("state: migrate database: %w", err)
 	}
 	s.db = db
 	return db, nil

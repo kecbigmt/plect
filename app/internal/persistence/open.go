@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io/fs"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -23,9 +24,19 @@ const busyTimeoutMillis = 5000
 // transaction-lock mode at open time (the "_txlock" DSN parameter), not per
 // transaction.
 type DB struct {
-	path  string
 	read  *sql.DB
 	write *sql.DB
+
+	// gate is this database's migration access gate (see gate.go),
+	// derived from its file path. Migrate and WithImmediateTx both go
+	// through it so every later slice inherits the gating for free.
+	gate *accessGate
+
+	// migrations is the goose migration source. It defaults to the
+	// embedded production tree; tests in this package override it via
+	// direct field assignment (same package) to exercise interrupted and
+	// concurrent migrations without touching the real migrations/ tree.
+	migrations fs.FS
 }
 
 // Open sets WAL journaling, a bounded busy timeout, and foreign-key
@@ -51,46 +62,42 @@ func Open(path string) (*DB, error) {
 	// redundant connections that would only ever queue behind each other.
 	write.SetMaxOpenConns(1)
 
-	// Pinging both handles is what actually creates a brand-new file's WAL
-	// and shared-memory files; without this lock, several processes pinging
-	// the same not-yet-existent path for the first time race on that
-	// creation and one gets "database is locked" instead of a working
-	// connection.
-	pingErr := withFileLock(path+".open.lock", func() error {
-		if err := read.Ping(); err != nil {
-			return fmt.Errorf("ping read handle: %w", err)
-		}
-		if err := write.Ping(); err != nil {
-			return fmt.Errorf("ping write handle: %w", err)
-		}
-		return nil
-	})
+	// Ping is what actually creates a brand-new file's WAL and
+	// shared-memory sidecars, so several processes pinging the same
+	// not-yet-existent path for the first time race on that creation.
+	// Serialize it with the coordination lock held exclusively — the same
+	// lock a migrator uses to record intent, not a third lock file — so a
+	// concurrent migration attempt also naturally waits behind (or refuses
+	// after migrationWait) this step, though in practice the two can't
+	// really collide: a migration presupposes the file already exists.
+	// context.Background(), not a caller-supplied context: Open has no ctx
+	// parameter, and this step is bounded by migrationWait regardless.
+	gate := newAccessGate(path)
+	unlockCoord, err := gate.acquireCoordinationExclusive(context.Background())
+	if err != nil {
+		read.Close()
+		write.Close()
+		return nil, err
+	}
+	pingErr := pingBoth(read, write)
+	unlockCoord()
 	if pingErr != nil {
 		read.Close()
 		write.Close()
 		return nil, pingErr
 	}
 
-	return &DB{path: path, read: read, write: write}, nil
+	return &DB{read: read, write: write, gate: gate, migrations: migrationsSourceFS()}, nil
 }
 
-// WithReadTx runs fn inside one read transaction on the read pool so every
-// query fn issues sees the same consistent snapshot. SQLite (even a
-// deferred, non-IMMEDIATE transaction) fixes its snapshot at the
-// transaction's first statement and holds it until the transaction ends,
-// so two queries inside the same fn can never straddle a concurrent
-// writer's commit and observe two different points in time — the failure
-// mode a caller issuing separate autocommit queries against db.read would
-// be exposed to instead. There is nothing to commit in a read-only
-// transaction, so it is always rolled back regardless of fn's outcome.
-func (db *DB) WithReadTx(ctx context.Context, fn func(*sql.Tx) error) error {
-	tx, err := db.read.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin read transaction: %w", err)
+func pingBoth(read, write *sql.DB) error {
+	if err := read.Ping(); err != nil {
+		return fmt.Errorf("ping read handle: %w", err)
 	}
-	defer tx.Rollback()
-
-	return fn(tx)
+	if err := write.Ping(); err != nil {
+		return fmt.Errorf("ping write handle: %w", err)
+	}
+	return nil
 }
 
 func (db *DB) Close() error {
@@ -112,6 +119,12 @@ func (db *DB) Close() error {
 // to fn's error rather than replacing it, so a genuine fn error is never
 // masked by a rollback failure.
 func (db *DB) WithImmediateTx(ctx context.Context, fn func(*sql.Tx) error) error {
+	unlock, err := db.enterNormalAccess(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
 	tx, err := db.write.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin immediate transaction: %w", err)
@@ -128,4 +141,32 @@ func (db *DB) WithImmediateTx(ctx context.Context, fn func(*sql.Tx) error) error
 		return fmt.Errorf("commit immediate transaction: %w", err)
 	}
 	return nil
+}
+
+// WithReadTx runs fn inside one read transaction on the read pool so every
+// query fn issues sees the same consistent snapshot. SQLite (even a
+// deferred, non-IMMEDIATE transaction) fixes its snapshot at the
+// transaction's first statement and holds it until the transaction ends,
+// so two queries inside the same fn can never straddle a concurrent
+// writer's commit and observe two different points in time — the failure
+// mode a caller issuing separate autocommit queries against db.read would
+// be exposed to instead. There is nothing to commit in a read-only
+// transaction, so it is always rolled back regardless of fn's outcome. It
+// goes through the same access gate as WithImmediateTx, so a read also
+// waits behind an in-flight migration and refuses on an unsupported
+// schema version rather than reading through it.
+func (db *DB) WithReadTx(ctx context.Context, fn func(*sql.Tx) error) error {
+	unlock, err := db.enterNormalAccess(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	tx, err := db.read.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin read transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	return fn(tx)
 }

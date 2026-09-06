@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # codex-headless runtime worker: the sole consumer of a session's queue
-# directory. Runs as the tmux pane's own process (exec'd, not a child), so
-# its PID is the pane PID and no TUI-boot detection is needed — `codex exec`
-# has no input box to wedge.
+# directory. Runs as an ordinary child of the pane's shell (not exec'd), so
+# a stuck worker can be terminated by its own pid without ending the pane's
+# root process — `codex exec` has no input box to wedge, so this still
+# needs no TUI-boot detection.
 #
 # Turns are drained strictly serially (one `codex exec`/`codex exec resume`
 # at a time) so a kick arriving mid-turn queues instead of racing the
@@ -18,6 +19,10 @@ state_dir="${2:?state_dir required}"
 profile_name="${3:?profile_name required}"
 
 mkdir -p "$queue_dir" "$state_dir/log"
+
+# comm is always "bash" for a script run this way, so this is the only way
+# the owning task's setup can identify (and later terminate) this worker.
+printf '%s' "$$" > "$state_dir/worker.pid"
 
 # CODEX_MODEL / CODEX_MODEL_REASONING_EFFORT (set by tasks/exec_runtime.toml's
 # setup from the model/effort inputs) map onto codex's own `-m` / `-c

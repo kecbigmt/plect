@@ -1,15 +1,9 @@
 # What each of this plugin's effects is exercised with when its invocation
-# record is regenerated. The launch line typed into the terminal is the
-# contract here, so every steering input is set. bin/ pins the session id and
-# the scratch paths, and seeds the session file the launch waits for; the
-# answers/ scripts are how this plugin's own executables reply.
+# record is regenerated. bin/ pins the session id and the scratch paths and
+# seeds the session file the launch waits for; pgrep/ps report a process
+# distinct from the pane's own root (PLECT_EFFECT_PID), so a kill-on-failure
+# scenario can prove it left the pane alone.
 
-# A resume whose only session record is the previous (now-dead) process's
-# stale entry: this plugin's own terminal-send_keys stand-in withholds the
-# live-pid record until a second Enter arrives, so the scenario only
-# succeeds if the poll loop resends Enter past the stale one. Runs before
-# the channel-server pair below so channel-server-absent's executable
-# removal doesn't shape its record too.
 [[runtime]]
 name = "resume-stale-record"
 prev = { session_id = "11111111-2222-3333-4444-555555555555", pid = "999999" }
@@ -30,18 +24,10 @@ path   = ""
 name   = "channel-server-present"
 inputs = { model = "opus", effort = "high", launch_env = '{"PLECT_TEAM_CONTEXT":"acme"}', mcp_servers = '[{"name":"kbn","command":"kbn-mcp"}]', path_prepend = "/spy/guard" }
 
-# The launch polls for the session file the agent writes; it names the id
-# uuidgen reported and a live process, so the poll accepts it on its first
-# pass rather than timing out.
 [[runtime.files]]
 path    = ".claude/sessions/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.json"
 content = '{"sessionId":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","pid":PID}'
 
-# The mcp_config content is the record of the presence check that gates
-# channel-server registration: this plugin's channel-server executable is
-# present in this variant, so the record shows the resolved bin path
-# actually used as the mcpServers entry's command, not a bare "channel-server"
-# name that would only ever work by coincidence of the runner's own PATH.
 [[runtime.artifacts]]
 output = "mcp_config"
 path   = ""
@@ -50,12 +36,6 @@ path   = ""
 output = "hooks_settings"
 path   = ""
 
-# The counterpart to the variant above: a mount that declares channel-server
-# but never built it (a custom catalog omitting it, or a builder stage that
-# failed partway). absent_executables removes the spy this harness would
-# otherwise install for it, so the setup script's presence check has to take
-# its false branch on its own — the launch line must come out with no
-# channels flag and no channel-server registration.
 [[runtime]]
 name               = "channel-server-absent"
 absent_executables = ["channel-server"]
@@ -72,30 +52,29 @@ path   = ""
 output = "mcp_config"
 path   = ""
 
-# A resume whose previous process is truly gone and never comes back: no
-# session file is ever written for the id this launch asks to resume, so the
-# poll loop (launch_timeout shortened to keep this scenario fast) runs out
-# its window. This is what exercises the kill-on-timeout branch: the
-# pgrep/ps stand-ins report the scenario's own live process — the harness's
-# real, owned stand-in for whatever the launch would have started — as a
-# "claude"-named child of the pane, and the setup script must actually
-# terminate it before failing (expect_live_process_dead asserts the real
-# process is gone, not just that a kill was invoked), so a later `plect up`
-# retry never types a second launch into a pane that still runs the first
-# one.
+# This proves the timed-out launch's child is killed, the pane survives,
+# and a retry against that same pane succeeds.
 [[runtime]]
-name                     = "launch-timeout-kills-pane-child"
-prev                     = { session_id = "33333333-4444-5555-6666-777777777777" }
-inputs                   = { launch_timeout = "1s" }
-expect_live_process_dead = true
-# Only setup is under test here — a node whose setup fails is never handed
-# to the health probes in real orchestration, so exercising them against
-# this scenario's empty self would only record an artifact of the harness,
-# not a claim about this effect's contract.
-hooks                    = ["setup"]
+name                       = "launch-timeout-then-retry-succeeds"
+prev                       = { session_id = "33333333-4444-5555-6666-777777777777" }
+inputs                     = { launch_timeout = "1s" }
+retry_inputs               = { model = "opus", effort = "high", launch_env = '{"PLECT_TEAM_CONTEXT":"acme"}', path_prepend = "/spy/guard" }
+expect_worker_process_dead = true
+# A failed node never reaches health probes in real orchestration.
+hooks                      = ["setup"]
+
+# This proves cleanup also runs when the final output-construction call
+# fails (see bin/jq), not only on a detection timeout.
+[[runtime]]
+name                       = "launch-succeeds-then-output-fails-kills-worker"
+fail_output                = true
+expect_worker_process_dead = true
+hooks                      = ["setup"]
+
+[[runtime.files]]
+path    = ".claude/sessions/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.json"
+content = '{"sessionId":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","pid":PID}'
 
 [[claude_initial_prompt]]
 inputs  = { terminal_ready = "acme-widget-1", agent_session = "1234", prompt = "rendered instruction", repeat = "" }
-# The readiness poll and the submit re-check both read the endpoint's input
-# box; an empty prompt line is what "ready, nothing pending" looks like.
 capture = "› "

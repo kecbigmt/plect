@@ -13,5 +13,5 @@ import (
 // Tests that want to simulate it opt back in with t.Setenv.
 func TestMain(m *testing.M) {
 	os.Unsetenv(confighome.XDGEnvVar)
-	os.Exit(m.Run())
+	os.Exit(runTestMain(m))
 }
