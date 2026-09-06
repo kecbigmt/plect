@@ -41,7 +41,7 @@ func assertNoFrame(t *testing.T, sub *FrameSub) {
 func TestRegistry_DeliversLiveFramesAfterTail(t *testing.T) {
 	store := eventlog.NewStore(t.TempDir())
 	// Pre-existing history: the reader seeds to the tail, so this is NOT broadcast.
-	store.Append(event.Event{SessionName: "o/r-1", Type: "user.note", Body: "old"})
+	store.Append(event.Event{SessionName: "o/r-1", Type: "user.note", Body: "old", Direction: event.Internal})
 	reg := newFastRegistry(store)
 	defer reg.Close()
 	sub := reg.SubscribeFrames("o/r-1")
@@ -50,7 +50,7 @@ func TestRegistry_DeliversLiveFramesAfterTail(t *testing.T) {
 	if sub.Start() == 0 {
 		t.Error("boundary should be the log tail (history exists), not 0")
 	}
-	stored, off, next, _ := store.Append(event.Event{SessionName: "o/r-1", Type: "user.note", Body: "new"})
+	stored, off, next, _ := store.Append(event.Event{SessionName: "o/r-1", Type: "user.note", Body: "new", Direction: event.Internal})
 	f := recvFrame(t, sub)
 	if f.Event.ID != stored.ID || f.Event.Body != "new" {
 		t.Errorf("frame = %+v, want the new event (old must not be re-broadcast)", f.Event)
@@ -76,7 +76,7 @@ func TestRegistry_MultipleSubscribersShareOneReader(t *testing.T) {
 	if readers != 1 || refs != 2 {
 		t.Fatalf("want one reader with refs=2, got readers=%d refs=%d", readers, refs)
 	}
-	store.Append(event.Event{SessionName: "o/r-1", Type: "x", Body: "e"})
+	store.Append(event.Event{SessionName: "o/r-1", Type: "x", Body: "e", Direction: event.Internal})
 	if recvFrame(t, a).Event.Body != "e" || recvFrame(t, b).Event.Body != "e" {
 		t.Error("both subscribers should receive the event from the shared reader")
 	}
@@ -134,7 +134,7 @@ func TestRegistry_SlowConsumerDroppedWithoutStallingReader(t *testing.T) {
 		done <- c
 	}()
 	for range n {
-		store.Append(event.Event{SessionName: "o/r-1", Type: "x"})
+		store.Append(event.Event{SessionName: "o/r-1", Type: "x", Direction: event.Internal})
 	}
 	select {
 	case c := <-done:
@@ -168,7 +168,7 @@ func TestRegistry_ConcurrentAppendsNoGapNoDup(t *testing.T) {
 	const n = 50
 	go func() {
 		for i := range n {
-			store.Append(event.Event{SessionName: "o/r-1", Type: "x", Body: fmt.Sprint(i)})
+			store.Append(event.Event{SessionName: "o/r-1", Type: "x", Body: fmt.Sprint(i), Direction: event.Internal})
 		}
 	}()
 	seen := make(map[string]bool, n)
@@ -204,7 +204,7 @@ func TestRegistry_SessionsAreIndependent(t *testing.T) {
 	if n != 2 {
 		t.Fatalf("want two independent readers, got %d", n)
 	}
-	store.Append(event.Event{SessionName: "s-a", Type: "x", Body: "for-a"})
+	store.Append(event.Event{SessionName: "s-a", Type: "x", Body: "for-a", Direction: event.Internal})
 	if recvFrame(t, a).Event.Body != "for-a" {
 		t.Error("s-a's subscriber should receive its event")
 	}
@@ -235,7 +235,7 @@ func TestRegistry_WatchSignalsOnAppend(t *testing.T) {
 	wk := reg.Watch("o/r-1")
 	defer wk.Close()
 
-	store.Append(event.Event{SessionName: "o/r-1", Type: "x"})
+	store.Append(event.Event{SessionName: "o/r-1", Type: "x", Direction: event.Internal})
 	select {
 	case <-wk.Wake():
 	case <-time.After(2 * time.Second):
@@ -259,7 +259,7 @@ func TestRegistry_WatchAndFramesShareOneReader(t *testing.T) {
 		t.Fatalf("a wake and a frame consumer must share one reader (refs=2); got readers=%d refs=%d", readers, refs)
 	}
 	// One append both delivers a frame and signals the wake.
-	store.Append(event.Event{SessionName: "o/r-1", Type: "x", Body: "e"})
+	store.Append(event.Event{SessionName: "o/r-1", Type: "x", Body: "e", Direction: event.Internal})
 	if recvFrame(t, fr).Event.Body != "e" {
 		t.Error("frame consumer missed the event")
 	}

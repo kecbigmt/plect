@@ -582,7 +582,7 @@ include     = ["plect.instruction"]
 		}
 	}
 
-	if _, _, _, err := log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Body: "go"}); err != nil {
+	if _, _, _, err := log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Body: "go", Direction: event.Internal}); err != nil {
 		t.Fatal(err)
 	}
 	if typ := recvType(t, recv); typ != event.TypeInstruction {

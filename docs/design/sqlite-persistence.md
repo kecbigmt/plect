@@ -77,7 +77,7 @@ nothing beyond its columns serializes to `"{}"`.
 | `up_reservations` | `child_session_name` primary key; nullable `parent_session_name`, `virtual_root`, `pid`, `reserved_at` | none | `state.json` `up_reservations` |
 | `pending_deliveries` | `(session_name, resource_id, operation)` primary key; `operation` is subscribe or unsubscribe | none | `pending_delivery.json` |
 | `event_streams` | `id` (ULID) primary key; `session_name` unique | none | each event directory and its `.gen` file |
-| `events` | `event_id` primary key; `(stream_id, sequence)` unique and references `event_streams(id)` | type, source, direction, summary, body, metadata, delivery mode, and recorded time | each `log.jsonl` record |
+| `events` | `event_id` primary key; `(stream_id, sequence)` unique and references `event_streams(id)`; `direction` CHECK IN `inbound`/`outbound`/`internal` | type, source, direction, summary, body, metadata, and recorded time | each `log.jsonl` record |
 | `event_cursors` | `(stream_id, cursor_name)` primary key and stream foreign key (`ON DELETE CASCADE`); `cursor_name` CHECK IN `dispatcher`/`reactor`/`heartbeat_inbound`; `next_sequence` | none | `.cursor.<consumer>`, `TickBackoff.LastLogPosition` |
 | `session_tombstones` | `session_name` primary key; `destroyed_at` | tombstone session snapshot | `tombstone.json` |
 
@@ -230,11 +230,10 @@ CREATE TABLE events (
     recorded_at TEXT NOT NULL,
     type TEXT NOT NULL,
     source TEXT NOT NULL,
-    direction TEXT NOT NULL,
+    direction TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound', 'internal')),
     summary TEXT NOT NULL,
     body TEXT NOT NULL DEFAULT '',
-    metadata_json TEXT NOT NULL,
-    delivery_mode TEXT NOT NULL
+    metadata_json TEXT NOT NULL
 );
 
 CREATE UNIQUE INDEX events_stream_id_sequence ON events(stream_id, sequence);
@@ -269,9 +268,13 @@ WHERE stream_id = ?;
 -- name: InsertEvent :exec
 INSERT INTO events (
     event_id, stream_id, sequence, recorded_at, type, source, direction,
-    summary, body, metadata_json, delivery_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    summary, body, metadata_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 ```
+
+`events` has no `delivery_mode` column: nothing reads a stored delivery mode
+back, and the persistence boundary drops the field on write and yields the
+zero value on read.
 
 ## Transaction boundaries
 
@@ -368,17 +371,17 @@ second storage authority.
 
 ## Event positions and cursors
 
-An event cursor is the opaque `event.Cursor{Off, Ord, Gen}` value, with
+An event cursor is the opaque `event.Cursor{Off, Ord, StreamID}` value, with
 `CursorVersion` set to `2`. `Off` is the exclusive logical sequence in the
 selected event stream: `1` starts at the first row, and a cursor after event
-sequence `n` has `Off == n + 1`. `Gen` is `event_streams.generation`, and
-`Ord` is the requested order.
+sequence `n` has `Off == n + 1`. `StreamID` is `event_streams.id`, and `Ord`
+is the requested order.
 
-`EventPage` decodes only version-2 cursors, validates `Ord` and `Gen` against
-the selected stream, and reads `sequence >= Off` in ascending order. Its next
-cursor has the exclusive position after the final scanned event. It returns an
-empty page for a missing stream, preserves the current ascending and
-non-paginating descending contracts, and rejects a stale generation or order
+`EventPage` decodes only version-2 cursors, validates `Ord` and `StreamID`
+against the selected stream, and reads `sequence >= Off` in ascending order.
+Its next cursor has the exclusive position after the final scanned event. It
+returns an empty page for a missing stream, preserves the current ascending
+and non-paginating descending contracts, and rejects a stream-id or order
 mismatch as invalid input.
 
 `EventStreamResume` uses the same validation and position semantics. SSE
@@ -404,9 +407,9 @@ event sequences. A sidecar cursor or `TickBackoff.LastLogPosition` must be
 zero or an end boundary of a complete line; it becomes the sequence of the
 next complete event, skipping malformed lines exactly as legacy `List` does.
 An offset that is negative, beyond the complete log, inside a line, or inside a
-trailing partial line rejects the import. Dispatcher and reactor positions go
-to `event_consumer_positions`; the heartbeat position goes to
-`event_watermarks` under its named watermark.
+trailing partial line rejects the import. Dispatcher and reactor positions
+import into `event_cursors` under their own `cursor_name`; the heartbeat
+position imports under `heartbeat_inbound`.
 
 ## One-time importer inventory
 
@@ -417,11 +420,11 @@ alongside the database. The command reads the following runtime paths.
 
 | Legacy path | Validation and destination |
 | --- | --- |
-| `state.json` | Parse once; require the supported legacy envelope version; validate layer effect identities and tree relationships; import sessions, tasks, completion state, populations, and reservations. |
+| `state.json` | Parse once; require the supported legacy envelope version; validate layer effect identities and tree relationships; import sessions, tasks, completion state, populations, and reservations. Each session's `TickBackoff.LastLogPosition` translates through the same byte-boundary index as a `.cursor.<consumer>` file and imports into `event_cursors` as that session's `heartbeat_inbound` position. |
 | `state.json.lock` | Confirm it is not held before import; do not copy it. The access gate replaces it. |
-| `events/<escaped-session>/log.jsonl` | Decode complete lines in byte order; reject invalid event identity, session mismatch, duplicate ID, and a malformed complete line; discard only a trailing partial line, matching the live reader; import stream and events. |
-| `events/<escaped-session>/.gen` | Read one trimmed non-empty generation identifier when present; otherwise generate a new stream generation after recording that no old page cursor survives cutover. |
-| `events/<escaped-session>/.cursor.<consumer>` | Parse a non-negative decimal boundary, validate it against the log boundary index, and import the translated consumer position. |
+| `events/<escaped-session>/log.jsonl` | Decode complete lines in byte order; reject invalid event identity, session mismatch, duplicate ID, and a malformed complete line; discard only a trailing partial line, matching the live reader; import stream and events. A record with no `direction` imports as `internal`, counted in the import summary. |
+| `events/<escaped-session>/.gen` | Read one trimmed non-empty stream identifier when present and reuse it as `event_streams.id`; otherwise mint a fresh id after recording that no old page cursor survives cutover. |
+| `events/<escaped-session>/.cursor.<consumer>` | Parse a non-negative decimal boundary, validate it against the log boundary index, map `<consumer>` to its `event_cursors.cursor_name` (`tick-reactor` imports as `reactor`; every other consumer name imports unchanged), and import the translated position. |
 | `events/<escaped-session>/tombstone.json` | Decode one tombstone, require that its embedded name matches the directory session, and import its snapshot and destruction time. |
 | `events/<escaped-session>/.lock` | Confirm it is not held before import; do not copy it. The database transaction and access gate replace it. |
 | `pending_delivery.json` | Decode subscribe and unsubscribe maps; require non-empty session and resource values; deduplicate entries into `pending_deliveries`. |

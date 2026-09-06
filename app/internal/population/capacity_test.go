@@ -135,7 +135,7 @@ func addCapacityMember(t *testing.T, def Definition, store *state.Store, logStor
 			SessionName: name,
 			Time:        cleared,
 			Type:        event.TypeStatusMessage,
-			Metadata:    map[string]string{"cleared": "true"},
+			Metadata:    map[string]string{"cleared": "true"}, Direction: event.Internal,
 		}); err != nil {
 			t.Fatal(err)
 		}

@@ -31,7 +31,7 @@ func TestBus_PublishAndList(t *testing.T) {
 	c, _, _ := newTestBus(t, "")
 	ctx := t.Context()
 
-	id, off, err := c.Publish(ctx, event.Event{SessionName: "owner/repo-1", Type: "user.note", Summary: "hi"})
+	id, off, err := c.Publish(ctx, event.Event{SessionName: "owner/repo-1", Type: "user.note", Summary: "hi", Direction: event.Internal})
 	if err != nil || id == "" || off != 1 {
 		t.Fatalf("publish: id=%q off=%d err=%v", id, off, err)
 	}
@@ -59,8 +59,8 @@ func TestBus_PublishAndList(t *testing.T) {
 func TestBus_ListFilter(t *testing.T) {
 	c, _, _ := newTestBus(t, "")
 	ctx := t.Context()
-	_, _, _ = c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "github.ci_status", Source: "github"})
-	_, _, _ = c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "slack.message", Source: "slack"})
+	_, _, _ = c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "github.ci_status", Source: "github", Direction: event.Internal})
+	_, _, _ = c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "slack.message", Source: "slack", Direction: event.Internal})
 
 	gh, _, err := c.List(ctx, "o/r-1", event.OrderAsc, "", event.Filter{Types: []string{"github.*"}})
 	if err != nil || len(gh) != 1 || gh[0].Type != "github.ci_status" {
@@ -78,12 +78,12 @@ func TestBus_AuthRequired(t *testing.T) {
 	_, baseURL, _ := newTestBus(t, "s3cret")
 
 	noTok := &event.Client{BaseURL: baseURL, HTTP: http.DefaultClient}
-	if _, _, err := noTok.Publish(t.Context(), event.Event{SessionName: "o/r-1", Type: "user.note"}); err == nil {
+	if _, _, err := noTok.Publish(t.Context(), event.Event{SessionName: "o/r-1", Type: "user.note", Direction: event.Internal}); err == nil {
 		t.Fatal("publish without token should be rejected")
 	}
 
 	withTok := &event.Client{BaseURL: baseURL, Token: "s3cret", HTTP: http.DefaultClient}
-	if _, _, err := withTok.Publish(t.Context(), event.Event{SessionName: "o/r-1", Type: "user.note"}); err != nil {
+	if _, _, err := withTok.Publish(t.Context(), event.Event{SessionName: "o/r-1", Type: "user.note", Direction: event.Internal}); err != nil {
 		t.Fatalf("publish with token should succeed: %v", err)
 	}
 }
@@ -94,7 +94,7 @@ func TestBus_StreamReplayThenLive(t *testing.T) {
 	defer cancel()
 
 	// pre-existing event must be replayed.
-	if _, _, err := c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "user.note", Summary: "first"}); err != nil {
+	if _, _, err := c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "user.note", Summary: "first", Direction: event.Internal}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -108,7 +108,7 @@ func TestBus_StreamReplayThenLive(t *testing.T) {
 	}
 
 	// a subsequent append must arrive live.
-	if _, _, err := c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "user.note", Summary: "second"}); err != nil {
+	if _, _, err := c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "user.note", Summary: "second", Direction: event.Internal}); err != nil {
 		t.Fatal(err)
 	}
 	if ev := recv(t, got); ev.Summary != "second" {
@@ -131,7 +131,7 @@ func TestBus_StreamLiveBurstNoGapNoDup(t *testing.T) {
 
 	const n = 30
 	for i := range n {
-		if _, _, err := c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "user.note", Summary: fmt.Sprintf("e%d", i)}); err != nil {
+		if _, _, err := c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "user.note", Summary: fmt.Sprintf("e%d", i), Direction: event.Internal}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -156,8 +156,8 @@ func TestBus_StreamLiveBurstNoGapNoDup(t *testing.T) {
 func TestBus_StreamResume(t *testing.T) {
 	c, baseURL, _ := newTestBus(t, "")
 	ctx := t.Context()
-	_, _, _ = c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "user.note", Summary: "A"})
-	_, _, _ = c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "user.note", Summary: "B"})
+	_, _, _ = c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "user.note", Summary: "A", Direction: event.Internal})
+	_, _, _ = c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "user.note", Summary: "B", Direction: event.Internal})
 
 	id1, ev1 := firstFrame(t, baseURL, "o/r-1", "")
 	if ev1.Summary != "A" {
@@ -202,7 +202,7 @@ func TestBus_StreamTail(t *testing.T) {
 	c, baseURL, _ := newTestBus(t, "")
 	ctx := t.Context()
 	for _, s := range []string{"A", "B", "C"} {
-		if _, _, err := c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "user.note", Summary: s}); err != nil {
+		if _, _, err := c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "user.note", Summary: s, Direction: event.Internal}); err != nil {
 			t.Fatal(err)
 		}
 	}

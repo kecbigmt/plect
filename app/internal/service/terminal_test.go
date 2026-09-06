@@ -93,8 +93,8 @@ func TestPublishTerminalToParent_WritesIntoParentsOwnLog(t *testing.T) {
 		t.Fatalf("parent log events = %d, want 1", len(parentEvs))
 	}
 	ev := parentEvs[0]
-	if ev.Type != event.TypeTerminalDone || ev.DeliveryMode != event.DeliveryModePush {
-		t.Fatalf("event = %+v, want push done", ev)
+	if ev.Type != event.TypeTerminalDone {
+		t.Fatalf("event = %+v, want type %q", ev, event.TypeTerminalDone)
 	}
 	if want := "work done (from owner/repo-1)"; ev.Summary != want {
 		t.Fatalf("summary = %q, want %q (origin must be self-describing on the parent's log)", ev.Summary, want)

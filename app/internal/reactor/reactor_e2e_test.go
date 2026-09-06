@@ -103,7 +103,7 @@ func TestSessionReactor_ReactiveTickReachesDoneWhenConsequence(t *testing.T) {
 	stop := startReactor(t, r)
 	defer stop()
 
-	log.Append(event.Event{SessionName: "o/r-1", Type: "resource.updated"})
+	log.Append(event.Event{SessionName: "o/r-1", Type: "resource.updated", Direction: event.Internal})
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -180,7 +180,7 @@ func TestSessionReactor_UnchangedUnmetStateAnnouncesOnce(t *testing.T) {
 
 	floor := time.Now()
 	for range 6 {
-		log.Append(event.Event{SessionName: "o/r-1", Type: "resource.updated", Source: event.SourceCLI})
+		log.Append(event.Event{SessionName: "o/r-1", Type: "resource.updated", Source: event.SourceCLI, Direction: event.Internal})
 		time.Sleep(20 * time.Millisecond)
 	}
 	waitLastTickAt(t, st, "o/r-1", floor) // the reactor did evaluate the state

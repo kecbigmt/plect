@@ -129,7 +129,7 @@ func TestSessionReactor_TicksOnDeclaredPattern(t *testing.T) {
 	defer stop()
 
 	floor := time.Now()
-	log.Append(event.Event{SessionName: "o/r-1", Type: "resource.updated"})
+	log.Append(event.Event{SessionName: "o/r-1", Type: "resource.updated", Direction: event.Internal})
 	waitLastTickAt(t, st, "o/r-1", floor)
 }
 
@@ -141,7 +141,7 @@ func TestSessionReactor_UndeclaredWorkflowDoesNotReactiveTick(t *testing.T) {
 	defer stop()
 
 	floor := time.Now()
-	log.Append(event.Event{SessionName: "o/r-1", Type: "resource.updated"})
+	log.Append(event.Event{SessionName: "o/r-1", Type: "resource.updated", Direction: event.Internal})
 	assertNeverTicked(t, st, "o/r-1", floor)
 }
 
@@ -188,7 +188,7 @@ func TestSessionReactor_GenuineUserEmitStillTriggersWhenDeclared(t *testing.T) {
 	defer stop()
 
 	floor := time.Now()
-	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeUserEmit, Source: event.SourceCLI})
+	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeUserEmit, Source: event.SourceCLI, Direction: event.Internal})
 	waitLastTickAt(t, st, "o/r-1", floor)
 }
 
@@ -201,7 +201,7 @@ func TestSessionReactor_JudgeRecordedAlwaysTriggers(t *testing.T) {
 	defer stop()
 
 	floor := time.Now()
-	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeJudgeRecorded})
+	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeJudgeRecorded, Direction: event.Internal})
 	waitLastTickAt(t, st, "o/r-1", floor)
 }
 
@@ -381,7 +381,7 @@ func TestSessionReactor_ReactiveTickResetsHeartbeatWindow(t *testing.T) {
 	}
 
 	// A reactive tick well inside the heartbeat window resets it (the second call).
-	log.Append(event.Event{SessionName: "o/r-1", Type: "resource.updated"})
+	log.Append(event.Event{SessionName: "o/r-1", Type: "resource.updated", Direction: event.Internal})
 	deadline = time.Now().Add(2 * time.Second)
 	for callCount() < 2 && time.Now().Before(deadline) {
 		time.Sleep(2 * time.Millisecond)
@@ -444,12 +444,15 @@ func TestSessionReactor_TicksSerializeAndDebounceBursts(t *testing.T) {
 
 	const n = 20
 	for range n {
-		log.Append(event.Event{SessionName: "o/r-1", Type: "resource.updated"})
+		log.Append(event.Event{SessionName: "o/r-1", Type: "resource.updated", Direction:
+
+		// Pre-commit the cursor to 0 so seedCursor (called at the top of run())
+		// finds a cursor already present and does not seed it to the post-burst
+		// tail — the reactor's first drain() then necessarily reads all n events
+		// appended above in one batch.
+		event.Internal})
 	}
-	// Pre-commit the cursor to 0 so seedCursor (called at the top of run())
-	// finds a cursor already present and does not seed it to the post-burst
-	// tail — the reactor's first drain() then necessarily reads all n events
-	// appended above in one batch.
+
 	if err := log.CommitCursor("o/r-1", reactorConsumer, 0); err != nil {
 		t.Fatal(err)
 	}

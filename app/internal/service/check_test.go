@@ -944,9 +944,6 @@ func TestTickSession_PushesDoneToParentOnceOnSatisfied(t *testing.T) {
 		t.Fatalf("done events on parent = %d, want 1 (pushed once, not re-pushed on repeated poll)", len(evs))
 	}
 	ev := evs[0]
-	if ev.DeliveryMode != event.DeliveryModePush {
-		t.Fatalf("delivery_mode = %q, want push", ev.DeliveryMode)
-	}
 	if ev.Metadata[event.MetaOriginSession] != "owner/repo-1" || ev.Metadata[event.MetaInstance] != "initial" {
 		t.Fatalf("metadata = %+v", ev.Metadata)
 	}
@@ -1020,7 +1017,7 @@ func TestTickSession_EscalatesAfterHeartbeatBudget_PushesToParent(t *testing.T) 
 	if len(pushed) != 1 {
 		t.Fatalf("escalate events on parent = %d, want 1", len(pushed))
 	}
-	if pushed[0].Metadata[event.MetaOriginSession] != "owner/repo-1" || pushed[0].DeliveryMode != event.DeliveryModePush {
+	if pushed[0].Metadata[event.MetaOriginSession] != "owner/repo-1" {
 		t.Fatalf("pushed escalate = %+v", pushed[0])
 	}
 	if pushed[0].Metadata["escalation_kind"] != "done_when.non_convergence" || pushed[0].Metadata["heartbeat_budget"] != "1" {

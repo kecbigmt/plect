@@ -805,7 +805,7 @@ func TestUp_ForceRecreateResetsRuntimeWithoutPrev(t *testing.T) {
 	}
 	setParent(t, store, "org/repo-child", sessionName)
 	logStore := eventlog.NewStore(store.Dir())
-	_, _, next, err := logStore.Append(event.Event{SessionName: sessionName, Type: event.TypeUserEmit, Source: event.SourceCLI})
+	_, _, next, err := logStore.Append(event.Event{SessionName: sessionName, Type: event.TypeUserEmit, Source: event.SourceCLI, Direction: event.Internal})
 	if err != nil {
 		t.Fatalf("append event: %v", err)
 	}
@@ -957,7 +957,7 @@ func TestUp_ForceRecreateCleanupFailurePreservesInspectableState(t *testing.T) {
 	}
 	setParent(t, store, "org/repo-child", sessionName)
 	logStore := eventlog.NewStore(store.Dir())
-	_, _, next, err := logStore.Append(event.Event{SessionName: sessionName, Type: event.TypeUserEmit, Source: event.SourceCLI})
+	_, _, next, err := logStore.Append(event.Event{SessionName: sessionName, Type: event.TypeUserEmit, Source: event.SourceCLI, Direction: event.Internal})
 	if err != nil {
 		t.Fatalf("append event: %v", err)
 	}
@@ -1086,7 +1086,7 @@ func TestUp_ForceRecreateProviderSetupFailurePersistsInspectableState(t *testing
 	}
 	setParent(t, store, "org/repo-child", sessionName)
 	logStore := eventlog.NewStore(store.Dir())
-	_, _, next, err := logStore.Append(event.Event{SessionName: sessionName, Type: event.TypeUserEmit, Source: event.SourceCLI})
+	_, _, next, err := logStore.Append(event.Event{SessionName: sessionName, Type: event.TypeUserEmit, Source: event.SourceCLI, Direction: event.Internal})
 	if err != nil {
 		t.Fatalf("append event: %v", err)
 	}
@@ -1388,7 +1388,7 @@ func TestUp_ForceRecreateFailureStagesPersistInspectableState(t *testing.T) {
 			}
 			setParent(t, store, "org/repo-child", sessionName)
 			logStore := eventlog.NewStore(store.Dir())
-			_, _, next, err := logStore.Append(event.Event{SessionName: sessionName, Type: event.TypeUserEmit, Source: event.SourceCLI})
+			_, _, next, err := logStore.Append(event.Event{SessionName: sessionName, Type: event.TypeUserEmit, Source: event.SourceCLI, Direction: event.Internal})
 			if err != nil {
 				t.Fatalf("append event: %v", err)
 			}

@@ -24,7 +24,7 @@ func TestMain(m *testing.M) {
 		n, _ := strconv.Atoi(os.Getenv("EVENTLOG_CHILD_N"))
 		s := NewStore(dir)
 		for range n {
-			if _, _, _, err := s.Append(event.Event{SessionName: session, Type: "test.tick", Source: "test"}); err != nil {
+			if _, _, _, err := s.Append(event.Event{SessionName: session, Type: "test.tick", Source: "test", Direction: event.Internal}); err != nil {
 				os.Exit(1)
 			}
 		}
@@ -227,7 +227,7 @@ func TestAppendAndList(t *testing.T) {
 	}
 	var offsets []int64
 	for _, w := range want {
-		_, off, next, err := s.Append(event.Event{SessionName: session, Type: w.typ, Source: w.src})
+		_, off, next, err := s.Append(event.Event{SessionName: session, Type: w.typ, Source: w.src, Direction: event.Internal})
 		if err != nil {
 			t.Fatalf("append: %v", err)
 		}
@@ -276,7 +276,7 @@ func TestSessionsEnumeratesTouchedStreams(t *testing.T) {
 	}
 
 	for _, name := range []string{"octocat/hello-world-42", "owner/repo-1", "owner/repo-1+tag"} {
-		if _, _, _, err := s.Append(event.Event{SessionName: name, Type: "t"}); err != nil {
+		if _, _, _, err := s.Append(event.Event{SessionName: name, Type: "t", Direction: event.Internal}); err != nil {
 			t.Fatalf("append %s: %v", name, err)
 		}
 	}
@@ -307,7 +307,7 @@ func TestListAcrossMergesNamedSessions(t *testing.T) {
 		{"root", "r1"}, {"work", "w1"}, {"outside", "x1"}, {"work", "w2"}, {"root", "r2"},
 	}
 	for _, e := range seq {
-		if _, _, _, err := s.Append(event.Event{SessionName: e.session, Type: "t", Source: "test", Summary: e.summary}); err != nil {
+		if _, _, _, err := s.Append(event.Event{SessionName: e.session, Type: "t", Source: "test", Summary: e.summary, Direction: event.Internal}); err != nil {
 			t.Fatalf("append: %v", err)
 		}
 	}
@@ -387,7 +387,7 @@ func TestTailReturnsLastN(t *testing.T) {
 	s := NewStore(t.TempDir())
 	const session = "owner/repo-9"
 	for i := range 25 {
-		if _, _, _, err := s.Append(event.Event{SessionName: session, Type: "t", Summary: strconv.Itoa(i)}); err != nil {
+		if _, _, _, err := s.Append(event.Event{SessionName: session, Type: "t", Summary: strconv.Itoa(i), Direction: event.Internal}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -424,7 +424,7 @@ func TestTailOffset(t *testing.T) {
 	s := NewStore(t.TempDir())
 	const session = "owner/repo-9"
 	for i := range 25 {
-		if _, _, _, err := s.Append(event.Event{SessionName: session, Type: "t", Summary: strconv.Itoa(i)}); err != nil {
+		if _, _, _, err := s.Append(event.Event{SessionName: session, Type: "t", Summary: strconv.Itoa(i), Direction: event.Internal}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -465,7 +465,7 @@ func TestTailAppliesFilterToTheRing(t *testing.T) {
 		if i%2 == 0 {
 			typ = "keep"
 		}
-		if _, _, _, err := s.Append(event.Event{SessionName: session, Type: typ, Summary: strconv.Itoa(i)}); err != nil {
+		if _, _, _, err := s.Append(event.Event{SessionName: session, Type: typ, Summary: strconv.Itoa(i), Direction: event.Internal}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -490,7 +490,7 @@ func TestGen(t *testing.T) {
 		t.Fatalf("gen of empty log = %q (err=%v), want empty", g, err)
 	}
 
-	if _, _, _, err := s.Append(event.Event{SessionName: session, Type: "a"}); err != nil {
+	if _, _, _, err := s.Append(event.Event{SessionName: session, Type: "a", Direction: event.Internal}); err != nil {
 		t.Fatal(err)
 	}
 	g1, err := s.StreamID(session)
@@ -499,7 +499,7 @@ func TestGen(t *testing.T) {
 	}
 
 	// Stable across further appends (no rotation).
-	if _, _, _, err := s.Append(event.Event{SessionName: session, Type: "b"}); err != nil {
+	if _, _, _, err := s.Append(event.Event{SessionName: session, Type: "b", Direction: event.Internal}); err != nil {
 		t.Fatal(err)
 	}
 	g2, err := s.StreamID(session)
@@ -563,7 +563,7 @@ func TestFollowDeliversNewEvents(t *testing.T) {
 	go func() { _ = s.Follow(ctx, session, 0, func(ev event.Event, _ int64) { got <- ev }) }()
 
 	time.Sleep(50 * time.Millisecond)
-	if _, _, _, err := s.Append(event.Event{SessionName: session, Type: "live"}); err != nil {
+	if _, _, _, err := s.Append(event.Event{SessionName: session, Type: "live", Direction: event.Internal}); err != nil {
 		t.Fatal(err)
 	}
 	select {
