@@ -23,9 +23,10 @@ func migrationsSourceFS() fs.FS {
 	return sub
 }
 
-// Migrate applies every pending embedded migration to db in ascending
-// order, using goose's own applied-version ledger as the sole authority
-// for what has already run.
+// Migrate defers entirely to goose's own applied-version ledger rather
+// than tracking a second record of what has run, so it is safe to call on
+// every startup: goose.Provider.Up is a no-op once the ledger shows every
+// embedded migration already applied.
 func (db *DB) Migrate(ctx context.Context) error {
 	provider, err := goose.NewProvider(goose.DialectSQLite3, db.write, migrationsSourceFS())
 	if err != nil {

@@ -9,18 +9,20 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/persistence/sqlcgen"
 )
 
-// SmokeRecord is persistence's own translation of the generated
-// sqlcgen.PersistenceSmoke row; callers outside this package never see
-// generated database types, per the design's persistence-boundary rule.
+// SmokeRecord exists so InsertSmoke's caller never sees a generated
+// sqlcgen type: the design confines generated database types to this
+// package's boundary, so SmokeRecord is persistence's own translation of
+// the generated sqlcgen.PersistenceSmoke row.
 type SmokeRecord struct {
 	ID        int64
 	Note      string
 	CreatedAt time.Time
 }
 
-// InsertSmoke inserts one persistence_smoke row inside a BEGIN IMMEDIATE
-// write transaction and returns it, exercising the schema.sql -> sqlc ->
-// generated Go -> database/sql -> SQLite driver pipeline end to end.
+// InsertSmoke has no domain purpose of its own; it exists only to prove
+// the schema.sql -> sqlc -> generated Go -> database/sql -> SQLite driver
+// pipeline end to end, by inserting one persistence_smoke row inside a
+// BEGIN IMMEDIATE write transaction and returning it.
 func (db *DB) InsertSmoke(ctx context.Context, note string) (SmokeRecord, error) {
 	var record SmokeRecord
 	err := db.WithImmediateTx(ctx, func(tx *sql.Tx) error {

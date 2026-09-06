@@ -27,9 +27,11 @@ type DB struct {
 	write *sql.DB
 }
 
-// Open opens the SQLite database at path with WAL journaling, a bounded
-// busy timeout, and foreign-key enforcement on every connection. It does
-// not apply migrations; call Migrate for that.
+// Open sets WAL journaling, a bounded busy timeout, and foreign-key
+// enforcement as DSN parameters rather than leaving them to each caller,
+// so every connection this package ever opens carries them, with no path
+// through Open that could construct a connection missing one. It does not
+// apply migrations; call Migrate for that.
 func Open(path string) (*DB, error) {
 	readDSN := fmt.Sprintf("%s?_journal_mode=WAL&_busy_timeout=%d&_foreign_keys=on", path, busyTimeoutMillis)
 	writeDSN := readDSN + "&_txlock=immediate"
