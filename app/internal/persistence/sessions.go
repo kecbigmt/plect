@@ -89,7 +89,7 @@ func (db *DB) FindSessionsByAlias(ctx context.Context, alias string) ([]*domain.
 	}
 	var result []*domain.Session
 	err := db.WithReadTx(ctx, func(tx *sql.Tx) error {
-		rows, err := sqlcgen.New(tx).ListSessionsByAlias(ctx, alias)
+		rows, err := sqlcgen.New(tx).ListSessionsByAlias(ctx, sql.NullString{String: alias, Valid: true})
 		if err != nil {
 			return fmt.Errorf("find sessions by alias %q: %w", alias, err)
 		}
@@ -172,10 +172,10 @@ func (db *DB) writeSessionTx(ctx context.Context, tx *sql.Tx, s *domain.Session)
 		Name:              s.Name,
 		ParentSessionName: parentCol,
 		RootSessionName:   rootCol,
-		ResourceID:        s.ResourceID,
-		Alias:             s.Alias,
+		ResourceID:        nullString(s.ResourceID),
+		Alias:             nullString(s.Alias),
 		Workflow:          s.Workflow,
-		WorkspaceDirPath:  s.WorkspaceDirPath,
+		WorkspaceDir:      nullString(s.WorkspaceDirPath),
 		CreatedAt:         formatTime(s.CreatedAt),
 		UpdatedAt:         formatTime(s.UpdatedAt),
 		RecordJson:        recordJSON,
@@ -277,10 +277,10 @@ func sessionFromRow(row sqlcgen.Session) (*domain.Session, error) {
 		return nil, fmt.Errorf("parse session %q record: %w", row.Name, err)
 	}
 	s.Name = row.Name
-	s.ResourceID = row.ResourceID
-	s.Alias = row.Alias
+	s.ResourceID = row.ResourceID.String
+	s.Alias = row.Alias.String
 	s.Workflow = row.Workflow
-	s.WorkspaceDirPath = row.WorkspaceDirPath
+	s.WorkspaceDirPath = row.WorkspaceDir.String
 	s.ParentSession = deriveParentSession(row.ParentSessionName, row.RootSessionName)
 
 	createdAt, err := parseTime(row.CreatedAt)

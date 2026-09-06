@@ -157,7 +157,7 @@ func TestWithImmediateTx_RollsBackOnFnError(t *testing.T) {
 
 	wantErr := context.Canceled
 	err := db.WithImmediateTx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, "INSERT INTO persistence_smoke (note, created_at) VALUES (?, ?)", "rolled back", "2026-01-01T00:00:00Z"); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO up_reservations (child_session_name, parent_name, pid, reserved_at) VALUES (?, ?, ?, ?)", "rolled-back-child", "parent1", 1, "2026-01-01T00:00:00.000000000Z"); err != nil {
 			t.Fatalf("exec: %v", err)
 		}
 		return wantErr
@@ -167,10 +167,10 @@ func TestWithImmediateTx_RollsBackOnFnError(t *testing.T) {
 	}
 
 	var count int
-	if err := db.write.QueryRowContext(ctx, "SELECT COUNT(*) FROM persistence_smoke").Scan(&count); err != nil {
+	if err := db.write.QueryRowContext(ctx, "SELECT COUNT(*) FROM up_reservations").Scan(&count); err != nil {
 		t.Fatalf("count: %v", err)
 	}
 	if count != 0 {
-		t.Errorf("persistence_smoke has %d rows, want 0 (fn's error should have rolled back the insert)", count)
+		t.Errorf("up_reservations has %d rows, want 0 (fn's error should have rolled back the insert)", count)
 	}
 }

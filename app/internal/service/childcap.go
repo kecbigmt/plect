@@ -31,7 +31,10 @@ func reserveChildCapSlot(cfg *config.Config, store *state.Store, childSessionNam
 		capParent = virtualRootCapParent
 		capLabel = "virtual root"
 	} else {
-		parent := store.Get(parentSessionName)
+		parent, err := store.GetE(parentSessionName)
+		if err != nil {
+			return false, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("load parent %s: %v", parentSessionName, err)}
+		}
 		if parent == nil {
 			return false, nil
 		}

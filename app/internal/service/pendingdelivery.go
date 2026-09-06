@@ -155,7 +155,12 @@ func sweepOrphanedPendingDeliveries(cfg *config.Config, store *state.Store, sess
 	}
 	delete(orphaned, sessionName)
 	for name := range orphaned {
-		if store.Get(name) != nil {
+		session, err := store.GetE(name)
+		if err != nil {
+			slog.Default().Warn("pending delivery sweep: failed to check session", "session", name, "error", err)
+			continue // fail closed: an unreadable session is not provably gone, so it is not swept as orphaned
+		}
+		if session != nil {
 			continue
 		}
 		for _, err := range flushPendingDelivery(cfg, store, name) {

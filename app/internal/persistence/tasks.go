@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/persistence/sqlcgen"
 	contract "github.com/kecbigmt/plecture/contracts/state"
@@ -68,6 +69,11 @@ func loadTasks(ctx context.Context, q sqlcgen.DBTX, sessionName string) (map[str
 		ts.Status = row.Status
 		ts.Seq = int(row.Sequence)
 		ts.Dynamic = false
+		finalizedAt, err := parseTimeNull(row.FinalizedAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse node instance %q/%q finalized_at: %w", sessionName, row.NodeID, err)
+		}
+		ts.FinalizedAt = finalizedAt
 		tasks[row.NodeID] = ts
 	}
 	for _, row := range instanceRows {
@@ -80,8 +86,15 @@ func loadTasks(ctx context.Context, q sqlcgen.DBTX, sessionName string) (map[str
 		ts.Status = row.Status
 		ts.Seq = int(row.Sequence)
 		ts.Dynamic = true
-		ts.Resource = row.Resource
-		ts.Name = row.NamedInstance
+		ts.Resource = row.Resource.String
+		if row.Named {
+			ts.Name = row.InstanceName
+		}
+		finalizedAt, err := parseTimeNull(row.FinalizedAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse task instance %q/%q finalized_at: %w", sessionName, row.InstanceName, err)
+		}
+		ts.FinalizedAt = finalizedAt
 
 		if dw, ok := doneWhenByInstanceID[row.ID]; ok {
 			doneWhen, err := doneWhenFromRow(dw, judgesByInstanceID[row.ID])
@@ -95,21 +108,26 @@ func loadTasks(ctx context.Context, q sqlcgen.DBTX, sessionName string) (map[str
 	return tasks, nil
 }
 
-// writeTasksTx replaces every node-instance and task-instance row for
-// sessionName: it deletes both tables' rows for the session (task_instances'
-// delete cascades to task_done_when_states and task_done_when_judges via
-// their id foreign key) and reinserts the current Tasks map split by
-// Dynamic, all inside the caller's write transaction. It never touches
-// another session's rows. Every dynamic instance gets a freshly minted id,
-// so a cleanup followed by a new setup under the same instance_name is a
-// distinct row with its own done_when/judge history.
+// writeTasksTx replaces every node-instance row for sessionName (that table
+// has no identity worth preserving across a write) and reconciles
+// task_instances against the current Tasks map instead: each current dynamic
+// instance is upserted (preserving its id across an ordinary update; see
+// UpsertTaskInstance), and any instance_name no longer present is then
+// explicitly deleted, which is what mints a fresh id on a later cleanup +
+// setup under the same name. It never touches another session's rows.
 func (db *DB) writeTasksTx(ctx context.Context, tx *sql.Tx, sessionName string, tasks map[string]*contract.TaskState) error {
 	q := sqlcgen.New(tx)
 	if err := q.DeleteNodeInstancesForSession(ctx, sessionName); err != nil {
 		return fmt.Errorf("clear node instances for %q: %w", sessionName, err)
 	}
-	if err := q.DeleteTaskInstancesForSession(ctx, sessionName); err != nil {
-		return fmt.Errorf("clear task instances for %q: %w", sessionName, err)
+
+	existing, err := q.ListTaskInstances(ctx, sessionName)
+	if err != nil {
+		return fmt.Errorf("list existing task instances for %q: %w", sessionName, err)
+	}
+	remaining := make(map[string]bool, len(existing))
+	for _, row := range existing {
+		remaining[row.InstanceName] = true
 	}
 
 	for key, ts := range tasks {
@@ -117,13 +135,23 @@ func (db *DB) writeTasksTx(ctx context.Context, tx *sql.Tx, sessionName string, 
 			continue
 		}
 		if ts.Dynamic {
-			if err := insertTaskInstanceTx(ctx, q, sessionName, key, ts); err != nil {
+			delete(remaining, key)
+			if err := upsertTaskInstanceTx(ctx, q, sessionName, key, ts); err != nil {
 				return err
 			}
 			continue
 		}
 		if err := insertNodeInstanceTx(ctx, q, sessionName, key, ts); err != nil {
 			return err
+		}
+	}
+
+	for instanceName := range remaining {
+		if err := q.DeleteTaskInstanceByName(ctx, sqlcgen.DeleteTaskInstanceByNameParams{
+			SessionName:  sessionName,
+			InstanceName: instanceName,
+		}); err != nil {
+			return fmt.Errorf("delete task instance %q/%q: %w", sessionName, instanceName, err)
 		}
 	}
 	return nil
@@ -140,6 +168,7 @@ func insertNodeInstanceTx(ctx context.Context, q *sqlcgen.Queries, sessionName, 
 		Scope:       ts.Scope,
 		Status:      ts.Status,
 		Sequence:    int64(ts.Seq),
+		FinalizedAt: formatTimeNull(ts.FinalizedAt),
 		RecordJson:  recordJSON,
 	}); err != nil {
 		return fmt.Errorf("insert node instance %q/%q: %w", sessionName, nodeID, err)
@@ -147,27 +176,40 @@ func insertNodeInstanceTx(ctx context.Context, q *sqlcgen.Queries, sessionName, 
 	return nil
 }
 
-func insertTaskInstanceTx(ctx context.Context, q *sqlcgen.Queries, sessionName, instanceName string, ts *contract.TaskState) error {
+// upsertTaskInstanceTx upserts the instance row, then replaces its
+// done_when/judge rows keyed by whichever id the upsert reports (the
+// preserved id on an ordinary update, or the freshly minted one on a
+// genuinely new instance) — never relying on a full-table delete's cascade,
+// since a surviving instance's row is no longer deleted on every write.
+func upsertTaskInstanceTx(ctx context.Context, q *sqlcgen.Queries, sessionName, instanceName string, ts *contract.TaskState) error {
 	recordJSON, err := marshalTaskRecord(ts)
 	if err != nil {
 		return fmt.Errorf("marshal task %q/%q: %w", sessionName, instanceName, err)
 	}
-	id := newULID()
-	if err := q.InsertTaskInstance(ctx, sqlcgen.InsertTaskInstanceParams{
-		ID:            id,
-		SessionName:   sessionName,
-		InstanceName:  instanceName,
-		TaskID:        ts.TaskID,
-		Scope:         ts.Scope,
-		Status:        ts.Status,
-		Sequence:      int64(ts.Seq),
-		Resource:      ts.Resource,
-		NamedInstance: ts.Name,
-		RecordJson:    recordJSON,
-	}); err != nil {
-		return fmt.Errorf("insert task instance %q/%q: %w", sessionName, instanceName, err)
+	named := ts.Name != ""
+	id, err := q.UpsertTaskInstance(ctx, sqlcgen.UpsertTaskInstanceParams{
+		ID:           newULID(),
+		SessionName:  sessionName,
+		InstanceName: instanceName,
+		TaskID:       ts.TaskID,
+		Scope:        ts.Scope,
+		Status:       ts.Status,
+		Sequence:     int64(ts.Seq),
+		Resource:     nullString(ts.Resource),
+		Named:        named,
+		FinalizedAt:  formatTimeNull(ts.FinalizedAt),
+		RecordJson:   recordJSON,
+	})
+	if err != nil {
+		return fmt.Errorf("upsert task instance %q/%q: %w", sessionName, instanceName, err)
 	}
 
+	if err := q.DeleteTaskDoneWhenStateByInstanceID(ctx, id); err != nil {
+		return fmt.Errorf("clear done_when %q/%q: %w", sessionName, instanceName, err)
+	}
+	if err := q.DeleteTaskDoneWhenJudgesByInstanceID(ctx, id); err != nil {
+		return fmt.Errorf("clear done_when judges %q/%q: %w", sessionName, instanceName, err)
+	}
 	if ts.DoneWhen == nil {
 		return nil
 	}
@@ -194,13 +236,13 @@ func insertDoneWhenTx(ctx context.Context, q *sqlcgen.Queries, taskInstanceID st
 		TaskInstanceID:       taskInstanceID,
 		HeartbeatTicks:       int64(dw.HeartbeatTicks),
 		HeartbeatEscalations: int64(dw.HeartbeatEscalations),
-		LastAction:           dw.LastAction,
-		LastFingerprint:      dw.LastFingerprint,
-		LastReason:           dw.LastReason,
+		LastAction:           nullString(dw.LastAction),
+		LastFingerprint:      nullString(dw.LastFingerprint),
+		LastReason:           nullString(dw.LastReason),
 		LastUnsatisfiedJson:  string(lastUnsatisfiedJSON),
-		LastBody:             dw.LastBody,
-		EscalatedAt:          formatTime(dw.EscalatedAt),
-		EscalateReason:       dw.EscalateReason,
+		LastBody:             nullString(dw.LastBody),
+		EscalatedAt:          formatTimeNull(dw.EscalatedAt),
+		EscalateReason:       nullString(dw.EscalateReason),
 	})
 }
 
@@ -217,7 +259,7 @@ func insertJudgeTx(ctx context.Context, q *sqlcgen.Queries, taskInstanceID, leaf
 		Reason:         judge.Reason,
 		Revision:       judge.Revision,
 		JudgeSession:   judge.ReviewerSession,
-		JudgeWorkflow:  judge.ReviewerWorkflow,
+		JudgeWorkflow:  nullString(judge.ReviewerWorkflow),
 		Relation:       judge.Relation,
 		CreatedAt:      formatTime(judge.CreatedAt),
 	})
@@ -236,7 +278,7 @@ func judgeFromRow(r sqlcgen.ListTaskDoneWhenJudgesForSessionRow) (*contract.Done
 		TargetSession:    r.TargetSession,
 		Instance:         r.TargetInstance,
 		ReviewerSession:  r.JudgeSession,
-		ReviewerWorkflow: r.JudgeWorkflow,
+		ReviewerWorkflow: r.JudgeWorkflow.String,
 		Relation:         r.Relation,
 		CreatedAt:        createdAt,
 	}, nil
@@ -247,35 +289,36 @@ func doneWhenFromRow(dw sqlcgen.TaskDoneWhenState, judges map[string]*contract.D
 	if err := json.Unmarshal([]byte(dw.LastUnsatisfiedJson), &lastUnsatisfied); err != nil {
 		return nil, fmt.Errorf("parse last_unsatisfied: %w", err)
 	}
-	escalatedAt, err := parseTime(dw.EscalatedAt)
+	escalatedAt, err := parseTimeNull(dw.EscalatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("parse escalated_at: %w", err)
 	}
 	return &contract.DoneWhenState{
 		HeartbeatTicks:       int(dw.HeartbeatTicks),
 		HeartbeatEscalations: int(dw.HeartbeatEscalations),
-		LastAction:           dw.LastAction,
-		LastFingerprint:      dw.LastFingerprint,
-		LastReason:           dw.LastReason,
+		LastAction:           dw.LastAction.String,
+		LastFingerprint:      dw.LastFingerprint.String,
+		LastReason:           dw.LastReason.String,
 		LastUnsatisfied:      lastUnsatisfied,
-		LastBody:             dw.LastBody,
+		LastBody:             dw.LastBody.String,
 		EscalatedAt:          escalatedAt,
-		EscalateReason:       dw.EscalateReason,
+		EscalateReason:       dw.EscalateReason.String,
 		Judges:               judges,
 	}, nil
 }
 
 // marshalNodeInstanceRecord serializes every TaskState field not already
 // carried by a relational column on node_instances (scope, status,
-// sequence). Unlike a dynamic instance, a node instance's TaskID, Resource,
-// Name, and DoneWhen (rare, and not relationally queried) all stay embedded
-// here rather than split out.
+// sequence, finalized_at). Unlike a dynamic instance, a node instance's
+// TaskID, Resource, Name, and DoneWhen (rare, and not relationally queried)
+// all stay embedded here rather than split out.
 func marshalNodeInstanceRecord(t *contract.TaskState) (string, error) {
 	clone := *t
 	clone.Scope = ""
 	clone.Status = ""
 	clone.Seq = 0
 	clone.Dynamic = false
+	clone.FinalizedAt = time.Time{}
 	data, err := json.Marshal(clone)
 	if err != nil {
 		return "", err
@@ -303,6 +346,7 @@ func marshalTaskRecord(t *contract.TaskState) (string, error) {
 	clone.Resource = ""
 	clone.Name = ""
 	clone.DoneWhen = nil
+	clone.FinalizedAt = time.Time{}
 	data, err := json.Marshal(clone)
 	if err != nil {
 		return "", err

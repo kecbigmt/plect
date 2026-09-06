@@ -1,3 +1,4 @@
-h1:D9RO26Vk0+t1Wz4qebe9Gm4+XqvFjdFfBjDvrUSINEA=
+h1:cgVc9bxaa+H24HGI0vA0zZQvK4EBgne77tdnRdWq1+8=
 20260906051929_persistence_smoke.sql h1:VJQbsA+3kdW09JOA/7fdHbtscHLy6/jFDEL+ECJl9WI=
-20260906071015_add_runtime_state_tables.sql h1:V0IAvtHyCEon7vvMfgWo68f3jBNtGbvkvg8ZvvMOTxc=
+20260906071015_add_runtime_state_tables.sql h1:M9sJNBYcHQEvdPGSzZRfXHnd1pAxujKrbz9GsUxOgM0=
+20260906085730_drop_persistence_smoke.sql h1:ynXh1nZv2xCCKeHEvey0ZaLwuG61TYqO1bx3EpKiwlg=

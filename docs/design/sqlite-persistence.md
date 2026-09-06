@@ -41,15 +41,33 @@ relationship, ordering, and lookup values have columns and constraints. Fields
 whose shape is defined by a workflow, hook, observer, or event producer remain
 JSON in the record that owns them.
 
+A column is `NULL` exactly when the domain value it holds can be genuinely
+absent — never observed or resolved yet, or an optional fact. A column that
+domain logic always populates is `NOT NULL` with no `DEFAULT`, so every write
+site states its value explicitly rather than silently inheriting one from the
+database. A closed-set text column (`scope`, `status`, an action or relation,
+a decision kind) carries a `CHECK (col IN (...))` naming its exact values; a
+boolean column is `boolean NOT NULL CHECK (col IN (0, 1))` rather than SQLite's
+untyped affinity alone. Every `*_at` timestamp column is a UTC RFC3339 string
+with exactly nine fractional digits (for example
+`2026-09-06T08:50:42.821423717Z`), or `NULL` when unset — never a
+variable-width fractional part, so lexical order equals time order; see
+`timeconv.go`.
+
+`record_json` never duplicates a value a relational column already carries:
+each table's write path zeroes those fields on the in-memory value before
+serializing it, so the column is the read authority and the blob holds only
+what has no column of its own.
+
 | Table | Key and relational columns | JSON or scalar payload | Source |
 | --- | --- | --- | --- |
-| `sessions` | `name` primary key; nullable `parent_session_name` and `root_session_name`, each referencing `sessions(name)`; `resource_id`, `alias`, `workflow`, `workspace_dir_path`, `created_at`, `updated_at` | conversation, message, inputs, health, channel-health, tick state, and other session fields | `state.json` `sessions` entries |
-| `node_instances` | `(session_name, node_id)` primary key; session foreign key; `scope`, `status`, `sequence` | task id, inputs, outputs, state, observed value, layers, lifecycle timestamps, error, done_when (rare, not relationally queried), and extra completion data | `state.json` `sessions.*.tasks` entries with `dynamic` unset |
-| `task_instances` | `id` (ULID, minted fresh on every insert) primary key; `(session_name, instance_name)` unique; session foreign key; `task_id`, `scope`, `status`, `sequence`, `resource`, `named_instance` | inputs, outputs, state, observed value, layers, lifecycle timestamps, error, and extra completion data | `state.json` `sessions.*.tasks` entries with `dynamic: true` |
+| `sessions` | `name` primary key; nullable `parent_session_name` and `root_session_name`, each referencing `sessions(name)`; nullable `resource_id`, `alias`, `workspace_dir`; `workflow`, `created_at`, `updated_at` | conversation, message, inputs, health, channel-health, tick state, and other session fields | `state.json` `sessions` entries |
+| `node_instances` | `(session_name, node_id)` primary key; session foreign key; `scope`, `status`, `sequence`, nullable `finalized_at` | task id, inputs, outputs, state, observed value, layers, lifecycle timestamps, error, done_when (rare, not relationally queried), and extra completion data | `state.json` `sessions.*.tasks` entries with `dynamic` unset |
+| `task_instances` | `id` (ULID, stable across every write that still names the same `(session_name, instance_name)`; re-minted only when a cleanup removes the row before a later setup recreates it) primary key; `(session_name, instance_name)` unique; session foreign key; `task_id`, `scope`, `status`, `sequence`, nullable `resource`, `named`, nullable `finalized_at` | inputs, outputs, state, observed value, layers, lifecycle timestamps, error, and extra completion data | `state.json` `sessions.*.tasks` entries with `dynamic: true` |
 | `task_done_when_states` | `task_instance_id` primary key and foreign key | counters, fingerprints, reason/body, escalation data | `TaskState.DoneWhen` (dynamic instances only) |
-| `task_done_when_judges` | `(task_instance_id, leaf_id)` primary key and task-instance foreign key; `judge_session`/`judge_workflow` remain stored facts | action, reason, revision, relation, and creation time | `DoneWhenState.Judges` (dynamic instances only) |
-| `populations` | `population_key` primary key; `workflow`, `name` | none | `state.json` `populations` map key and value |
-| `population_members` | `(population_key, resource_id)` primary key; nullable `session_name` | item, generation, timestamps, flags, decision, blockers | `PopulationState.Members` |
+| `task_done_when_judges` | `(task_instance_id, leaf_id)` primary key and task-instance foreign key; `judge_session`/nullable `judge_workflow` remain stored facts | action, reason, revision, relation, and creation time | `DoneWhenState.Judges` (dynamic instances only) |
+| `populations` | `(workflow, name)` primary key | none | `state.json` `populations` map key and value |
+| `population_members` | `(workflow, name, resource_id)` primary key and `populations(workflow, name)` foreign key; nullable `session_name` | item, generation, timestamps, flags, `decision_kind`/`decision_reason`, blockers | `PopulationState.Members` |
 | `up_reservations` | `child_session_name` primary key; `parent_name`, `pid`, `reserved_at` | none | `state.json` `up_reservations` |
 | `pending_deliveries` | `(session_name, resource_id, operation)` primary key; `operation` is subscribe or unsubscribe | none | `pending_delivery.json` |
 | `event_streams` | `session_name` primary key; `generation` | none | each event directory and its `.gen` file |
@@ -60,7 +78,31 @@ JSON in the record that owns them.
 
 `population_members.session_name` is a recorded fact, not an enforced foreign
 key: admission can record a member's intended session name before that
-session's own row exists.
+session's own row exists. `Session.Population` (the session-side copy of a
+member's workflow/name/resource_id) stays embedded in `sessions.record_json`
+rather than being derived from `population_members` at read time: the one
+write path that populates it (`population/engine.go`'s admission) creates the
+session through the population's own hook before it records the member row,
+so a read between those two steps would see a session with no population yet
+if the field were derived by join instead of stored directly. The two facts
+never legitimately disagree once both writes land; only their momentary
+ordering during admission does.
+
+`(workflow, name)` is a population's own domain identity — a workflow's
+declared population, its config address plus population name — not the
+`"workflow/name"` string built for JSON map keys and in-memory lookups
+elsewhere in `internal/population`; the persistence boundary parses that
+concatenation back into its two parts on every population read or write
+rather than storing it as an identity.
+
+`task_instances.named` replaces what would otherwise be a duplicated
+instance-identity string: a `--name` a caller gave the instance is always
+either empty or exactly `instance_name`, so `named` is the only bit that
+does not already live in `instance_name` itself. `finalized_at` on both
+`node_instances` and `task_instances` is nullable and orthogonal to
+`status`: `plect task finalize` can record completion while status stays
+`produced`, awaiting a later `plect task cleanup`, so it is a timestamp
+fact rather than a state folded into `status`'s CHECK.
 
 `Session.Tasks` splits across `node_instances` and `task_instances` by
 whether the entry is a static workflow-DAG node (including the `@workflow`
@@ -68,21 +110,27 @@ pseudo-node) or a dynamic instance created at runtime via
 `plect task setup`; the persistence layer reads both and composes the one
 `Tasks` map the domain type and every core call site still see, deriving
 `Dynamic` from which table a record came from rather than storing it.
-`task_instances.id` is a ULID minted fresh on every insert, never reused
-across a delete-and-reinsert, so a cleanup followed by a new setup under the
-same `instance_name` is a distinct row with its own `task_done_when_states`/
-`task_done_when_judges` history. Those two tables key off
-`task_instances.id` and exist only for dynamic instances; a static workflow
-node's `done_when` (declaring one is rare, and no shipped workflow node
-relies on it) stays embedded in `node_instances.record_json` instead of
-being split out.
+`task_instances.id` is a ULID minted once when a dynamic instance's row is
+first created and preserved by every later write that still names the same
+`(session_name, instance_name)` — an ordinary `Put`/`Update` upserts the
+row and keeps its existing id. Only a cleanup (the instance disappearing
+from a write's `Tasks` map, so the row is deleted outright) followed by a
+new setup under the same `instance_name` mints a fresh id, which is what
+gives that recreated instance a fresh `task_done_when_states`/
+`task_done_when_judges` history rather than resurfacing the retired
+instance's. Those two tables key off `task_instances.id` and exist only for
+dynamic instances; a static workflow node's `done_when` (declaring one is
+rare, and no shipped workflow node relies on it) stays embedded in
+`node_instances.record_json` instead of being split out.
 
 `task_done_when_judges` does not store the judged session/instance: the
 owning `task_instances` row's own `(session_name, instance_name)` is always
 the judged side (the one write path that records a verdict always stores it
 on the same session/instance it names as the target), so
 `DoneWhenJudge.TargetSession`/`Instance` are derived from that join at read
-time rather than duplicated as columns.
+time rather than duplicated as columns. `relation`'s CHECK set is the seven
+`domain.SessionRelation` values; unlike `judge_workflow`, a judge always has
+a computed relation, so there is no eighth "unset" value to admit.
 
 `sessions` represents a real parent with `parent_session_name` and a
 session-local pseudo-root with `root_session_name`; a check constraint permits
@@ -114,10 +162,10 @@ CREATE TABLE sessions (
     name TEXT PRIMARY KEY,
     parent_session_name TEXT REFERENCES sessions(name) ON DELETE SET NULL,
     root_session_name TEXT REFERENCES sessions(name) ON DELETE SET NULL,
-    resource_id TEXT NOT NULL DEFAULT '',
-    alias TEXT NOT NULL DEFAULT '',
-    workflow TEXT NOT NULL DEFAULT '',
-    workspace_dir_path TEXT NOT NULL DEFAULT '',
+    resource_id TEXT,
+    alias TEXT,
+    workflow TEXT NOT NULL,
+    workspace_dir TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     record_json TEXT NOT NULL,
@@ -125,7 +173,7 @@ CREATE TABLE sessions (
     CHECK (root_session_name IS NULL OR root_session_name <> name)
 );
 
-CREATE INDEX sessions_alias_idx ON sessions(alias) WHERE alias <> '';
+CREATE INDEX sessions_alias_idx ON sessions(alias);
 CREATE INDEX sessions_parent_idx ON sessions(parent_session_name);
 
 CREATE TABLE event_streams (
@@ -218,7 +266,7 @@ upgrade.
 
 | Existing callback or append path | SQLite transaction | Behavioral contract |
 | --- | --- | --- |
-| `Put` | Upsert the session row, replace its `node_instances`/`task_instances` rows (routed by `Dynamic`, each dynamic instance re-minting its `id`) and their completion rows, replace its population reference fields, and normalize the parent relation in one write transaction. | Preserves one durable checkpoint for the supplied session; it no longer rewrites unrelated sessions. |
+| `Put` | Replace the session's `node_instances` rows outright; reconcile its `task_instances` rows against the current `Tasks` map instead (upserting each current dynamic instance, preserving its `id` across an ordinary update, then deleting any instance no longer present), replacing each surviving instance's completion rows; normalize the parent relation — all in one write transaction. | Preserves one durable checkpoint for the supplied session; it no longer rewrites unrelated sessions, and a dynamic instance's `id` and completion history survive an ordinary update instead of resetting on every write. |
 | `Update` | Read the named session and its workflow-node/task-instance/completion rows, run the in-process callback, then write that session's changed rows in one write transaction. | Preserves read-modify-write atomicity and the missing-session error. The callback remains local and must not perform external work. |
 | `UpdatePopulation` | Read or create one population and its members, run the callback, then replace that population's members in one write transaction. | Preserves an atomic population snapshot without serializing unrelated sessions. |
 | `ReserveUpSlot` | Delete reservations whose recorded PID is no longer live, read the parent’s active children and reservations, enforce the cap, and insert the child reservation in one write transaction. | Preserves the live-holder rule and the rejection for an already-reserved child. |

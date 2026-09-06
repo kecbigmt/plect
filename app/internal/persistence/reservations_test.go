@@ -2,6 +2,7 @@ package persistence
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"os/exec"
@@ -165,15 +166,25 @@ func plantReservationForTest(t *testing.T, db *DB, child, parent string, pid int
 	}
 }
 
+// reservationNames reads every reservation's child session name through the
+// same migration-access gate every other read goes through (WithReadTx),
+// since persistence.DB exposes no production ListUpReservations of its own
+// to bypass it: nothing in production ever needs an unpruned reservation
+// list outside ReserveUpSlot's own write transaction.
 func reservationNames(t *testing.T, db *DB) map[string]bool {
 	t.Helper()
-	reservations, err := db.ListUpReservations(context.Background())
-	if err != nil {
+	names := make(map[string]bool)
+	if err := db.WithReadTx(context.Background(), func(tx *sql.Tx) error {
+		rows, err := sqlcgen.New(tx).ListUpReservations(context.Background())
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			names[row.ChildSessionName] = true
+		}
+		return nil
+	}); err != nil {
 		t.Fatalf("ListUpReservations: %v", err)
-	}
-	names := make(map[string]bool, len(reservations))
-	for name := range reservations {
-		names[name] = true
 	}
 	return names
 }

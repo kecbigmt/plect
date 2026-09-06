@@ -88,25 +88,6 @@ func (db *DB) ReleaseUpSlot(ctx context.Context, childName string) error {
 	})
 }
 
-// ListUpReservations returns every current up-slot reservation, keyed by
-// child session name, without pruning dead ones — callers needing pruning
-// semantics use ReserveUpSlot.
-func (db *DB) ListUpReservations(ctx context.Context) (map[string]domain.UpReservation, error) {
-	rows, err := sqlcgen.New(db.read).ListUpReservations(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list up-slot reservations: %w", err)
-	}
-	result := make(map[string]domain.UpReservation, len(rows))
-	for _, row := range rows {
-		reservedAt, err := parseTime(row.ReservedAt)
-		if err != nil {
-			return nil, fmt.Errorf("parse reservation %q reserved_at: %w", row.ChildSessionName, err)
-		}
-		result[row.ChildSessionName] = domain.UpReservation{Parent: row.ParentName, At: reservedAt, PID: int(row.Pid)}
-	}
-	return result, nil
-}
-
 // processAlive treats PID reuse (a crashed holder's PID reassigned to an
 // unrelated live process) as an accepted false negative — a stuck
 // reservation stays recoverable via retry or Destroy either way.

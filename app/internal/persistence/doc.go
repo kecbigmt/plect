@@ -6,10 +6,12 @@
 // IMMEDIATE so later slices never have to reason about a deferred
 // transaction's read-then-write upgrade failure.
 //
-// This slice ships only the toolchain and a persistence_smoke table proving
-// the schema.sql -> Atlas -> goose -> SQLite pipeline and the
-// schema.sql -> sqlc -> Go pipeline end to end. Domain tables belong to
-// later slices.
+// Runtime state tables (sessions, task/node instances, done_when/judge
+// state, populations, up-slot reservations) live in schema.sql; the
+// migration history also records a since-retired persistence_smoke table
+// that once proved the schema.sql -> Atlas -> goose -> SQLite and
+// schema.sql -> sqlc -> Go pipelines end to end before any domain table
+// existed to prove them instead.
 //
 // # Regenerating
 //

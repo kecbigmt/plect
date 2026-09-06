@@ -14,32 +14,28 @@ type NodeInstance struct {
 	Scope       string
 	Status      string
 	Sequence    int64
+	FinalizedAt sql.NullString
 	RecordJson  string
 }
 
-type PersistenceSmoke struct {
-	ID        int64
-	Note      string
-	CreatedAt string
-}
-
 type Population struct {
-	PopulationKey string
-	Workflow      string
-	Name          string
+	Workflow string
+	Name     string
 }
 
 type PopulationMember struct {
-	PopulationKey    string
+	Workflow         string
+	Name             string
 	ResourceID       string
-	SessionName      string
+	SessionName      sql.NullString
 	Generation       int64
-	AcceptedAt       string
-	LastAppearance   string
-	LastInbound      string
+	AcceptedAt       sql.NullString
+	LastAppearance   sql.NullString
+	LastInbound      sql.NullString
 	Tombstoned       bool
 	PendingUp        bool
-	LastDecision     string
+	DecisionKind     sql.NullString
+	DecisionReason   sql.NullString
 	ItemJson         string
 	LastBlockersJson string
 }
@@ -48,10 +44,10 @@ type Session struct {
 	Name              string
 	ParentSessionName sql.NullString
 	RootSessionName   sql.NullString
-	ResourceID        string
-	Alias             string
+	ResourceID        sql.NullString
+	Alias             sql.NullString
 	Workflow          string
-	WorkspaceDirPath  string
+	WorkspaceDir      sql.NullString
 	CreatedAt         string
 	UpdatedAt         string
 	RecordJson        string
@@ -64,7 +60,7 @@ type TaskDoneWhenJudge struct {
 	Reason         string
 	Revision       string
 	JudgeSession   string
-	JudgeWorkflow  string
+	JudgeWorkflow  sql.NullString
 	Relation       string
 	CreatedAt      string
 }
@@ -73,26 +69,27 @@ type TaskDoneWhenState struct {
 	TaskInstanceID       string
 	HeartbeatTicks       int64
 	HeartbeatEscalations int64
-	LastAction           string
-	LastFingerprint      string
-	LastReason           string
+	LastAction           sql.NullString
+	LastFingerprint      sql.NullString
+	LastReason           sql.NullString
 	LastUnsatisfiedJson  string
-	LastBody             string
-	EscalatedAt          string
-	EscalateReason       string
+	LastBody             sql.NullString
+	EscalatedAt          sql.NullString
+	EscalateReason       sql.NullString
 }
 
 type TaskInstance struct {
-	ID            string
-	SessionName   string
-	InstanceName  string
-	TaskID        string
-	Scope         string
-	Status        string
-	Sequence      int64
-	Resource      string
-	NamedInstance string
-	RecordJson    string
+	ID           string
+	SessionName  string
+	InstanceName string
+	TaskID       string
+	Scope        string
+	Status       string
+	Sequence     int64
+	Resource     sql.NullString
+	Named        bool
+	FinalizedAt  sql.NullString
+	RecordJson   string
 }
 
 type UpReservation struct {

@@ -447,7 +447,7 @@ func TestPutSession_DynamicInstanceCleanupThenSetupYieldsFreshDoneWhenHistory(t 
 			DoneWhen: &contract.DoneWhenState{
 				LastFingerprint: "old",
 				Judges: map[string]*contract.DoneWhenJudge{
-					"leaf-a": {LeafID: "leaf-a", Action: "approve", CreatedAt: now},
+					"leaf-a": {LeafID: "leaf-a", Action: "approve", Relation: "sibling", CreatedAt: now},
 				},
 			},
 		},
@@ -480,5 +480,47 @@ func TestPutSession_DynamicInstanceCleanupThenSetupYieldsFreshDoneWhenHistory(t 
 	}
 	if task.DoneWhen != nil {
 		t.Fatalf("DoneWhen = %+v, want nil (the retired instance's done_when/judge history must not resurface on a same-named recreate)", task.DoneWhen)
+	}
+}
+
+// TestPutSession_DynamicInstanceIDStableAcrossOrdinaryUpdate proves the
+// other half of M5's regression ask: two consecutive Puts that both still
+// declare the same dynamic instance name preserve the row's id (an
+// ordinary update, not a cleanup), so done_when/judge history keyed by
+// that id survives across it too.
+func TestPutSession_DynamicInstanceIDStableAcrossOrdinaryUpdate(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	seed := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Tasks: map[string]*contract.TaskState{
+		"initial": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, Dynamic: true, TaskID: "work", Name: "initial"},
+	}}
+	if err := db.PutSession(ctx, seed); err != nil {
+		t.Fatalf("PutSession (seed): %v", err)
+	}
+	firstID := taskInstanceIDForTest(t, db, "s1", "initial")
+
+	updated := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Tasks: map[string]*contract.TaskState{
+		"initial": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, Dynamic: true, TaskID: "work", Name: "initial",
+			DoneWhen: &contract.DoneWhenState{LastFingerprint: "new"},
+		},
+	}}
+	if err := db.PutSession(ctx, updated); err != nil {
+		t.Fatalf("PutSession (update): %v", err)
+	}
+	secondID := taskInstanceIDForTest(t, db, "s1", "initial")
+
+	if firstID != secondID {
+		t.Fatalf("id changed across an ordinary update: first = %q, second = %q", firstID, secondID)
+	}
+
+	got, err := db.GetSession(ctx, "s1")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	task := got.Tasks["initial"]
+	if task == nil || task.DoneWhen == nil || task.DoneWhen.LastFingerprint != "new" {
+		t.Fatalf("task after update = %+v, want done_when.last_fingerprint = %q", task, "new")
 	}
 }

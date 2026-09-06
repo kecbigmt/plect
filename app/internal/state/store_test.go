@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/domain"
+	"github.com/kecbigmt/plecture/app/internal/persistence/sqlcgen"
 )
 
 func TestStore_PutAndGet(t *testing.T) {
@@ -481,13 +482,18 @@ func reservationNames(t *testing.T, store *Store) map[string]bool {
 	if err != nil {
 		t.Fatalf("reservationNames: %v", err)
 	}
-	reservations, err := db.ListUpReservations(context.Background())
-	if err != nil {
+	names := make(map[string]bool)
+	if err := db.WithReadTx(context.Background(), func(tx *sql.Tx) error {
+		rows, err := sqlcgen.New(tx).ListUpReservations(context.Background())
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			names[row.ChildSessionName] = true
+		}
+		return nil
+	}); err != nil {
 		t.Fatalf("ListUpReservations: %v", err)
-	}
-	names := make(map[string]bool, len(reservations))
-	for name := range reservations {
-		names[name] = true
 	}
 	return names
 }

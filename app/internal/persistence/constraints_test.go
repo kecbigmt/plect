@@ -22,6 +22,24 @@ func seedBareSessionForTest(t *testing.T, db *DB, name string) {
 	}
 }
 
+// taskInstanceIDForTest reads a task_instances row's own id column directly,
+// bypassing the persistence-layer read path (which never surfaces it), so a
+// test can prove the id itself is stable or fresh across writes.
+func taskInstanceIDForTest(t *testing.T, db *DB, sessionName, instanceName string) string {
+	t.Helper()
+	rows, err := sqlcgen.New(db.write).ListTaskInstances(context.Background(), sessionName)
+	if err != nil {
+		t.Fatalf("ListTaskInstances(%q): %v", sessionName, err)
+	}
+	for _, row := range rows {
+		if row.InstanceName == instanceName {
+			return row.ID
+		}
+	}
+	t.Fatalf("no task_instances row for %q/%q", sessionName, instanceName)
+	return ""
+}
+
 // TestSchema_RejectsOutOfSetScopeAndStatus proves the CHECK IN constraints
 // on the closed-set columns copied from contracts/state's own constants
 // (TaskScopeSession/TaskScopeRun, TaskStatusProduced/TaskStatusFailed/
@@ -44,15 +62,15 @@ func TestSchema_RejectsOutOfSetScopeAndStatus(t *testing.T) {
 		t.Fatalf("InsertNodeInstance with bogus status: err = %v, want a CHECK constraint failure", err)
 	}
 
-	if err := q.InsertTaskInstance(ctx, sqlcgen.InsertTaskInstanceParams{
+	if _, err := q.UpsertTaskInstance(ctx, sqlcgen.UpsertTaskInstanceParams{
 		ID: newULID(), SessionName: "s1", InstanceName: "i1", Scope: "bogus", Status: "produced", RecordJson: "{}",
 	}); err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
-		t.Fatalf("InsertTaskInstance with bogus scope: err = %v, want a CHECK constraint failure", err)
+		t.Fatalf("UpsertTaskInstance with bogus scope: err = %v, want a CHECK constraint failure", err)
 	}
-	if err := q.InsertTaskInstance(ctx, sqlcgen.InsertTaskInstanceParams{
+	if _, err := q.UpsertTaskInstance(ctx, sqlcgen.UpsertTaskInstanceParams{
 		ID: newULID(), SessionName: "s1", InstanceName: "i1", Scope: "session", Status: "bogus", RecordJson: "{}",
 	}); err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
-		t.Fatalf("InsertTaskInstance with bogus status: err = %v, want a CHECK constraint failure", err)
+		t.Fatalf("UpsertTaskInstance with bogus status: err = %v, want a CHECK constraint failure", err)
 	}
 }
 
@@ -65,7 +83,7 @@ func TestSchema_RejectsOutOfSetJudgeActionAndRelation(t *testing.T) {
 	q := sqlcgen.New(db.write)
 	seedBareSessionForTest(t, db, "s1")
 
-	if err := q.InsertTaskInstance(ctx, sqlcgen.InsertTaskInstanceParams{
+	if _, err := q.UpsertTaskInstance(ctx, sqlcgen.UpsertTaskInstanceParams{
 		ID: "task1", SessionName: "s1", InstanceName: "i1", Scope: "session", Status: "produced", RecordJson: "{}",
 	}); err != nil {
 		t.Fatalf("seed task instance: %v", err)
@@ -90,16 +108,16 @@ func TestSchema_RejectsOutOfSetBooleanColumns(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
 
-	if _, err := db.write.ExecContext(ctx, "INSERT INTO populations (population_key, workflow, name) VALUES ('wf/pop', 'wf', 'pop')"); err != nil {
+	if _, err := db.write.ExecContext(ctx, "INSERT INTO populations (workflow, name) VALUES ('wf', 'pop')"); err != nil {
 		t.Fatalf("seed population: %v", err)
 	}
 
 	if _, err := db.write.ExecContext(ctx,
-		"INSERT INTO population_members (population_key, resource_id, tombstoned) VALUES ('wf/pop', 'r1', 2)"); err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
+		"INSERT INTO population_members (workflow, name, resource_id, tombstoned) VALUES ('wf', 'pop', 'r1', 2)"); err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
 		t.Fatalf("insert with tombstoned=2: err = %v, want a CHECK constraint failure", err)
 	}
 	if _, err := db.write.ExecContext(ctx,
-		"INSERT INTO population_members (population_key, resource_id, pending_up) VALUES ('wf/pop', 'r1', -1)"); err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
+		"INSERT INTO population_members (workflow, name, resource_id, pending_up) VALUES ('wf', 'pop', 'r1', -1)"); err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
 		t.Fatalf("insert with pending_up=-1: err = %v, want a CHECK constraint failure", err)
 	}
 }

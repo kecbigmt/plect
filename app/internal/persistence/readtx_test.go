@@ -18,7 +18,7 @@ func TestWithReadTx_HoldsOneSnapshotAcrossQueries(t *testing.T) {
 	ctx := context.Background()
 
 	if err := db.WithImmediateTx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, "INSERT INTO persistence_smoke (note, created_at) VALUES (?, ?)", "seed", "2024-01-01T00:00:00Z")
+		_, err := tx.ExecContext(ctx, "INSERT INTO up_reservations (child_session_name, parent_name, pid, reserved_at) VALUES (?, ?, ?, ?)", "seed", "parent1", 1, "2024-01-01T00:00:00.000000000Z")
 		return err
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
@@ -33,18 +33,18 @@ func TestWithReadTx_HoldsOneSnapshotAcrossQueries(t *testing.T) {
 	go func() {
 		defer close(readTxDone)
 		readErr = db.WithReadTx(ctx, func(tx *sql.Tx) error {
-			if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM persistence_smoke").Scan(&firstCount); err != nil {
+			if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM up_reservations").Scan(&firstCount); err != nil {
 				return err
 			}
 			close(firstQueryDone)
 			<-writerDone
-			return tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM persistence_smoke").Scan(&secondCount)
+			return tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM up_reservations").Scan(&secondCount)
 		})
 	}()
 
 	<-firstQueryDone
 	if err := db.WithImmediateTx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, "INSERT INTO persistence_smoke (note, created_at) VALUES (?, ?)", "concurrent", "2024-01-01T00:00:01Z")
+		_, err := tx.ExecContext(ctx, "INSERT INTO up_reservations (child_session_name, parent_name, pid, reserved_at) VALUES (?, ?, ?, ?)", "concurrent", "parent1", 2, "2024-01-01T00:00:01.000000000Z")
 		return err
 	}); err != nil {
 		t.Fatalf("concurrent write: %v", err)
@@ -65,7 +65,7 @@ func TestWithReadTx_HoldsOneSnapshotAcrossQueries(t *testing.T) {
 	// The write is visible to a fresh read once the read transaction ends.
 	var afterCount int
 	if err := db.WithReadTx(ctx, func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM persistence_smoke").Scan(&afterCount)
+		return tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM up_reservations").Scan(&afterCount)
 	}); err != nil {
 		t.Fatalf("post-check WithReadTx: %v", err)
 	}
