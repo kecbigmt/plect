@@ -266,6 +266,41 @@ jobs:
         run: go test ./internal/webui/...
         working-directory: app
 
+  # Browser-level acceptance for the /app/ shell's read/live milestone: a
+  # real Chromium against the committed /app/ build, served by the real
+  # service/state stack over httptest.NewServer — the same seam
+  # acceptance_test.go already drives at the HTTP level, with a browser on
+  # top. Kept separate from web-app-build (rather than an extra step there)
+  # because the browser download and launch are materially slower than that
+  # job's build-and-unit-test check, and a browser/env failure here must not
+  # obscure a real build or unit-test failure in the same job log. Gated on
+  # WEB_CI for the same reason web-app-build is.
+  #
+  # No caching action for the browser download: this repo does not use
+  # actions/cache anywhere yet, and adding one is a bigger commitment than
+  # this single job's download time justifies; the download cost is
+  # accepted per run.
+  #
+  # Adjustment rule (this job is part of ci-ok, so it must earn its keep):
+  # if it produces a false failure on main more than once in its first ten
+  # runs, it moves out of ci-ok to a non-blocking job in a follow-up PR.
+  web-browser-acceptance:
+    name: web-browser-acceptance
+    needs: changes
+    if: needs.changes.outputs.web_ci == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Install the pinned Playwright driver + Chromium
+        run: go run github.com/mxschmitt/playwright-go/cmd/playwright@v0.6201.1 install --with-deps chromium
+        working-directory: app
+      - name: go test -tags browser ./internal/webui/...
+        run: go test -tags browser ./internal/webui/...
+        working-directory: app
+
   # This job covers the script-side half of a plugin's delivery contract;
   # its argv side is pinned by the channel-invocation records the
   # integration-test job regenerates from the shipped declarations. It is
@@ -445,6 +480,7 @@ jobs:
       - gh-guard
       - web-api-contract
       - web-app-build
+      - web-browser-acceptance
       - plugin-script-selftests
       - sqlite-persistence-generation
       - build-test
