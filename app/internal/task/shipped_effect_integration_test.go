@@ -245,9 +245,8 @@ func (h *effectHarness) startLiveProcess(t *testing.T) {
 	}
 }
 
-// startWorkerProcess is startLiveProcess's counterpart for
-// effectHarness.workerProcess. A scenario that never reads
-// PLECT_EFFECT_WORKER_PID just leaves it idle until cleanup reaps it.
+// A scenario that never reads PLECT_EFFECT_WORKER_PID leaves this process
+// idle until cleanup reaps it.
 func (h *effectHarness) startWorkerProcess(t *testing.T) {
 	t.Helper()
 	cmd := exec.Command("sleep", "600")
@@ -344,6 +343,11 @@ func (h *effectHarness) runScenario(t *testing.T, b *strings.Builder, def config
 	h.startWorkerProcess(t)
 	t.Setenv("PLECT_EFFECT_CAPTURE", scenario.Capture)
 	t.Setenv("PLECT_EFFECT_RETRY", "")
+	if scenario.FailOutput {
+		t.Setenv("PLECT_EFFECT_FAIL_OUTPUT", "1")
+	} else {
+		t.Setenv("PLECT_EFFECT_FAIL_OUTPUT", "")
+	}
 	for _, file := range scenario.Files {
 		path := filepath.Join(h.homeDir, file.Path)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -401,8 +405,8 @@ func (h *effectHarness) runScenario(t *testing.T, b *strings.Builder, def config
 	}
 }
 
-// runOneHook runs one hook and records it into b. suffix distinguishes a
-// retried "setup" run from its first attempt in the transcript.
+// suffix distinguishes a retried "setup" run from its first attempt in
+// the transcript.
 func (h *effectHarness) runOneHook(t *testing.T, b *strings.Builder, def config.TaskDefinition, hook, suffix string, resolved Resolved, id, label string, session SessionVars, tasks map[string]*contract.TaskState, self map[string]any, inputs map[string]string, artifacts []effectScenarioArtifact) map[string]any {
 	t.Helper()
 	// A node input is a literal here rather than a projection of another

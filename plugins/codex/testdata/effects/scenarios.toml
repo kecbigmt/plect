@@ -1,13 +1,10 @@
 # What each of this plugin's effects is exercised with when its invocation
-# record is regenerated. The launch line typed into the terminal is the
-# contract here, so every steering input is set. bin/ pins the profile name
-# and answers the pane introspection each launch performs. pgrep/ps report a
-# process distinct from the pane's own root (PLECT_EFFECT_PID), so a
-# kill-on-failure scenario can assert it left the pane alone.
+# record is regenerated. bin/ pins the profile name and answers the pane
+# introspection each launch performs. pgrep/ps report a process distinct
+# from the pane's own root (PLECT_EFFECT_PID), so a kill-on-failure
+# scenario can prove it left the pane alone.
 
-# retry_inputs/retry_capture prove a same-pane retry: the pid is found but
-# the boot banner never clears, so setup kills it (expect_worker_process_
-# dead), then reruns against the same sandbox and pane and must produce
+# A killed child, a surviving pane, and a same-pane retry that produces
 # normally.
 [[codex]]
 name                       = "launch-timeout-then-retry-succeeds"
@@ -16,19 +13,27 @@ capture                    = "esc to interrupt"
 retry_inputs               = { model = "gpt-5.6-sol", effort = "high", launch_env = '{"PLECT_TEAM_CONTEXT":"acme"}', path_prepend = "/spy/guard" }
 retry_capture              = "› "
 expect_worker_process_dead = true
-# setup only: a failed node never reaches health probes in real
-# orchestration.
+# A failed node never reaches health probes in real orchestration.
 hooks                      = ["setup"]
 
-# The retry attempt reads this to learn its own session id.
 [[codex.files]]
 path    = ".codex/sessions/rollout.jsonl"
 content = '{"type":"session_meta","payload":{"cwd":"WORKSPACE","session_id":"11111111-2222-3333-4444-555555555555"}}'
 
-# PLECT_TEST_NEVER_READY (terminal-send_text) leaves a real, killable worker
-# running but never ready. retry_inputs then proves the same-pane retry this
-# affects: both the worker's death and the pane's survival, then a normal
-# rerun.
+# Cleanup for a non-timeout failure after start (see bin/jq).
+[[codex]]
+name                       = "launch-succeeds-then-output-fails-kills-worker"
+capture                    = "› "
+fail_output                = true
+expect_worker_process_dead = true
+hooks                      = ["setup"]
+
+[[codex.files]]
+path    = ".codex/sessions/rollout.jsonl"
+content = '{"type":"session_meta","payload":{"cwd":"WORKSPACE","session_id":"11111111-2222-3333-4444-555555555555"}}'
+
+# A killed, real worker survives neither a stuck-but-started launch nor a
+# same-pane retry that produces normally.
 [[exec_runtime]]
 name                       = "launch-timeout-then-retry-succeeds"
 inputs                     = { launch_env = '{"PLECT_TEST_NEVER_READY":"1"}', launch_timeout = "1s" }
@@ -36,25 +41,28 @@ retry_inputs               = { model = "gpt-5.6-sol", effort = "high", launch_en
 expect_worker_process_dead = true
 hooks                      = ["setup"]
 
-# PLECT_TEST_POISON_PID (terminal-send_text) writes the pane's own pid —
-# syntactically valid, but not this worker's child — into worker.pid. Setup
-# must reject it and fall back to the pane's real, owned child so the kill
-# still lands on the actual worker rather than an unrelated same-user
-# process or the pane itself.
+# A pidfile naming the pane's own pid must not be trusted; cleanup must
+# still land on the real worker.
 [[exec_runtime]]
 name                        = "poisoned-pidfile-kills-real-worker"
 inputs                      = { launch_env = '{"PLECT_TEST_POISON_PID":"1"}', launch_timeout = "1s" }
 expect_worker_process_dead  = true
 hooks                       = ["setup"]
 
-# PLECT_TEST_NO_PID_REPORT (terminal-send_text) never writes worker.pid at
-# all — a worker stuck before it can even self-report. Setup's parent-tree
-# fallback is what a launch failure this early still has to reach.
+# A worker stuck before it can self-report at all still has a real,
+# killable process under the pane.
 [[exec_runtime]]
 name                        = "no-pid-report-kills-real-worker"
 inputs                      = { launch_env = '{"PLECT_TEST_NO_PID_REPORT":"1"}', launch_timeout = "1s" }
 expect_worker_process_dead  = true
 hooks                       = ["setup"]
+
+# Cleanup for a non-timeout failure after start (see bin/jq).
+[[exec_runtime]]
+name                       = "launch-succeeds-then-output-fails-kills-worker"
+fail_output                = true
+expect_worker_process_dead = true
+hooks                      = ["setup"]
 
 [[codex_initial_prompt]]
 inputs  = { terminal_ready = "acme-widget-1", agent_session = "1234", prompt = "rendered instruction", repeat = "" }

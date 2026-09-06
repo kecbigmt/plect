@@ -11,6 +11,7 @@ call[8]: "find" "<home>/.codex/sessions" "-type" "f" "-newer" "<state>/plect" "-
 call[9]: "terminal-capture"
 call[10]: "terminal-capture"
 call[11]: "ps" "-p" "<pid>" "-o" "comm="
+call[12]: "ps" "-p" "<pid>" "-o" "comm="
 declined: task "codex" setup: exit status 1
 
 == codex:launch-timeout-then-retry-succeeds / setup (retry)
@@ -27,6 +28,24 @@ call[9]: "terminal-capture"
 call[10]: "terminal-capture"
 call[11]: "terminal-capture"
 outputs: {"pid":<pid>,"profile_path":"<home>/.codex/plect-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.config.toml","session_id":"11111111-2222-3333-4444-555555555555"}
+
+== codex:launch-succeeds-then-output-fails-kills-worker / setup
+call[0]: "codex-agent-activity" "reset" "acme/widget-1"
+call[1]: "uuidgen"
+call[2]: "mktemp"
+call[3]: "terminal-pid"
+call[4]: "terminal-send_text" "export PLECT_SESSION_NAME=acme/widget-1; codex --dangerously-bypass-approvals-and-sandbox --profile plect-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee  "
+call[5]: "terminal-send_keys" "Enter"
+call[6]: "pgrep" "-P" "<pid>"
+call[7]: "ps" "-p" "<pid>" "-o" "comm="
+call[8]: "find" "<home>/.codex/sessions" "-type" "f" "-newer" "<state>/plect" "-name" "*.jsonl"
+call[9]: "terminal-capture"
+call[10]: "terminal-capture"
+call[11]: "terminal-capture"
+call[12]: "jq" "-nc" "--argjson" "pid" "<pid>" "--arg" "sid" "11111111-2222-3333-4444-555555555555" "--arg" "profile" "<home>/.codex/plect-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.config.toml" "{pid:$pid, session_id:$sid, profile_path:$profile}"
+call[13]: "ps" "-p" "<pid>" "-o" "comm="
+call[14]: "ps" "-p" "<pid>" "-o" "comm="
+declined: task "codex" setup: exit status 1
 
 == codex_initial_prompt / setup
 call[0]: "terminal-capture"
@@ -46,6 +65,7 @@ call[3]: "terminal-send_text" "export PLECT_SESSION_NAME=acme/widget-1; export P
 call[4]: "terminal-send_keys" "Enter"
 call[5]: "ps" "-o" "ppid=" "-p" "<pid>"
 call[6]: "ps" "-o" "ppid=" "-p" "<pid>"
+call[7]: "ps" "-o" "ppid=" "-p" "<pid>"
 declined: task "exec_runtime" setup: exit status 1
 
 == exec_runtime:launch-timeout-then-retry-succeeds / setup (retry)
@@ -67,6 +87,7 @@ call[5]: "ps" "-o" "ppid=" "-p" "<pid>"
 call[6]: "ps" "-o" "ppid=" "-p" "<pid>"
 call[7]: "pgrep" "-P" "<pid>"
 call[8]: "ps" "-o" "ppid=" "-p" "<pid>"
+call[9]: "ps" "-o" "ppid=" "-p" "<pid>"
 declined: task "exec_runtime" setup: exit status 1
 
 == exec_runtime:no-pid-report-kills-real-worker / setup
@@ -77,4 +98,17 @@ call[3]: "terminal-send_text" "export PLECT_SESSION_NAME=acme/widget-1; export P
 call[4]: "terminal-send_keys" "Enter"
 call[5]: "pgrep" "-P" "<pid>"
 call[6]: "ps" "-o" "ppid=" "-p" "<pid>"
+call[7]: "ps" "-o" "ppid=" "-p" "<pid>"
+declined: task "exec_runtime" setup: exit status 1
+
+== exec_runtime:launch-succeeds-then-output-fails-kills-worker / setup
+call[0]: "codex-agent-activity" "reset" "acme/widget-1"
+call[1]: "uuidgen"
+call[2]: "terminal-pid"
+call[3]: "terminal-send_text" "export PLECT_SESSION_NAME=acme/widget-1; export PLECT_AGENT_ACTIVITY_BIN='<plugin>/scripts/codex-agent-activity'; <plugin>/scripts/codex-exec-worker '<state>/plect-codex-exec/acme/widget-1/queue' '<state>/plect-codex-exec/acme/widget-1' 'plect-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'"
+call[4]: "terminal-send_keys" "Enter"
+call[5]: "ps" "-o" "ppid=" "-p" "<pid>"
+call[6]: "jq" "-nc" "--argjson" "pid" "<pid>" "--arg" "queue_dir" "<state>/plect-codex-exec/acme/widget-1/queue" "--arg" "state_dir" "<state>/plect-codex-exec/acme/widget-1" "--arg" "profile" "<home>/.codex/plect-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.config.toml" "{pid:$pid, queue_dir:$queue_dir, state_dir:$state_dir, profile_path:$profile}"
+call[7]: "ps" "-o" "ppid=" "-p" "<pid>"
+call[8]: "ps" "-o" "ppid=" "-p" "<pid>"
 declined: task "exec_runtime" setup: exit status 1

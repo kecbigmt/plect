@@ -34,8 +34,10 @@ scope = "run"
 [codex.setup]
 type   = "shell"
 script = '''
-# Terminates $1 if — revalidated by comm at the moment of killing, not a
-# cached identity — it is still a codex process; a no-op otherwise.
+# Terminates $1 if it is a codex process, reconfirmed by comm both before
+# TERM and again before the KILL escalation — a process that exited and
+# had its pid reused during the TERM grace period must not carry the
+# escalation to whatever holds that number now.
 terminate_if_codex() {
   COMM=$(ps -p "$1" -o comm= 2>/dev/null | tr -d '[:space:]')
   case "$COMM" in
@@ -45,7 +47,8 @@ terminate_if_codex() {
         sleep 0.5
         kill -0 "$1" 2>/dev/null || break
       done
-      kill -KILL "$1" 2>/dev/null || true
+      COMM=$(ps -p "$1" -o comm= 2>/dev/null | tr -d '[:space:]')
+      case "$COMM" in codex|codex-*) kill -KILL "$1" 2>/dev/null ;; esac
       ;;
   esac
 }

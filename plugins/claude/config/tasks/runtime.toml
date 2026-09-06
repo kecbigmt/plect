@@ -44,12 +44,12 @@ scope = "run"
 [runtime.setup]
 type   = "shell"
 script = '''
-# Terminates any claude-named child of the pane, revalidated by comm at the
-# moment of killing (not a cached identity) — the pane's own root process,
-# and the multiplexer session behind it, are never touched.
+# Terminates any claude-named child of $PANE_PID, reconfirmed by comm both
+# before TERM and again before the KILL escalation — a child that exited
+# and had its pid reused during the TERM grace period must not carry the
+# escalation to whatever holds that number now. The pane's own root
+# process, and the multiplexer session behind it, are never touched.
 terminate_claude_children() {
-  PANE_PID=$(sh -c "$terminal_pid" terminal-pid 2>/dev/null)
-  [ -n "$PANE_PID" ] || return 0
   for CHILD in $(pgrep -P "$PANE_PID" 2>/dev/null); do
     COMM=$(ps -p "$CHILD" -o comm= 2>/dev/null | tr -d '[:space:]')
     case "$COMM" in
@@ -59,7 +59,8 @@ terminate_claude_children() {
           sleep 0.5
           kill -0 "$CHILD" 2>/dev/null || break
         done
-        kill -KILL "$CHILD" 2>/dev/null || true
+        COMM=$(ps -p "$CHILD" -o comm= 2>/dev/null | tr -d '[:space:]')
+        case "$COMM" in claude|claude-*) kill -KILL "$CHILD" 2>/dev/null ;; esac
         ;;
     esac
   done
@@ -178,6 +179,14 @@ if [ -n "$PREV_SID" ]; then
   # session id — the socket path is already derived from SID, so keeping the
   # id lets the MCP config stay valid across the fallback.
   CLAUDE_CMD="$CLAUDE_CMD || claude --session-id $SID --mcp-config $MCP --settings $HOOKS $CHANNELS_FLAG $MODEL_FLAG $EFFORT_FLAG $DISALLOWED_FLAG"
+fi
+
+# Resolved before anything is typed: this is the identity terminate_claude_
+# children searches under, so a launch is only attempted once it exists.
+PANE_PID=$(sh -c "$terminal_pid" terminal-pid 2>/dev/null)
+if [ -z "$PANE_PID" ]; then
+  echo "could not resolve the pane's own pid before launch" >&2
+  exit 1
 fi
 
 # The terminal verbs compose against whichever effect in this workflow

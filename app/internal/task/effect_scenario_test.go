@@ -62,9 +62,16 @@ type effectScenario struct {
 	// retry-succeeds claim is checked against that exact state rather than
 	// a separately-started scenario that only shares on-disk paths.
 	RetryInputs map[string]string `toml:"retry_inputs"`
-	// RetryCapture replaces Capture for the RetryInputs attempt, for an
-	// endpoint whose readiness reads Capture rather than a state file.
+	// RetryCapture is RetryInputs' counterpart for a Capture-based endpoint.
 	RetryCapture string `toml:"retry_capture"`
+	// FailOutput makes each plugin's own jq stand-in fail the one call that
+	// assembles setup's final output line, once everything else — the
+	// launch, its detection, its readiness — has already succeeded. This is
+	// the only reachable way to exercise "a non-zero exit after the process
+	// was started" that is not the detection timeout: every value that call
+	// assembles is already validated by the time setup reaches it, so no
+	// scenario input can make it fail on its own.
+	FailOutput bool `toml:"fail_output"`
 }
 
 type effectScenarioFile struct {

@@ -1,0 +1,19 @@
+#!/usr/bin/env sh
+# Passes every call through to the real jq unchanged, except the one this
+# plugin's own closing output-construction call is uniquely identifiable
+# by ("profile_path", a key only that call's filter uses) when a scenario
+# declares fail_output — the only way to exercise a non-zero exit after
+# the process was started that is not the detection timeout, since every
+# value that call assembles is otherwise already validated by then.
+if [ -n "${PLECT_EFFECT_FAIL_OUTPUT-}" ]; then
+  case "$*" in
+    *profile_path*)
+      plect-effect-record jq "$@"
+      echo "jq: simulated output failure" >&2
+      exit 1
+      ;;
+  esac
+fi
+PATH=$(printf '%s' "$PATH" | sed 's|^'"$PLECT_EFFECT_BIN"':||')
+export PATH
+exec jq "$@"

@@ -43,10 +43,10 @@ scope = "run"
 [exec_runtime.setup]
 type   = "shell"
 script = '''
-# Terminates $1, but only once reconfirmed as the pane's own child: a pid
-# read from worker.pid (a workflow-configurable path) may be stale, and a
-# process that pid once named can have exited and been reused by the time
-# this actually runs.
+# Terminates $1, but only once reconfirmed as the pane's own child — a pid
+# read from worker.pid (a workflow-configurable path) may be stale — and
+# reconfirmed again before the KILL escalation, since a process that
+# exited during the TERM grace period can have had its pid reused by then.
 terminate_if_owned() {
   case "$1" in ''|0|*[!0-9]*) return 0 ;; esac
   [ "$(ps -o ppid= -p "$1" 2>/dev/null | tr -d '[:space:]')" = "$PANE_PID" ] || return 0
@@ -55,7 +55,8 @@ terminate_if_owned() {
     sleep 0.5
     kill -0 "$1" 2>/dev/null || break
   done
-  kill -KILL "$1" 2>/dev/null || true
+  [ "$(ps -o ppid= -p "$1" 2>/dev/null | tr -d '[:space:]')" = "$PANE_PID" ] && kill -KILL "$1" 2>/dev/null
+  true
 }
 
 # The reset drops any record a previous run left behind, so this run's
