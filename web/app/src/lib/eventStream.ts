@@ -1,9 +1,9 @@
 import type { SessionEvent } from "@/lib/eventsApi";
 
 // The live-timeline connection module (docs/design/web-ui-event-history.md's
-// history/live handoff; issue #407's ratified decision to hand-roll this over
-// `fetch()` + `ReadableStream` rather than the browser's native
-// `EventSource`). `EventSource` cannot read a response's HTTP status or body
+// history/live handoff). It hand-rolls this over `fetch()` +
+// `ReadableStream` rather than the browser's native `EventSource`:
+// `EventSource` cannot read a response's HTTP status or body
 // on failure, so a 401 (auth expired), a 502 (bus unavailable), and a
 // transient network blip would all surface identically — this module reads
 // `response.status` directly, matching how `bootstrap.ts` already

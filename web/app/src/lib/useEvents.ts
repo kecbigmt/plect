@@ -25,9 +25,8 @@ export function useSessionEvents(sessionName: string | null) {
     // events (docs/design/web-ui-event-history.md) — so a page that comes
     // back empty means "caught up for now," not "no cursor was issued".
     // Stopping there rather than following that cursor keeps Load more from
-    // becoming a control that re-fetches the same empty tail forever; this
-    // PR renders history pages only; a live subscription (#407) is what
-    // picks up new events past this point.
+    // becoming a control that re-fetches the same empty tail forever;
+    // useLiveEvents below is what picks up new events past this point.
     getNextPageParam: (lastPage) => (lastPage.events.length === 0 ? undefined : lastPage.nextCursor),
     enabled: sessionName !== null,
     retry: false,

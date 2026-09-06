@@ -37,8 +37,7 @@ import (
 // endpoint's own events[] item (webapi.EventFromDomain — the same
 // conversion, not a second one), and its `id:` is the same opaque cursor
 // format re-encoded for the position after that record, so a client's own
-// reconnect (its fetch-based module, not the browser's EventSource — see the
-// ratified decision on issue #407) can hand that id straight back as this
+// fetch-based reconnect module can hand that id straight back as this
 // endpoint's `cursor` with no translation of its own.
 func (s *Server) handleSessionEventsStreamJSON(w http.ResponseWriter, r *http.Request) {
 	session := r.URL.Query().Get("session")

@@ -103,8 +103,8 @@ export function Conversation({
   );
 }
 
-// Stale-state indication for the live subscription (issue #407's acceptance
-// criteria): "connecting"/"live" are the steady states and render nothing —
+// Stale-state indication for the live subscription: "connecting"/"live" are
+// the steady states and render nothing —
 // only a state the reader should actually act on or wait out gets a banner.
 // "reconnecting" is transient background noise the connection module itself
 // recovers from, so it likewise renders nothing to avoid flickering a banner

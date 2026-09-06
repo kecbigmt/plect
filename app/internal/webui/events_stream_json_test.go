@@ -24,7 +24,7 @@ func TestEventsStreamJSON_RequiresSession(t *testing.T) {
 // applies, not a silently-wrong resume position.
 func TestEventsStreamJSON_RejectsInvalidCursor(t *testing.T) {
 	svc := &fakeService{resumeErr: &service.Error{Code: service.ErrInvalidInput, Message: "cursor expired"}}
-	rr := get(t, svc, "/api/v1/events/stream?session=o/r-1&cursor=garbage")
+	rr := get(t, svc, "/api/v1/events/stream?session=acme/session-x&cursor=garbage")
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body: %s", rr.Code, rr.Body)
 	}
@@ -47,7 +47,7 @@ func fakeBusJSON(t *testing.T, wantSince string) *httptest.Server {
 		w.WriteHeader(http.StatusOK)
 		w.(http.Flusher).Flush()
 		_, _ = w.Write([]byte(": ping\n\n"))
-		_, _ = w.Write([]byte("id: 128\ndata: {\"id\":\"E1\",\"session_name\":\"o/r-1\",\"type\":\"claude.reply\",\"source\":\"claude\",\"summary\":\"hi there\"}\n\n"))
+		_, _ = w.Write([]byte("id: 128\ndata: {\"id\":\"E1\",\"session_name\":\"acme/session-x\",\"type\":\"acme.reply\",\"source\":\"acme\",\"summary\":\"hi there\"}\n\n"))
 		w.(http.Flusher).Flush()
 	})
 	return httptest.NewServer(mux)
@@ -67,7 +67,7 @@ func TestEventsStreamJSON_RelaysEventsWithOpaqueResumeCursor(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/v1/events/stream?session=o/r-1", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/v1/events/stream?session=acme/session-x", nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -100,7 +100,7 @@ func TestEventsStreamJSON_RelaysEventsWithOpaqueResumeCursor(t *testing.T) {
 			// The DTO uses the wire's camelCase sessionName field, matching
 			// webapi.EventFromDomain/webapiv1.Event exactly (see
 			// testdata/event_page.valid.json).
-			if !strings.Contains(line, `"sessionName":"o/r-1"`) {
+			if !strings.Contains(line, `"sessionName":"acme/session-x"`) {
 				t.Errorf("frame = %q, want the same field shape as webapiv1.Event", line)
 			}
 		}
@@ -129,7 +129,7 @@ func TestEventsStreamJSON_ResumesBusFromDecodedCursor(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/v1/events/stream?session=o/r-1&cursor=some-opaque-token", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/v1/events/stream?session=acme/session-x&cursor=some-opaque-token", nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -153,7 +153,7 @@ func TestEventsStreamJSON_BusUnavailable(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	withBus(&fakeService{}, downURL).Routes().ServeHTTP(
-		rr, httptest.NewRequest(http.MethodGet, "/api/v1/events/stream?session=o/r-1", nil))
+		rr, httptest.NewRequest(http.MethodGet, "/api/v1/events/stream?session=acme/session-x", nil))
 	if rr.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want 502", rr.Code)
 	}
