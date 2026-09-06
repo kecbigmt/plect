@@ -3,7 +3,7 @@
 This design implements [the SQLite durable-storage decision](../adr/2026-09-06-sqlite-durable-storage.md).
 
 Core runtime persistence is one SQLite database at
-`$XDG_DATA_HOME/plect/runtime.db`. The `app/internal/persistence` package owns
+`$XDG_DATA_HOME/plect/store.db`. The `app/internal/persistence` package owns
 opening it, schema checks, the access gate, migrations, and translation between
 database records and domain values. It opens every connection with WAL mode, a
 non-zero bounded busy timeout, and foreign-key enforcement. Production opens
@@ -221,14 +221,14 @@ transaction.
 
 SQLite's single-writer rule is insufficient: it does not make a running binary
 aware that its schema assumptions are incompatible. `persistence` therefore
-uses two local advisory lock files next to `runtime.db`:
+uses two local advisory lock files next to `store.db`:
 
-- `runtime.db.access.lock` is the data-access gate. Every query and explicit
+- `store.db.access.lock` is the data-access gate. Every query and explicit
   transaction takes a shared lock for its duration. A migration takes its
   exclusive lock for the full migration.
-- `runtime.db.coordination.lock` serializes migration intent. A normal access
+- `store.db.coordination.lock` serializes migration intent. A normal access
   briefly takes a shared lock before taking the access gate. A migration takes
-  it exclusively, writes and fsyncs `runtime.db.migration.json`, and retains it
+  it exclusively, writes and fsyncs `store.db.migration.json`, and retains it
   until the migration completes or fails.
 
 The marker records only diagnostics: process ID, binary version, start time,
@@ -315,7 +315,7 @@ to `event_consumer_positions`; the heartbeat position goes to
 
 The import command runs only against an operator-created backup while writers
 are stopped. It builds and validates a temporary database, validates it again,
-then atomically promotes it as `runtime.db`. It never writes JSON and JSONL
+then atomically promotes it as `store.db`. It never writes JSON and JSONL
 alongside the database. The command reads the following runtime paths.
 
 | Legacy path | Validation and destination |

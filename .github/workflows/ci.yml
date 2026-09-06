@@ -122,6 +122,13 @@ jobs:
         run: ./scripts/check-provider-boundary_selftest.sh
       - name: Check core provider-neutrality
         run: ./scripts/check-provider-boundary.sh
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Prove the SQLite driver boundary checker catches a seeded requirement
+        run: ./scripts/check-sqlite-driver-boundary_selftest.sh
+      - name: Check the SQLite driver stays out of contracts/ and plugins/ build lists
+        run: ./scripts/check-sqlite-driver-boundary.sh
 
   comment-references:
     name: comment-references
@@ -280,6 +287,58 @@ jobs:
           mapfile -t names < <(jq -r '.[]' <<< '${{ needs.changes.outputs.affected_plugins }}')
           ./scripts/run-plugin-selftests.sh "${names[@]}"
 
+  # The two standing checks docs/design/sqlite-persistence.md's toolchain
+  # slice requires: (1) here, that regenerating the goose migration from
+  # schema.sql via Atlas CE and regenerating sqlc's Go output from
+  # schema.sql/queries.sql produce no diff, so the committed artifacts
+  # cannot silently drift from their declarative sources. (2) declaration
+  # equivalence — that applying the migration history reproduces the same
+  # structure schema.sql declares, excluding goose's own bookkeeping table
+  # — is TestSchemaSQL_MatchesMigrationHistory, which already runs in every
+  # build-test (app) job below; it needs no external tool, so it gets no
+  # separate job here.
+  sqlite-persistence-generation:
+    name: sqlite-persistence-generation
+    needs: changes
+    if: contains(needs.changes.outputs.build_test_matrix, '"app"')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      # Pinned by exact release + the community (Apache-2.0) binary's own
+      # SHA-256, not `curl https://atlasgo.sh | sh`: see this package's
+      # doc.go for why the community binary specifically, and the per-platform
+      # checksums for developers on other operating systems.
+      - name: Fetch and verify the pinned Atlas Community Edition binary
+        run: |
+          curl -sSL -o atlas https://release.ariga.io/atlas/atlas-community-linux-amd64-v1.3.0
+          echo "10d7913e3dce43ab99b8d71534a4cbadaf11a16dc293adf3b91d10e83a0ac70b  atlas" | sha256sum -c -
+          chmod +x atlas
+        working-directory: app/internal/persistence
+      - name: Regenerate the migration history from schema.sql and check for drift
+        run: |
+          ./atlas migrate diff regen_check \
+            --dir "file://migrations" \
+            --dir-format goose \
+            --to "file://schema.sql" \
+            --dev-url "sqlite://file?mode=memory&cache=shared"
+          rm -f atlas
+          git diff --exit-code -- migrations/ schema.sql || {
+            echo "::error::app/internal/persistence/migrations (or schema.sql) is out of date; see doc.go for the regeneration command, and commit the result." >&2
+            exit 1
+          }
+        working-directory: app/internal/persistence
+      - name: Regenerate sqlc's generated Go and check for drift
+        run: |
+          go generate ./internal/persistence/...
+          git diff --exit-code -- internal/persistence/sqlcgen/ || {
+            echo "::error::app/internal/persistence/sqlcgen is out of date; run 'go generate ./internal/persistence/...' in app and commit the result." >&2
+            exit 1
+          }
+        working-directory: app
+
   build-test:
     name: build-test (${{ matrix.module }})
     needs: changes
@@ -387,6 +446,7 @@ jobs:
       - web-api-contract
       - web-app-build
       - plugin-script-selftests
+      - sqlite-persistence-generation
       - build-test
       - integration-test
       - readme-verify
