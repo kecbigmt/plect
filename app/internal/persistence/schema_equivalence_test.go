@@ -272,12 +272,50 @@ func indexPredicate(t *testing.T, ctx context.Context, handle *sql.DB, index str
 		// partial, so there is no predicate to find.
 		return ""
 	}
-	upper := strings.ToUpper(createSQL.String)
-	where := strings.LastIndex(upper, "WHERE")
+	// A partial index's predicate is free to contain a string literal whose
+	// content happens to spell "WHERE" (e.g. a value like 'anywhere'), so
+	// the search must run over a copy with literal content masked out — a
+	// plain LastIndex on the raw text could match inside such a literal
+	// instead of the real keyword, corrupting the extracted predicate.
+	masked := strings.ToUpper(maskStringLiterals(createSQL.String))
+	where := strings.LastIndex(masked, "WHERE")
 	if where == -1 {
 		return ""
 	}
 	return normalizeSQLFragment(createSQL.String[where+len("WHERE"):])
+}
+
+// maskStringLiterals returns a same-length copy of s with every character
+// inside a single-quoted string literal (its delimiting quotes excluded)
+// replaced with 'x'. Keyword search and paren-depth counting must run
+// against this masked text rather than s itself: a string literal is free
+// to contain "CHECK", "WHERE", or unbalanced parentheses as ordinary data,
+// and treating those as syntax would misidentify where a clause starts or
+// ends. Because masking preserves length and the position of every
+// non-literal character, an index found in the masked text locates the
+// same character in the original s.
+func maskStringLiterals(s string) string {
+	b := []byte(s)
+	inString := false
+	for i := 0; i < len(b); i++ {
+		switch {
+		case inString && b[i] == '\'':
+			if i+1 < len(b) && b[i+1] == '\'' {
+				// A doubled '' is SQL's escape for a literal quote inside
+				// a string, not the string's closing quote.
+				b[i] = 'x'
+				b[i+1] = 'x'
+				i++
+				continue
+			}
+			inString = false
+		case inString:
+			b[i] = 'x'
+		case b[i] == '\'':
+			inString = true
+		}
+	}
+	return string(b)
 }
 
 func tableForeignKeys(t *testing.T, ctx context.Context, handle *sql.DB, table string) []foreignKeyInfo {
@@ -353,34 +391,39 @@ func tableChecks(t *testing.T, ctx context.Context, handle *sql.DB, table string
 // statement and captures its parenthesized expression by tracking paren
 // depth, rather than matching to the first ")" — a table- or column-level
 // CHECK expression is free to contain its own nested parentheses (as
-// schema.sql's own sessions-table example does).
+// schema.sql's own sessions-table example does) or a string literal
+// containing "check", a stray paren, or anything else as ordinary data.
+// Both the keyword search and the paren-depth count below run against a
+// string-literal-masked copy for exactly that reason; every index found
+// against it is used to slice the original, unmasked createTableSQL, so
+// the extracted expression still has its literals' real content.
 func extractChecks(createTableSQL string) []string {
-	upper := strings.ToUpper(createTableSQL)
+	masked := strings.ToUpper(maskStringLiterals(createTableSQL))
 	var checks []string
-	for i := 0; i < len(upper); {
-		rel := strings.Index(upper[i:], "CHECK")
+	for i := 0; i < len(masked); {
+		rel := strings.Index(masked[i:], "CHECK")
 		if rel == -1 {
 			break
 		}
 		idx := i + rel
-		before := idx == 0 || !isIdentByte(createTableSQL[idx-1])
-		after := idx+5 >= len(createTableSQL) || !isIdentByte(createTableSQL[idx+5])
+		before := idx == 0 || !isIdentByte(masked[idx-1])
+		after := idx+5 >= len(masked) || !isIdentByte(masked[idx+5])
 		if !before || !after {
 			i = idx + 5
 			continue
 		}
 		j := idx + 5
-		for j < len(createTableSQL) && unicode.IsSpace(rune(createTableSQL[j])) {
+		for j < len(masked) && unicode.IsSpace(rune(masked[j])) {
 			j++
 		}
-		if j >= len(createTableSQL) || createTableSQL[j] != '(' {
+		if j >= len(masked) || masked[j] != '(' {
 			i = idx + 5
 			continue
 		}
 		depth := 0
 		end := -1
-		for k := j; k < len(createTableSQL); k++ {
-			switch createTableSQL[k] {
+		for k := j; k < len(masked); k++ {
+			switch masked[k] {
 			case '(':
 				depth++
 			case ')':
@@ -733,6 +776,57 @@ func TestExtractChecks_DistinguishesLiteralCase(t *testing.T) {
 	}
 	if upper[0] == lower[0] {
 		t.Fatalf("extractChecks did not distinguish string literal case: both normalized to %q", upper[0])
+	}
+}
+
+// TestExtractChecks_IgnoresSyntaxInsideStringLiterals is the regression a
+// masking-free scan would hit: a CHECK expression's own string literal is
+// free to contain an unbalanced paren or the word "check", and naive paren
+// counting or keyword search would either truncate the expression early
+// or misidentify the literal's content as a second CHECK clause.
+func TestExtractChecks_IgnoresSyntaxInsideStringLiterals(t *testing.T) {
+	const createTable = `CREATE TABLE t (
+		note TEXT,
+		CHECK (note <> 'contains a ) paren and the word check')
+	)`
+
+	got := extractChecks(createTable)
+	want := "(note <> 'contains a ) paren and the word check')"
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("extractChecks(...) = %v, want exactly [%q]", got, want)
+	}
+}
+
+// TestIndexPredicate_IgnoresWhereInsideStringLiteral is the same
+// regression for the partial-index path: strings.LastIndex(masked,
+// "WHERE") must not match the literal "where" inside a value like
+// 'anywhere' — two predicates differing only by their string literal must
+// extract to two different, uncorrupted predicates rather than both
+// collapsing to a truncated tail.
+func TestIndexPredicate_IgnoresWhereInsideStringLiteral(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	const ddl = `
+		CREATE TABLE t (note TEXT);
+		CREATE UNIQUE INDEX t_a_idx ON t(note) WHERE note <> 'anywhere';
+		CREATE UNIQUE INDEX t_b_idx ON t(note) WHERE note <> 'elsewhere';
+	`
+	if _, err := db.write.ExecContext(ctx, ddl); err != nil {
+		t.Fatalf("apply fixture DDL: %v", err)
+	}
+
+	a := indexPredicate(t, ctx, db.write, "t_a_idx")
+	b := indexPredicate(t, ctx, db.write, "t_b_idx")
+
+	if a != "note <> 'anywhere'" {
+		t.Errorf("t_a_idx predicate = %q, want %q", a, "note <> 'anywhere'")
+	}
+	if b != "note <> 'elsewhere'" {
+		t.Errorf("t_b_idx predicate = %q, want %q", b, "note <> 'elsewhere'")
+	}
+	if a == b {
+		t.Fatalf("both predicates extracted identically: %q", a)
 	}
 }
 
