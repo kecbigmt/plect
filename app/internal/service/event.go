@@ -174,17 +174,11 @@ func EventPage(cfg *config.Config, store *state.Store, identifier string, p Even
 	return res, nil
 }
 
-// EventStreamResume decodes and validates a live-endpoint resume cursor,
-// sharing EventPage's own cursor-validation code path exactly: a client that
-// hands this the opaque NextCursor a prior EventPage call returned gets back
-// the identical byte offset EventPage itself would have resumed from. This is
-// the history/live handoff's resume mechanism (docs/design/web-ui-event-
-// history.md) — the live SSE endpoint has no cursor semantics of its own to
-// invent. An empty cursor is a fresh connection (no history handoff yet): it
-// resolves to the log's current generation and a zero offset, leaving any
-// tail-replay policy to the caller. A malformed, wrong-order, or stale-
-// generation cursor is rejected the same way EventPage rejects one — resuming
-// against the wrong generation's byte layout would silently misread the log.
+// EventStreamResume decodes a live-endpoint resume cursor via EventPage's own
+// cursor-validation path, so a NextCursor from GET /events needs no second
+// format. An empty cursor is a fresh connect (current generation, zero
+// offset); a malformed, wrong-order, or stale-generation one is rejected the
+// same way EventPage rejects one.
 func EventStreamResume(cfg *config.Config, store *state.Store, identifier, cursor string) (gen string, offset int64, err error) {
 	name, err := resolveSessionName(cfg, store, identifier)
 	if err != nil {

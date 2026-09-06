@@ -49,13 +49,9 @@ func (s *Server) handleSessionEventsStreamJSON(w http.ResponseWriter, r *http.Re
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	// A fresh connect against a session with no durable log yet resolves gen
-	// as "" (EventStreamResume). The log's real, permanent generation is
-	// assigned on its first Append, which can happen after this connection
-	// is already open and following live — so resolveGen re-reads it lazily
-	// until a non-empty value appears, rather than baking in the empty one
-	// for the rest of the connection's frames (which a later reconnect would
-	// then reject as a stale-generation cursor).
+	// gen is "" for a session with no log yet; its first Append (possibly
+	// after this connection opens) assigns the real one, so resolveGen
+	// re-checks lazily rather than baking in "" for every frame.
 	known := gen
 	resolveGen := func() string {
 		if known == "" {

@@ -1,3 +1,4 @@
+import { Profiler } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -450,7 +451,7 @@ describe("Conversation", () => {
     expect(sawStreamCursorParam).toBeNull();
   });
 
-  it("clears a previous session's live events when switching to another session whose own history is also empty", async () => {
+  it("never commits a render showing a previous session's live event under the newly selected session", async () => {
     vi.mocked(fetch).mockImplementation((input) => {
       const url = requestUrl(input);
       const session = url.searchParams.get("session");
@@ -467,21 +468,27 @@ describe("Conversation", () => {
       return Promise.resolve(jsonResponse({ events: [] })); // both sessions: no nextCursor
     });
 
+    // Profiler's onRender fires once per commit, after React has already
+    // painted it — reading the DOM there catches an intermediate committed
+    // render an assertion made only after the switch settles would miss.
+    const commits: string[] = [];
+    const onRender = () => commits.push(document.body.textContent ?? "");
     const queryClient = new QueryClient();
-    const { rerender } = render(
+    const tree = (name: string) => (
       <QueryClientProvider client={queryClient}>
-        <Conversation sessionName="team/a" onSelectSession={vi.fn()} />
-      </QueryClientProvider>,
+        <Profiler id="conversation" onRender={onRender}>
+          <Conversation sessionName={name} onSelectSession={vi.fn()} />
+        </Profiler>
+      </QueryClientProvider>
     );
+
+    const { rerender } = render(tree("team/a"));
     await screen.findByText("team-a-live");
+    commits.length = 0; // only the commits from the switch onward matter here
 
-    rerender(
-      <QueryClientProvider client={queryClient}>
-        <Conversation sessionName="team/b" onSelectSession={vi.fn()} />
-      </QueryClientProvider>,
-    );
-
+    rerender(tree("team/b"));
     await screen.findByText(/no events recorded/i);
-    expect(screen.queryByText("team-a-live")).not.toBeInTheDocument();
+
+    expect(commits.some((textContent) => textContent.includes("team-a-live"))).toBe(false);
   });
 });

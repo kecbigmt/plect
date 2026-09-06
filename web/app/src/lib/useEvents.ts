@@ -73,12 +73,22 @@ export function useLiveEvents(sessionName: string | null, historyReady: boolean,
   const queryClient = useQueryClient();
   const [liveEvents, setLiveEvents] = useState<SessionEvent[]>([]);
   const [state, setState] = useState<EventStreamState>("connecting");
+  const [liveEventsOwner, setLiveEventsOwner] = useState(sessionName);
+
+  // Clears liveEvents during render, not in an effect, on a session change:
+  // an effect runs after React has already committed (and painted) this
+  // render with the previous session's stale events attached to the new
+  // one. Calling a setter here instead makes React redo this render before
+  // committing, so the browser never paints that intermediate frame.
+  if (sessionName !== liveEventsOwner) {
+    setLiveEventsOwner(sessionName);
+    setLiveEvents([]);
+  }
 
   useEffect(() => {
     if (sessionName === null || !historyReady) {
       return;
     }
-    setLiveEvents([]);
     const controller = new AbortController();
     openEventStream(
       sessionName,
