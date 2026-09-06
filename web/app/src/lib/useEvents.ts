@@ -71,8 +71,7 @@ export function useLiveEvents(sessionName: string | null, historyReady: boolean,
       {
         onEvent: (event) => {
           setLiveEvents((prev) => (prev.some((e) => e.id === event.id) ? prev : [...prev, event]));
-          // Invalidated, not derived from the event, since not every state
-          // change emits one.
+          // Direct derivation would be incomplete: not every state change emits an event.
           queryClient.invalidateQueries({ queryKey: sessionDetailQueryKey(sessionName) });
           queryClient.invalidateQueries({ queryKey: sessionListQueryKey() });
         },

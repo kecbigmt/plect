@@ -5,11 +5,8 @@ import { dedupeEventsById, useLiveEvents, useSessionEvents } from "@/lib/useEven
 import type { EventStreamState } from "@/lib/eventStream";
 import { Button } from "@/components/ui/button";
 
-// This component itself never remounts on selection change (its scroll
-// position must survive a switch); LiveTimeline below is keyed by
-// sessionName instead, so the live subscription's own state has no
-// cross-session read to preserve, and a superseded session's connection
-// simply stops existing rather than needing runtime ownership checks.
+// This component itself never remounts on selection change: its scroll
+// position must survive a switch.
 export function Conversation({
   sessionName,
   onSelectSession,
@@ -68,6 +65,8 @@ export function Conversation({
       className="flex min-h-0 flex-1 flex-col overflow-auto p-3"
       onScroll={(e) => scrollPositions.current.set(sessionName, e.currentTarget.scrollTop)}
     >
+      {/* Keyed so a superseded session's live subscription is torn down by
+          unmounting, not by a runtime ownership check. */}
       <LiveTimeline
         key={sessionName}
         sessionName={sessionName}
