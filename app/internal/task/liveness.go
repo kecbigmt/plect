@@ -9,17 +9,10 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// verifyLiveness runs a produced node's declared `[health.alive]` probe(s)
-// and reports whether its record may still be reused. A plain node runs its
-// own probe against its stored outputs; a nested node composes every layer's
-// probe by AND, since liveness is a chain of necessary resources — the first
-// failing layer's error, named by its own effect id, is what invalidates the
-// whole node. A layer or plain node declaring no probe at all is vacuous: it
-// never blocks reuse.
-//
-// A value the probe reads that fails to resolve (e.g. an
-// `self.outputs.<key>` no longer present) is returned as an error exactly
-// like a failing exit code: the node is invalid, not skipped.
+// verifyLiveness composes a nesting chain's layers by AND, since liveness is
+// a chain of necessary resources, and treats a probe value that fails to
+// resolve the same as a failing exit code: either way the node cannot be
+// verified, so it must not be skipped.
 func verifyLiveness(goCtx context.Context, r Resolved, session SessionVars, existing *contract.TaskState) error {
 	if len(r.Layers) == 0 {
 		action := r.Health.AliveProbe()
@@ -61,13 +54,9 @@ func verifyLiveness(goCtx context.Context, r Resolved, session SessionVars, exis
 	return nil
 }
 
-// invalidateProducedNode marks r failed with the liveness error that
-// disqualified it from reuse, then cleans r and every node in ordered that
-// transitively depends on it, in reverse dependency order — the same
-// direction a teardown unwinds in. The walk that called this resumes at r's
-// own position once cleanup returns, and finds r (and any cleaned dependent
-// reached later in ordered) no longer "produced", so the ordinary setup path
-// rebuilds them in dependency order.
+// invalidateProducedNode stamps the liveness error onto r before cleanup
+// runs, so a cleanup failure midway still leaves that reason on disk rather
+// than only in a return value neither `plect status` nor a retry can see.
 func invalidateProducedNode(goCtx context.Context, r Resolved, ordered []Resolved, aliveErr error, session SessionVars, tasks map[string]*contract.TaskState, obs Observer) error {
 	if existing := tasks[r.NodeID]; existing != nil {
 		existing.Status = contract.TaskStatusFailed
@@ -81,12 +70,9 @@ func invalidateProducedNode(goCtx context.Context, r Resolved, ordered []Resolve
 	return nil
 }
 
-// transitiveDependents returns nodeID's own entry in ordered followed by
-// every node that transitively depends on it (directly, or through another
-// dependent), in ordered's own dependency-respecting order. ordered is
-// already topologically sorted, so a dependent always sorts after what it
-// depends on — filtering ordered by set membership therefore needs no
-// re-sort.
+// transitiveDependents filters ordered down to nodeID and whatever
+// transitively depends on it. ordered is already topologically sorted, so
+// membership filtering alone preserves dependency order — no re-sort needed.
 func transitiveDependents(nodeID string, ordered []Resolved) []Resolved {
 	children := make(map[string][]string, len(ordered))
 	for _, r := range ordered {

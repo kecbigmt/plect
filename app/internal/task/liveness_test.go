@@ -4,16 +4,40 @@ import (
 	"context"
 	"os/exec"
 	"testing"
+	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/lang"
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// Given a produced run-scoped node whose alive fails, when plect up runs,
-// then the node is cleaned, marked failed with the liveness error, its
-// produced dependents are cleaned in reverse order, and setup re-runs from
-// that node; the result reads up with every current-plan node produced.
+// startSnapshotObserver records the order every node's OnStart fires in
+// (across both the cleanup and the setup an invalidation triggers), plus a
+// snapshot of watchID's TaskState at its own first OnStart — which lands
+// between invalidateProducedNode stamping it failed and RunCleanup changing
+// it further, the one point that state is otherwise unobservable from.
+type startSnapshotObserver struct {
+	tasks   map[string]*contract.TaskState
+	watchID string
+	starts  []string
+	snapped bool
+	status  string
+	errMsg  string
+}
+
+func (o *startSnapshotObserver) OnStart(_, id string) {
+	o.starts = append(o.starts, id)
+	if id == o.watchID && !o.snapped {
+		if st := o.tasks[id]; st != nil {
+			o.status, o.errMsg = st.Status, st.Error
+		}
+		o.snapped = true
+	}
+}
+func (o *startSnapshotObserver) OnSkip(string, string, string)                          {}
+func (o *startSnapshotObserver) OnSuccess(string, string, time.Duration, []byte)        {}
+func (o *startSnapshotObserver) OnFailure(string, string, time.Duration, error, []byte) {}
+
 func TestRunSetup_ProducedRunScopedNodeAliveFails_RebuildsNodeAndDependents(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -23,8 +47,8 @@ func TestRunSetup_ProducedRunScopedNodeAliveFails_RebuildsNodeAndDependents(t *t
 	bMarker := tmpDir + "/b-setup-ran"
 	plan := buildPlan(t,
 		[]taskStub{
-			{id: "a", scope: "run", setup: "touch " + aMarker + `; echo '{"value":"rebuilt"}'`, alive: "exit 1"},
-			{id: "b", scope: "run", setup: "touch " + bMarker + "; echo '{}'"},
+			{id: "a", scope: "run", setup: "touch " + aMarker + `; echo '{"value":"rebuilt"}'`, cleanup: "true", alive: "exit 1"},
+			{id: "b", scope: "run", setup: "touch " + bMarker + "; echo '{}'", cleanup: "true"},
 		},
 		[]nodeStub{
 			{id: "a"},
@@ -35,7 +59,8 @@ func TestRunSetup_ProducedRunScopedNodeAliveFails_RebuildsNodeAndDependents(t *t
 		"a": {Scope: "run", Status: contract.TaskStatusProduced, Outputs: map[string]any{"value": "stale"}},
 		"b": {Scope: "run", Status: contract.TaskStatusProduced, Outputs: map[string]any{}},
 	}
-	if err := RunSetup(context.Background(), plan.Run, SessionVars{}, tasks, nil); err != nil {
+	obs := &startSnapshotObserver{tasks: tasks, watchID: "a"}
+	if err := RunSetup(context.Background(), plan.Run, SessionVars{}, tasks, obs); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 	if _, statErr := exec.Command("bash", "-c", "test -f "+aMarker).CombinedOutput(); statErr != nil {
@@ -50,11 +75,17 @@ func TestRunSetup_ProducedRunScopedNodeAliveFails_RebuildsNodeAndDependents(t *t
 	if tasks["b"].Status != contract.TaskStatusProduced {
 		t.Fatalf("b.Status = %q, want produced", tasks["b"].Status)
 	}
+	// b depends on a, so cleanup must release b before a (reverse dependency
+	// order); setup then rebuilds forward, a before b.
+	wantStarts := []string{"b", "a", "a", "b"}
+	if !equalStrings(obs.starts, wantStarts) {
+		t.Fatalf("start order = %v, want %v", obs.starts, wantStarts)
+	}
+	if obs.status != contract.TaskStatusFailed || obs.errMsg == "" {
+		t.Fatalf("a's state when its cleanup began = status %q, error %q, want failed with the liveness error", obs.status, obs.errMsg)
+	}
 }
 
-// Given a produced session-scoped node whose alive fails, when plect up
-// runs, then it is rebuilt the same way, and its dependents (run-scoped
-// nodes reading its outputs) are rebuilt after it.
 func TestRunSetup_ProducedSessionScopedNodeAliveFails_RebuildsRunScopedDependent(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -91,8 +122,6 @@ func TestRunSetup_ProducedSessionScopedNodeAliveFails_RebuildsRunScopedDependent
 	}
 }
 
-// Given a produced node whose alive is noop, when plect up runs, then no
-// process is started for it and it is skipped.
 func TestRunSetup_NoopAliveSkipsWithoutRunningProcess(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -123,8 +152,6 @@ func TestRunSetup_NoopAliveSkipsWithoutRunningProcess(t *testing.T) {
 	}
 }
 
-// Given a produced node whose alive succeeds, when plect up runs, then it is
-// skipped and its record is untouched.
 func TestRunSetup_PassingAliveSkipsAndRecordUntouched(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -153,8 +180,6 @@ func TestRunSetup_PassingAliveSkipsAndRecordUntouched(t *testing.T) {
 	}
 }
 
-// Given a session that reads up with every probe passing, when plect up
-// runs, then no node is rebuilt and the command exits zero.
 func TestRunSetup_EveryProbePassing_NoRebuild(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -183,8 +208,6 @@ func TestRunSetup_EveryProbePassing_NoRebuild(t *testing.T) {
 	}
 }
 
-// Given a probe that cannot resolve self.outputs.<key>, when plect up runs,
-// then the node is treated as invalid, not as skipped.
 func TestRunSetup_UnresolvedSelfOutputInProbe_InvalidatesRatherThanSkips(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -215,8 +238,6 @@ func TestRunSetup_UnresolvedSelfOutputInProbe_InvalidatesRatherThanSkips(t *test
 	}
 }
 
-// Given a nesting chain whose inner layer's alive fails, when plect up runs,
-// then the whole node is cleaned layer by layer (LIFO) and rebuilt.
 func TestRunSetup_NestedInnerLayerAliveFails_RebuildsWholeChainLIFO(t *testing.T) {
 	executor := withScriptedExecutor(t, &scriptedExecutor{})
 	inner := config.TaskDefinition{
@@ -265,9 +286,6 @@ func equalStrings(a, b []string) bool {
 	return true
 }
 
-// Failure path: cleanup of a produced dependent fails midway. The walk
-// records the failed node and stops, exactly as an ordinary cleanup failure
-// does, and the invalidated node's own setup never runs.
 func TestRunSetup_DependentCleanupFailureStopsTheWalk(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -299,9 +317,6 @@ func TestRunSetup_DependentCleanupFailureStopsTheWalk(t *testing.T) {
 	}
 }
 
-// Failure path: after a produced node is invalidated and cleaned, its
-// rebuild's own setup fails. RunSetup reports that failure exactly like an
-// ordinary setup failure.
 func TestRunSetup_RebuiltNodeSetupFailure(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
