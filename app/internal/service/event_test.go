@@ -250,6 +250,22 @@ func TestEventPageRejectsStaleGenerationCursor(t *testing.T) {
 	}
 }
 
+// A cursor encoded under the retired byte-offset format must never be
+// reinterpreted as a sequence number.
+func TestEventPageRejectsOldVersionCursor(t *testing.T) {
+	store := state.NewStore(t.TempDir())
+	const session = "owner/repo-7"
+	if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote}); err != nil {
+		t.Fatal(err)
+	}
+	old := event.Cursor{V: event.CursorVersion - 1, Off: 0, Ord: event.OrderAsc, Gen: "01JXNEVER"}.Encode()
+	_, err := EventPage(nil, store, session, EventPageParams{Cursor: old})
+	var svcErr *Error
+	if !errors.As(err, &svcErr) || svcErr.Code != ErrInvalidInput {
+		t.Fatalf("want ErrInvalidInput for an old-version cursor, got %v", err)
+	}
+}
+
 func TestEventStreamResumeDecodesEventPageCursor(t *testing.T) {
 	store := state.NewStore(t.TempDir())
 	const session = "owner/repo-9"
@@ -313,6 +329,20 @@ func TestEventStreamResumeRejectsStaleGenerationCursor(t *testing.T) {
 	var svcErr *Error
 	if !errors.As(err, &svcErr) || svcErr.Code != ErrInvalidInput {
 		t.Fatalf("want ErrInvalidInput for stale generation, got %v", err)
+	}
+}
+
+func TestEventStreamResumeRejectsOldVersionCursor(t *testing.T) {
+	store := state.NewStore(t.TempDir())
+	const session = "owner/repo-9"
+	if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote}); err != nil {
+		t.Fatal(err)
+	}
+	old := event.Cursor{V: event.CursorVersion - 1, Off: 0, Ord: event.OrderAsc, Gen: "01JXNEVER"}.Encode()
+	_, _, err := EventStreamResume(nil, store, session, old)
+	var svcErr *Error
+	if !errors.As(err, &svcErr) || svcErr.Code != ErrInvalidInput {
+		t.Fatalf("want ErrInvalidInput for an old-version cursor, got %v", err)
 	}
 }
 

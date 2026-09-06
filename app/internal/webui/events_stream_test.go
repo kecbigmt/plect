@@ -94,15 +94,16 @@ func TestEventsStream_RelaysRenderedRows(t *testing.T) {
 
 	// Read frames until we see the rendered event row (the fake bus stream ends
 	// after it, so the body closes and the scanner stops).
-	var sawPing, sawRow, sawID bool
+	var sawPing, sawRow bool
+	var gotID string
 	sc := bufio.NewScanner(resp.Body)
 	for sc.Scan() {
 		line := sc.Text()
 		switch {
 		case strings.HasPrefix(line, ": ping"):
 			sawPing = true
-		case line == "id: 128":
-			sawID = true
+		case strings.HasPrefix(line, "id: "):
+			gotID = strings.TrimPrefix(line, "id: ")
 		case strings.Contains(line, "claude.reply") && strings.Contains(line, "<li"):
 			sawRow = true
 		case strings.Contains(line, "hi there"):
@@ -112,11 +113,54 @@ func TestEventsStream_RelaysRenderedRows(t *testing.T) {
 	if !sawPing {
 		t.Error("keepalive comment was not forwarded to the browser")
 	}
-	if !sawID {
-		t.Error("resume id was not forwarded")
+	// The bus's raw "id: 128" is re-encoded as an opaque v2 cursor, never a bare integer.
+	cur, err := event.DecodeCursor(gotID)
+	if err != nil {
+		t.Fatalf("resume id %q did not decode as an opaque cursor: %v", gotID, err)
+	}
+	if cur.V != event.CursorVersion || cur.Off != 128 || cur.Ord != event.OrderAsc {
+		t.Errorf("resume cursor = %+v, want V=%d Off=128 Ord=asc", cur, event.CursorVersion)
 	}
 	if !sawRow {
 		t.Error("event was not rendered as a timeline row")
+	}
+}
+
+func TestEventsStream_RawIntegerLastEventIDFallsBackToFreshConnect(t *testing.T) {
+	bus := fakeBus(t)
+	defer bus.Close()
+
+	svc := &fakeService{
+		// Stands in for service.EventStreamResume: rejects anything that
+		// isn't a decodable cursor, exactly as event.DecodeCursor would.
+		resumeFn: func(_, cursor string) (string, int64, error) {
+			if cursor == "" {
+				return "gen1", 0, nil
+			}
+			if _, err := event.DecodeCursor(cursor); err != nil {
+				return "", 0, err
+			}
+			return "gen1", 0, nil
+		},
+	}
+	srv := httptest.NewServer(withBus(svc, bus.URL).Routes())
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/events/stream?session=o/r-1", nil)
+	req.Header.Set("Last-Event-ID", "128") // pre-cutover raw byte offset
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (fresh connect, not an error)", resp.StatusCode)
+	}
+	// Rejected as an invalid cursor, so the handler fell through to since=0.
+	if svc.gotResumeCursor != "128" {
+		t.Fatalf("gotResumeCursor = %q, want the raw Last-Event-ID passed through for validation", svc.gotResumeCursor)
 	}
 }
 

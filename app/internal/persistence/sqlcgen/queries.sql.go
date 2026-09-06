@@ -94,6 +94,35 @@ func (q *Queries) DeleteUpReservation(ctx context.Context, childSessionName stri
 	return err
 }
 
+const getEventConsumerPosition = `-- name: GetEventConsumerPosition :one
+SELECT next_sequence FROM event_consumer_positions WHERE session_name = ? AND consumer_name = ?
+`
+
+type GetEventConsumerPositionParams struct {
+	SessionName  string
+	ConsumerName string
+}
+
+func (q *Queries) GetEventConsumerPosition(ctx context.Context, arg GetEventConsumerPositionParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, getEventConsumerPosition, arg.SessionName, arg.ConsumerName)
+	var next_sequence int64
+	err := row.Scan(&next_sequence)
+	return next_sequence, err
+}
+
+const getEventStreamGeneration = `-- name: GetEventStreamGeneration :one
+
+SELECT generation FROM event_streams WHERE session_name = ?
+`
+
+// Events
+func (q *Queries) GetEventStreamGeneration(ctx context.Context, sessionName string) (string, error) {
+	row := q.db.QueryRowContext(ctx, getEventStreamGeneration, sessionName)
+	var generation string
+	err := row.Scan(&generation)
+	return generation, err
+}
+
 const getPopulation = `-- name: GetPopulation :one
 
 SELECT workflow, name FROM populations WHERE workflow = ? AND name = ?
@@ -137,6 +166,72 @@ func (q *Queries) GetSession(ctx context.Context, name string) (Session, error) 
 		&i.RecordJson,
 	)
 	return i, err
+}
+
+const hasEventConsumerPosition = `-- name: HasEventConsumerPosition :one
+SELECT COUNT(*) FROM event_consumer_positions WHERE session_name = ? AND consumer_name = ?
+`
+
+type HasEventConsumerPositionParams struct {
+	SessionName  string
+	ConsumerName string
+}
+
+func (q *Queries) HasEventConsumerPosition(ctx context.Context, arg HasEventConsumerPositionParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, hasEventConsumerPosition, arg.SessionName, arg.ConsumerName)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const insertEvent = `-- name: InsertEvent :exec
+INSERT INTO events (event_id, session_name, sequence, recorded_at, type, source, direction, summary, body, metadata_json, delivery_mode)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type InsertEventParams struct {
+	EventID      string
+	SessionName  string
+	Sequence     int64
+	RecordedAt   string
+	Type         string
+	Source       string
+	Direction    string
+	Summary      string
+	Body         string
+	MetadataJson string
+	DeliveryMode string
+}
+
+func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) error {
+	_, err := q.db.ExecContext(ctx, insertEvent,
+		arg.EventID,
+		arg.SessionName,
+		arg.Sequence,
+		arg.RecordedAt,
+		arg.Type,
+		arg.Source,
+		arg.Direction,
+		arg.Summary,
+		arg.Body,
+		arg.MetadataJson,
+		arg.DeliveryMode,
+	)
+	return err
+}
+
+const insertEventStream = `-- name: InsertEventStream :exec
+INSERT INTO event_streams (session_name, generation) VALUES (?, ?) ON CONFLICT(session_name) DO NOTHING
+`
+
+type InsertEventStreamParams struct {
+	SessionName string
+	Generation  string
+}
+
+func (q *Queries) InsertEventStream(ctx context.Context, arg InsertEventStreamParams) error {
+	_, err := q.db.ExecContext(ctx, insertEventStream, arg.SessionName, arg.Generation)
+	return err
 }
 
 const insertNodeInstance = `-- name: InsertNodeInstance :exec
@@ -307,6 +402,78 @@ func (q *Queries) ListChildSessionNames(ctx context.Context, parentSessionName s
 			return nil, err
 		}
 		items = append(items, name)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listEventStreamSessions = `-- name: ListEventStreamSessions :many
+SELECT session_name FROM event_streams ORDER BY session_name
+`
+
+func (q *Queries) ListEventStreamSessions(ctx context.Context) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listEventStreamSessions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var session_name string
+		if err := rows.Scan(&session_name); err != nil {
+			return nil, err
+		}
+		items = append(items, session_name)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listEventsFrom = `-- name: ListEventsFrom :many
+SELECT event_id, session_name, sequence, recorded_at, type, source, direction, summary, body, metadata_json, delivery_mode
+FROM events WHERE session_name = ? AND sequence >= ? ORDER BY sequence
+`
+
+type ListEventsFromParams struct {
+	SessionName string
+	Sequence    int64
+}
+
+func (q *Queries) ListEventsFrom(ctx context.Context, arg ListEventsFromParams) ([]Event, error) {
+	rows, err := q.db.QueryContext(ctx, listEventsFrom, arg.SessionName, arg.Sequence)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Event
+	for rows.Next() {
+		var i Event
+		if err := rows.Scan(
+			&i.EventID,
+			&i.SessionName,
+			&i.Sequence,
+			&i.RecordedAt,
+			&i.Type,
+			&i.Source,
+			&i.Direction,
+			&i.Summary,
+			&i.Body,
+			&i.MetadataJson,
+			&i.DeliveryMode,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -669,6 +836,17 @@ func (q *Queries) ListUpReservations(ctx context.Context) ([]UpReservation, erro
 	return items, nil
 }
 
+const nextEventSequence = `-- name: NextEventSequence :one
+SELECT COALESCE(MAX(sequence), 0) + 1 FROM events WHERE session_name = ?
+`
+
+func (q *Queries) NextEventSequence(ctx context.Context, sessionName string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, nextEventSequence, sessionName)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const sessionParent = `-- name: SessionParent :one
 SELECT parent_session_name FROM sessions WHERE name = ?
 `
@@ -678,6 +856,22 @@ func (q *Queries) SessionParent(ctx context.Context, name string) (sql.NullStrin
 	var parent_session_name sql.NullString
 	err := row.Scan(&parent_session_name)
 	return parent_session_name, err
+}
+
+const upsertEventConsumerPosition = `-- name: UpsertEventConsumerPosition :exec
+INSERT INTO event_consumer_positions (session_name, consumer_name, next_sequence) VALUES (?, ?, ?)
+ON CONFLICT(session_name, consumer_name) DO UPDATE SET next_sequence = excluded.next_sequence
+`
+
+type UpsertEventConsumerPositionParams struct {
+	SessionName  string
+	ConsumerName string
+	NextSequence int64
+}
+
+func (q *Queries) UpsertEventConsumerPosition(ctx context.Context, arg UpsertEventConsumerPositionParams) error {
+	_, err := q.db.ExecContext(ctx, upsertEventConsumerPosition, arg.SessionName, arg.ConsumerName, arg.NextSequence)
+	return err
 }
 
 const upsertPopulation = `-- name: UpsertPopulation :exec

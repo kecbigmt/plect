@@ -3,11 +3,8 @@
 -- migrations from it with Atlas Community Edition; do not hand-write
 -- migration SQL against a structural change already captured here.
 --
--- Runtime state tables: sessions, node-instance and task-instance state,
--- done_when / judge state, populations, and up-slot reservations. Event
--- tables (event_streams, events, event_consumer_positions,
--- event_watermarks, session_tombstones, pending_deliveries) belong to a
--- later slice.
+-- Runtime state tables (sessions, task state, populations, reservations)
+-- plus the event tables; session_tombstones/pending_deliveries stay file-based.
 --
 -- Nullability convention throughout: a column is NULL exactly when the
 -- domain value can be genuinely absent (never observed/resolved yet, or an
@@ -201,4 +198,44 @@ CREATE TABLE up_reservations (
     pid INTEGER NOT NULL,
     reserved_at TEXT NOT NULL,
     CHECK ((parent_session_name IS NOT NULL) != (virtual_root = 1))
+);
+
+-- No foreign key to sessions: a destroyed session's event history survives it.
+CREATE TABLE event_streams (
+    session_name TEXT PRIMARY KEY,
+    generation TEXT NOT NULL
+);
+
+CREATE TABLE events (
+    event_id TEXT PRIMARY KEY,
+    session_name TEXT NOT NULL REFERENCES event_streams(session_name),
+    sequence INTEGER NOT NULL CHECK (sequence > 0),
+    recorded_at TEXT NOT NULL,
+    type TEXT NOT NULL,
+    source TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    body TEXT NOT NULL DEFAULT '',
+    metadata_json TEXT NOT NULL,
+    delivery_mode TEXT NOT NULL,
+    UNIQUE (session_name, sequence)
+);
+
+CREATE INDEX events_stream_sequence_idx ON events(session_name, sequence);
+CREATE INDEX events_stream_id_idx ON events(session_name, event_id);
+
+-- next_sequence is exclusive (event.Cursor.Off); unlike events.sequence, 0 is valid.
+CREATE TABLE event_consumer_positions (
+    session_name TEXT NOT NULL REFERENCES event_streams(session_name),
+    consumer_name TEXT NOT NULL,
+    next_sequence INTEGER NOT NULL CHECK (next_sequence >= 0),
+    PRIMARY KEY (session_name, consumer_name)
+);
+
+-- Reserved for a later importer; no producer or consumer writes/reads it yet.
+CREATE TABLE event_watermarks (
+    session_name TEXT NOT NULL REFERENCES event_streams(session_name),
+    watermark_name TEXT NOT NULL,
+    next_sequence INTEGER NOT NULL CHECK (next_sequence >= 0),
+    PRIMARY KEY (session_name, watermark_name)
 );

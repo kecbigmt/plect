@@ -23,12 +23,13 @@ const pollInterval = 500 * time.Millisecond
 // up is dropped rather than stalling the shared reader (see FrameSub.deliver).
 const frameBuffer = 256
 
-// Frame is one delivered event with its SSE resume offset (the byte offset past
-// the record — the same id-frame cursor the bus has always emitted).
+// Frame is one delivered event with its SSE resume position (the sequence
+// number past the record — the same id-frame cursor the bus has always
+// emitted).
 type Frame struct {
 	Event  event.Event
-	Start  int64 // byte offset where the record starts
-	Resume int64 // byte offset past the record
+	Start  int64 // sequence of the record itself
+	Resume int64 // sequence past the record
 }
 
 // FrameSub is a live frame subscriber (SSE). Start is the reader's broadcast

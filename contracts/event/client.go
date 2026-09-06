@@ -46,7 +46,7 @@ func (c *Client) auth(req *http.Request) {
 	}
 }
 
-// Publish appends an event and returns its assigned id and byte offset.
+// Publish appends an event and returns its assigned id and sequence.
 func (c *Client) Publish(ctx context.Context, ev Event) (id string, off int64, err error) {
 	body, err := json.Marshal(ev)
 	if err != nil {
@@ -110,7 +110,7 @@ func (c *Client) List(ctx context.Context, session string, order Order, cursor s
 	return out.Events, out.NextCursor, nil
 }
 
-// Subscribe streams events for a session from byte offset `since`, calling fn
+// Subscribe streams events for a session from sequence `since`, calling fn
 // for each. It replays from the log then follows live (one SSE path), and
 // reconnects with Last-Event-ID so reconnects don't drop events. The caller is
 // expected to dedup by Event.ID across reconnects. Returns when ctx is done.
@@ -230,7 +230,7 @@ func listQuery(session string, order Order, cursor string, f Filter) url.Values 
 	return q
 }
 
-// filterQuery encodes session + byte offset `since` + filter for the streaming
+// filterQuery encodes session + sequence `since` + filter for the streaming
 // path (GET /v1/stream), whose replay cursor rides as the SSE id frame /
 // Last-Event-ID. session rides as a query param for the same reason as listQuery.
 func filterQuery(session string, since int64, f Filter) url.Values {

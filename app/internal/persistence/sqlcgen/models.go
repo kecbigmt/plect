@@ -8,6 +8,37 @@ import (
 	"database/sql"
 )
 
+type Event struct {
+	EventID      string
+	SessionName  string
+	Sequence     int64
+	RecordedAt   string
+	Type         string
+	Source       string
+	Direction    string
+	Summary      string
+	Body         string
+	MetadataJson string
+	DeliveryMode string
+}
+
+type EventConsumerPosition struct {
+	SessionName  string
+	ConsumerName string
+	NextSequence int64
+}
+
+type EventStream struct {
+	SessionName string
+	Generation  string
+}
+
+type EventWatermark struct {
+	SessionName   string
+	WatermarkName string
+	NextSequence  int64
+}
+
 type NodeInstance struct {
 	SessionName string
 	NodeID      string

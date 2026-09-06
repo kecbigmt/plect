@@ -306,17 +306,21 @@ func TestTickSession_ChainCapAttemptEventRecordsNewStreakAfterPredicateGoesUnmet
 	}
 }
 
-// blockLogFile makes the given session's event log path a directory instead
-// of a file, so Append's open for writing fails with EISDIR — a structural
-// mismatch, not a permission bit, so it fails the same way for any user
-// including root (unlike a chmod-based block, which root bypasses).
-func blockLogFile(t *testing.T, store *state.Store, session string) string {
+// blockLogFile makes every eventlog.Append against store fail
+// deterministically: each call site builds a fresh eventlog.Store over
+// store.Dir() (service/event.go's own convention), so stripping write
+// permission from the shared store.db forces that fresh open to fail —
+// while store's own state.Store connection, already established before
+// this runs, keeps working, since Unix permission checks apply at open(2),
+// not to an already-open descriptor. It returns the blocked path so the
+// caller can restore it once the test no longer needs the failure.
+func blockLogFile(t *testing.T, store *state.Store) string {
 	t.Helper()
-	logPath := filepath.Join(store.Dir(), "events", session, "log.jsonl")
-	if err := os.MkdirAll(logPath, 0o755); err != nil {
+	dbPath := filepath.Join(store.Dir(), "store.db")
+	if err := os.Chmod(dbPath, 0o444); err != nil {
 		t.Fatal(err)
 	}
-	return logPath
+	return dbPath
 }
 
 func TestTickSession_ChainCapAttemptEventRetriesAfterPublishFailure(t *testing.T) {
@@ -343,7 +347,7 @@ all = [ { check = "resource.state.checks_status", in = ["SUCCESS"] } ]
 	seedReviewWork(t, store, "work1", map[string]any{"checks_status": "SUCCESS"})
 	setParent(t, store, "work1", "parent1")
 
-	logPath := blockLogFile(t, store, "work1")
+	dbPath := blockLogFile(t, store)
 
 	res, err := TickSession(cfg, store, TickParams{SessionName: "work1", SkipRefresh: true})
 	if err != nil {
@@ -363,7 +367,7 @@ all = [ { check = "resource.state.checks_status", in = ["SUCCESS"] } ]
 		t.Fatalf("expected a chain-attempt event failure warning, got %+v", sp.Warnings)
 	}
 
-	if err := os.RemoveAll(logPath); err != nil {
+	if err := os.Chmod(dbPath, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	res2, err := TickSession(cfg, store, TickParams{SessionName: "work1", SkipRefresh: true})

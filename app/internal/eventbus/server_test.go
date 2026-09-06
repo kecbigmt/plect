@@ -32,7 +32,7 @@ func TestBus_PublishAndList(t *testing.T) {
 	ctx := t.Context()
 
 	id, off, err := c.Publish(ctx, event.Event{SessionName: "owner/repo-1", Type: "user.note", Summary: "hi"})
-	if err != nil || id == "" || off != 0 {
+	if err != nil || id == "" || off != 1 {
 		t.Fatalf("publish: id=%q off=%d err=%v", id, off, err)
 	}
 

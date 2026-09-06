@@ -1054,19 +1054,24 @@ revision = { type = "string", mutable = true }
 	}}, []nodeFixture{{id: "initial", uses: "work"}})
 }
 
-// blockEventsDir makes every eventlog.Append against store fail deterministically
-// (a plain file sits where the events directory needs to be, so os.MkdirAll
-// errors), to exercise CheckSession's publish-failure retry contract.
+// blockEventsDir makes every eventlog.Append against store fail
+// deterministically, to exercise CheckSession's publish-failure retry
+// contract. Each call site builds a fresh eventlog.Store over store.Dir()
+// (service/event.go's own convention), so stripping write permission from
+// the shared store.db forces that fresh open to fail — while store's own
+// state.Store connection, already established before this runs (via
+// seedSession's writes), keeps working, since Unix permission checks apply
+// at open(2), not to an already-open descriptor.
 func blockEventsDir(t *testing.T, store *state.Store) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(store.Dir(), "events"), []byte("block"), 0o644); err != nil {
+	if err := os.Chmod(filepath.Join(store.Dir(), "store.db"), 0o444); err != nil {
 		t.Fatalf("blockEventsDir: %v", err)
 	}
 }
 
 func unblockEventsDir(t *testing.T, store *state.Store) {
 	t.Helper()
-	if err := os.Remove(filepath.Join(store.Dir(), "events")); err != nil {
+	if err := os.Chmod(filepath.Join(store.Dir(), "store.db"), 0o644); err != nil {
 		t.Fatalf("unblockEventsDir: %v", err)
 	}
 }

@@ -177,7 +177,6 @@ func seedCursor(log *eventlog.Store, session string) {
 // exactly as verification-gate.md's serialization/debounce rule requires.
 func (r *sessionReactor) drain(ctx context.Context, startGen *string) {
 	if g, _ := r.log.Gen(r.session); *startGen != "" && g != *startGen {
-		// Log rotated/compacted: the byte cursor is meaningless, re-read from head.
 		if err := r.log.CommitCursor(r.session, reactorConsumer, 0); err != nil {
 			slog.Default().Warn("reactor: reset cursor after log rotation failed", "session", r.session, "error", err)
 		}

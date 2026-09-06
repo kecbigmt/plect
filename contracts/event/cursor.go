@@ -9,7 +9,13 @@ import (
 // CursorVersion is the current opaque-cursor format version. A token carrying a
 // different version is rejected as expired: the format moved on and the token's
 // fields can no longer be trusted.
-const CursorVersion = 1
+//
+// Version 2 (current): Off is a per-stream sequence number (SQLite-backed
+// event log). Version 1 (retired): Off was a byte offset into a JSONL log
+// file. A v1 token is rejected the same way any other version mismatch is —
+// Validate never reinterprets its Off as a sequence, since the two numbers
+// are not comparable.
+const CursorVersion = 2
 
 // Order is the listing direction for a page of events.
 type Order string
@@ -33,16 +39,16 @@ func NormalizeOrder(s string) (Order, error) {
 
 // Cursor is the decoded form of an opaque pagination token. Clients never
 // construct or interpret it — they pass a prior page's next_cursor back
-// verbatim. It is a keyset position (a byte offset into the log) wrapped with
-// the context needed to detect misuse: the order it was issued for and the log
-// generation it came from. A raw byte offset has neither, so a stale or
-// cross-order cursor would silently point at the wrong record; the wrapping
-// lets the server reject it instead.
+// verbatim. It is a keyset position (a per-stream sequence number) wrapped
+// with the context needed to detect misuse: the order it was issued for and
+// the stream generation it came from. A raw sequence number has neither, so a
+// stale or cross-order cursor would silently point at the wrong record; the
+// wrapping lets the server reject it instead.
 type Cursor struct {
 	V   int    `json:"v"`   // format version; must equal CursorVersion
-	Off int64  `json:"off"` // byte offset into the log (keyset position)
+	Off int64  `json:"off"` // exclusive per-stream sequence number (keyset position)
 	Ord Order  `json:"ord"` // order this cursor was issued for
-	Gen string `json:"gen"` // log generation id at issue time
+	Gen string `json:"gen"` // stream generation id at issue time
 }
 
 // Encode renders the cursor as an opaque base64url(JSON) token.

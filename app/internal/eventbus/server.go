@@ -103,8 +103,11 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 // head (or ?cursor) and returns next_cursor; desc returns the most recent page
 // and does not paginate in v1. A cursor is validated against the requested order
 // and the log's current generation, so a stale or cross-order token is rejected
-// rather than silently resolving to the wrong record. The opaque byte offset is
-// kept off the wire here; the live stream (handleStream) exposes it directly.
+// rather than silently resolving to the wrong record. The opaque event.Cursor
+// token is decoded here into the underlying sequence; the live stream
+// (handleStream) exposes that raw sequence directly instead, since it is an
+// internal protocol between plect processes and the resident bus, never a
+// browser-facing surface.
 func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 	session := r.URL.Query().Get("session")
 	if session == "" {
@@ -170,8 +173,11 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 
 // handleStream is an SSE endpoint: it replays the session's events from the
 // cursor (Last-Event-ID header or ?since) then follows the log live. Each frame
-// carries `id: <resume cursor>` (the byte offset past that record) so a
-// reconnect with Last-Event-ID resumes with no gap and no re-delivery.
+// carries `id: <resume sequence>` (the sequence past that record) so a
+// reconnect with Last-Event-ID resumes with no gap and no re-delivery. This is
+// an internal protocol between plect processes and the resident bus — a raw
+// sequence, not the browser-facing opaque cursor a webui relay re-encodes it
+// as before ever forwarding it to a browser.
 func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	session := r.URL.Query().Get("session")
 	if session == "" {

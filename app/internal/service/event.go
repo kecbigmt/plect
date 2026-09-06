@@ -307,8 +307,8 @@ func EventTailSubtree(ctx context.Context, cfg *config.Config, store *state.Stor
 	}, f, fn)
 }
 
-// EventList returns events for a session at or after byte offset `since` that
-// match f, plus their offsets and the next read cursor. Works for destroyed
+// EventList returns events for a session at or after sequence `since` that
+// match f, plus their sequences and the next read cursor. Works for destroyed
 // sessions too — the log is read directly, independent of state.
 func EventList(cfg *config.Config, store *state.Store, identifier string, since int64, f event.Filter) ([]event.Event, []int64, int64, error) {
 	name, err := resolveSessionName(cfg, store, identifier)
@@ -322,7 +322,7 @@ func EventList(cfg *config.Config, store *state.Store, identifier string, since 
 	return evs, offs, next, nil
 }
 
-// EventTail follows a session's events from byte offset `since`, invoking fn
+// EventTail follows a session's events from sequence `since`, invoking fn
 // for each event matching f, until ctx is done.
 func EventTail(ctx context.Context, cfg *config.Config, store *state.Store, identifier string, since int64, f event.Filter, fn func(event.Event)) error {
 	name, err := resolveSessionName(cfg, store, identifier)

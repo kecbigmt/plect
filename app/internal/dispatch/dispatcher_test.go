@@ -1,17 +1,13 @@
 package dispatch
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
 	"io"
-	"log/slog"
 	"net"
-	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -604,52 +600,6 @@ func TestDispatcher_ReplaysFromCursorAcrossRestart(t *testing.T) {
 	drainOnce(d2, s)
 	if typ := recvType(t, recv); typ != event.TypeInstruction {
 		t.Errorf("post-restart delivery type = %q", typ)
-	}
-}
-
-// TestDispatcher_CommitCursorFailureIsLoggedAndEventRedelivers forces
-// CommitCursor to fail (by revoking write permission on its session dir, so
-// the temp file it writes before renaming can't be created) and asserts the
-// failure is observable via logging rather than silently swallowed, and that
-// the stuck cursor causes the already-delivered event to redeliver on the
-// next drain (at-least-once, not lost).
-func TestDispatcher_CommitCursorFailureIsLoggedAndEventRedelivers(t *testing.T) {
-	log := eventlog.NewStore(t.TempDir())
-	sock, recv := startFakeSocket(t)
-	d, s := runtimeDispatcher(t, "o/r-1", log, sock, "plect.instruction")
-
-	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Body: "first"})
-	drainOnce(d, s)
-	recvType(t, recv) // establishes a committed cursor
-
-	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Body: "second"})
-
-	sessionDir := filepath.Join(log.Root(), url.PathEscape("o/r-1"))
-	if err := os.Chmod(sessionDir, 0o555); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Chmod(sessionDir, 0o755) })
-
-	var logs bytes.Buffer
-	origLogger := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
-	defer slog.SetDefault(origLogger)
-
-	drainOnce(d, s)
-	recvType(t, recv) // delivered despite the commit failure
-
-	if !strings.Contains(logs.String(), "commit cursor failed") {
-		t.Fatalf("expected a commit-cursor-failed warning to be logged, got %q", logs.String())
-	}
-
-	// Cursor never advanced past the stuck commit, so a clean drain redelivers
-	// the same event instead of silently dropping it.
-	if err := os.Chmod(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	drainOnce(d, s)
-	if typ := recvType(t, recv); typ != event.TypeInstruction {
-		t.Errorf("expected the stuck event to redeliver, got %q", typ)
 	}
 }
 

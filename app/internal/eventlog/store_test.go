@@ -1,15 +1,12 @@
 package eventlog
 
 import (
-	"bytes"
 	"context"
-	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -241,11 +238,6 @@ func TestAppendAndList(t *testing.T) {
 		_ = next
 	}
 
-	// directory name must be the escaped opaque session, not owner/repo split
-	if _, err := os.Stat(filepath.Join(s.root, "octocat%2Fhello-world-42", "log.jsonl")); err != nil {
-		t.Fatalf("expected escaped session dir: %v", err)
-	}
-
 	all, offs, _, err := s.List(session, 0, event.Filter{})
 	if err != nil {
 		t.Fatalf("list: %v", err)
@@ -275,10 +267,10 @@ func TestAppendAndList(t *testing.T) {
 	}
 }
 
-func TestSessionsEnumeratesLogDirs(t *testing.T) {
+func TestSessionsEnumeratesTouchedStreams(t *testing.T) {
 	s := NewStore(t.TempDir())
 
-	// No root yet → empty, no error.
+	// No stream touched yet → empty, no error.
 	if names, err := s.Sessions(); err != nil || len(names) != 0 {
 		t.Fatalf("empty store: names=%v err=%v", names, err)
 	}
@@ -292,7 +284,8 @@ func TestSessionsEnumeratesLogDirs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sessions: %v", err)
 	}
-	// Sorted, and the opaque names are decoded back from their escaped dir names.
+	// Sorted, including names containing "/" (an opaque session name, not
+	// interpreted as owner/repo).
 	want := []string{"octocat/hello-world-42", "owner/repo-1", "owner/repo-1+tag"}
 	if len(got) != len(want) {
 		t.Fatalf("sessions = %v, want %v", got, want)
@@ -341,72 +334,6 @@ func TestListAcrossMergesNamedSessions(t *testing.T) {
 	// An empty name set yields no events, not an error (an empty subtree is valid).
 	if evs, err := s.ListAcross(nil, event.Filter{}); err != nil || len(evs) != 0 {
 		t.Fatalf("empty name set = (%v, %v), want (nil, nil)", summaries(evs), err)
-	}
-}
-
-func TestListDropsTornTrailingLine(t *testing.T) {
-	s := NewStore(t.TempDir())
-	const session = "o/r-1"
-	_, _, next, err := s.Append(event.Event{SessionName: session, Type: "a"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	// simulate an in-flight append: a partial line with no trailing newline
-	f, err := os.OpenFile(s.logPath(session), os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.WriteString(`{"id":"x","session_name":"o/r-1","type":"b"`) // no "}\n"
-	f.Close()
-
-	evs, _, gotNext, err := s.List(session, 0, event.Filter{})
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	if len(evs) != 1 || evs[0].Type != "a" {
-		t.Fatalf("expected only the complete record, got %d", len(evs))
-	}
-	if gotNext != next {
-		t.Fatalf("next=%d, want %d (partial line not counted)", gotNext, next)
-	}
-}
-
-func TestListSkipsMalformedLineButAdvancesCursorPastIt(t *testing.T) {
-	s := NewStore(t.TempDir())
-	var logs bytes.Buffer
-	s.logger = slog.New(slog.NewTextHandler(&logs, nil))
-
-	const session = "o/r-2"
-	if _, _, _, err := s.Append(event.Event{SessionName: session, Type: "a"}); err != nil {
-		t.Fatal(err)
-	}
-
-	f, err := os.OpenFile(s.logPath(session), os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.WriteString("{not valid json}\n"); err != nil {
-		t.Fatal(err)
-	}
-	f.Close()
-
-	_, _, next, err := s.Append(event.Event{SessionName: session, Type: "b"})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	evs, _, gotNext, err := s.List(session, 0, event.Filter{})
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	if len(evs) != 2 || evs[0].Type != "a" || evs[1].Type != "b" {
-		t.Fatalf("expected the two well-formed records, got %+v", evs)
-	}
-	if gotNext != next {
-		t.Fatalf("next=%d, want %d: cursor must advance past the malformed line, or every later event wedges behind it", gotNext, next)
-	}
-	if !strings.Contains(logs.String(), "malformed") || !strings.Contains(logs.String(), session) {
-		t.Fatalf("expected a malformed-record warning naming the session, got %q", logs.String())
 	}
 }
 
