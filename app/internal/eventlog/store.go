@@ -94,11 +94,8 @@ func (s *Store) lockPath(session string) string { return filepath.Join(s.session
 
 // Append writes ev to its session's log and returns the stored event (with ID
 // and Time filled in if absent), its sequence (the replay cursor), and next.
-// A session with no current stream (never created through Create, or a
-// notice about a resource whose admission never went through) gets one
-// started here rather than rejecting the write: the guarantee Create's own
-// NewStream protects is a fresh incarnation on every session create, not
-// that every append target was already created.
+// A session with no current stream (never created, or a notice about a
+// resource whose admission never went through) gets one started here.
 func (s *Store) Append(ev event.Event) (stored event.Event, seq, next int64, err error) {
 	if ev.SessionName == "" {
 		return ev, 0, 0, fmt.Errorf("eventlog: session_name is required")
@@ -156,8 +153,7 @@ func (s *Store) ReadTombstone(session string) (data []byte, ok bool, err error) 
 
 // SwapChainAttempt atomically compares-and-sets a plect.chain.attempt
 // cap-refusal streak marker (see service.chainAttemptFingerprint), scoped by
-// a caller-supplied identity token (service.chainAttemptStreamID) so two incarnations never share a key even if a destroy races a leftover tick.
-// previous is the value from just before this call, for RevertChainAttempt.
+// a caller-supplied identity token (service.chainAttemptStreamID) so two incarnations never share a key even if a destroy races a leftover tick; previous is the value from just before this call, for RevertChainAttempt.
 func (s *Store) SwapChainAttempt(session, instance, chainID, generation, newFingerprint string) (previous string, won bool, err error) {
 	key := chainAttemptKey(instance, chainID, generation)
 	err = s.withChainAttemptsLocked(session, func(attempts map[string]string) bool {
@@ -354,11 +350,8 @@ func (s *Store) TailOffset(session string, f event.Filter, n int) (int64, error)
 	return ring[0], nil // sequence of the n-th-from-last matching record
 }
 
-// StreamID returns the current incarnation's stream id for session, or ""
-// if none has been created yet. NewStream mints a fresh one on session
-// create, so a cursor issued for a since-superseded incarnation resolves to
-// a different id here and is detectable as stale rather than silently
-// resolving into the wrong incarnation's log.
+// StreamID returns the current incarnation's stream id for session, or "" if
+// none exists yet — a superseded incarnation's cursor resolves to a different id here, detectably stale.
 func (s *Store) StreamID(session string) (string, error) {
 	db, err := s.dbHandle()
 	if err != nil {
@@ -371,10 +364,8 @@ func (s *Store) StreamID(session string) (string, error) {
 	return id, nil
 }
 
-// NewStream mints a new event stream for session — one incarnation's log —
-// and returns its id. It always creates, so callers own the decision of
-// when a session name starts a new incarnation (a session create) versus
-// resuming its current one (a down/up or --force-recreate).
+// NewStream mints a new incarnation's stream for session (a session create,
+// not a down/up or --force-recreate, which resume the current one).
 func (s *Store) NewStream(session string) (string, error) {
 	db, err := s.dbHandle()
 	if err != nil {

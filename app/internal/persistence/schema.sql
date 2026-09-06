@@ -199,14 +199,8 @@ CREATE TABLE up_reservations (
     CHECK ((parent_session_name IS NOT NULL) != (virtual_root = 1))
 );
 
--- One row per session incarnation: a session create mints a new row; a
--- down/up or --force-recreate reuses the existing one (same id, sequence
--- continues), since the runtime failure model preserves the event log
--- across those. session_name is therefore not unique — a later create under
--- the same name mints another row — and a read resolves to the current
--- incarnation, the row with the latest created_at for that name. No FK to
--- sessions: a destroyed session's rows and events survive it as history,
--- reachable by their own id even though no longer current for that name.
+-- One row per session incarnation, minted at session create (down/up and
+-- --force-recreate reuse it); not unique on session_name, so a read resolves to the latest created_at. No FK to sessions: a destroyed row survives, reachable by its own id.
 CREATE TABLE event_streams (
     id TEXT PRIMARY KEY,
     session_name TEXT NOT NULL,

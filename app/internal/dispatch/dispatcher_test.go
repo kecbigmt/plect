@@ -132,10 +132,8 @@ func TestDispatcher_RunReplaysAfterRestart(t *testing.T) {
 	}
 }
 
-// startDispatcher starts d.run in the background and blocks until it has
-// seeded its cursor (past SeedCursor and into its Watch/select loop) before
-// returning, so callers need no fixed post-start sleep — SQLite's first-touch
-// migration cost varies, unlike the old file-backed store's near-instant seed.
+// startDispatcher starts d.run and blocks until its cursor is seeded, so
+// callers need no fixed sleep despite SQLite's variable first-touch cost.
 func startDispatcher(t *testing.T, d *sessionDispatcher) func() {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
