@@ -48,7 +48,7 @@ JSON in the record that owns them.
 | `task_done_when` | `(session_name, instance_name)` primary key and task foreign key | counters, fingerprints, reason/body, escalation data | `TaskState.DoneWhen` |
 | `task_done_when_judges` | `(session_name, instance_name, leaf_id)` primary key and task foreign key; reviewer and target names remain stored facts | action, reason, revision, workflow/relation facts, and creation time | `DoneWhenState.Judges` |
 | `populations` | `population_key` primary key; `workflow`, `name` | none | `state.json` `populations` map key and value |
-| `population_members` | `(population_key, resource_id)` primary key; nullable `session_name` reference | item, generation, timestamps, flags, decision, blockers | `PopulationState.Members` |
+| `population_members` | `(population_key, resource_id)` primary key; nullable `session_name` | item, generation, timestamps, flags, decision, blockers | `PopulationState.Members` |
 | `up_reservations` | `child_session_name` primary key; `parent_name`, `pid`, `reserved_at` | none | `state.json` `up_reservations` |
 | `pending_deliveries` | `(session_name, resource_id, operation)` primary key; `operation` is subscribe or unsubscribe | none | `pending_delivery.json` |
 | `event_streams` | `session_name` primary key; `generation` | none | each event directory and its `.gen` file |
@@ -56,6 +56,10 @@ JSON in the record that owns them.
 | `event_consumer_positions` | `(session_name, consumer_name)` primary key and stream foreign key; `next_sequence` | none | `.cursor.<consumer>` |
 | `event_watermarks` | `(session_name, watermark_name)` primary key and stream foreign key; `next_sequence` | none | `TickBackoff.LastLogPosition` |
 | `session_tombstones` | `session_name` primary key; `destroyed_at` | tombstone session snapshot | `tombstone.json` |
+
+`population_members.session_name` is a recorded fact, not an enforced foreign
+key: admission can record a member's intended session name before that
+session's own row exists.
 
 `sessions` represents a real parent with `parent_session_name` and a
 session-local pseudo-root with `root_session_name`; a check constraint permits
