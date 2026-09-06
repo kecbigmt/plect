@@ -21,6 +21,15 @@ func (q *Queries) CountSessionsNamed(ctx context.Context, name string) (int64, e
 	return count, err
 }
 
+const deleteNodeInstancesForSession = `-- name: DeleteNodeInstancesForSession :exec
+DELETE FROM node_instances WHERE session_name = ?
+`
+
+func (q *Queries) DeleteNodeInstancesForSession(ctx context.Context, sessionName string) error {
+	_, err := q.db.ExecContext(ctx, deleteNodeInstancesForSession, sessionName)
+	return err
+}
+
 const deletePopulationMembersForPopulation = `-- name: DeletePopulationMembersForPopulation :exec
 DELETE FROM population_members WHERE population_key = ?
 `
@@ -54,15 +63,6 @@ DELETE FROM up_reservations WHERE child_session_name = ?
 
 func (q *Queries) DeleteUpReservation(ctx context.Context, childSessionName string) error {
 	_, err := q.db.ExecContext(ctx, deleteUpReservation, childSessionName)
-	return err
-}
-
-const deleteWorkflowNodesForSession = `-- name: DeleteWorkflowNodesForSession :exec
-DELETE FROM workflow_nodes WHERE session_name = ?
-`
-
-func (q *Queries) DeleteWorkflowNodesForSession(ctx context.Context, sessionName string) error {
-	_, err := q.db.ExecContext(ctx, deleteWorkflowNodesForSession, sessionName)
 	return err
 }
 
@@ -101,6 +101,35 @@ func (q *Queries) GetSession(ctx context.Context, name string) (Session, error) 
 		&i.RecordJson,
 	)
 	return i, err
+}
+
+const insertNodeInstance = `-- name: InsertNodeInstance :exec
+
+INSERT INTO node_instances (
+    session_name, node_id, scope, status, sequence, record_json
+) VALUES (?, ?, ?, ?, ?, ?)
+`
+
+type InsertNodeInstanceParams struct {
+	SessionName string
+	NodeID      string
+	Scope       string
+	Status      string
+	Sequence    int64
+	RecordJson  string
+}
+
+// Workflow nodes (static; Session.Tasks entries with Dynamic == false)
+func (q *Queries) InsertNodeInstance(ctx context.Context, arg InsertNodeInstanceParams) error {
+	_, err := q.db.ExecContext(ctx, insertNodeInstance,
+		arg.SessionName,
+		arg.NodeID,
+		arg.Scope,
+		arg.Status,
+		arg.Sequence,
+		arg.RecordJson,
+	)
+	return err
 }
 
 const insertPersistenceSmoke = `-- name: InsertPersistenceSmoke :one
@@ -275,35 +304,6 @@ func (q *Queries) InsertTaskInstance(ctx context.Context, arg InsertTaskInstance
 	return err
 }
 
-const insertWorkflowNode = `-- name: InsertWorkflowNode :exec
-
-INSERT INTO workflow_nodes (
-    session_name, node_id, scope, status, sequence, record_json
-) VALUES (?, ?, ?, ?, ?, ?)
-`
-
-type InsertWorkflowNodeParams struct {
-	SessionName string
-	NodeID      string
-	Scope       string
-	Status      string
-	Sequence    int64
-	RecordJson  string
-}
-
-// Workflow nodes (static; Session.Tasks entries with Dynamic == false)
-func (q *Queries) InsertWorkflowNode(ctx context.Context, arg InsertWorkflowNodeParams) error {
-	_, err := q.db.ExecContext(ctx, insertWorkflowNode,
-		arg.SessionName,
-		arg.NodeID,
-		arg.Scope,
-		arg.Status,
-		arg.Sequence,
-		arg.RecordJson,
-	)
-	return err
-}
-
 const listChildSessionNames = `-- name: ListChildSessionNames :many
 SELECT name FROM sessions WHERE parent_session_name = ? ORDER BY name
 `
@@ -321,6 +321,41 @@ func (q *Queries) ListChildSessionNames(ctx context.Context, parentSessionName s
 			return nil, err
 		}
 		items = append(items, name)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNodeInstances = `-- name: ListNodeInstances :many
+SELECT session_name, node_id, scope, status, sequence, record_json
+FROM node_instances WHERE session_name = ? ORDER BY node_id
+`
+
+func (q *Queries) ListNodeInstances(ctx context.Context, sessionName string) ([]NodeInstance, error) {
+	rows, err := q.db.QueryContext(ctx, listNodeInstances, sessionName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []NodeInstance
+	for rows.Next() {
+		var i NodeInstance
+		if err := rows.Scan(
+			&i.SessionName,
+			&i.NodeID,
+			&i.Scope,
+			&i.Status,
+			&i.Sequence,
+			&i.RecordJson,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -615,41 +650,6 @@ func (q *Queries) ListUpReservations(ctx context.Context) ([]UpReservation, erro
 			&i.ParentName,
 			&i.Pid,
 			&i.ReservedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listWorkflowNodes = `-- name: ListWorkflowNodes :many
-SELECT session_name, node_id, scope, status, sequence, record_json
-FROM workflow_nodes WHERE session_name = ? ORDER BY node_id
-`
-
-func (q *Queries) ListWorkflowNodes(ctx context.Context, sessionName string) ([]WorkflowNode, error) {
-	rows, err := q.db.QueryContext(ctx, listWorkflowNodes, sessionName)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []WorkflowNode
-	for rows.Next() {
-		var i WorkflowNode
-		if err := rows.Scan(
-			&i.SessionName,
-			&i.NodeID,
-			&i.Scope,
-			&i.Status,
-			&i.Sequence,
-			&i.RecordJson,
 		); err != nil {
 			return nil, err
 		}

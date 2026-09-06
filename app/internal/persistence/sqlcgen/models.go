@@ -8,6 +8,15 @@ import (
 	"database/sql"
 )
 
+type NodeInstance struct {
+	SessionName string
+	NodeID      string
+	Scope       string
+	Status      string
+	Sequence    int64
+	RecordJson  string
+}
+
 type PersistenceSmoke struct {
 	ID        int64
 	Note      string
@@ -91,13 +100,4 @@ type UpReservation struct {
 	ParentName       string
 	Pid              int64
 	ReservedAt       string
-}
-
-type WorkflowNode struct {
-	SessionName string
-	NodeID      string
-	Scope       string
-	Status      string
-	Sequence    int64
-	RecordJson  string
 }

@@ -13,7 +13,7 @@ CREATE TABLE persistence_smoke (
     created_at TEXT NOT NULL
 );
 
--- Runtime state tables: sessions, workflow-node and task-instance state,
+-- Runtime state tables: sessions, node-instance and task-instance state,
 -- done_when / judge state, populations, and up-slot reservations. Event
 -- tables (event_streams, events, event_consumer_positions,
 -- event_watermarks, session_tombstones, pending_deliveries) belong to a
@@ -43,7 +43,7 @@ CREATE INDEX sessions_parent_idx ON sessions(parent_session_name);
 -- one Tasks map the domain type and every core call site still see;
 -- Dynamic itself is derived from which table a record came from and is not
 -- a stored column on either.
-CREATE TABLE workflow_nodes (
+CREATE TABLE node_instances (
     session_name TEXT NOT NULL REFERENCES sessions(name) ON DELETE CASCADE,
     node_id TEXT NOT NULL,
     scope TEXT NOT NULL CHECK (scope IN ('session', 'run')),
@@ -60,8 +60,8 @@ CREATE TABLE workflow_nodes (
 -- done_when counters/fingerprints and judge verdicts are split into their
 -- own tables below (keyed by this id) rather than folded into record_json,
 -- so a judge verdict is never duplicated between two authorities. A static
--- workflow node's own done_when (rare, and not relationally queried) stays
--- embedded in workflow_nodes.record_json instead.
+-- node_instances row's own done_when (rare, and not relationally queried)
+-- stays embedded in its record_json instead.
 CREATE TABLE task_instances (
     id TEXT PRIMARY KEY,
     session_name TEXT NOT NULL REFERENCES sessions(name) ON DELETE CASCADE,

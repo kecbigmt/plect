@@ -9,7 +9,7 @@ import (
 )
 
 // seedBareSessionForTest inserts a minimal sessions row so a
-// workflow_nodes/task_instances insert in the same test satisfies its
+// node_instances/task_instances insert in the same test satisfies its
 // session_name foreign key and fails (or succeeds) only for the reason the
 // test is actually checking.
 func seedBareSessionForTest(t *testing.T, db *DB, name string) {
@@ -26,22 +26,22 @@ func seedBareSessionForTest(t *testing.T, db *DB, name string) {
 // on the closed-set columns copied from contracts/state's own constants
 // (TaskScopeSession/TaskScopeRun, TaskStatusProduced/TaskStatusFailed/
 // TaskStatusCleaned): an out-of-set value is rejected at insert, on both
-// workflow_nodes and task_instances.
+// node_instances and task_instances.
 func TestSchema_RejectsOutOfSetScopeAndStatus(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
 	q := sqlcgen.New(db.write)
 	seedBareSessionForTest(t, db, "s1")
 
-	if err := q.InsertWorkflowNode(ctx, sqlcgen.InsertWorkflowNodeParams{
+	if err := q.InsertNodeInstance(ctx, sqlcgen.InsertNodeInstanceParams{
 		SessionName: "s1", NodeID: "n1", Scope: "bogus", Status: "produced", RecordJson: "{}",
 	}); err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
-		t.Fatalf("InsertWorkflowNode with bogus scope: err = %v, want a CHECK constraint failure", err)
+		t.Fatalf("InsertNodeInstance with bogus scope: err = %v, want a CHECK constraint failure", err)
 	}
-	if err := q.InsertWorkflowNode(ctx, sqlcgen.InsertWorkflowNodeParams{
+	if err := q.InsertNodeInstance(ctx, sqlcgen.InsertNodeInstanceParams{
 		SessionName: "s1", NodeID: "n1", Scope: "session", Status: "bogus", RecordJson: "{}",
 	}); err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
-		t.Fatalf("InsertWorkflowNode with bogus status: err = %v, want a CHECK constraint failure", err)
+		t.Fatalf("InsertNodeInstance with bogus status: err = %v, want a CHECK constraint failure", err)
 	}
 
 	if err := q.InsertTaskInstance(ctx, sqlcgen.InsertTaskInstanceParams{

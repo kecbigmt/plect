@@ -364,12 +364,12 @@ func TestPutSession_WithDoneWhenAndJudgesRoundTrips(t *testing.T) {
 	}
 }
 
-// TestPutSession_WorkflowNodeDoneWhenRoundTripsAsEmbeddedJSON proves a
-// static workflow node's (Dynamic == false) DoneWhen survives round-trip
+// TestPutSession_NodeInstanceDoneWhenRoundTripsAsEmbeddedJSON proves a
+// static node instance's (Dynamic == false) DoneWhen survives round-trip
 // even though it is never split into the relational done_when tables
 // (those attach only to dynamic task_instances rows): it stays embedded in
-// workflow_nodes.record_json instead.
-func TestPutSession_WorkflowNodeDoneWhenRoundTripsAsEmbeddedJSON(t *testing.T) {
+// node_instances.record_json instead.
+func TestPutSession_NodeInstanceDoneWhenRoundTripsAsEmbeddedJSON(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Second)
@@ -393,7 +393,7 @@ func TestPutSession_WorkflowNodeDoneWhenRoundTripsAsEmbeddedJSON(t *testing.T) {
 	}
 	task := got.Tasks["@workflow"]
 	if task == nil || task.Dynamic {
-		t.Fatalf("task = %+v, want a static (non-dynamic) workflow node", task)
+		t.Fatalf("task = %+v, want a static (non-dynamic) node instance", task)
 	}
 	if task.DoneWhen == nil || task.DoneWhen.LastFingerprint != "wf-fingerprint" {
 		t.Fatalf("DoneWhen = %+v, want it preserved via embedded JSON", task.DoneWhen)

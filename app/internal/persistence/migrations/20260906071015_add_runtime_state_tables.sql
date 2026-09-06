@@ -5,8 +5,8 @@ CREATE TABLE `sessions` (`name` text NULL, `parent_session_name` text NULL, `roo
 CREATE INDEX `sessions_alias_idx` ON `sessions` (`alias`) WHERE alias <> '';
 -- create index "sessions_parent_idx" to table: "sessions"
 CREATE INDEX `sessions_parent_idx` ON `sessions` (`parent_session_name`);
--- create "workflow_nodes" table
-CREATE TABLE `workflow_nodes` (`session_name` text NOT NULL, `node_id` text NOT NULL, `scope` text NOT NULL, `status` text NOT NULL, `sequence` integer NOT NULL DEFAULT 0, `record_json` text NOT NULL, PRIMARY KEY (`session_name`, `node_id`), CONSTRAINT `0` FOREIGN KEY (`session_name`) REFERENCES `sessions` (`name`) ON UPDATE NO ACTION ON DELETE CASCADE, CHECK (scope IN ('session', 'run')), CHECK (status IN ('produced', 'failed', 'cleaned')));
+-- create "node_instances" table
+CREATE TABLE `node_instances` (`session_name` text NOT NULL, `node_id` text NOT NULL, `scope` text NOT NULL, `status` text NOT NULL, `sequence` integer NOT NULL DEFAULT 0, `record_json` text NOT NULL, PRIMARY KEY (`session_name`, `node_id`), CONSTRAINT `0` FOREIGN KEY (`session_name`) REFERENCES `sessions` (`name`) ON UPDATE NO ACTION ON DELETE CASCADE, CHECK (scope IN ('session', 'run')), CHECK (status IN ('produced', 'failed', 'cleaned')));
 -- create "task_instances" table
 CREATE TABLE `task_instances` (`id` text NULL, `session_name` text NOT NULL, `instance_name` text NOT NULL, `task_id` text NOT NULL DEFAULT '', `scope` text NOT NULL, `status` text NOT NULL, `sequence` integer NOT NULL DEFAULT 0, `resource` text NOT NULL DEFAULT '', `named_instance` text NOT NULL DEFAULT '', `record_json` text NOT NULL, PRIMARY KEY (`id`), CONSTRAINT `0` FOREIGN KEY (`session_name`) REFERENCES `sessions` (`name`) ON UPDATE NO ACTION ON DELETE CASCADE, CHECK (scope IN ('session', 'run')), CHECK (status IN ('produced', 'failed', 'cleaned')));
 -- create index "task_instances_session_name_instance_name" to table: "task_instances"
@@ -37,8 +37,8 @@ DROP TABLE `task_done_when_states`;
 DROP INDEX `task_instances_session_name_instance_name`;
 -- reverse: create "task_instances" table
 DROP TABLE `task_instances`;
--- reverse: create "workflow_nodes" table
-DROP TABLE `workflow_nodes`;
+-- reverse: create "node_instances" table
+DROP TABLE `node_instances`;
 -- reverse: create index "sessions_parent_idx" to table: "sessions"
 DROP INDEX `sessions_parent_idx`;
 -- reverse: create index "sessions_alias_idx" to table: "sessions"

@@ -10,7 +10,7 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// loadTasks assembles a session's Tasks map from two tables: workflow_nodes
+// loadTasks assembles a session's Tasks map from two tables: node_instances
 // (static workflow-DAG nodes, including the @workflow pseudo-node) and
 // task_instances (dynamic instances created via `plect task setup`), joined
 // in Go with task_done_when_states/task_done_when_judges by the dynamic
@@ -19,9 +19,9 @@ import (
 func loadTasks(ctx context.Context, q sqlcgen.DBTX, sessionName string) (map[string]*contract.TaskState, error) {
 	queries := sqlcgen.New(q)
 
-	nodeRows, err := queries.ListWorkflowNodes(ctx, sessionName)
+	nodeRows, err := queries.ListNodeInstances(ctx, sessionName)
 	if err != nil {
-		return nil, fmt.Errorf("list workflow nodes for %q: %w", sessionName, err)
+		return nil, fmt.Errorf("list node instances for %q: %w", sessionName, err)
 	}
 	instanceRows, err := queries.ListTaskInstances(ctx, sessionName)
 	if err != nil {
@@ -60,9 +60,9 @@ func loadTasks(ctx context.Context, q sqlcgen.DBTX, sessionName string) (map[str
 
 	tasks := make(map[string]*contract.TaskState, len(nodeRows)+len(instanceRows))
 	for _, row := range nodeRows {
-		ts, err := unmarshalWorkflowNodeRecord(row.RecordJson)
+		ts, err := unmarshalNodeInstanceRecord(row.RecordJson)
 		if err != nil {
-			return nil, fmt.Errorf("parse workflow node %q/%q record: %w", sessionName, row.NodeID, err)
+			return nil, fmt.Errorf("parse node instance %q/%q record: %w", sessionName, row.NodeID, err)
 		}
 		ts.Scope = row.Scope
 		ts.Status = row.Status
@@ -95,7 +95,7 @@ func loadTasks(ctx context.Context, q sqlcgen.DBTX, sessionName string) (map[str
 	return tasks, nil
 }
 
-// writeTasksTx replaces every workflow-node and task-instance row for
+// writeTasksTx replaces every node-instance and task-instance row for
 // sessionName: it deletes both tables' rows for the session (task_instances'
 // delete cascades to task_done_when_states and task_done_when_judges via
 // their id foreign key) and reinserts the current Tasks map split by
@@ -105,8 +105,8 @@ func loadTasks(ctx context.Context, q sqlcgen.DBTX, sessionName string) (map[str
 // distinct row with its own done_when/judge history.
 func (db *DB) writeTasksTx(ctx context.Context, tx *sql.Tx, sessionName string, tasks map[string]*contract.TaskState) error {
 	q := sqlcgen.New(tx)
-	if err := q.DeleteWorkflowNodesForSession(ctx, sessionName); err != nil {
-		return fmt.Errorf("clear workflow nodes for %q: %w", sessionName, err)
+	if err := q.DeleteNodeInstancesForSession(ctx, sessionName); err != nil {
+		return fmt.Errorf("clear node instances for %q: %w", sessionName, err)
 	}
 	if err := q.DeleteTaskInstancesForSession(ctx, sessionName); err != nil {
 		return fmt.Errorf("clear task instances for %q: %w", sessionName, err)
@@ -122,19 +122,19 @@ func (db *DB) writeTasksTx(ctx context.Context, tx *sql.Tx, sessionName string, 
 			}
 			continue
 		}
-		if err := insertWorkflowNodeTx(ctx, q, sessionName, key, ts); err != nil {
+		if err := insertNodeInstanceTx(ctx, q, sessionName, key, ts); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func insertWorkflowNodeTx(ctx context.Context, q *sqlcgen.Queries, sessionName, nodeID string, ts *contract.TaskState) error {
-	recordJSON, err := marshalWorkflowNodeRecord(ts)
+func insertNodeInstanceTx(ctx context.Context, q *sqlcgen.Queries, sessionName, nodeID string, ts *contract.TaskState) error {
+	recordJSON, err := marshalNodeInstanceRecord(ts)
 	if err != nil {
-		return fmt.Errorf("marshal workflow node %q/%q: %w", sessionName, nodeID, err)
+		return fmt.Errorf("marshal node instance %q/%q: %w", sessionName, nodeID, err)
 	}
-	if err := q.InsertWorkflowNode(ctx, sqlcgen.InsertWorkflowNodeParams{
+	if err := q.InsertNodeInstance(ctx, sqlcgen.InsertNodeInstanceParams{
 		SessionName: sessionName,
 		NodeID:      nodeID,
 		Scope:       ts.Scope,
@@ -142,7 +142,7 @@ func insertWorkflowNodeTx(ctx context.Context, q *sqlcgen.Queries, sessionName, 
 		Sequence:    int64(ts.Seq),
 		RecordJson:  recordJSON,
 	}); err != nil {
-		return fmt.Errorf("insert workflow node %q/%q: %w", sessionName, nodeID, err)
+		return fmt.Errorf("insert node instance %q/%q: %w", sessionName, nodeID, err)
 	}
 	return nil
 }
@@ -265,12 +265,12 @@ func doneWhenFromRow(dw sqlcgen.TaskDoneWhenState, judges map[string]*contract.D
 	}, nil
 }
 
-// marshalWorkflowNodeRecord serializes every TaskState field not already
-// carried by a relational column on workflow_nodes (scope, status,
-// sequence). Unlike a dynamic instance, a workflow node's TaskID, Resource,
+// marshalNodeInstanceRecord serializes every TaskState field not already
+// carried by a relational column on node_instances (scope, status,
+// sequence). Unlike a dynamic instance, a node instance's TaskID, Resource,
 // Name, and DoneWhen (rare, and not relationally queried) all stay embedded
 // here rather than split out.
-func marshalWorkflowNodeRecord(t *contract.TaskState) (string, error) {
+func marshalNodeInstanceRecord(t *contract.TaskState) (string, error) {
 	clone := *t
 	clone.Scope = ""
 	clone.Status = ""
@@ -283,7 +283,7 @@ func marshalWorkflowNodeRecord(t *contract.TaskState) (string, error) {
 	return string(data), nil
 }
 
-func unmarshalWorkflowNodeRecord(recordJSON string) (*contract.TaskState, error) {
+func unmarshalNodeInstanceRecord(recordJSON string) (*contract.TaskState, error) {
 	var t contract.TaskState
 	if err := json.Unmarshal([]byte(recordJSON), &t); err != nil {
 		return nil, err

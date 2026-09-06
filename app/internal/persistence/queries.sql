@@ -50,17 +50,17 @@ SELECT COUNT(*) FROM sessions WHERE name = ?;
 
 -- Workflow nodes (static; Session.Tasks entries with Dynamic == false)
 
--- name: InsertWorkflowNode :exec
-INSERT INTO workflow_nodes (
+-- name: InsertNodeInstance :exec
+INSERT INTO node_instances (
     session_name, node_id, scope, status, sequence, record_json
 ) VALUES (?, ?, ?, ?, ?, ?);
 
--- name: ListWorkflowNodes :many
+-- name: ListNodeInstances :many
 SELECT session_name, node_id, scope, status, sequence, record_json
-FROM workflow_nodes WHERE session_name = ? ORDER BY node_id;
+FROM node_instances WHERE session_name = ? ORDER BY node_id;
 
--- name: DeleteWorkflowNodesForSession :exec
-DELETE FROM workflow_nodes WHERE session_name = ?;
+-- name: DeleteNodeInstancesForSession :exec
+DELETE FROM node_instances WHERE session_name = ?;
 
 -- Task instances (dynamic; Session.Tasks entries with Dynamic == true)
 
