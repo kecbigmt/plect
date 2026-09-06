@@ -23,11 +23,7 @@ import (
 	"github.com/mxschmitt/playwright-go"
 )
 
-// browserOrigin wires a real service/state stack, a fake event-bus relay
-// (startEventBusRelay, shared with the HTTP-level acceptance suite), and the
-// production Routes() — including the real, committed /app/ build — behind
-// an httptest server. cfg controls auth; pass &Config{} for the network-trust
-// default.
+// browserOrigin: pass &Config{} for the network-trust default.
 func browserOrigin(t *testing.T, store *state.Store, cfg *Config) (string, *LiveService) {
 	t.Helper()
 	svcCfg, err := config.Load()
@@ -461,8 +457,6 @@ func TestBrowserAcceptance_NarrowViewportUsesOverlayDetailPane(t *testing.T) {
 	if err := overlaySession.Click(); err != nil {
 		t.Fatalf("select from the overlay: %v", err)
 	}
-	// Selecting a session closes the sidebar overlay on a narrow layout
-	// (AppShell.tsx's selectSession), so the tree it came from is gone.
 	if err := expect.Locator(page.GetByRole("navigation", playwright.PageGetByRoleOptions{Name: "Sessions"})).Not().ToBeVisible(); err != nil {
 		t.Fatalf("selecting a session should close the sidebar overlay: %v", err)
 	}

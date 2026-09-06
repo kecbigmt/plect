@@ -25,8 +25,6 @@ func isolateMachineConfig(cfg *config.Config) {
 	cfg.Plugins = nil
 }
 
-// sinceFromQuery parses a "since" offset query parameter, defaulting to the
-// start of the log. Shared with startEventBusRelay below.
 func sinceFromQuery(r *http.Request) int64 {
 	v := r.URL.Query().Get("since")
 	if v == "" {
