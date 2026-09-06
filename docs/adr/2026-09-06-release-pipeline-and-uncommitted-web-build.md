@@ -40,13 +40,26 @@ and contains these executables in `bin/`:
 
 - `plect`
 - `plect-web`
-- `channel-server`
-- `slack-adapter`
-- `github-watcher`
 
-These are the five `subPackages` in `kecbigmt/devbox`'s
-`nixos/packages/plect.nix`. Other plugin commands remain independently
-buildable and are not silently included in the core release.
+`channel-server`, `slack-adapter`, and `github-watcher` are plugin
+executables, not core release artifacts. Their
+[`plugin.toml`](../../plugins/claude/plugin.toml),
+[`plugin.toml`](../../plugins/slack/plugin.toml), and
+[`plugin.toml`](../../plugins/github/plugin.toml) `[[executables]]` entries
+declare Go `build` commands. When a catalog add or update locks an enabled
+plugin, `lockPluginAtPath` calls [`RunBuilds`](../../app/internal/plugins/build.go)
+in that plugin's resolved catalog directory. For a pinned Git catalog, that
+directory is below `~/.cache/plect/catalogs/<source-digest>/<revision>/`; the
+build output stays in the plugin's `bin/` path there.
+
+Consequently, a host needs a Go toolchain wherever an enabled catalog plugin
+declares a Go build step. The release archive does not change that requirement.
+The downstream `config/plect/plect.lock` remains the catalog revision and
+content-hash authority for those builds. Prebuilt plugin executables are
+catalog-level artifacts, not core binaries; the
+[plugin boundary contracts](2026-08-17-plugin-boundary-contracts.md) decision
+and its plugin-packaging design carry that follow-up. This ADR does not design
+or bundle them.
 
 Use a plain GitHub Actions workflow, shell packaging, and `gh release
 create`; do not introduce GoReleaser or a repository Nix build as the
@@ -135,8 +148,9 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - name: Install the pinned pnpm version
-        run: npm install -g "pnpm@10.33.0"
+      - name: Install the pnpm version declared by web/package.json
+        run: npm install -g "pnpm@$(node -p "require('./package.json').packageManager.split('@')[1]")"
+        working-directory: web
       - name: Install and build the Web UI
         run: |
           pnpm install --frozen-lockfile
@@ -161,14 +175,8 @@ jobs:
           flags="-X github.com/kecbigmt/plecture/app/internal/version.Current=$version"
           go build -C app -ldflags "$flags" -o "$out/plect" ./cmd/plect
           go build -C app -ldflags "$flags" -o "$out/plect-web" ./cmd/plect-web
-          go build -C plugins/claude/src/channel-server -o "$out/channel-server" ./cmd/channel-server
-          go build -C plugins/slack/src/slack-adapter -o "$out/slack-adapter" ./cmd/slack-adapter
-          go build -C plugins/github/src -o "$out/github-watcher" ./cmd/github-watcher
           "$out/plect" --help
           "$out/plect-web" --help
-          "$out/channel-server" --help
-          "$out/slack-adapter" --help
-          "$out/github-watcher" --help
           tar -C dist -czf "dist/${root}.tar.gz" "$root"
           rm -rf "dist/$root"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -253,7 +261,7 @@ option. It does not promise a Node-free `plect-web` source install.
 
 `kecbigmt/devbox` consumes the Linux release archive, not a Plecture source
 flake input. Its package expression fetches the versioned archive by hash and
-exposes the archive's five `bin/` entries. The following replaces the source
+exposes the archive's two `bin/` entries. The following replaces the source
 `buildGoModule` expression there; the `sha256` is the value printed for the
 selected `SHA256SUMS` entry, converted with `nix store prefetch-file` before
 committing.
@@ -283,7 +291,14 @@ pkgs.stdenvNoCC.mkDerivation {
 ```
 
 The downstream flake removes its `plect` source input, `plectSrc` special
-argument, `vendorHash`, `overrideModAttrs`, and Plecture's `checkFlags`.
+argument, `vendorHash`, `overrideModAttrs`, and Plecture's `checkFlags`. It
+also removes the three stale plugin `subPackages` entries and the leftover
+`github-watcher` user unit that points at an old Nix store path. The
+[downstream module](https://github.com/kecbigmt/devbox/blob/main/nixos/modules/plect.nix)
+states that `plect-bus` supervises catalog-declared services, so the PR does
+not replace that unit. The downstream catalog configuration and lock remain
+because they pin and build the enabled plugins on the host.
+
 Plecture source integration tests continue to run in Plecture pull-request CI
 and must pass before the tagged commit is released. The downstream repository
 runs its own Nix evaluation and service/configuration smoke tests against the
@@ -293,7 +308,8 @@ source integration tests.
 `fetchurl` is preferred to `fetchzip`: it fetches the exact release asset
 whose checksum is recorded in the release, while the derivation explicitly
 controls extraction. It supports reproducible binary consumption without
-requiring Nix users to own the cgo/frontend build toolchain.
+requiring Nix users to build the cgo core or frontend. It does not remove the
+Go toolchain needed by catalog plugins with Go build steps.
 
 ### Cutover and rollback
 
