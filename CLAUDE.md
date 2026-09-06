@@ -49,6 +49,9 @@ was made, or why an alternative was not.
 - A test function's name should usually make a docstring unnecessary. A
   one-sentence statement of intent is acceptable when the name alone
   doesn't carry it; don't restate the test's steps.
+- The same rationale is never written in more than one comment within a
+  change; it lives in the single outermost place (the function's doc
+  comment or `docs/adr/`), and other sites do not restate or reference it.
 
 Bad — restates what the code does and leans on an external decision
 record instead of standing on its own:
