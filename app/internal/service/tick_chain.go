@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/eventlog"
@@ -55,17 +56,17 @@ func publishAlreadyActiveChainKick(cfg *config.Config, store *state.Store, workS
 	return true, nil
 }
 
-// chainAttemptReasonCap is the sole Metadata["reason"] a chain-attempt event
-// carries today — see TypeChainAttempt.
 const chainAttemptReasonCap = "cap"
 
 // publishChainCapAttempt appends one plect.chain.attempt event to the ticking
 // session's own log (workSession) when its chain's spawn was refused by the
 // parent's max_up_children cap. It dedupes against that session's own recent
-// chain-attempt events on (chain_id, instance, target, reason): while none of
-// those change, a refusal streak records once rather than once per tick, and
-// a later fire of the same chain against a different target (a new instance,
-// or a re-derived target after the input it names moves on) is its own event.
+// chain-attempt events on (chain_id, instance, target, reason), but only
+// within the current refusal streak: a later recurrence of the identical
+// tuple, once targetSpawnedSince proves the derived target actually spawned
+// and was torn down in between, is a new streak and gets its own event —
+// matching evalDocumentChain's own reasoning that a cap-refused entry never
+// keeps a target's identity from resolving the same way twice.
 func publishChainCapAttempt(cfg *config.Config, store *state.Store, workSession string, sp ChainSpawn) error {
 	if sp.TargetSession == "" {
 		return nil
@@ -78,11 +79,25 @@ func publishChainCapAttempt(cfg *config.Config, store *state.Store, workSession 
 	if err != nil {
 		return err
 	}
-	for _, ev := range evs {
-		if ev.Metadata["chain_id"] == sp.ChainID &&
-			ev.Metadata["instance"] == sp.Instance &&
-			ev.Metadata["target"] == sp.TargetSession &&
-			ev.Metadata["reason"] == chainAttemptReasonCap {
+	var lastMatch *event.Event
+	for i := range evs {
+		ev := &evs[i]
+		if ev.Metadata["chain_id"] != sp.ChainID ||
+			ev.Metadata["instance"] != sp.Instance ||
+			ev.Metadata["target"] != sp.TargetSession ||
+			ev.Metadata["reason"] != chainAttemptReasonCap {
+			continue
+		}
+		if lastMatch == nil || ev.Time.After(lastMatch.Time) {
+			lastMatch = ev
+		}
+	}
+	if lastMatch != nil {
+		spawned, err := targetSpawnedSince(cfg, store, sp.TargetSession, lastMatch.Time)
+		if err != nil {
+			return err
+		}
+		if !spawned {
 			return nil
 		}
 	}
@@ -100,6 +115,25 @@ func publishChainCapAttempt(cfg *config.Config, store *state.Store, workSession 
 		},
 	})
 	return err
+}
+
+// targetSpawnedSince reports whether target was actually created after t —
+// evidence that an earlier refusal's streak ended (capacity freed and the
+// chain fired) before a later refusal for the identical tuple began a new
+// one. A currently-live session newer than t is that evidence directly; a
+// torn-down one leaves it in its tombstone's CreatedAt, since a cap refusal
+// is only ever reported for a target that does not presently exist —
+// evalDocumentChain reports an existing one as already-active instead of
+// retrying the fire.
+func targetSpawnedSince(cfg *config.Config, store *state.Store, target string, t time.Time) (bool, error) {
+	if s := store.Get(target); s != nil && s.CreatedAt.After(t) {
+		return true, nil
+	}
+	tomb, err := lookupTombstone(cfg, store, target)
+	if err != nil {
+		return false, err
+	}
+	return tomb != nil && tomb.CreatedAt.After(t), nil
 }
 
 func chainKickDedupKey(workSession string, sp ChainSpawn) string {
