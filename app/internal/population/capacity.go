@@ -103,7 +103,7 @@ func (c *capacityCoordinator) idleCandidates() []idleCandidate {
 	sessions := c.state.All()
 	var candidates []idleCandidate
 	for sessionName, session := range sessions {
-		if session == nil || session.Population == nil || !logicalVirtualRootChild(session) || !runIsUp(session) {
+		if session == nil || session.Population == nil || !logicalVirtualRootChild(session) || !c.cfg().RunScopeUp(session) {
 			continue
 		}
 		key := session.Population.Workflow + "/" + session.Population.Name
@@ -164,15 +164,6 @@ func (c *capacityCoordinator) latestInbound(session string) (time.Time, error) {
 
 func logicalVirtualRootChild(session *domain.Session) bool {
 	return session.ParentSession == "" || strings.HasPrefix(session.ParentSession, "root:")
-}
-
-func runIsUp(session *domain.Session) bool {
-	for _, taskState := range session.Tasks {
-		if taskState != nil && taskState.Scope == contract.TaskScopeRun && taskState.Status == contract.TaskStatusProduced {
-			return true
-		}
-	}
-	return false
 }
 
 func (c *capacityCoordinator) latestStatus(session string) (event.Event, bool) {

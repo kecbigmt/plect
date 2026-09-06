@@ -9,7 +9,6 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/eventlog"
 	"github.com/kecbigmt/plecture/app/internal/state"
 	"github.com/kecbigmt/plecture/contracts/event"
-	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
 // terminalScanLimit bounds the reverse scan a dedup check uses against the
@@ -140,7 +139,7 @@ func publishTerminalTo(cfg *config.Config, store *state.Store, origin, target st
 		if err != nil {
 			return "", nil, err
 		}
-		if ts != nil && !runScopeUp(ts.Tasks) {
+		if ts != nil && !cfg.RunScopeUp(ts) {
 			if _, uerr := Up(cfg, store, UpParams{Identifier: target}); uerr != nil {
 				wakeErr = fmt.Errorf("wake %q: %w", target, uerr)
 			}
@@ -160,16 +159,4 @@ func hasRecentTerminalEvent(store *state.Store, session, typ, dedupKey string) (
 		}
 	}
 	return false, nil
-}
-
-// runScopeUp reports whether any run-scoped task is produced — the same test
-// the dispatch supervisor uses to decide whether a session's dispatcher (and
-// therefore its socket/runtime-delivery channel) is live.
-func runScopeUp(tasks map[string]*contract.TaskState) bool {
-	for _, e := range tasks {
-		if e != nil && e.Scope == contract.TaskScopeRun && e.Status == contract.TaskStatusProduced {
-			return true
-		}
-	}
-	return false
 }

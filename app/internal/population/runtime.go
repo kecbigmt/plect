@@ -68,7 +68,7 @@ func upPopulation(cfg func() *config.Config, store *state.Store, def Definition,
 		if current.Population == nil || *current.Population != *provenance || current.ResourceID != resource {
 			return UpOutcome{}, &populationConflictError{session: name, reason: fmt.Sprintf("session %q is owned by another lifecycle authority", name)}
 		}
-		alreadyUp := runIsUp(current)
+		alreadyUp := cfg().RunScopeUp(current)
 		result, err := service.Up(cfg(), store, service.UpParams{Identifier: name})
 		if err != nil {
 			return UpOutcome{}, err

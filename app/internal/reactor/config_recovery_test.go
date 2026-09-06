@@ -16,7 +16,7 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-const workflowHeader = "\n[wf]\nkind = \"workflow\"\n"
+const workflowHeader = "\n[wf]\nkind = \"workflow\"\n[[wf.nodes]]\nid = \"claude\"\nuses = \"claude\"\n"
 
 const heartbeatWorkflow = workflowHeader + `
 [wf.tick]
@@ -33,6 +33,7 @@ const declaresOnOnly = workflowHeader + "\n[wf.tick]\non = [\"resource.*\"]\n"
 // process was restarted.
 func TestSessionReactor_ReArmsHeartbeatAfterWorkflowLoadRecovers(t *testing.T) {
 	base := t.TempDir()
+	writeClaudeRunTask(t, base)
 	workflowPath := filepath.Join(base, "workflows", "wf.toml")
 	writeFile(t, workflowPath, "this is not valid toml")
 	cfg := &config.Config{BaseDir: base, WorkspaceDirsRoot: t.TempDir()}
@@ -95,6 +96,7 @@ func TestSessionReactor_ReArmsHeartbeatAfterWorkflowLoadRecovers(t *testing.T) {
 // daemon's own periodic config refresh applies.
 func TestSessionReactor_KeepsLastGoodTickConfigWhenWorkflowLoadFails(t *testing.T) {
 	base := t.TempDir()
+	writeClaudeRunTask(t, base)
 	workflowPath := filepath.Join(base, "workflows", "wf.toml")
 	writeFile(t, workflowPath, heartbeatWorkflow)
 	cfg := &config.Config{BaseDir: base, WorkspaceDirsRoot: t.TempDir()}

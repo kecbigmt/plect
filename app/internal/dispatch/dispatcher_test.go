@@ -64,6 +64,7 @@ func runTestDispatcher(t *testing.T, log *eventlog.Store, sock string) (*session
 	}
 	d := &sessionDispatcher{
 		session:  "o/r-1",
+		cfg:      &config.Config{},
 		channels: []config.EventChannel{{Name: "runtime", Uses: "claude_channel", Inputs: map[string]*lang.Value{"path": fromValue("nodes.claude.outputs.socket_path")}, Include: []string{"plect.instruction"}}},
 		defs:     map[string]config.ChannelDefinition{"claude_channel": socketChannel()},
 		log:      log,
@@ -128,7 +129,7 @@ func TestDispatcher_RunReplaysAfterRestart(t *testing.T) {
 	// Appended "while down": no dispatcher running.
 	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Body: "while-down"})
 
-	d2 := &sessionDispatcher{session: d1.session, channels: d1.channels, defs: d1.defs, log: log, state: st, hub: hub, policy: d1.policy}
+	d2 := &sessionDispatcher{session: d1.session, cfg: d1.cfg, channels: d1.channels, defs: d1.defs, log: log, state: st, hub: hub, policy: d1.policy}
 	startDispatcher(t, d2)
 	if typ := recvType(t, recv); typ != event.TypeInstruction { // replayed from the durable cursor
 		t.Errorf("post-restart delivery type = %q", typ)

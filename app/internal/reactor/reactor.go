@@ -128,7 +128,7 @@ func (r *sessionReactor) run(ctx context.Context) {
 		if s == nil {
 			return // destroyed
 		}
-		if hasRunScopeUp(s.Tasks) {
+		if r.cfg.RunScopeUp(s) {
 			r.drain(ctx, &startGen)
 		}
 		select {
@@ -313,7 +313,7 @@ func (r *sessionReactor) checkHeartbeat(ctx context.Context) {
 		return
 	}
 	s := r.state.Get(r.session)
-	if s == nil || !hasRunScopeUp(s.Tasks) {
+	if s == nil || !r.cfg.RunScopeUp(s) {
 		return
 	}
 	if !s.LastTickAt.IsZero() {
@@ -342,7 +342,7 @@ func (r *sessionReactor) checkHealth(ctx context.Context) {
 		return
 	}
 	s := r.state.Get(r.session)
-	if s == nil || !hasRunScopeUp(s.Tasks) {
+	if s == nil || !r.cfg.RunScopeUp(s) {
 		return
 	}
 	fn := r.healthcheckFn
@@ -363,7 +363,7 @@ func (r *sessionReactor) checkChannelHealth(ctx context.Context) {
 		return
 	}
 	s := r.state.Get(r.session)
-	if s == nil || !hasRunScopeUp(s.Tasks) {
+	if s == nil || !r.cfg.RunScopeUp(s) {
 		return
 	}
 	fn := r.channelHealthFn

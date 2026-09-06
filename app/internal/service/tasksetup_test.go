@@ -365,12 +365,15 @@ func TestTaskSetup_RunScopedRejectedWhenDown(t *testing.T) {
 
 func TestTaskSetup_RunScopedAllowedWhenUp(t *testing.T) {
 	cfg := writeWorkflowFixture(t, t.TempDir(), "coding",
-		[]taskFixture{{id: "storybook", scope: "run", setup: `echo '{}'`}},
-		[]nodeFixture{{id: "storybook"}},
+		[]taskFixture{
+			{id: "storybook", scope: "run", setup: `echo '{}'`},
+			{id: "runtime", scope: "run"},
+		},
+		[]nodeFixture{{id: "storybook"}, {id: "runtime"}},
 	)
 	store := testStore(t)
 	seedSession(t, store, "o/r-1", "o/r", 1, "coding", map[string]*contract.TaskState{
-		"tmux": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Seq: 4},
+		"runtime": {Scope: contract.TaskScopeRun, TaskID: "runtime", Status: contract.TaskStatusProduced, Seq: 4},
 	})
 
 	res, err := TaskSetup(cfg, store, TaskSetupParams{TaskID: "storybook", SessionName: "o/r-1"})
@@ -379,6 +382,27 @@ func TestTaskSetup_RunScopedAllowedWhenUp(t *testing.T) {
 	}
 	if st := store.Get("o/r-1").Tasks[res.Instance]; st == nil || st.Status != contract.TaskStatusProduced {
 		t.Fatalf("expected produced storybook, got %+v", st)
+	}
+}
+
+func TestTaskSetup_RunScopedRejectedWhenOnlyStaleProducedRecord(t *testing.T) {
+	cfg := writeWorkflowFixture(t, t.TempDir(), "coding",
+		[]taskFixture{{id: "storybook", scope: "run", setup: `echo '{}'`}},
+		[]nodeFixture{{id: "storybook"}},
+	)
+	store := testStore(t)
+	seedSession(t, store, "o/r-1", "o/r", 1, "coding", map[string]*contract.TaskState{
+		// "removed_runtime" is a stale record: the workflow above declares no
+		// node using it.
+		"removed_runtime": {Scope: contract.TaskScopeRun, TaskID: "removed_runtime", Status: contract.TaskStatusProduced},
+	})
+
+	_, err := TaskSetup(cfg, store, TaskSetupParams{TaskID: "storybook", SessionName: "o/r-1"})
+	if err == nil {
+		t.Fatal("expected error: run-scoped task while only a stale entry is produced")
+	}
+	if svcErr, ok := err.(*Error); !ok || svcErr.Code != ErrInvalidInput {
+		t.Errorf("err = %v, want ErrInvalidInput", err)
 	}
 }
 

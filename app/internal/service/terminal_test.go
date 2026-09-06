@@ -284,26 +284,6 @@ func TestPublishTerminalTo_SelfTargetNeverWakesRegardlessOfCallerRequest(t *test
 	}
 }
 
-func TestRunScopeUp(t *testing.T) {
-	cases := []struct {
-		name  string
-		tasks map[string]*contract.TaskState
-		want  bool
-	}{
-		{"nil tasks", nil, false},
-		{"only session-scoped produced", map[string]*contract.TaskState{
-			"slack_thread": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced},
-		}, false},
-		{"run-scoped cleaned", map[string]*contract.TaskState{
-			"tmux": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusCleaned},
-		}, false},
-		{"run-scoped produced", map[string]*contract.TaskState{
-			"tmux": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced},
-		}, true},
-	}
-	for _, c := range cases {
-		if got := runScopeUp(c.tasks); got != c.want {
-			t.Errorf("%s: runScopeUp = %v, want %v", c.name, got, c.want)
-		}
-	}
-}
+// RunScopeUp itself moved to the config package (config.Config.RunScopeUp),
+// which every consumer of the run fact — service, reactor, dispatch, and
+// population — now shares; see app/internal/config/runstate_test.go.

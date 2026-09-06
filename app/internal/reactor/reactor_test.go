@@ -28,6 +28,19 @@ func writeFile(t *testing.T, path, content string) {
 	}
 }
 
+// writeClaudeRunTask declares the run-scoped effect a "claude" node uses,
+// under root/tasks — cfg.RunScopeUp resolves a produced "claude" task-state
+// entry against this declaration to decide the node is current-plan
+// run-scoped.
+func writeClaudeRunTask(t *testing.T, root string) {
+	t.Helper()
+	writeFile(t, filepath.Join(root, "tasks", "claude.toml"), `
+[claude]
+kind  = "effect"
+scope = "run"
+`)
+}
+
 // newTestReactor builds a sessionReactor over a fast-poll hub so tests don't
 // wait on the production 500ms poll interval.
 func newTestReactor(t *testing.T, tc config.TickConfig) (*sessionReactor, *state.Store, *eventlog.Store) {
