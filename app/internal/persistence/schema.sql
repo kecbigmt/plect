@@ -224,8 +224,7 @@ CREATE TABLE events (
 CREATE UNIQUE INDEX events_stream_id_sequence ON events(stream_id, sequence);
 CREATE INDEX events_stream_id_id_idx ON events(stream_id, id);
 
--- delivery/tick are at-least-once commitments; heartbeat is a resettable
--- observation mark. next_sequence is exclusive and 0 is valid (unconsumed).
+-- delivery/tick are at-least-once commitments; heartbeat is a resettable mark; next_sequence is exclusive and 0 is valid (unconsumed).
 CREATE TABLE event_cursors (
     stream_id TEXT NOT NULL REFERENCES event_streams(id) ON DELETE CASCADE,
     kind TEXT NOT NULL CHECK (kind IN ('delivery', 'tick', 'heartbeat')),

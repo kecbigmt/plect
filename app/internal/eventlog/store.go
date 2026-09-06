@@ -143,8 +143,7 @@ func (s *Store) ReadTombstone(session string) (data []byte, ok bool, err error) 
 
 // SwapChainAttempt atomically compares-and-sets a plect.chain.attempt
 // cap-refusal streak marker (see service.chainAttemptFingerprint), scoped by
-// a caller-supplied identity token (service.chainAttemptStreamID) so two
-// incarnations never share a key even if a destroy races a leftover tick.
+// a caller-supplied identity token (service.chainAttemptStreamID) so two incarnations never share a key even if a destroy races a leftover tick.
 // previous is the value from just before this call, for RevertChainAttempt.
 func (s *Store) SwapChainAttempt(session, instance, chainID, generation, newFingerprint string) (previous string, won bool, err error) {
 	key := chainAttemptKey(instance, chainID, generation)
@@ -417,8 +416,7 @@ func (s *Store) ListAcross(names []string, f event.Filter) ([]event.Event, error
 // FollowAcross delivers events as they land across a dynamic set of sessions,
 // then keeps polling until ctx ends. It re-resolves membership each tick via
 // namesFn so a session that joins later — a freshly spawned subtree child —
-// starts being followed automatically, and tracks a per-session sequence so
-// each record is delivered once, sorted by id so the merged order stays
+// starts being followed automatically, tracking a per-session sequence so each record is delivered once, sorted by id so the merged order stays
 // chronological; across ticks ordering is monotonic at poll granularity.
 func (s *Store) FollowAcross(ctx context.Context, namesFn func() ([]string, error), f event.Filter, fn func(event.Event)) error {
 	lf := f

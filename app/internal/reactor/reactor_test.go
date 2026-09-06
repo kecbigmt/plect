@@ -68,11 +68,8 @@ func newTestReactor(t *testing.T, tc config.TickConfig) (*sessionReactor, *state
 	return r, st, log
 }
 
-// startReactor starts r.run in the background and blocks until it has
-// seeded its cursor and registered its Watch (both happen before run()'s
-// first blocking call), so callers need no fixed post-start sleep — SQLite's
-// first-touch migration cost varies, unlike the old file-backed store's
-// near-instant seed.
+// startReactor starts r.run and blocks until its cursor is seeded and its
+// Watch registered, so callers need no fixed sleep despite SQLite's variable first-touch migration cost.
 func startReactor(t *testing.T, r *sessionReactor) func() {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -85,9 +82,7 @@ func startReactor(t *testing.T, r *sessionReactor) func() {
 	}
 }
 
-// waitForCursorSeed polls until run()'s seedCursor has committed the
-// reactor's durable cursor, replacing a fixed sleep sized for the old
-// file-backed event log (SQLite's first-touch migration cost varies).
+// waitForCursorSeed polls for run()'s seedCursor commit; see startReactor.
 func waitForCursorSeed(t *testing.T, log *eventlog.Store, session string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -444,15 +439,11 @@ func TestSessionReactor_TicksSerializeAndDebounceBursts(t *testing.T) {
 
 	const n = 20
 	for range n {
-		log.Append(event.Event{SessionName: "o/r-1", Type: "resource.updated", Direction:
-
-		// Pre-commit the cursor to 0 so seedCursor (called at the top of run())
-		// finds a cursor already present and does not seed it to the post-burst
-		// tail — the reactor's first drain() then necessarily reads all n events
-		// appended above in one batch.
-		event.Internal})
+		log.Append(event.Event{SessionName: "o/r-1", Type: "resource.updated", Direction: event.Internal})
 	}
 
+	// Pre-committing to 0 stops seedCursor from seeding past this burst, so the
+	// reactor's first drain() reads all n events in one batch.
 	if err := log.CommitCursor("o/r-1", reactorConsumer, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -836,14 +827,9 @@ func TestSessionReactor_DrainTriggeredInboundTickResetsBackoff(t *testing.T) {
 	})
 	r.tickFn = service.TickSession
 
-	// Seed a grown backoff and a recent LastTickAt before the reactor ever
-	// starts, as if several quiet heartbeat sweeps already happened — the
-	// heartbeat sweep alone would not fire again for a long while. Seeding
-	// first (rather than after starting) also gives run()'s own immediate
-	// heartbeat check a non-zero LastTickAt to see, so it takes the
-	// interval-gated branch and skips its unconditional first-tick path;
-	// otherwise that tick's own updateBackoff races this seed and can
-	// commit after it, clobbering ConsecutiveUnchanged back up.
+	// Seeded before start so run()'s own immediate heartbeat check sees a
+	// non-zero LastTickAt and takes the interval-gated branch — seeding after
+	// start would race that tick's own updateBackoff clobbering this value.
 	if err := st.Update("o/r-1", func(s *domain.Session) error {
 		s.LastTickAt = time.Now()
 		s.TickBackoff = &contract.TickBackoff{ConsecutiveUnchanged: 5}
