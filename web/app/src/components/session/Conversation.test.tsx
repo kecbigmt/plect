@@ -457,7 +457,8 @@ describe("Conversation", () => {
   });
 
   it("remounts the live timeline even when the newly selected session's history is already cached", async () => {
-    // Pre-populated so team/b never passes through isPending, ruling that out as the isolating mechanism.
+    // Pre-populated so team/b never passes through isPending, ruling that
+    // out as the isolating mechanism.
     vi.mocked(fetch).mockImplementation((input) => {
       const url = requestUrl(input);
       const session = url.searchParams.get("session");

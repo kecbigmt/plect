@@ -65,8 +65,6 @@ export function Conversation({
       className="flex min-h-0 flex-1 flex-col overflow-auto p-3"
       onScroll={(e) => scrollPositions.current.set(sessionName, e.currentTarget.scrollTop)}
     >
-      {/* Keyed so a superseded session's live subscription is torn down by
-          unmounting, not by a runtime ownership check. */}
       <LiveTimeline
         key={sessionName}
         sessionName={sessionName}
