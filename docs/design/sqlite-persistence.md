@@ -1,5 +1,7 @@
 # SQLite persistence
 
+This design implements [the SQLite durable-storage decision](../adr/2026-09-06-sqlite-durable-storage.md).
+
 Core runtime persistence is one SQLite database at
 `$XDG_DATA_HOME/plect/runtime.db`. The `app/internal/persistence` package owns
 opening it, schema checks, the access gate, migrations, and translation between
@@ -227,12 +229,13 @@ uses two local advisory lock files next to `runtime.db`:
 
 The marker records only diagnostics: process ID, binary version, start time,
 stage, and a failure message. It is not a version ledger. A process that sees
-the coordination lock or a live marker waits for the configured migration wait
-period, then fails with an actionable "migration in progress" error; it does
-not open the database. An access that passed the brief coordination check just
-before intent was recorded may obtain the shared access lock, so the migration
-waits for that already-started operation. Once the migrator has the exclusive
-access lock, no new normal operation can enter.
+the coordination lock or a live marker waits for 30 seconds, then fails with an
+actionable "migration in progress" error; it does not open the database. The
+bound is `app/internal/persistence`'s fixed `migrationWait` constant, not a
+configuration value. An access that passed the brief coordination check before
+intent was recorded may obtain the shared access lock, so the migration waits
+for that already-started operation. Once the migrator has the exclusive access
+lock, no new normal operation can enter.
 
 After it owns both exclusive locks, the runner opens the database, reads the
 goose ledger again, and only then applies needed migrations. Each migration
@@ -264,12 +267,11 @@ second storage authority.
 
 ## Event positions and cursors
 
-An event cursor remains the opaque `event.Cursor{Off, Ord, Gen}` value, with
-`CursorVersion` set to `2`. `Off` is now the exclusive logical sequence in the
+An event cursor is the opaque `event.Cursor{Off, Ord, Gen}` value, with
+`CursorVersion` set to `2`. `Off` is the exclusive logical sequence in the
 selected event stream: `1` starts at the first row, and a cursor after event
 sequence `n` has `Off == n + 1`. `Gen` is `event_streams.generation`, and
-`Ord` is still the requested order. The field name remains stable for callers;
-its byte-offset interpretation does not.
+`Ord` is the requested order.
 
 `EventPage` decodes only version-2 cursors, validates `Ord` and `Gen` against
 the selected stream, and reads `sequence >= Off` in ascending order. Its next
@@ -286,7 +288,8 @@ version-1 token. The bus stream and the HTML relay at `GET /events/stream`
 reject raw byte-offset `Last-Event-ID` values and version-1 tokens before
 opening a stream. None parses a legacy byte offset as a sequence. The client
 recovery path discards the stream cursor and refetches history, deduplicating
-overlap by event ID as specified in `docs/design/web-ui-event-history.md`.
+overlap by event ID as specified in [the event-history handoff
+protocol](web-ui-event-history.md).
 
 The subtree cursor also carries version 2 and keeps its event-ID keyset
 position. `ListAcross` becomes a query over the selected stream names ordered
