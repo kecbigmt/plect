@@ -32,14 +32,9 @@ import (
 // request before any workspace provider hook does.
 func mountResolverOnlyWorkspaceProvider(t *testing.T, cfg *config.Config) {
 	t.Helper()
+	isolateMachineConfig(cfg)
 	base := t.TempDir()
 	cfg.BaseDir = base
-	// Clearing the mounted plugins is what the independence above actually
-	// requires: overriding BaseDir alone leaves whatever catalog this machine
-	// has mounted in the load, so the test would fail or pass on the strength
-	// of config it does not own.
-	cfg.PluginDirs = nil
-	cfg.Plugins = nil
 	if err := os.MkdirAll(filepath.Join(base, "workflows"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -94,6 +89,7 @@ func TestAcceptance_SessionAppearsInList(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	isolateMachineConfig(cfg)
 	svc := newLiveService(cfg, store)
 	rec := get(t, svc, "/")
 
@@ -161,6 +157,7 @@ func TestAcceptance_ApiV1SessionDetailUnknownNameIs404(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	isolateMachineConfig(cfg)
 	svc := newLiveService(cfg, store)
 	rec := get(t, svc, "/api/v1/sessions/acceptance/missing")
 
@@ -321,6 +318,7 @@ func TestAcceptance_SessionDetailNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	isolateMachineConfig(cfg)
 	svc := newLiveService(cfg, store)
 	rec := get(t, svc, "/sessions/acceptance/missing-1")
 	if rec.Code != http.StatusNotFound {
