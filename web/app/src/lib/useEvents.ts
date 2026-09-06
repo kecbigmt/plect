@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 
 import { fetchEventPage, type SessionEvent, type SessionEventPage } from "@/lib/eventsApi";
@@ -56,19 +56,19 @@ export function useLiveEvents(sessionName: string | null, historyReady: boolean,
   const queryClient = useQueryClient();
   const [liveEvents, setLiveEvents] = useState<SessionEvent[]>([]);
   const [state, setState] = useState<EventStreamState>("connecting");
-  const [owner, setOwner] = useState(sessionName);
   const controllerRef = useRef<AbortController | null>(null);
+  const mounted = useRef(false);
 
-  // Aborts the previous session's connection here, not only in the effect
-  // cleanup below: that cleanup runs on the next passive-effect flush, after
-  // this render has already committed, leaving a window where an in-flight
-  // callback from the old connection could still reach these setters.
-  if (sessionName !== owner) {
+  // Passive cleanup would leave the obsolete connection active through the next commit.
+  useLayoutEffect(() => {
+    if (!mounted.current) {
+      mounted.current = true;
+      return;
+    }
     controllerRef.current?.abort();
-    setOwner(sessionName);
     setLiveEvents([]);
     setState("connecting");
-  }
+  }, [sessionName]);
 
   useEffect(() => {
     if (sessionName === null || !historyReady) {

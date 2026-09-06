@@ -18,7 +18,7 @@ afterEach(() => {
 });
 
 describe("useLiveEvents", () => {
-  it("ignores a callback from the previous session's connection once ownership has moved on, independent of that connection's own AbortSignal", () => {
+  it("ignores a callback from the previous session's connection once a switch has committed", () => {
     const captured: EventStreamHandlers[] = [];
     vi.mocked(openEventStream).mockImplementation((_sessionName, _cursor, handlers) => {
       captured.push(handlers);
@@ -31,10 +31,6 @@ describe("useLiveEvents", () => {
 
     rerender({ sessionName: "team/b" });
 
-    // Session A's own AbortSignal is never fired here (openEventStream is
-    // mocked, so nothing calls it) — this isolates the ownership check from
-    // abort timing, proving it alone rejects a callback from a superseded
-    // connection.
     const aHandlers = captured[0];
     act(() => {
       aHandlers.onEvent({
