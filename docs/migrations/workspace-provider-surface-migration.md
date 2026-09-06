@@ -110,9 +110,13 @@ is the table name, every field moves under it, `{{bin "name"}}` becomes
 | `{{.owner}}` in `name` | `{ expr = "match.owner + …" }` | `name` |
 
 Each hook observes only its own roots, so a projection of the wrong one is a
-load error rather than an empty value. `subscribe` in particular reads only
-`session.name` and `resource.id`: it resolves the provider from the resource
-alone, with no workflow in scope to have set a parameter.
+load error rather than an empty value. `subscribe`'s old template only ever
+carried `{{.SessionName}}` and `{{.ResourceID}}`, migrated per the table
+above — it resolves the provider from the resource alone, with no workflow
+in scope to have set a parameter. `subscribe` later gained `session.branch`,
+which has no old-template counterpart to migrate from; see
+[`workspace-providers.md`](../language/workspace-providers.md) for the
+current root list.
 
 `name` is a computation over the resolver's captures, so it uses `expr`
 rather than a projection — `{{.owner}}/{{.repo}}-{{.number}}` is string

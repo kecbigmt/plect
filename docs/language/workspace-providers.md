@@ -88,8 +88,12 @@ title         = { type = "string", mutable = true }
 provider's own parameters. `cleanup` additionally reads the provider's recorded
 outputs through `self.outputs.*`, the caller's cleanup inputs, and `force`.
 `subscribe` and `unsubscribe` resolve the provider from the resource alone — no
-workflow is in scope to have set a parameter — so each reads only the session
-name and the resource id.
+workflow is in scope to have set a parameter — so each reads only session
+context and the resource id: `unsubscribe` reads the session name;
+`subscribe` additionally reads the session's own workspace branch
+(`session.branch`, empty when the workspace provider that set up the session
+produced none), so a provider can forward it to whatever delivery mechanism
+it owns.
 
 ## Contracts
 
