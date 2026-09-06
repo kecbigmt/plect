@@ -213,7 +213,7 @@ func flushOnePendingSubscribe(cfg *config.Config, store *state.Store, sessionNam
 	if fresh == nil || !resourceStillNeededBySession(fresh, resource) {
 		return dequeuePendingSubscribe(store, sessionName, resource)
 	}
-	subscribed, subErr := subscribeIfWired(cfg, sessionName, resource)
+	subscribed, subErr := subscribeIfWired(cfg, sessionName, resource, fresh.Branch)
 	if subErr != nil {
 		return subErr
 	}

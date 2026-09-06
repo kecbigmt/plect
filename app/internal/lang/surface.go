@@ -107,7 +107,7 @@ var (
 		"self.outputs.<key>", "inputs.<key>", "cleanup.inputs.<key>", "session.name",
 		"config.workspace_dirs_root", "force")
 	surfaceProviderSubscribe = newSurface("workspace_provider.subscribe", LayerSemantic,
-		"session.name", "resource.id")
+		"session.name", "session.branch", "resource.id")
 	surfaceProviderUnsubscribe = newSurface("workspace_provider.unsubscribe", LayerSemantic,
 		"session.name", "resource.id")
 
