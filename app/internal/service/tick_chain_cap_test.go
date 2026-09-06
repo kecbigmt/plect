@@ -58,10 +58,10 @@ func writeSpawnableWorkflowFile(t *testing.T, cfg *config.Config, id, workspaceD
 }
 
 // TestTickSession_ChainCapRefusalReportsTypedOutcomeAndEmitsChainAttemptEvent
-// exercises issue #452's first two acceptance criteria: a cap-refused spawn
-// is reported as its own typed outcome (not folded into a generic "spawn
-// failed:" warning), and records exactly one plect.chain.attempt event on
-// the ticking session's own log — deduplicated across a refusal streak.
+// verifies a cap-refused spawn is reported as its own typed outcome (not
+// folded into a generic "spawn failed:" warning), and records exactly one
+// plect.chain.attempt event on the ticking session's own log — deduplicated
+// across a refusal streak.
 func TestTickSession_ChainCapRefusalReportsTypedOutcomeAndEmitsChainAttemptEvent(t *testing.T) {
 	store := testStore(t)
 	cfg := writeWorkflowFixture(t, t.TempDir(), "wf",
@@ -121,10 +121,10 @@ func TestTickSession_ChainCapRefusalReportsTypedOutcomeAndEmitsChainAttemptEvent
 	}
 }
 
-// TestTickSession_ChainSpawnsOnceCapacityFreesAfterCapRefusal exercises issue
-// #452's third acceptance criterion: once the sibling occupying the cap goes
-// down, the next tick retries the same (idempotent) fire and actually spawns
-// it — the refusal was never a persisted "blocked" state.
+// TestTickSession_ChainSpawnsOnceCapacityFreesAfterCapRefusal verifies that
+// once the sibling occupying the cap goes down, the next tick retries the
+// same (idempotent) fire and actually spawns it — the refusal was never a
+// persisted "blocked" state.
 func TestTickSession_ChainSpawnsOnceCapacityFreesAfterCapRefusal(t *testing.T) {
 	store := testStore(t)
 	cfg := writeWorkflowFixture(t, t.TempDir(), "wf",
