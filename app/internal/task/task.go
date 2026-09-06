@@ -639,8 +639,8 @@ type ResultObserver interface {
 	OnResult(scope, node, effectID, action, result string, elapsed time.Duration, body string)
 }
 
-// nodeResultBodyLimit: the log is a delivery surface for channels, not a
-// dump for arbitrary script output.
+// The log is a delivery surface for channels, not a dump for arbitrary
+// script output, so a failure's captured text is bounded to this many bytes.
 const nodeResultBodyLimit = 4096
 
 func nodeResultBody(err error, stderr []byte) string {
@@ -671,8 +671,6 @@ func reportSetupSuccess(obs Observer, r Resolved, elapsed time.Duration, stderr 
 	reportResult(obs, r, event.NodeResultActionSetup, event.NodeResultProduced, elapsed, "")
 }
 
-// reportSetupFailure returns err unchanged so a call site can `return
-// reportSetupFailure(...)`.
 func reportSetupFailure(obs Observer, r Resolved, elapsed time.Duration, err error, stderr []byte) error {
 	obs.OnFailure(r.Scope, r.NodeID, elapsed, err, stderr)
 	reportResult(obs, r, event.NodeResultActionSetup, event.NodeResultFailed, elapsed, nodeResultBody(err, stderr))

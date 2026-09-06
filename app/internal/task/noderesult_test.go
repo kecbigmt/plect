@@ -18,7 +18,6 @@ type resultCall struct {
 	body                                string
 }
 
-// resultRecordingObserver captures ResultObserver.OnResult invocations.
 type resultRecordingObserver struct {
 	results []resultCall
 }
@@ -221,8 +220,8 @@ func TestRunCleanup_SkipReportsNoNodeResult(t *testing.T) {
 		[]taskStub{{id: "agent", scope: "run", setup: `echo '{}'`, cleanup: "true"}},
 		[]nodeStub{{id: "agent"}},
 	)
-	// No entry in tasks for "agent": RunCleanup takes its "no setup state"
-	// skip branch, which did no work and so must report nothing.
+	// Leaving "agent" absent from tasks sends RunCleanup down its "no setup
+	// state" skip branch, which did no work and so must report nothing.
 	tasks := map[string]*contract.TaskState{}
 	obs := &resultRecordingObserver{}
 	if err := RunCleanup(context.Background(), plan.Run, SessionVars{}, tasks, obs); err != nil {

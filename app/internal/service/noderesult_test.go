@@ -158,7 +158,8 @@ func TestUp_PopulationMemberRepairRecordsNodeResultWithoutUpTransition(t *testin
 		t.Fatalf("set population provenance: %v", err)
 	}
 
-	// No Observer, mirroring internal/population/runtime.go's repair call.
+	// This omits Observer to mirror internal/population/runtime.go's real
+	// repair call, which passes none.
 	if _, err := Up(cfg, store, UpParams{Identifier: sessionName}); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
