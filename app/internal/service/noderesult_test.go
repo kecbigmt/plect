@@ -137,12 +137,9 @@ func TestDown_RecordsNodeResultForCleanedNode(t *testing.T) {
 	}
 }
 
-// TestUp_PopulationMemberRepairRecordsNodeResultWithoutUpTransition covers
-// the runtime-failure-model ADR's decision that an in-place liveness repair
-// of a population-produced member appends plect.node.result to that
-// member's own log without depending on — or itself emitting —
-// plect.workflow_population.up, since the member never transitioned from
-// down to up (it was already up throughout the repair).
+// The member never transitions from down to up during an in-place repair —
+// it was already up throughout — so this asserts plect.node.result lands on
+// its own, without a plect.workflow_population.up alongside it.
 func TestUp_PopulationMemberRepairRecordsNodeResultWithoutUpTransition(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -172,17 +169,21 @@ func TestUp_PopulationMemberRepairRecordsNodeResultWithoutUpTransition(t *testin
 		t.Fatalf("Up: %v", err)
 	}
 
-	// The vanished pane fails its liveness check, so the repair is a
-	// cleanup-then-resetup pair: two separate node.result facts, not one.
+	// The vanished pane fails its liveness check, so the repair is three
+	// separate node.result facts: the failed check itself, the cleanup it
+	// triggers, and the re-setup that follows — not one.
 	evs := nodeResultEvents(t, store, sessionName)
-	if len(evs) != 2 {
-		t.Fatalf("node.result events = %d, want 2: %+v", len(evs), evs)
+	if len(evs) != 3 {
+		t.Fatalf("node.result events = %d, want 3: %+v", len(evs), evs)
 	}
-	if got := evs[0].Metadata; got["node"] != "pane" || got["action"] != event.NodeResultActionCleanup || got["result"] != event.NodeResultCleaned {
+	if got := evs[0].Metadata; got["node"] != "pane" || got["action"] != event.NodeResultActionAlive || got["result"] != event.NodeResultFailed {
 		t.Fatalf("first event metadata = %+v", got)
 	}
-	if got := evs[1].Metadata; got["node"] != "pane" || got["action"] != event.NodeResultActionSetup || got["result"] != event.NodeResultProduced {
+	if got := evs[1].Metadata; got["node"] != "pane" || got["action"] != event.NodeResultActionCleanup || got["result"] != event.NodeResultCleaned {
 		t.Fatalf("second event metadata = %+v", got)
+	}
+	if got := evs[2].Metadata; got["node"] != "pane" || got["action"] != event.NodeResultActionSetup || got["result"] != event.NodeResultProduced {
+		t.Fatalf("third event metadata = %+v", got)
 	}
 
 	upEvents, _, _, err := eventlog.NewStore(store.Dir()).List(sessionName, 0, event.Filter{Types: []string{event.TypeWorkflowPopulationUp}})

@@ -233,6 +233,13 @@ func resolveWorkflowNodes(wf config.WorkflowFile, defs map[string]config.TaskDef
 		if err != nil {
 			return nil, err
 		}
+		// node.Uses is the catalog-qualified address already canonicalized
+		// against defs' own keys; def.ID is only the definition's local name,
+		// which differs from it whenever the definition is plugin-owned.
+		// TaskID must carry the address: a later stale-node cleanup re-looks
+		// up the definition by it, and it is the identifier reported for the
+		// node's effect.
+		resolved.TaskID = node.Uses
 		resolved.Inputs = node.Inputs
 		out = append(out, resolved)
 	}
@@ -734,10 +741,16 @@ func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, ta
 		if existing, ok := tasks[r.NodeID]; ok && existing != nil && existing.Status == contract.TaskStatusProduced {
 			aliveStart := time.Now()
 			aliveErr := verifyLiveness(goCtx, r, session, existing)
+			aliveElapsed := time.Since(aliveStart)
 			if aliveErr == nil {
-				reportAliveSkip(obs, r, time.Since(aliveStart))
+				reportAliveSkip(obs, r, aliveElapsed)
 				continue
 			}
+			// The liveness check itself is a completed action distinct from
+			// whatever the ensuing cleanup and re-setup report: it can fail
+			// even when the node's eventual rebuild succeeds, so it needs its
+			// own result rather than being folded into either of theirs.
+			reportResult(obs, r, event.NodeResultActionAlive, event.NodeResultFailed, aliveElapsed, nodeResultBody(aliveErr, nil))
 			if invalidateErr := invalidateProducedNode(goCtx, r, ordered, aliveErr, session, tasks, obs); invalidateErr != nil {
 				return invalidateErr
 			}

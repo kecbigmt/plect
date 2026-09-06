@@ -12,10 +12,8 @@ import (
 )
 
 // noopTaskObserver lets nodeResultObserver always hold a callable inner
-// Observer. Many lifecycle callers (population repair, tick's own re-up,
-// mcpserver.Up) pass no Observer at all — exactly the unattended paths
-// decision 6 of the runtime-failure-model ADR most needs a durable record
-// from — so nodeResultObserver must not assume a real one underneath it.
+// Observer: several lifecycle callers (population repair, tick's own
+// re-up) pass none at all.
 type noopTaskObserver struct{}
 
 func (noopTaskObserver) OnStart(string, string)                                 {}
@@ -27,15 +25,8 @@ func (noopTaskObserver) OnFailure(string, string, time.Duration, error, []byte) 
 // every terminal node outcome task.RunSetup/RunCleanup reports (via the
 // optional task.ResultObserver extension) is appended to sessionName's own
 // event log, in addition to being forwarded to inner for CLI/UI rendering.
-//
-// Delivering the event to a workflow channel is the ordinary session
-// dispatcher's job — it already follows this same log — so this type's only
-// responsibility is getting the fact durably recorded, for a manual
-// session, a child session, and a population member alike: appending to
-// sessionName's own log rather than depending on any particular caller
-// makes that "alike" hold, since every lifecycle entry point wraps its
-// Observer with this before running setup or cleanup (the runtime-failure-model
-// ADR's decision on population-produced sessions).
+// Delivering the appended event to a workflow channel is the ordinary
+// session dispatcher's job, which already follows this same log.
 type nodeResultObserver struct {
 	inner       task.Observer
 	log         *eventlog.Store
