@@ -66,16 +66,27 @@ type indexInfo struct {
 	wherePredicate string
 }
 
-// foreignKeyInfo omits SQLite's numeric constraint id/sequence columns:
-// those numbers are assigned by declaration order, which is exactly the
-// kind of textual-layout difference schema.sql and Atlas-generated SQL are
-// free to vary on while still declaring the same relationship.
+// foreignKeyInfo groups PRAGMA foreign_key_list's rows by their shared
+// constraint id and keeps them ordered by seq: a composite foreign key
+// (FOREIGN KEY (a, b) REFERENCES other(x, y)) reports one row per column
+// pair, all sharing one id, and seq gives the pairing between each local
+// and referenced column. Flattening those rows into independent
+// column-pair entries — dropping which pairs belong to the same
+// constraint and in what order — would make one two-column composite key
+// indistinguishable from two unrelated single-column keys to the same
+// table. The id's own numeric value is not part of this, since it is
+// itself assigned by declaration order across the table's other foreign
+// keys and free to differ between schema.sql and generated SQL.
 type foreignKeyInfo struct {
+	columns  []fkColumnPair
+	toTable  string
+	onUpdate string
+	onDelete string
+}
+
+type fkColumnPair struct {
 	fromColumn string
-	toTable    string
 	toColumn   string
-	onUpdate   string
-	onDelete   string
 }
 
 func schemaFromSQLFile(t *testing.T, ctx context.Context, path string) map[string]tableSchema {
@@ -277,22 +288,49 @@ func tableForeignKeys(t *testing.T, ctx context.Context, handle *sql.DB, table s
 	}
 	defer rows.Close()
 
-	var fks []foreignKeyInfo
+	type rawRow struct {
+		id, seq                         int
+		refTable, from, to              string
+		onUpdate, onDelete, matchClause string
+	}
+	var rawByID []rawRow
+	seen := map[int]bool{}
+	var order []int
 	for rows.Next() {
-		var (
-			id, seq                         int
-			refTable, from, to              string
-			onUpdate, onDelete, matchClause string
-		)
-		if err := rows.Scan(&id, &seq, &refTable, &from, &to, &onUpdate, &onDelete, &matchClause); err != nil {
+		var r rawRow
+		if err := rows.Scan(&r.id, &r.seq, &r.refTable, &r.from, &r.to, &r.onUpdate, &r.onDelete, &r.matchClause); err != nil {
 			t.Fatalf("scan foreign_key_list(%s): %v", table, err)
 		}
-		fks = append(fks, foreignKeyInfo{fromColumn: from, toTable: refTable, toColumn: to, onUpdate: onUpdate, onDelete: onDelete})
+		rawByID = append(rawByID, r)
+		if !seen[r.id] {
+			seen[r.id] = true
+			order = append(order, r.id)
+		}
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate foreign_key_list(%s): %v", table, err)
 	}
-	sort.Slice(fks, func(i, j int) bool { return fks[i].fromColumn < fks[j].fromColumn })
+
+	var fks []foreignKeyInfo
+	for _, id := range order {
+		var group []rawRow
+		for _, r := range rawByID {
+			if r.id == id {
+				group = append(group, r)
+			}
+		}
+		sort.Slice(group, func(i, j int) bool { return group[i].seq < group[j].seq })
+
+		fk := foreignKeyInfo{toTable: group[0].refTable, onUpdate: group[0].onUpdate, onDelete: group[0].onDelete}
+		for _, r := range group {
+			fk.columns = append(fk.columns, fkColumnPair{fromColumn: r.from, toColumn: r.to})
+		}
+		fks = append(fks, fk)
+	}
+	// Sorted by the constraint's own first column pair rather than by id:
+	// id is a declaration-order artifact (see foreignKeyInfo's doc comment)
+	// and is not itself part of what two schemas need to agree on.
+	sort.Slice(fks, func(i, j int) bool { return fks[i].columns[0].fromColumn < fks[j].columns[0].fromColumn })
 	return fks
 }
 
@@ -375,10 +413,54 @@ func isIdentByte(b byte) bool {
 // normalizeSQLFragment lets a CHECK or partial-index predicate compare
 // equal across schema.sql and Atlas-generated SQL despite the two being
 // free to differ in identifier quoting (backticks vs. none) and
-// whitespace while expressing the same constraint.
+// whitespace while expressing the same constraint. It tracks single-quoted
+// string literals and leaves their contents untouched: SQL keywords and
+// identifiers are case-insensitive, but a string literal's case (and
+// internal whitespace) is data, not layout, and folding CHECK (status =
+// 'Active') and CHECK (status = 'active') together would hide two
+// constraints that accept different values as the same one.
 func normalizeSQLFragment(s string) string {
-	s = strings.NewReplacer("`", "", `"`, "", "[", "", "]", "").Replace(s)
-	return strings.ToLower(strings.Join(strings.Fields(s), " "))
+	var b strings.Builder
+	inString := false
+	pendingSpace := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if inString {
+			b.WriteByte(c)
+			if c == '\'' {
+				if i+1 < len(s) && s[i+1] == '\'' {
+					// A doubled '' is SQL's escape for a literal quote
+					// inside a string, not the string's closing quote.
+					b.WriteByte('\'')
+					i++
+					continue
+				}
+				inString = false
+			}
+			continue
+		}
+		switch {
+		case c == '\'':
+			if pendingSpace {
+				b.WriteByte(' ')
+				pendingSpace = false
+			}
+			inString = true
+			b.WriteByte(c)
+		case c == '`' || c == '"' || c == '[' || c == ']':
+			// Identifier-quoting punctuation outside a string literal;
+			// dropping it lets `col` and col compare equal.
+		case unicode.IsSpace(rune(c)):
+			pendingSpace = b.Len() > 0
+		default:
+			if pendingSpace {
+				b.WriteByte(' ')
+				pendingSpace = false
+			}
+			b.WriteByte(byte(unicode.ToLower(rune(c))))
+		}
+	}
+	return b.String()
 }
 
 func diffTableSets(declared, migrated map[string]tableSchema) string {
@@ -407,7 +489,7 @@ func diffTable(name string, want, got tableSchema) string {
 		func(i int) string { return columnString(want.columns[i]) }, func(i int) string { return columnString(got.columns[i]) })
 	diff += diffSlice(name, "secondary indexes", len(want.indexes), len(got.indexes), func(i int) bool { return indexesEqual(want.indexes[i], got.indexes[i]) },
 		func(i int) string { return indexString(want.indexes[i]) }, func(i int) string { return indexString(got.indexes[i]) })
-	diff += diffSlice(name, "foreign keys", len(want.foreignKeys), len(got.foreignKeys), func(i int) bool { return want.foreignKeys[i] == got.foreignKeys[i] },
+	diff += diffSlice(name, "foreign keys", len(want.foreignKeys), len(got.foreignKeys), func(i int) bool { return foreignKeysEqual(want.foreignKeys[i], got.foreignKeys[i]) },
 		func(i int) string { return foreignKeyString(want.foreignKeys[i]) }, func(i int) string { return foreignKeyString(got.foreignKeys[i]) })
 	diff += diffSlice(name, "CHECK constraints", len(want.checks), len(got.checks), func(i int) bool { return want.checks[i] == got.checks[i] },
 		func(i int) string { return want.checks[i] }, func(i int) string { return got.checks[i] })
@@ -463,8 +545,31 @@ func indexString(idx indexInfo) string {
 		" where=" + strconv.Quote(idx.wherePredicate) + " cols=" + strconv.Itoa(len(idx.cols)) + ":" + fmt.Sprint(idx.cols)
 }
 
+// foreignKeyInfo embeds a slice (columns), so it cannot use Go's built-in
+// ==; a composite key's column pairs must also match in both membership
+// and order, since seq encodes which local column pairs with which
+// referenced column.
+func foreignKeysEqual(a, b foreignKeyInfo) bool {
+	if a.toTable != b.toTable || a.onUpdate != b.onUpdate || a.onDelete != b.onDelete {
+		return false
+	}
+	if len(a.columns) != len(b.columns) {
+		return false
+	}
+	for i := range a.columns {
+		if a.columns[i] != b.columns[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func foreignKeyString(fk foreignKeyInfo) string {
-	return fk.fromColumn + " -> " + fk.toTable + "." + fk.toColumn + " on_update=" + fk.onUpdate + " on_delete=" + fk.onDelete
+	pairs := make([]string, len(fk.columns))
+	for i, c := range fk.columns {
+		pairs[i] = c.fromColumn + "->" + c.toColumn
+	}
+	return "(" + strings.Join(pairs, ", ") + ") -> " + fk.toTable + " on_update=" + fk.onUpdate + " on_delete=" + fk.onDelete
 }
 
 // TestDiffTable_CatchesIndexDefinitionMismatch is the regression this
@@ -508,11 +613,11 @@ func TestDiffTable_CatchesIndexDefinitionMismatch(t *testing.T) {
 func TestDiffTable_CatchesForeignKeyMismatch(t *testing.T) {
 	base := tableSchema{columns: []columnInfo{{name: "id", sqlType: "INTEGER", pk: 1}}}
 	want := base
-	want.foreignKeys = []foreignKeyInfo{{fromColumn: "parent_id", toTable: "sessions", toColumn: "name", onDelete: "SET NULL"}}
+	want.foreignKeys = []foreignKeyInfo{{columns: []fkColumnPair{{fromColumn: "parent_id", toColumn: "name"}}, toTable: "sessions", onDelete: "SET NULL"}}
 
 	cases := map[string]foreignKeyInfo{
-		"different referenced table":   {fromColumn: "parent_id", toTable: "other_table", toColumn: "name", onDelete: "SET NULL"},
-		"different on_delete behavior": {fromColumn: "parent_id", toTable: "sessions", toColumn: "name", onDelete: "CASCADE"},
+		"different referenced table":   {columns: []fkColumnPair{{fromColumn: "parent_id", toColumn: "name"}}, toTable: "other_table", onDelete: "SET NULL"},
+		"different on_delete behavior": {columns: []fkColumnPair{{fromColumn: "parent_id", toColumn: "name"}}, toTable: "sessions", onDelete: "CASCADE"},
 	}
 	for name, mismatched := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -523,6 +628,38 @@ func TestDiffTable_CatchesForeignKeyMismatch(t *testing.T) {
 				t.Fatal("diffTable reported no difference for tables with the same foreign key count but a mismatched definition")
 			}
 		})
+	}
+}
+
+// TestDiffTable_DistinguishesCompositeForeignKeyFromSeparateOnes proves a
+// two-column composite foreign key does not compare equal to two
+// unrelated single-column foreign keys that happen to reference the same
+// pair of columns: grouping and column order (seq) is part of what a
+// composite key means, not an artifact this check can discard.
+func TestDiffTable_DistinguishesCompositeForeignKeyFromSeparateOnes(t *testing.T) {
+	base := tableSchema{columns: []columnInfo{{name: "id", sqlType: "INTEGER", pk: 1}}}
+
+	composite := base
+	composite.foreignKeys = []foreignKeyInfo{
+		{columns: []fkColumnPair{{fromColumn: "a", toColumn: "x"}, {fromColumn: "b", toColumn: "y"}}, toTable: "other"},
+	}
+
+	separate := base
+	separate.foreignKeys = []foreignKeyInfo{
+		{columns: []fkColumnPair{{fromColumn: "a", toColumn: "x"}}, toTable: "other"},
+		{columns: []fkColumnPair{{fromColumn: "b", toColumn: "y"}}, toTable: "other"},
+	}
+
+	if diff := diffTable("t", composite, separate); diff == "" {
+		t.Fatal("diffTable reported no difference between one composite foreign key and two separate single-column ones")
+	}
+
+	reordered := base
+	reordered.foreignKeys = []foreignKeyInfo{
+		{columns: []fkColumnPair{{fromColumn: "b", toColumn: "y"}, {fromColumn: "a", toColumn: "x"}}, toTable: "other"},
+	}
+	if diff := diffTable("t", composite, reordered); diff == "" {
+		t.Fatal("diffTable reported no difference between a composite foreign key and the same columns in a different order")
 	}
 }
 
@@ -571,6 +708,34 @@ func TestExtractChecks_HandlesNestedParens(t *testing.T) {
 	}
 }
 
+// TestNormalizeSQLFragment_PreservesStringLiteralCaseAndWhitespace proves
+// normalizeSQLFragment folds keyword/identifier case and whitespace layout
+// but never touches what is inside a string literal — the regression a
+// blanket strings.ToLower would reintroduce, silently treating CHECK
+// (status = 'Active') and CHECK (status = 'active') as the same
+// constraint.
+func TestNormalizeSQLFragment_PreservesStringLiteralCaseAndWhitespace(t *testing.T) {
+	got := normalizeSQLFragment("( STATUS  =  'Active  Now' )")
+	want := "( status = 'Active  Now' )"
+	if got != want {
+		t.Errorf("normalizeSQLFragment(...) = %q, want %q", got, want)
+	}
+}
+
+// TestExtractChecks_DistinguishesLiteralCase is the same regression as
+// above, exercised through the full CHECK-extraction path rather than
+// normalizeSQLFragment in isolation.
+func TestExtractChecks_DistinguishesLiteralCase(t *testing.T) {
+	upper := extractChecks("CREATE TABLE t (status TEXT, CHECK (status = 'Active'))")
+	lower := extractChecks("CREATE TABLE t (status TEXT, CHECK (status = 'active'))")
+	if len(upper) != 1 || len(lower) != 1 {
+		t.Fatalf("extractChecks found %d and %d constraints, want exactly one each", len(upper), len(lower))
+	}
+	if upper[0] == lower[0] {
+		t.Fatalf("extractChecks did not distinguish string literal case: both normalized to %q", upper[0])
+	}
+}
+
 // TestIntrospect_ExtractsRealConstraintsFromSQLite proves the PRAGMA and
 // sqlite_master parsing in tableForeignKeys, tableIndexes, and
 // tableChecks actually recover the right values from a real SQLite
@@ -581,12 +746,15 @@ func TestIntrospect_ExtractsRealConstraintsFromSQLite(t *testing.T) {
 	ctx := context.Background()
 
 	const ddl = `
-		CREATE TABLE parent (id INTEGER PRIMARY KEY);
+		CREATE TABLE parent (id INTEGER PRIMARY KEY, code TEXT);
 		CREATE TABLE child (
 			id INTEGER PRIMARY KEY,
 			parent_id INTEGER REFERENCES parent(id) ON DELETE CASCADE,
 			label TEXT NOT NULL,
-			CHECK (label <> '')
+			composite_a INTEGER,
+			composite_b TEXT,
+			CHECK (label <> ''),
+			FOREIGN KEY (composite_a, composite_b) REFERENCES parent(id, code)
 		);
 		CREATE UNIQUE INDEX child_label_idx ON child(label) WHERE label <> 'draft';
 	`
@@ -596,8 +764,17 @@ func TestIntrospect_ExtractsRealConstraintsFromSQLite(t *testing.T) {
 
 	schema := introspect(t, ctx, db.write)["child"]
 
-	if len(schema.foreignKeys) != 1 || schema.foreignKeys[0] != (foreignKeyInfo{fromColumn: "parent_id", toTable: "parent", toColumn: "id", onDelete: "CASCADE", onUpdate: "NO ACTION"}) {
-		t.Errorf("foreignKeys = %+v, want one CASCADE-on-delete reference to parent.id", schema.foreignKeys)
+	wantForeignKeys := []foreignKeyInfo{
+		{columns: []fkColumnPair{{fromColumn: "composite_a", toColumn: "id"}, {fromColumn: "composite_b", toColumn: "code"}}, toTable: "parent", onUpdate: "NO ACTION", onDelete: "NO ACTION"},
+		{columns: []fkColumnPair{{fromColumn: "parent_id", toColumn: "id"}}, toTable: "parent", onUpdate: "NO ACTION", onDelete: "CASCADE"},
+	}
+	if len(schema.foreignKeys) != len(wantForeignKeys) {
+		t.Fatalf("foreignKeys = %+v, want %+v", schema.foreignKeys, wantForeignKeys)
+	}
+	for i := range wantForeignKeys {
+		if !foreignKeysEqual(schema.foreignKeys[i], wantForeignKeys[i]) {
+			t.Errorf("foreignKeys[%d] = %+v, want %+v", i, schema.foreignKeys[i], wantForeignKeys[i])
+		}
 	}
 	if len(schema.checks) != 1 || schema.checks[0] != "(label <> '')" {
 		t.Errorf("checks = %v, want exactly [\"(label <> '')\"]", schema.checks)
