@@ -84,6 +84,58 @@ func TestSubscribe_RunsProviderHookWithEnv(t *testing.T) {
 	}
 }
 
+// Subscribe forwards the session's own workspace branch into the hook
+// context, so a workspace provider's subscribe hook can key its own delivery
+// mechanism on it (e.g. the GitHub watcher's linked-PR discovery for an
+// issue resource) without any core knowledge of what the branch is for.
+func TestSubscribe_ForwardsSessionBranch(t *testing.T) {
+	rec := filepath.Join(t.TempDir(), "rec")
+	baseDir := t.TempDir()
+	providersDir := filepath.Join(baseDir, "workspaces")
+	if err := os.MkdirAll(providersDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`
+[github]
+kind  = "workspace_provider"
+match = %q
+name  = { expr = "match.owner + '/' + match.repo + '-' + match.number" }
+
+[github.setup]
+type    = "exec"
+command = "printf"
+args    = ['{"workspace_dir":"/tmp/x"}']
+
+[github.subscribe]
+type    = "exec"
+command = "sh"
+args    = ["-c", 'printf "%%s" "$1" > "$2"', "provider", { from = "session.branch" }, %q]
+`, ghMatch, rec)
+	if err := os.WriteFile(filepath.Join(providersDir, "github.toml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{BaseDir: baseDir}
+	store := state.NewStore(t.TempDir())
+	now := time.Now()
+	if err := store.Put(&domain.Session{Name: "org/repo-7", Branch: "issue/7", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+
+	if err := Subscribe(cfg, store, SubscribeParams{
+		ResourceID:  "https://github.com/org/repo/pull/7",
+		SessionName: "org/repo-7",
+	}); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	got, readErr := os.ReadFile(rec)
+	if readErr != nil {
+		t.Fatalf("read record: %v", readErr)
+	}
+	if string(got) != "issue/7" {
+		t.Errorf("subscribe hook saw session.branch = %q, want issue/7", got)
+	}
+}
+
 func TestSubscribe_DefaultsSessionFromEnv(t *testing.T) {
 	rec := filepath.Join(t.TempDir(), "rec")
 	cfg := writeSubscribeProvider(t, "github", ghMatch, rec)

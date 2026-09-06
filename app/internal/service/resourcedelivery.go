@@ -23,7 +23,7 @@ import (
 // a retry gets queued. Never returns an error: every caller treats a wiring
 // failure as non-fatal to the instantiation that already succeeded,
 // reporting it via the returned message instead.
-func wireDeliveryOnSetup(cfg *config.Config, store *state.Store, sessionName, resource string) (bool, string) {
+func wireDeliveryOnSetup(cfg *config.Config, store *state.Store, sessionName, resource, branch string) (bool, string) {
 	if strings.TrimSpace(resource) == "" {
 		return false, ""
 	}
@@ -31,7 +31,7 @@ func wireDeliveryOnSetup(cfg *config.Config, store *state.Store, sessionName, re
 	var errMsg string
 	if lockErr := withDeliveryLock(store, sessionName, func() {
 		var subErr error
-		subscribed, subErr = subscribeIfWired(cfg, sessionName, resource)
+		subscribed, subErr = subscribeIfWired(cfg, sessionName, resource, branch)
 		if subErr != nil {
 			errMsg = subErr.Error()
 		}
@@ -59,7 +59,7 @@ func wireDeliveryOnSetup(cfg *config.Config, store *state.Store, sessionName, re
 // it, like a hook execution failure, as non-fatal (see its own comment),
 // since the instance it would otherwise leave orphaned has already been
 // fully instantiated by the time this runs.
-func subscribeIfWired(cfg *config.Config, sessionName, resourceID string) (bool, error) {
+func subscribeIfWired(cfg *config.Config, sessionName, resourceID, branch string) (bool, error) {
 	if strings.TrimSpace(resourceID) == "" {
 		return false, nil
 	}
@@ -80,6 +80,7 @@ func subscribeIfWired(cfg *config.Config, sessionName, resourceID string) (bool,
 			SessionName: sessionName,
 			Plugins:     cfg.Plugins,
 			SourcePath:  prov.SourcePath,
+			Branch:      branch,
 		}); hookErr != nil {
 			return false, &Error{Code: ErrExecutionFailed, Message: hookErr.Error()}
 		}

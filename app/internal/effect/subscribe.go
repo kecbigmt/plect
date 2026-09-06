@@ -24,6 +24,14 @@ type SubscribeHookVars struct {
 	// `bin = "<name>"` in Subscribe can resolve against the workspace
 	// provider's containing plugin.
 	SourcePath string
+	// Branch is the session's workspace branch, when the workspace provider
+	// that set up the session produced one. Neutral session context: core
+	// has no opinion on what a workspace provider's subscribe hook does with
+	// it. Empty when the workspace provider produced no branch, or when the
+	// caller has no session workspace in scope. Only Subscribe projects it
+	// into the hook's env; a subscribe hook with no use for it is
+	// unaffected.
+	Branch string
 }
 
 // RunWorkspaceProviderSubscribe renders and runs the workspace provider's
@@ -37,7 +45,7 @@ func RunWorkspaceProviderSubscribe(prov config.WorkspaceProviderConfig, vars Sub
 		return fmt.Errorf("workspace provider %q declares no subscribe hook", prov.ID)
 	}
 	env := lang.Roots{
-		"session":  map[string]any{"name": vars.SessionName},
+		"session":  map[string]any{"name": vars.SessionName, "branch": vars.Branch},
 		"resource": map[string]any{"id": vars.ResourceID},
 	}
 	_, stderr, runErr := RunProviderAction(prov.Subscribe, ProviderEval(env, vars.Plugins, vars.SourcePath, prov.Ownership()))

@@ -90,6 +90,58 @@ func TestTaskSetup_ResourceSubscribesToMatchingProvider(t *testing.T) {
 	}
 }
 
+// A dynamic task instance's implicit subscribe carries the session's own
+// workspace branch through, the same as the session's own resource does at
+// create time — the hook context is session-scoped, not tied to which
+// resource happens to be getting bound.
+func TestTaskSetup_ResourceSubscribeCarriesSessionBranch(t *testing.T) {
+	subRec := filepath.Join(t.TempDir(), "sub-rec")
+	body := `
+[github]
+kind  = "workspace_provider"
+match = '` + ghMatch + `'
+name  = { expr = "match.owner + '/' + match.repo + '-' + match.number" }
+
+[github.setup]
+type    = "exec"
+command = "printf"
+args    = ['{"workdir":"/tmp/x"}']
+
+[github.subscribe]
+type    = "exec"
+command = "sh"
+args    = ["-c", 'printf "%s" "$1" > "$2"', "provider", { from = "session.branch" }, "` + subRec + `"]
+`
+	cfg := writeWorkflowFixture(t, t.TempDir(), "coding",
+		[]taskFixture{{id: "work", scope: "session", setup: `echo '{}'`}},
+		[]nodeFixture{{id: "work"}},
+	)
+	if err := os.MkdirAll(filepath.Join(cfg.BaseDir, "workspaces"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.BaseDir, "workspaces", "github.toml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store := testStore(t)
+	// seedSession stamps Branch "issue/1" on every session it creates.
+	seedSession(t, store, "o/r-1", "o/r", 1, "coding", map[string]*contract.TaskState{})
+
+	result, err := TaskSetup(cfg, store, TaskSetupParams{TaskID: "work", SessionName: "o/r-1", Name: "pr", Resource: "https://github.com/o/r/pull/9"})
+	if err != nil {
+		t.Fatalf("TaskSetup: %v", err)
+	}
+	if !result.Subscribed {
+		t.Fatal("Subscribed = false, want true for a resource a workspace provider recognizes")
+	}
+	got, readErr := os.ReadFile(subRec)
+	if readErr != nil {
+		t.Fatalf("subscribe hook did not run: %v", readErr)
+	}
+	if string(got) != "issue/1" {
+		t.Errorf("subscribe hook saw session.branch = %q, want issue/1", got)
+	}
+}
+
 // A --resource no workspace provider's resolver recognizes is left unwired —
 // silently, not an error — since not every bound resource is a
 // workspace-provider-governed one.
