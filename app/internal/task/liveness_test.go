@@ -61,33 +61,33 @@ func TestRunSetup_ProducedSessionScopedNodeAliveFails_RebuildsRunScopedDependent
 	}
 	plan := buildPlan(t,
 		[]taskStub{
-			{id: "gh_guard", scope: "session", setup: `echo '{"k":"the-dir"}'`, alive: "exit 1"},
-			{id: "claude", scope: "run", setupAction: &lang.Action{
+			{id: "guard", scope: "session", setup: `echo '{"k":"the-dir"}'`, alive: "exit 1"},
+			{id: "agent", scope: "run", setupAction: &lang.Action{
 				Type:   lang.ActionShell,
 				Script: `jq -nc --arg saw "$saw" '{saw:$saw}'`,
-				Bind:   map[string]*lang.Value{"saw": {Form: lang.FormFrom, From: "nodes.gh_guard.outputs.k"}},
+				Bind:   map[string]*lang.Value{"saw": {Form: lang.FormFrom, From: "nodes.guard.outputs.k"}},
 			}},
 		},
 		[]nodeStub{
-			{id: "gh_guard"},
-			{id: "claude", inputs: map[string]*lang.Value{"link": fromValue("nodes.gh_guard.outputs.k")}},
+			{id: "guard"},
+			{id: "agent", inputs: map[string]*lang.Value{"link": fromValue("nodes.guard.outputs.k")}},
 		},
 	)
 	tasks := map[string]*contract.TaskState{
-		"gh_guard": {Scope: "session", Status: contract.TaskStatusProduced, Outputs: map[string]any{"k": "stale-dir"}},
-		"claude":   {Scope: "run", Status: contract.TaskStatusProduced, Outputs: map[string]any{"saw": "stale-dir"}},
+		"guard": {Scope: "session", Status: contract.TaskStatusProduced, Outputs: map[string]any{"k": "stale-dir"}},
+		"agent": {Scope: "run", Status: contract.TaskStatusProduced, Outputs: map[string]any{"saw": "stale-dir"}},
 	}
 	if err := RunSetup(context.Background(), plan.UpOrder(), SessionVars{}, tasks, nil); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
-	if tasks["gh_guard"].Outputs["k"] != "the-dir" {
-		t.Fatalf("gh_guard was not rebuilt: %+v", tasks["gh_guard"])
+	if tasks["guard"].Outputs["k"] != "the-dir" {
+		t.Fatalf("guard was not rebuilt: %+v", tasks["guard"])
 	}
-	if tasks["claude"].Outputs["saw"] != "the-dir" {
-		t.Fatalf("claude, a run-scoped dependent, was not rebuilt after gh_guard: %+v", tasks["claude"])
+	if tasks["agent"].Outputs["saw"] != "the-dir" {
+		t.Fatalf("agent, a run-scoped dependent, was not rebuilt after guard: %+v", tasks["agent"])
 	}
-	if tasks["gh_guard"].Status != contract.TaskStatusProduced || tasks["claude"].Status != contract.TaskStatusProduced {
-		t.Fatalf("gh_guard = %q, claude = %q, want both produced", tasks["gh_guard"].Status, tasks["claude"].Status)
+	if tasks["guard"].Status != contract.TaskStatusProduced || tasks["agent"].Status != contract.TaskStatusProduced {
+		t.Fatalf("guard = %q, agent = %q, want both produced", tasks["guard"].Status, tasks["agent"].Status)
 	}
 }
 
@@ -164,14 +164,14 @@ func TestRunSetup_EveryProbePassing_NoRebuild(t *testing.T) {
 	runMarker := tmpDir + "/run-setup-ran"
 	plan := buildPlan(t,
 		[]taskStub{
-			{id: "gh_guard", scope: "session", setup: "touch " + sessionMarker + `; echo '{"k":"the-dir"}'`, alive: "true"},
-			{id: "tmux", scope: "run", setup: "touch " + runMarker + "; echo '{}'", alive: "true"},
+			{id: "guard", scope: "session", setup: "touch " + sessionMarker + `; echo '{"k":"the-dir"}'`, alive: "true"},
+			{id: "runner", scope: "run", setup: "touch " + runMarker + "; echo '{}'", alive: "true"},
 		},
-		[]nodeStub{{id: "gh_guard"}, {id: "tmux"}},
+		[]nodeStub{{id: "guard"}, {id: "runner"}},
 	)
 	tasks := map[string]*contract.TaskState{
-		"gh_guard": {Scope: "session", Status: contract.TaskStatusProduced, Outputs: map[string]any{"k": "the-dir"}},
-		"tmux":     {Scope: "run", Status: contract.TaskStatusProduced, Outputs: map[string]any{}},
+		"guard":  {Scope: "session", Status: contract.TaskStatusProduced, Outputs: map[string]any{"k": "the-dir"}},
+		"runner": {Scope: "run", Status: contract.TaskStatusProduced, Outputs: map[string]any{}},
 	}
 	if err := RunSetup(context.Background(), plan.UpOrder(), SessionVars{}, tasks, nil); err != nil {
 		t.Fatalf("setup: %v", err)
