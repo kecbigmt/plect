@@ -105,14 +105,10 @@ EFFORT="${effort-}"
 [ -n "$EFFORT" ] && EXPORTS="${EXPORTS}export CODEX_MODEL_REASONING_EFFORT='$EFFORT'; "
 
 rm -f "$STATE_DIR/ready" "$STATE_DIR/worker.pid"
-# No `exec`: the worker runs as a child of the pane's own shell, the same
-# shape the interactive `codex` effect uses for its TUI, so killing it to
-# abandon a stuck launch leaves the pane's own root process — and the
-# multiplexer session behind it, a produced record this plugin does not own
-# the lifecycle of — alone. The worker is a bash script, so its comm is
-# "bash" regardless of which script bash is running; it writes its own pid
-# to worker.pid for this reason, the same way this plugin's `codex` effect
-# discovers its agent's pid by reading a file the agent itself writes.
+# Not exec'd, so killing the worker cannot take the pane (or its
+# multiplexer session, a lifecycle this plugin does not own) down too. A
+# bash script's comm is always "bash", so worker.pid — written by the
+# worker itself — is this effect's only way to identify its own pid.
 #
 # The terminal verbs compose against whichever effect in this workflow
 # declares the interactive endpoint — never a concrete multiplexer named
@@ -127,14 +123,29 @@ READY=0
 for _ in $(seq 1 $((READY_TIMEOUT_SECONDS * 2))); do
   sleep 0.5
   kill -0 "$PANE_PID" 2>/dev/null || continue
-  [ -z "$PID" ] && [ -s "$STATE_DIR/worker.pid" ] && PID=$(cat "$STATE_DIR/worker.pid")
+  if [ -z "$PID" ] && [ -s "$STATE_DIR/worker.pid" ]; then
+    CANDIDATE=$(cat "$STATE_DIR/worker.pid")
+    # state_root is workflow-configurable, so worker.pid's content is not
+    # trustworthy on its own: reject anything but a bare positive integer,
+    # then confirm it actually is the pane's own child, before this script
+    # ever signals it.
+    case "$CANDIDATE" in ''|0|*[!0-9]*) CANDIDATE="" ;; esac
+    if [ -n "$CANDIDATE" ] && [ "$(ps -o ppid= -p "$CANDIDATE" 2>/dev/null | tr -d '[:space:]')" = "$PANE_PID" ]; then
+      PID="$CANDIDATE"
+    fi
+  fi
   [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null && [ -f "$STATE_DIR/ready" ] && READY=1 && break
 done
 if [ "$READY" -ne 1 ]; then
   echo "codex-exec worker not ready within ${launch_timeout} under pane pid $PANE_PID" >&2
-  # The worker is a child of the pane's shell, not the pane's root process,
-  # so terminating it leaves the pane itself alive and usable for the retry
-  # this failure is about to trigger.
+  if [ -z "$PID" ]; then
+    # A worker that never reported its own pid — stuck before that point,
+    # or its report was rejected above — is still the pane's one direct
+    # child: the only launch this script could have started here.
+    PID=$(pgrep -P "$PANE_PID" 2>/dev/null | head -1)
+  fi
+  # A child of the pane's shell, not the pane's root process, so this
+  # leaves the pane itself alive and usable for the retry this triggers.
   if [ -n "$PID" ]; then
     kill -TERM "$PID" 2>/dev/null
     for _ in 1 2 3 4 5; do

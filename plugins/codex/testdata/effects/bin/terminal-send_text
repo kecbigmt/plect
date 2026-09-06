@@ -1,15 +1,18 @@
 #!/usr/bin/env sh
-# Records the launch line, then stands in for the headless worker it starts:
-# the worker writes its own pid to worker.pid and then creates ready under
-# the state directory it was handed, and the launch waits for both. A
-# scenario exercising a worker that starts but never signals readiness
-# carries PLECT_TEST_NEVER_READY in its launch_env, which this stand-in
-# honors by writing worker.pid (a real, killable process) while withholding
-# ready.
+# Stands in for the worker's own self-reporting. PLECT_TEST_NEVER_READY
+# marks a worker that started but got stuck: worker.pid is still written
+# (a real process exists to kill), only ready is withheld.
+# PLECT_TEST_POISON_PID and PLECT_TEST_NO_PID_REPORT exercise the two ways
+# that self-report can't be trusted: a syntactically valid but unrelated
+# pid, and no report at all.
 plect-effect-record terminal-send_text "$@"
 state_dir=$(printf '%s' "$1" | sed -n "s/.*codex-exec-worker '[^']*' '\([^']*\)'.*/\1/p")
 [ -n "$state_dir" ] || exit 0
 mkdir -p "$state_dir"
+case "$1" in
+  *PLECT_TEST_NO_PID_REPORT*) exit 0 ;;
+  *PLECT_TEST_POISON_PID*) printf '%s' "$PLECT_EFFECT_PID" > "$state_dir/worker.pid"; exit 0 ;;
+esac
 printf '%s' "$PLECT_EFFECT_WORKER_PID" > "$state_dir/worker.pid"
 case "$1" in *PLECT_TEST_NEVER_READY*) exit 0 ;; esac
 : > "$state_dir/ready"

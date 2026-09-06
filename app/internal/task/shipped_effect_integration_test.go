@@ -112,13 +112,9 @@ type effectHarness struct {
 	// rather than polling signal 0 (which a zombie still answers).
 	liveProcess int
 	liveCmd     *exec.Cmd
-	// workerProcess/workerCmd is a second, independent live process for an
-	// effect whose launched thing is not the interactive endpoint's own root
-	// process (e.g. a headless worker started as a plain child rather than
-	// exec'd into the pane). Kept separate from liveProcess/liveCmd so a
-	// scenario can assert this one died while the endpoint's own root
-	// process — liveProcess — stayed alive, proving a kill-on-failure path
-	// terminated the right process.
+	// workerProcess/workerCmd stands in for a launched thing distinct from
+	// the endpoint's own root process (liveProcess), so a scenario can
+	// assert this one died without the endpoint dying too.
 	workerProcess int
 	workerCmd     *exec.Cmd
 	scrub         []struct{ from, to string }
@@ -249,10 +245,9 @@ func (h *effectHarness) startLiveProcess(t *testing.T) {
 	}
 }
 
-// startWorkerProcess is startLiveProcess's counterpart for a launched thing
-// distinct from the endpoint's own root process — see effectHarness's
-// workerProcess field. A scenario that never reads PLECT_EFFECT_WORKER_PID
-// simply leaves this process idle until the test's own cleanup reaps it.
+// startWorkerProcess is startLiveProcess's counterpart for
+// effectHarness.workerProcess. A scenario that never reads
+// PLECT_EFFECT_WORKER_PID just leaves it idle until cleanup reaps it.
 func (h *effectHarness) startWorkerProcess(t *testing.T) {
 	t.Helper()
 	cmd := exec.Command("sleep", "600")
@@ -372,24 +367,23 @@ func (h *effectHarness) runScenario(t *testing.T, b *strings.Builder, def config
 	}
 
 	self := asAnyMap(scenario.Self)
-	// The scenario's own "current" inputs: RetryInputs replaces Inputs once
-	// the retry attempt below has run, so any hook after "setup" in the list
-	// (health.alive, cleanup, ...) sees the inputs the produced instance
-	// actually carries.
+	// A hook after "setup" (health.alive, cleanup, ...) must see whichever
+	// inputs actually produced the instance it inspects.
 	currentInputs := scenario.Inputs
 	for _, hook := range scenario.hooks(def) {
 		if hook == "setup" && len(scenario.RetryInputs) > 0 {
-			// RetryInputs splits "setup" into two runs against the same
-			// sandbox and live processes: a first attempt (expected to fail
-			// and, for a kill-on-failure scenario, take the worker process
-			// with it) and a second, freshly-launched attempt that proves
-			// the failure left nothing behind for a retry to collide with.
+			// Two runs against the same sandbox and live processes, not two
+			// scenarios, is what makes "retry succeeds" a claim about this
+			// exact failed state rather than a coincidence of shared paths.
 			self = h.runOneHook(t, b, def, "setup", "", resolved, id, label, session, tasks, self, scenario.Inputs, scenario.Artifacts)
 			if scenario.ExpectWorkerProcessDead {
 				h.assertWorkerProcessDead(t)
 				h.assertPaneProcessAlive(t)
 			}
 			h.startWorkerProcess(t)
+			if scenario.RetryCapture != "" {
+				t.Setenv("PLECT_EFFECT_CAPTURE", scenario.RetryCapture)
+			}
 			currentInputs = scenario.RetryInputs
 			self = h.runOneHook(t, b, def, "setup", " (retry)", resolved, id, label, session, tasks, self, currentInputs, scenario.Artifacts)
 			continue
@@ -405,10 +399,8 @@ func (h *effectHarness) runScenario(t *testing.T, b *strings.Builder, def config
 	}
 }
 
-// runOneHook runs a single named hook, recording its calls and outcome (plus
-// any setup artifacts) into b, and returns the outputs a produced setup left
-// for a later hook's Self. suffix distinguishes a retried "setup" run's
-// section from its first attempt in the transcript.
+// runOneHook runs one hook and records it into b. suffix distinguishes a
+// retried "setup" run from its first attempt in the transcript.
 func (h *effectHarness) runOneHook(t *testing.T, b *strings.Builder, def config.TaskDefinition, hook, suffix string, resolved Resolved, id, label string, session SessionVars, tasks map[string]*contract.TaskState, self map[string]any, inputs map[string]string, artifacts []effectScenarioArtifact) map[string]any {
 	t.Helper()
 	// A node input is a literal here rather than a projection of another
@@ -473,14 +465,16 @@ func (h *effectHarness) assertWorkerProcessDead(t *testing.T) {
 	}
 }
 
-// assertPaneProcessAlive is assertWorkerProcessDead's complement: the whole
-// point of tracking a separate worker process is to prove a kill-on-failure
-// path took the worker and left the endpoint's own root process alone, so a
-// scenario that asserts the worker died also asserts this one didn't.
+// assertPaneProcessAlive is assertWorkerProcessDead's complement: proving
+// the worker died is only useful alongside proof the endpoint didn't. A
+// killed-but-unreaped process is a zombie that still answers Signal(0), so
+// this uses a non-blocking Wait4 (reaping it if it did exit, harmlessly
+// racing nothing since nothing else reaps it first) rather than that.
 func (h *effectHarness) assertPaneProcessAlive(t *testing.T) {
 	t.Helper()
-	if err := h.liveCmd.Process.Signal(syscall.Signal(0)); err != nil {
-		t.Errorf("expected the endpoint's own root process to survive a worker-only kill, but it is gone: %v", err)
+	wpid, err := syscall.Wait4(h.liveProcess, nil, syscall.WNOHANG, nil)
+	if err != nil || wpid == h.liveProcess {
+		t.Error("expected the endpoint's own root process to survive a worker-only kill, but it is gone")
 	}
 }
 

@@ -20,10 +20,8 @@ profile_name="${3:?profile_name required}"
 
 mkdir -p "$queue_dir" "$state_dir/log"
 
-# A bash script's own pid is not recoverable from its process name (comm is
-# the interpreter's, "bash", regardless of the script file executed), so this
-# is the only way the owning task's setup can identify — and later
-# terminate — this specific worker instance.
+# comm is always "bash" for a script run this way, so this is the only way
+# the owning task's setup can identify (and later terminate) this worker.
 printf '%s' "$$" > "$state_dir/worker.pid"
 
 # CODEX_MODEL / CODEX_MODEL_REASONING_EFFORT (set by tasks/exec_runtime.toml's
