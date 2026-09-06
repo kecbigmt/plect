@@ -457,7 +457,7 @@ describe("Conversation", () => {
   });
 
   it("remounts the live timeline even when the newly selected session's history is already cached", async () => {
-    // team/b's history is cached, so this switch never passes through isPending.
+    // Cached history skips the isPending branch entirely, so only the key can isolate this switch.
     vi.mocked(fetch).mockImplementation((input) => {
       const url = requestUrl(input);
       const session = url.searchParams.get("session");
