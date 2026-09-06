@@ -156,17 +156,11 @@ func TestRecordJudge_RejectsRetiredReviewerSessionArgument(t *testing.T) {
 	}
 }
 
-// TestHandleJudgeApprove_JudgeSessionRoundTrips proves the judge_session
-// argument recorded through the MCP tool round-trips end to end: the
-// response carries it back under judge_session (never reviewer_session), the
-// persisted contract state names the judge the same way, and — the actual
-// public read path a client uses — plect_status's JSON carries judge_session
-// and judge_workflow in both the live done_when.leaves projection (for the
-// approved, satisfied ac-met leaf) and unmet_items (for the request-changes,
-// unsatisfied solves leaf), with no reviewer_* key anywhere in the response.
-// A live session's status never populates persisted_done_when (that
-// projection is tombstone-only, see status.go's tombstoneStatusResult), so
-// done_when.leaves is the live equivalent this test checks instead.
+// TestHandleJudgeApprove_JudgeSessionRoundTrips proves judge_session/
+// judge_workflow project correctly through plect_status's actual JSON
+// (done_when.leaves and unmet_items), with no reviewer_* key anywhere.
+// persisted_done_when is skipped: it is tombstone-only (status.go's
+// tombstoneStatusResult), never populated for a live session.
 func TestHandleJudgeApprove_JudgeSessionRoundTrips(t *testing.T) {
 	setUpConfigHome(t)
 	work, instance := setUpJudgeableInstance(t, "judge-work-session-2")
