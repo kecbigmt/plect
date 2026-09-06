@@ -104,7 +104,7 @@ activity: fingerprint="spy-turn-1" silence_expected=false
 call[0]: "claude-agent-activity" "reset" "acme/widget-1"
 cleaned
 
-== runtime:launch-timeout-kills-pane-child / setup
+== runtime:launch-timeout-then-retry-succeeds / setup
 call[0]: "mktemp" "<state>/plect-mcp.XXXXXX"
 call[1]: "claude-mcp-servers"
 call[2]: "claude-agent-activity" "reset" "acme/widget-1"
@@ -117,3 +117,12 @@ call[8]: "terminal-pid"
 call[9]: "pgrep" "-P" "<pid>"
 call[10]: "ps" "-p" "<pid>" "-o" "comm="
 declined: task "runtime" setup: exit status 1
+
+== runtime:launch-timeout-then-retry-succeeds / setup (retry)
+call[0]: "mktemp" "<state>/plect-mcp.XXXXXX"
+call[1]: "claude-mcp-servers"
+call[2]: "claude-agent-activity" "reset" "acme/widget-1"
+call[3]: "mktemp" "<state>/plect-hooks.XXXXXX"
+call[4]: "terminal-send_text" "export PLECT_SESSION_NAME=acme/widget-1; export PLECT_TEAM_CONTEXT='acme'; export PATH=/spy/guard:$PATH; claude --resume 33333333-4444-5555-6666-777777777777 --mcp-config <state>/plect-mcp.json --settings <state>/plect-hooks.json  --model opus --effort high --disallowedTools AskUserQuestion || claude --session-id 33333333-4444-5555-6666-777777777777 --mcp-config <state>/plect-mcp.json --settings <state>/plect-hooks.json  --model opus --effort high --disallowedTools AskUserQuestion"
+call[5]: "terminal-send_keys" "Enter"
+outputs: {"hooks_settings":"<state>/plect-hooks.json","mcp_config":"<state>/plect-mcp.json","pid":<pid>,"session_id":"33333333-4444-5555-6666-777777777777","socket_path":"<state>/claude-channel/33333333-4444-5555-6666-777777777777.sock"}

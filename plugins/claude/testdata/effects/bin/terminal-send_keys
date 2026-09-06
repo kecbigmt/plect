@@ -9,4 +9,11 @@ if [ "$count" -ge 2 ]; then
   printf '{"sessionId":"11111111-2222-3333-4444-555555555555","pid":%s}\n' "$PLECT_EFFECT_PID" \
     > "$HOME/.claude/sessions/live.json"
 fi
+# PLECT_EFFECT_RETRY marks a scenario's own retry attempt: writes a live
+# record under a freshly relaunched pid, independent of call count.
+if [ -n "${PLECT_EFFECT_RETRY-}" ]; then
+  mkdir -p "$HOME/.claude/sessions"
+  printf '{"sessionId":"33333333-4444-5555-6666-777777777777","pid":%s}\n' "$PLECT_EFFECT_WORKER_PID" \
+    > "$HOME/.claude/sessions/retry.json"
+fi
 true

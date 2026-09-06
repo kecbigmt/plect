@@ -44,6 +44,27 @@ scope = "run"
 [runtime.setup]
 type   = "shell"
 script = '''
+# Terminates any claude-named child of the pane, revalidated by comm at the
+# moment of killing (not a cached identity) — the pane's own root process,
+# and the multiplexer session behind it, are never touched.
+terminate_claude_children() {
+  PANE_PID=$(sh -c "$terminal_pid" terminal-pid 2>/dev/null)
+  [ -n "$PANE_PID" ] || return 0
+  for CHILD in $(pgrep -P "$PANE_PID" 2>/dev/null); do
+    COMM=$(ps -p "$CHILD" -o comm= 2>/dev/null | tr -d '[:space:]')
+    case "$COMM" in
+      claude|claude-*)
+        kill -TERM "$CHILD" 2>/dev/null
+        for _ in 1 2 3 4 5; do
+          sleep 0.5
+          kill -0 "$CHILD" 2>/dev/null || break
+        done
+        kill -KILL "$CHILD" 2>/dev/null || true
+        ;;
+    esac
+  done
+}
+
 PREV_SID="${prev_session_id-}"
 if [ -n "$PREV_SID" ]; then
   SID="$PREV_SID"
@@ -210,35 +231,22 @@ if [ -z "$PID" ]; then
   # reach a real claude prompt, just not one that ever wrote to
   # ~/.claude/sessions). Leaving that process running would trap the next
   # `plect up`: its retry types a second launch line into a pane that
-  # already holds a live claude, and the retry fails the same way. Killing
-  # whatever claude child the pane still holds, on top of failing this node,
-  # is what keeps the retry's pane clean.
-  PANE_PID=$(sh -c "$terminal_pid" terminal-pid 2>/dev/null)
-  if [ -n "$PANE_PID" ]; then
-    for CHILD in $(pgrep -P "$PANE_PID" 2>/dev/null); do
-      COMM=$(ps -p "$CHILD" -o comm= 2>/dev/null | tr -d '[:space:]')
-      case "$COMM" in
-        claude|claude-*)
-          kill -TERM "$CHILD" 2>/dev/null
-          for _ in 1 2 3 4 5; do
-            sleep 0.5
-            kill -0 "$CHILD" 2>/dev/null || break
-          done
-          kill -KILL "$CHILD" 2>/dev/null || true
-          ;;
-      esac
-    done
-  fi
+  # already holds a live claude, and the retry fails the same way.
+  terminate_claude_children
   exit 1
 fi
 
-jq -nc \
+OUTPUT=$(jq -nc \
   --argjson pid "$PID" \
   --arg sid "$SID" \
   --arg sock "$SOCKET" \
   --arg mcp "$MCP" \
   --arg hooks "$HOOKS" \
-  '{pid:$pid, session_id:$sid, socket_path:$sock, mcp_config:$mcp, hooks_settings:$hooks}'
+  '{pid:$pid, session_id:$sid, socket_path:$sock, mcp_config:$mcp, hooks_settings:$hooks}') || {
+    terminate_claude_children
+    exit 1
+  }
+printf '%s\n' "$OUTPUT"
 '''
 
 [runtime.setup.bind]

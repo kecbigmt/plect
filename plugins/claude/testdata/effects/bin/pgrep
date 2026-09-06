@@ -1,7 +1,5 @@
 #!/usr/bin/env sh
-# The pane's child is the scenario's own live process (the harness's real,
-# owned stand-in for whatever an agent launch would have started) — not a
-# fixed pid, which could otherwise name an unrelated process still running
-# on the host by the time the setup script's kill dance reaches it.
+# A process distinct from the pane's own root (PLECT_EFFECT_PID), so a
+# scenario can prove a kill-on-failure path left the pane alone.
 plect-effect-record pgrep "$@"
-printf '%s\n' "$PLECT_EFFECT_PID"
+printf '%s\n' "$PLECT_EFFECT_WORKER_PID"

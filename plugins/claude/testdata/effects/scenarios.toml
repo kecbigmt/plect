@@ -75,24 +75,20 @@ path   = ""
 # A resume whose previous process is truly gone and never comes back: no
 # session file is ever written for the id this launch asks to resume, so the
 # poll loop (launch_timeout shortened to keep this scenario fast) runs out
-# its window. This is what exercises the kill-on-timeout branch: the
-# pgrep/ps stand-ins report the scenario's own live process — the harness's
-# real, owned stand-in for whatever the launch would have started — as a
-# "claude"-named child of the pane, and the setup script must actually
-# terminate it before failing (expect_live_process_dead asserts the real
-# process is gone, not just that a kill was invoked), so a later `plect up`
-# retry never types a second launch into a pane that still runs the first
-# one.
+# its window. retry_inputs then proves the same-pane retry this affects:
+# expect_worker_process_dead asserts the pgrep/ps-found child actually died
+# and the pane survived it, and the retry attempt (a fresh worker, the same
+# resume id — nothing here ever produced a different one) must still
+# produce normally.
 [[runtime]]
-name                     = "launch-timeout-kills-pane-child"
-prev                     = { session_id = "33333333-4444-5555-6666-777777777777" }
-inputs                   = { launch_timeout = "1s" }
-expect_live_process_dead = true
-# Only setup is under test here — a node whose setup fails is never handed
-# to the health probes in real orchestration, so exercising them against
-# this scenario's empty self would only record an artifact of the harness,
-# not a claim about this effect's contract.
-hooks                    = ["setup"]
+name                       = "launch-timeout-then-retry-succeeds"
+prev                       = { session_id = "33333333-4444-5555-6666-777777777777" }
+inputs                     = { launch_timeout = "1s" }
+retry_inputs               = { model = "opus", effort = "high", launch_env = '{"PLECT_TEAM_CONTEXT":"acme"}', path_prepend = "/spy/guard" }
+expect_worker_process_dead = true
+# setup only: a failed node never reaches health probes in real
+# orchestration.
+hooks                      = ["setup"]
 
 [[claude_initial_prompt]]
 inputs  = { terminal_ready = "acme-widget-1", agent_session = "1234", prompt = "rendered instruction", repeat = "" }

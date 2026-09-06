@@ -43,6 +43,21 @@ scope = "run"
 [exec_runtime.setup]
 type   = "shell"
 script = '''
+# Terminates $1, but only once reconfirmed as the pane's own child: a pid
+# read from worker.pid (a workflow-configurable path) may be stale, and a
+# process that pid once named can have exited and been reused by the time
+# this actually runs.
+terminate_if_owned() {
+  case "$1" in ''|0|*[!0-9]*) return 0 ;; esac
+  [ "$(ps -o ppid= -p "$1" 2>/dev/null | tr -d '[:space:]')" = "$PANE_PID" ] || return 0
+  kill -TERM "$1" 2>/dev/null
+  for _ in 1 2 3 4 5; do
+    sleep 0.5
+    kill -0 "$1" 2>/dev/null || break
+  done
+  kill -KILL "$1" 2>/dev/null || true
+}
+
 # The reset drops any record a previous run left behind, so this run's
 # activity probe reports "no basis yet" until this run's first turn boundary
 # rather than inheriting a stale fingerprint.
@@ -105,6 +120,13 @@ EFFORT="${effort-}"
 [ -n "$EFFORT" ] && EXPORTS="${EXPORTS}export CODEX_MODEL_REASONING_EFFORT='$EFFORT'; "
 
 rm -f "$STATE_DIR/ready" "$STATE_DIR/worker.pid"
+# Resolved before anything is typed: this is the identity every cleanup
+# path below searches under, so a launch is only attempted once it exists.
+PANE_PID=$(sh -c "$terminal_pid" terminal-pid 2>/dev/null)
+if [ -z "$PANE_PID" ]; then
+  echo "could not resolve the pane's own pid before launch" >&2
+  exit 1
+fi
 # Not exec'd, so killing the worker cannot take the pane (or its
 # multiplexer session, a lifecycle this plugin does not own) down too. A
 # bash script's comm is always "bash", so worker.pid — written by the
@@ -116,7 +138,6 @@ rm -f "$STATE_DIR/ready" "$STATE_DIR/worker.pid"
 sh -c "$send_text" terminal-send-text "${EXPORTS}$worker_bin '$QUEUE_DIR' '$STATE_DIR' '$PROFILE_NAME'"
 sh -c "$send_keys" terminal-send-keys Enter
 
-PANE_PID=$(sh -c "$terminal_pid" terminal-pid)
 READY_TIMEOUT_SECONDS="${launch_timeout%s}"
 PID=""
 READY=0
@@ -125,44 +146,31 @@ for _ in $(seq 1 $((READY_TIMEOUT_SECONDS * 2))); do
   kill -0 "$PANE_PID" 2>/dev/null || continue
   if [ -z "$PID" ] && [ -s "$STATE_DIR/worker.pid" ]; then
     CANDIDATE=$(cat "$STATE_DIR/worker.pid")
-    # state_root is workflow-configurable, so worker.pid's content is not
-    # trustworthy on its own: reject anything but a bare positive integer,
-    # then confirm it actually is the pane's own child, before this script
-    # ever signals it.
     case "$CANDIDATE" in ''|0|*[!0-9]*) CANDIDATE="" ;; esac
-    if [ -n "$CANDIDATE" ] && [ "$(ps -o ppid= -p "$CANDIDATE" 2>/dev/null | tr -d '[:space:]')" = "$PANE_PID" ]; then
-      PID="$CANDIDATE"
-    fi
+    [ -n "$CANDIDATE" ] && [ "$(ps -o ppid= -p "$CANDIDATE" 2>/dev/null | tr -d '[:space:]')" = "$PANE_PID" ] && PID="$CANDIDATE"
   fi
   [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null && [ -f "$STATE_DIR/ready" ] && READY=1 && break
 done
 if [ "$READY" -ne 1 ]; then
   echo "codex-exec worker not ready within ${launch_timeout} under pane pid $PANE_PID" >&2
-  if [ -z "$PID" ]; then
-    # A worker that never reported its own pid — stuck before that point,
-    # or its report was rejected above — is still the pane's one direct
-    # child: the only launch this script could have started here.
-    PID=$(pgrep -P "$PANE_PID" 2>/dev/null | head -1)
-  fi
-  # A child of the pane's shell, not the pane's root process, so this
-  # leaves the pane itself alive and usable for the retry this triggers.
-  if [ -n "$PID" ]; then
-    kill -TERM "$PID" 2>/dev/null
-    for _ in 1 2 3 4 5; do
-      sleep 0.5
-      kill -0 "$PID" 2>/dev/null || break
-    done
-    kill -KILL "$PID" 2>/dev/null || true
-  fi
+  # A worker that never reported its own pid — stuck before that point, or
+  # its report was rejected above — is still the pane's one direct child:
+  # the only launch this script could have started here.
+  [ -z "$PID" ] && PID=$(pgrep -P "$PANE_PID" 2>/dev/null | head -1)
+  terminate_if_owned "$PID"
   exit 1
 fi
 
-jq -nc \
+OUTPUT=$(jq -nc \
   --argjson pid "$PID" \
   --arg queue_dir "$QUEUE_DIR" \
   --arg state_dir "$STATE_DIR" \
   --arg profile "$PROFILE_PATH" \
-  '{pid:$pid, queue_dir:$queue_dir, state_dir:$state_dir, profile_path:$profile}'
+  '{pid:$pid, queue_dir:$queue_dir, state_dir:$state_dir, profile_path:$profile}') || {
+    terminate_if_owned "$PID"
+    exit 1
+  }
+printf '%s\n' "$OUTPUT"
 '''
 
 [exec_runtime.setup.bind]

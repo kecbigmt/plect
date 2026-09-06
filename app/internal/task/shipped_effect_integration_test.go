@@ -343,6 +343,7 @@ func (h *effectHarness) runScenario(t *testing.T, b *strings.Builder, def config
 	h.startLiveProcess(t)
 	h.startWorkerProcess(t)
 	t.Setenv("PLECT_EFFECT_CAPTURE", scenario.Capture)
+	t.Setenv("PLECT_EFFECT_RETRY", "")
 	for _, file := range scenario.Files {
 		path := filepath.Join(h.homeDir, file.Path)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -384,6 +385,7 @@ func (h *effectHarness) runScenario(t *testing.T, b *strings.Builder, def config
 			if scenario.RetryCapture != "" {
 				t.Setenv("PLECT_EFFECT_CAPTURE", scenario.RetryCapture)
 			}
+			t.Setenv("PLECT_EFFECT_RETRY", "1")
 			currentInputs = scenario.RetryInputs
 			self = h.runOneHook(t, b, def, "setup", " (retry)", resolved, id, label, session, tasks, self, currentInputs, scenario.Artifacts)
 			continue

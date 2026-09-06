@@ -34,6 +34,22 @@ scope = "run"
 [codex.setup]
 type   = "shell"
 script = '''
+# Terminates $1 if — revalidated by comm at the moment of killing, not a
+# cached identity — it is still a codex process; a no-op otherwise.
+terminate_if_codex() {
+  COMM=$(ps -p "$1" -o comm= 2>/dev/null | tr -d '[:space:]')
+  case "$COMM" in
+    codex|codex-*)
+      kill -TERM "$1" 2>/dev/null
+      for _ in 1 2 3 4 5; do
+        sleep 0.5
+        kill -0 "$1" 2>/dev/null || break
+      done
+      kill -KILL "$1" 2>/dev/null || true
+      ;;
+  esac
+}
+
 # agent_activity self-report hooks: UserPromptSubmit/Stop call
 # codex-agent-activity, fire-and-forget by design. Hook registration is
 # written to a per-session codex profile file, not assembled as a `-c` value
@@ -112,13 +128,20 @@ ATTEMPTS=$((TIMEOUT_SECONDS * 2))
 # found below (the same shape this plugin's claude effect uses to resolve its
 # agent PID).
 #
+# Resolved before anything is typed: this is the identity every cleanup
+# path below searches under, so a launch is only attempted once it exists.
+PANE_PID=$(sh -c "$terminal_pid" terminal-pid 2>/dev/null)
+if [ -z "$PANE_PID" ]; then
+  echo "could not resolve the pane's own pid before launch" >&2
+  exit 1
+fi
+
 # The terminal verbs compose against whichever effect in this workflow
 # declares the interactive endpoint — never a concrete multiplexer named
 # here directly.
 sh -c "$send_text" terminal-send-text "${EXPORTS}${CODEX_CMD}"
 sh -c "$send_keys" terminal-send-keys Enter
 
-PANE_PID=$(sh -c "$terminal_pid" terminal-pid)
 PID=""
 SID=""
 for _ in $(seq 1 "$ATTEMPTS"); do
@@ -158,17 +181,7 @@ if [ -z "$PID" ]; then
   # line into a pane that already holds a live codex, and the retry fails
   # the same way.
   for CHILD in $(pgrep -P "$PANE_PID" 2>/dev/null); do
-    COMM=$(ps -p "$CHILD" -o comm= 2>/dev/null | tr -d '[:space:]')
-    case "$COMM" in
-      codex|codex-*)
-        kill -TERM "$CHILD" 2>/dev/null
-        for _ in 1 2 3 4 5; do
-          sleep 0.5
-          kill -0 "$CHILD" 2>/dev/null || break
-        done
-        kill -KILL "$CHILD" 2>/dev/null || true
-        ;;
-    esac
+    terminate_if_codex "$CHILD"
   done
   exit 1
 fi
@@ -201,22 +214,19 @@ for _ in $(seq 1 "$READY_ATTEMPTS"); do
 done
 if [ "$READY" -ne 1 ]; then
   echo "codex pid $PID detected but TUI not ready (boot banner / busy indicator still present) within ${READY_TIMEOUT_SECONDS}s" >&2
-  # A detected-but-never-ready codex is still a live process a retry's
-  # launch line would collide with, so it must go before this node fails.
-  kill -TERM "$PID" 2>/dev/null
-  for _ in 1 2 3 4 5; do
-    sleep 0.5
-    kill -0 "$PID" 2>/dev/null || break
-  done
-  kill -KILL "$PID" 2>/dev/null || true
+  terminate_if_codex "$PID"
   exit 1
 fi
 
-jq -nc \
+OUTPUT=$(jq -nc \
   --argjson pid "$PID" \
   --arg sid "$SID" \
   --arg profile "$PROFILE_PATH" \
-  '{pid:$pid, session_id:$sid, profile_path:$profile}'
+  '{pid:$pid, session_id:$sid, profile_path:$profile}') || {
+    terminate_if_codex "$PID"
+    exit 1
+  }
+printf '%s\n' "$OUTPUT"
 '''
 
 [codex.setup.bind]
