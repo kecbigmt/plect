@@ -140,6 +140,27 @@ jobs:
       - name: Check comments for issue/PR/ADR number references
         run: ./scripts/check-comment-references.sh
 
+  # Diff-scoped, not a whole-repo scan like comment-references above: it
+  # enforces CLAUDE.md's Comments-section shape rules (density, block
+  # length, no duplicated rationale) against exactly the lines a PR adds,
+  # so it needs the PR's base/head shas and therefore only runs on
+  # pull_request events — a push to main has no PR diff to scope to.
+  comment-density:
+    name: comment-density
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Prove the checker catches seeded density/block-length/duplication violations
+        run: ./scripts/check-comment-density_selftest.sh
+      - name: Check the PR diff's comment shape
+        run: ./scripts/check-comment-density.sh "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}"
+
   instruction-orphans:
     name: instruction-orphans
     runs-on: ubuntu-latest
@@ -476,6 +497,7 @@ jobs:
       - go-install
       - provider-boundary
       - comment-references
+      - comment-density
       - instruction-orphans
       - gh-guard
       - web-api-contract

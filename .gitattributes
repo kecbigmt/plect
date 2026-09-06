@@ -3,3 +3,7 @@
 # install time). CI regenerates and diffs it; reviewers should read
 # web/app/src/ instead.
 app/internal/webui/webapp/dist/** linguist-generated
+
+# oapi-codegen's committed output (web-api-contract's CI job regenerates and
+# diffs it against main.tsp's schema); reviewers should read web/api/ instead.
+app/internal/webapi/generated/** linguist-generated
