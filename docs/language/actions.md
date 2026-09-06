@@ -4,8 +4,8 @@ An action is a lifecycle execution: an effect's `setup` or `cleanup`, a health o
 terminal probe, a workspace provider's `setup`, `cleanup`, or `subscribe`, a
 resource observer's `observe` or `finalize`, and a channel's delivery.
 
-Every action declares a `type`. There are two variants, exec and shell, plus a
-third, noop, legal only under `[health.alive]`.
+Every action declares a `type`: `exec` and `shell` everywhere, and `noop`,
+legal only under `[health.alive]`.
 
 ## exec
 
