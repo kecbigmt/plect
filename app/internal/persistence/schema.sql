@@ -3,8 +3,7 @@
 -- migrations from it with Atlas Community Edition; do not hand-write
 -- migration SQL against a structural change already captured here.
 --
--- Runtime state tables (sessions, task state, populations, reservations)
--- plus the event tables; session_tombstones/pending_deliveries stay file-based.
+-- Runtime and event tables; session_tombstones/pending_deliveries stay file-based.
 --
 -- Nullability convention throughout: a column is NULL exactly when the
 -- domain value can be genuinely absent (never observed/resolved yet, or an
@@ -200,11 +199,8 @@ CREATE TABLE up_reservations (
     CHECK ((parent_session_name IS NOT NULL) != (virtual_root = 1))
 );
 
--- id is minted once, at stream creation, and never changes for that
--- session name; event.Cursor's v2 stream_id is this value, so a stale
--- cursor is detected the same way a session recreated under the same name
--- would be. No foreign key to sessions: a destroyed session's event
--- history survives it.
+-- id is minted once and never changes for the session name, so it detects
+-- a same-name session recreate; no FK to sessions since history survives a destroy.
 CREATE TABLE event_streams (
     id TEXT PRIMARY KEY,
     session_name TEXT NOT NULL
@@ -228,12 +224,8 @@ CREATE TABLE events (
 CREATE UNIQUE INDEX events_stream_id_sequence ON events(stream_id, sequence);
 CREATE INDEX events_stream_id_id_idx ON events(stream_id, id);
 
--- One reader-position table for every named cursor over a stream. delivery
--- and tick are delivery commitments (at-least-once, preserved by a later
--- import); heartbeat is an observation high-water mark with no delivery
--- meaning (may be reset to the tail). next_sequence is exclusive
--- (event.Cursor.Off); unlike events.sequence, 0 is valid (nothing consumed
--- yet). ON DELETE CASCADE: a cursor has no meaning once its stream is gone.
+-- delivery/tick are at-least-once commitments; heartbeat is a resettable
+-- observation mark. next_sequence is exclusive and 0 is valid (unconsumed).
 CREATE TABLE event_cursors (
     stream_id TEXT NOT NULL REFERENCES event_streams(id) ON DELETE CASCADE,
     kind TEXT NOT NULL CHECK (kind IN ('delivery', 'tick', 'heartbeat')),

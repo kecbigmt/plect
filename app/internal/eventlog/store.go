@@ -144,9 +144,8 @@ func (s *Store) ReadTombstone(session string) (data []byte, ok bool, err error) 
 // SwapChainAttempt atomically compares-and-sets a plect.chain.attempt
 // cap-refusal streak marker (see service.chainAttemptFingerprint), scoped by
 // a caller-supplied identity token (service.chainAttemptStreamID) so two
-// incarnations sharing that token never share a key, regardless of how a
-// destroy and any leftover tick racing it interleave. previous is the value
-// from just before this call, for RevertChainAttempt.
+// incarnations never share a key even if a destroy races a leftover tick.
+// previous is the value from just before this call, for RevertChainAttempt.
 func (s *Store) SwapChainAttempt(session, instance, chainID, generation, newFingerprint string) (previous string, won bool, err error) {
 	key := chainAttemptKey(instance, chainID, generation)
 	err = s.withChainAttemptsLocked(session, func(attempts map[string]string) bool {
@@ -248,8 +247,7 @@ func (s *Store) readChainAttemptsLocked(session string) (map[string]string, erro
 	return out, nil
 }
 
-// List returns events from sequence `since` (inclusive) that match f, in
-// ascending order, plus each event's sequence and the next read cursor.
+// List returns events from sequence `since` (inclusive) matching f, ascending, plus each event's sequence and the next read cursor.
 func (s *Store) List(session string, since int64, f event.Filter) (evs []event.Event, seqs []int64, next int64, err error) {
 	db, err := s.dbHandle()
 	if err != nil {
@@ -344,12 +342,9 @@ func (s *Store) TailOffset(session string, f event.Filter, n int) (int64, error)
 	return ring[0], nil // sequence of the n-th-from-last matching record
 }
 
-// StreamID returns the stream's id, or "" if none yet (no event appended, or
-// no consumer position ever committed). The id is assigned once when the
-// stream is first created and is stable for that session name; it changes
-// only if the session is later destroyed and recreated under the same name,
-// which lets a stale opaque cursor be detected instead of silently resolving
-// to a shifted record.
+// StreamID returns the stream's id, or "" if none yet. It is fixed for the
+// session name once assigned, changing only on a destroy/recreate, so a
+// stale opaque cursor is detectable instead of silently resolving wrong.
 func (s *Store) StreamID(session string) (string, error) {
 	db, err := s.dbHandle()
 	if err != nil {
@@ -382,8 +377,7 @@ func (s *Store) Follow(ctx context.Context, session string, since int64, fn func
 	}
 }
 
-// Sessions returns the names of every session whose event stream has been
-// touched, sorted for deterministic iteration. Missing database → empty, no error
+// Sessions returns the names of every touched session, sorted for deterministic iteration. Missing database → empty, no error
 // (nothing has been logged yet).
 func (s *Store) Sessions() ([]string, error) {
 	db, err := s.dbHandle()
