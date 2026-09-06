@@ -66,7 +66,7 @@ func reserveChildCapSlot(cfg *config.Config, store *state.Store, childSessionNam
 			if name == childSessionName {
 				continue // this decides its own slot, not a sibling's
 			}
-			if sessionRunState(sessions[name]) == domain.RunUp {
+			if sessionRunState(cfg, sessions[name]) == domain.RunUp {
 				count++
 				up[name] = true
 			}

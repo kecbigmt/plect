@@ -49,7 +49,7 @@ func CheckHeartbeatDeadman(cfg *config.Config, store *state.Store, name string, 
 	if err != nil {
 		return false, err
 	}
-	if s == nil || !runScopeUp(s.Tasks) {
+	if s == nil || !runScopeUp(cfg, s) {
 		return false, nil
 	}
 	n := 0

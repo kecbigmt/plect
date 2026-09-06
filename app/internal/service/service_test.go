@@ -63,11 +63,10 @@ func TestList_SortsTrackedByName(t *testing.T) {
 	}
 }
 
-// TestList_UnresolvableWorkflowIsUnhealthyButOtherSessionsListNormally pins
-// the per-session plan-resolution-failure rule (docs/adr/2026-09-06-runtime-failure-model.md
-// decision 2): one session whose frozen workflow no longer resolves reports
-// its own health-evaluation failure without preventing List from listing
-// every other session normally.
+// TestList_UnresolvableWorkflowIsUnhealthyButOtherSessionsListNormally pins a
+// plan-resolution failure as a per-session fact: a broken workflow reference
+// must not stop List from evaluating and returning any other session that
+// does resolve.
 func TestList_UnresolvableWorkflowIsUnhealthyButOtherSessionsListNormally(t *testing.T) {
 	store := testStore(t)
 	cfg := currentPlanConfig(t, "true", "true") // only declares workflow "default"

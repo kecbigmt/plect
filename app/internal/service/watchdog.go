@@ -209,6 +209,49 @@ func currentPlanRunScopedNodeIDs(nodes map[string]string, defs map[string]config
 	return ids
 }
 
+// currentPlanRunScopedNodeSet is currentPlanRunScopedNodeIDs' counterpart for
+// a caller that only has the session and cfg on hand (not an already-loaded
+// nodes/defs pair): it resolves the session's frozen workflow itself and
+// returns its declared run-scoped node ids as a set. ok is false when the
+// workflow or its task definitions do not resolve at all, which a caller
+// must tell apart from a legitimately empty node set (ok=true).
+func currentPlanRunScopedNodeSet(cfg *config.Config, s *domain.Session) (set map[string]bool, ok bool) {
+	wf, err := resolveSessionWorkflow(cfg, s)
+	if err != nil || wf == nil {
+		return nil, false
+	}
+	defs, err := cfg.LoadTaskDefinitions(s.WorkspaceDirPath)
+	if err != nil {
+		return nil, false
+	}
+	out := make(map[string]bool, len(wf.Nodes))
+	for _, n := range wf.Nodes {
+		if n.Uses == "" {
+			continue
+		}
+		def, defOK := defs[n.Uses]
+		if !defOK || def.Scope != config.TaskScopeRun {
+			continue
+		}
+		out[n.ID] = true
+	}
+	return out, true
+}
+
+// anyProducedCurrentPlanNode reports whether at least one of the given
+// current-plan node ids has a produced task-state entry whose own recorded
+// scope still says run — the gate that decides whether complete-plan health
+// composition applies at all.
+func anyProducedCurrentPlanNode(tasks map[string]*contract.TaskState, nodeIDs []string) bool {
+	for _, id := range nodeIDs {
+		st := tasks[id]
+		if st != nil && st.Scope == contract.TaskScopeRun && st.Status == contract.TaskStatusProduced {
+			return true
+		}
+	}
+	return false
+}
+
 func healthTerminalPlan(tasks map[string]*contract.TaskState, nodes map[string]string, defs map[string]config.TaskDefinition) (*task.Plan, error) {
 	var terminal *task.Resolved
 	for _, key := range sortedTaskKeys(tasks) {
@@ -323,9 +366,13 @@ func evaluateHealthFor(name string, tasks map[string]*contract.TaskState, docs m
 	// up. Nothing in the current plan is missing yet for a session that never
 	// produced any run-scoped node: an aborted first-node `up`, or a session
 	// that was deliberately brought down, reads as no verdict rather than
-	// unhealthy.
-	if runScopeUp(tasks) {
-		for _, nodeID := range currentPlanRunScopedNodeIDs(nodes, defs) {
+	// unhealthy. The gate is evaluated against the current plan specifically
+	// (not any produced run-scoped task-state entry at all), so a stale
+	// record for a node the workflow no longer declares cannot open it on its
+	// own.
+	currentPlan := currentPlanRunScopedNodeIDs(nodes, defs)
+	if anyProducedCurrentPlanNode(tasks, currentPlan) {
+		for _, nodeID := range currentPlan {
 			st := tasks[nodeID]
 			switch {
 			case st == nil:
@@ -464,7 +511,7 @@ func HealthcheckSession(cfg *config.Config, store *state.Store, params Healthche
 	// the gate CheckHeartbeatDeadman already applies internally. An unknown
 	// session still falls through to EvaluateHealth below, which is what
 	// reports ErrSessionNotFound.
-	if before != nil && !runScopeUp(before.Tasks) {
+	if before != nil && !runScopeUp(cfg, before) {
 		return &HealthReport{SessionName: params.SessionName}, nil
 	}
 	var prev *contract.HealthState

@@ -100,9 +100,7 @@ func TestEvaluateHealth_FailingAliveProbeIsUnhealthy(t *testing.T) {
 }
 
 // currentPlanConfig declares two run-scoped nodes, "pane" and "agent", each a
-// plain effect whose only declaration is the given [health.alive] command —
-// exactly what decision 2's structural composition (docs/adr/2026-09-06-runtime-failure-model.md)
-// needs: a current plan with more than one run-scoped node.
+// plain effect whose only declaration is the given [health.alive] command.
 func currentPlanConfig(t *testing.T, paneAlive, agentAlive string) *config.Config {
 	t.Helper()
 	return writeWorkflowFixture(t, t.TempDir(), "default", []taskFixture{
@@ -137,15 +135,14 @@ func TestEvaluateHealth_FailedCurrentPlanNodeIsUnhealthyNamingNodeAndError(t *te
 	if err != nil {
 		t.Fatalf("GetE: %v", err)
 	}
-	if sessionRunState(sess) != domain.RunUp {
-		t.Fatalf("run = %q, want up (a run-scoped node produced)", sessionRunState(sess))
+	if sessionRunState(cfg, sess) != domain.RunUp {
+		t.Fatalf("run = %q, want up (a run-scoped node produced)", sessionRunState(cfg, sess))
 	}
 }
 
-// TestEvaluateHealth_MissingCurrentPlanNodeIsUnhealthyNamingNode pins the
-// second acceptance criterion: a node the workflow declares but that never
-// even attempted setup — no task state entry at all — is unhealthy naming
-// it as missing, just like a failed node.
+// TestEvaluateHealth_MissingCurrentPlanNodeIsUnhealthyNamingNode pins a node
+// the workflow declares but that never even attempted setup — no task state
+// entry at all — as unhealthy naming it missing, just like a failed node.
 func TestEvaluateHealth_MissingCurrentPlanNodeIsUnhealthyNamingNode(t *testing.T) {
 	store := testStore(t)
 	cfg := currentPlanConfig(t, "true", "true")
@@ -210,8 +207,8 @@ func TestEvaluateHealth_CleanedCurrentPlanNodesAreNotUnhealthyAfterDown(t *testi
 	if err != nil {
 		t.Fatalf("GetE: %v", err)
 	}
-	if sessionRunState(sess) != domain.RunDown {
-		t.Fatalf("run = %q, want down", sessionRunState(sess))
+	if sessionRunState(cfg, sess) != domain.RunDown {
+		t.Fatalf("run = %q, want down", sessionRunState(cfg, sess))
 	}
 }
 
@@ -267,11 +264,41 @@ func TestEvaluateHealth_StaleTaskEntryContributesNothing(t *testing.T) {
 	}
 }
 
+// TestEvaluateHealth_StaleProducedNodeAloneReadsDownWithNoVerdict pins the
+// gate itself against staleness: a session whose only produced run-scoped
+// task-state entry is for a node the workflow no longer declares must read
+// run down, not up — and, since nothing current-plan is produced, the
+// current plan's own missing node must not read unhealthy either.
+func TestEvaluateHealth_StaleProducedNodeAloneReadsDownWithNoVerdict(t *testing.T) {
+	store := testStore(t)
+	cfg := currentPlanConfig(t, "true", "true") // declares only "pane" and "agent"
+	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+		// "removed_node" is a stale record: the workflow above no longer
+		// declares any node using it. Neither "pane" nor "agent" has any
+		// task state at all.
+		"removed_node": {Scope: contract.TaskScopeRun, TaskID: "removed_node", Status: contract.TaskStatusProduced},
+	})
+
+	report, err := EvaluateHealth(cfg, store, "owner/repo-1")
+	if err != nil {
+		t.Fatalf("EvaluateHealth: %v", err)
+	}
+	if report.State() == domain.HealthUnhealthy {
+		t.Fatalf("report = %+v, state = %q, want no verdict (only a stale entry is produced)", report, report.State())
+	}
+	sess, err := store.GetE("owner/repo-1")
+	if err != nil {
+		t.Fatalf("GetE: %v", err)
+	}
+	if sessionRunState(cfg, sess) != domain.RunDown {
+		t.Fatalf("run = %q, want down (the only produced entry is stale)", sessionRunState(cfg, sess))
+	}
+}
+
 // TestEvaluateHealth_FailedSessionScopedNodeDoesNotAffectRunScopedHealthReport
-// pins the dispatcher amendment's narrowing of decision 2: the structural
-// composition covers the current-plan RUN-scoped node set only. A failed
-// session-scoped node blocks create/repair elsewhere, but is out of scope for
-// this report.
+// pins the structural composition's scope: it covers the current-plan
+// run-scoped node set only. A failed session-scoped node blocks
+// create/repair elsewhere, but is out of scope for this report.
 func TestEvaluateHealth_FailedSessionScopedNodeDoesNotAffectRunScopedHealthReport(t *testing.T) {
 	store := testStore(t)
 	cfg := writeWorkflowFixture(t, t.TempDir(), "default", []taskFixture{
@@ -565,7 +592,7 @@ func TestSessionRunAndHealthState_AliveProbeBacked(t *testing.T) {
 			seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", tt.tasks)
 
 			s := store.Get("owner/repo-1")
-			if gotRun := sessionRunState(s); gotRun != tt.wantRun {
+			if gotRun := sessionRunState(cfg, s); gotRun != tt.wantRun {
 				t.Errorf("sessionRunState = %q, want %q", gotRun, tt.wantRun)
 			}
 			if gotHealth := sessionHealthState(cfg, store, "owner/repo-1"); gotHealth != tt.wantHealth {
