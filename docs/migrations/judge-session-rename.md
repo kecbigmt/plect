@@ -40,8 +40,16 @@ Repeat for any repo overlay (`.plect/`) or plugin source tree you maintain.
 
 ```bash
 grep -rn "reviewer_session\|reviewer-session\|reviewer_workflow\|ReviewerSession\|ReviewerWorkflow" \
-  "$CONFIG_HOME" .plect docs 2>/dev/null
+  "$CONFIG_HOME" .plect 2>/dev/null
 ```
+
+Point this at your own configuration layers — `$CONFIG_HOME`, a repo
+overlay's `.plect/`, or a plugin source tree you maintain. Do not point it
+at a checkout of this repository's own `docs/`: this migration note and its
+sibling `plugins/slack/README.md` both name the retired identifiers in
+their own explanatory prose (documenting what changed, same as any other
+rename note under `docs/migrations/`), so a grep scoped there can never
+reach zero hits and is not the check this section means.
 
 This repository's own shipped catalog (`plugins/github`, `plugins/okf`) and
 task documents invoke `plect judge approve`/`request-changes` without ever
@@ -77,8 +85,10 @@ judge_workflow  // was reviewer_workflow
 
 ## Verify
 
-Re-run the grep from [Find every reference](#find-every-reference). No hits
-across your layers is the completion condition.
+Re-run the grep from [Find every reference](#find-every-reference) against
+your own configuration layers (never against this repository's `docs/`,
+which is expected to keep naming the retired identifiers as migration
+prose). No hits across your layers is the completion condition.
 
 ## Nothing else moves
 

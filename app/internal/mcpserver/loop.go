@@ -296,6 +296,12 @@ func handleJudgeRequestChanges(ctx context.Context, request mcp.CallToolRequest)
 }
 
 func recordJudge(request mcp.CallToolRequest, action string) (*mcp.CallToolResult, error) {
+	// The retired argument name must fail loud rather than be silently dropped
+	// and replaced by the ambient session: a caller that still names it would
+	// otherwise have its verdict recorded under the wrong judge identity.
+	if _, ok := request.GetArguments()["reviewer_session"]; ok {
+		return mcp.NewToolResultError("reviewer_session was renamed to judge_session"), nil
+	}
 	session := request.GetString("session", "")
 	if session == "" {
 		return mcp.NewToolResultError("session is required"), nil

@@ -45,6 +45,32 @@ func TestLoopHandlers_RequireArgs(t *testing.T) {
 	}
 }
 
+// A caller still naming the retired reviewer_session argument must get an
+// explicit rejection, not have it silently dropped and the verdict recorded
+// under the ambient session instead.
+func TestRecordJudge_RejectsRetiredReviewerSessionArgument(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		handler func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error)
+	}{
+		{"judge_approve", handleJudgeApprove},
+		{"judge_request_changes", handleJudgeRequestChanges},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := tc.handler(context.Background(), reqWith(map[string]any{
+				"session": "s", "instance": "i", "judge_id": "j", "reason": "r",
+				"reviewer_session": "reviewer-1",
+			}))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if result == nil || !result.IsError {
+				t.Fatalf("expected MCP error result for retired reviewer_session argument, got %+v", result)
+			}
+		})
+	}
+}
+
 func TestGetStringMapArg(t *testing.T) {
 	req := reqWith(map[string]any{
 		"inputs": map[string]any{
