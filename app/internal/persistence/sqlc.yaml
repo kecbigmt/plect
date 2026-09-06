@@ -1,0 +1,11 @@
+# Regenerate with: go generate ./internal/persistence/...
+# (see this package's doc.go for the full command and pin rationale)
+version: "2"
+sql:
+  - engine: "sqlite"
+    schema: "schema.sql"
+    queries: "queries.sql"
+    gen:
+      go:
+        package: "sqlcgen"
+        out: "sqlcgen"
