@@ -52,7 +52,13 @@ untyped affinity alone. Every `*_at` timestamp column is a UTC RFC3339 string
 with exactly nine fractional digits (for example
 `2026-09-06T08:50:42.821423717Z`), or `NULL` when unset — never a
 variable-width fractional part, so lexical order equals time order; see
-`timeconv.go`.
+`timeconv.go`. A text column holding JSON carries the `_json` suffix
+(`record_json`, `metadata_json`). A `_json` column is declaration-owned: its
+shape comes from a configuration-language or provider schema, and the
+database stores it opaquely, enforcing only well-formedness (a `CHECK
+(json_valid(...))`, e.g. `events.metadata_json`), never its internal
+structure. Core-owned structure is never stored as JSON — it gets relational
+columns instead.
 
 `record_json` never duplicates a value a relational column already carries.
 Each table's write path encodes its blob through a persistence-local payload
@@ -76,10 +82,9 @@ nothing beyond its columns serializes to `"{}"`.
 | `population_members` | `(workflow, name, resource_id)` primary key and `populations(workflow, name)` foreign key; nullable `session_name` | item, generation, timestamps, flags, `decision_kind`/`decision_reason`, blockers | `PopulationState.Members` |
 | `up_reservations` | `child_session_name` primary key; nullable `parent_session_name`, `virtual_root`, `pid`, `reserved_at` | none | `state.json` `up_reservations` |
 | `pending_deliveries` | `(session_name, resource_id, operation)` primary key; `operation` is subscribe or unsubscribe | none | `pending_delivery.json` |
-| `event_streams` | `session_name` primary key; `generation` | none | each event directory and its `.gen` file |
-| `events` | `event_id` primary key; `(session_name, sequence)` unique and references `event_streams` | type, source, direction, summary, body, metadata, delivery mode, and recorded time | each `log.jsonl` record |
-| `event_consumer_positions` | `(session_name, consumer_name)` primary key and stream foreign key; `next_sequence` | none | `.cursor.<consumer>` |
-| `event_watermarks` | `(session_name, watermark_name)` primary key and stream foreign key; `next_sequence` | none | `TickBackoff.LastLogPosition` |
+| `event_streams` | `id` (ULID) primary key; `(session_name, created_at DESC)` index, not unique | none | each event directory and its `.gen` file |
+| `events` | `id` primary key; `(stream_id, sequence)` unique and references `event_streams(id)`; `direction` CHECK IN `inbound`/`outbound`/`internal`; `metadata_json` CHECK `json_valid` | type, source, direction, summary, body, metadata, delivery mode, and recorded time | each `log.jsonl` record |
+| `event_cursors` | `(stream_id, kind)` primary key and stream foreign key (`ON DELETE CASCADE`); `kind` CHECK IN `delivery`/`tick`/`heartbeat`; `next_sequence` | none | `.cursor.<consumer>`, `TickBackoff.LastLogPosition` |
 | `session_tombstones` | `session_name` primary key; `destroyed_at` | tombstone session snapshot | `tombstone.json` |
 
 `population_members.session_name` is a recorded fact, not an enforced foreign
@@ -163,16 +168,29 @@ a computed relation, so there is no eighth "unset" value to admit.
 `sessions` represents a real parent with `parent_session_name` and a
 session-local pseudo-root with `root_session_name`; a check constraint permits
 at most one. `children` is derived from those columns and is not stored. A
-session may be deleted without deleting its event stream or tombstone, so
-`event_streams` deliberately has no foreign key to `sessions`.
+session may be deleted without deleting its event streams or tombstone, so
+`event_streams` deliberately has no foreign key to `sessions`. `session_name`
+is not unique: a session create mints a new row each time (see "Event
+positions and cursors" below), so a name created more than once has one row
+per incarnation.
 
 `events.sequence` is a positive, per-stream append position. It is not an
-event identity and it is not a timestamp. A write transaction creates an
-`event_streams` row when needed, assigns its generation, allocates the next
-sequence, and inserts the event. The unique stream/sequence constraint gives
-each log a total append order even when separate processes append concurrently.
-Event IDs remain the global deduplication identity and the key used for merged
-subtree ordering.
+event identity and it is not a timestamp. A session create mints an
+`event_streams` row — a ULID `id`, its `session_name`, and a `created_at` —
+starting that incarnation's stream; the write transaction that appends an
+event allocates the next sequence within it and inserts the event. The
+unique stream/sequence constraint gives each stream a total append order
+even when separate processes append concurrently. Event IDs remain the
+global deduplication identity and the key used for merged subtree ordering.
+
+Vocabulary: a *cursor* is the opaque encoded token (`event.Cursor`) handed to
+a client; a *position* is the stored plain-integer `next_sequence` a server
+holds on its behalf. `event_cursors` holds three named positions per stream,
+keyed by `kind`: `delivery` (dispatch's channel-delivery cursor) and `tick`
+(the reactor's tick-loop cursor) are delivery commitments (at-least-once — a
+later importer must preserve them exactly), and `heartbeat` (the reactor's
+heartbeat inbound sweep) is an observation high-water mark with no delivery
+meaning (an importer may reset it to the tail instead).
 
 The database does not contain plugin-owned configuration or plugin-private
 state. In particular, plugin catalog and lock files remain configuration, and
@@ -209,76 +227,60 @@ CREATE INDEX sessions_alias_idx ON sessions(alias);
 CREATE INDEX sessions_parent_idx ON sessions(parent_session_name);
 
 CREATE TABLE event_streams (
-    session_name TEXT PRIMARY KEY,
-    generation TEXT NOT NULL
+    id TEXT PRIMARY KEY,
+    session_name TEXT NOT NULL,
+    created_at TEXT NOT NULL
 );
+
+CREATE INDEX event_streams_session_name_created_at ON event_streams(session_name, created_at DESC);
 
 CREATE TABLE events (
-    event_id TEXT PRIMARY KEY,
-    session_name TEXT NOT NULL REFERENCES event_streams(session_name),
+    id TEXT PRIMARY KEY,
+    stream_id TEXT NOT NULL REFERENCES event_streams(id),
     sequence INTEGER NOT NULL CHECK (sequence > 0),
-    recorded_at TEXT NOT NULL,
+    time TEXT NOT NULL,
     type TEXT NOT NULL,
     source TEXT NOT NULL,
-    direction TEXT NOT NULL,
+    direction TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound', 'internal')),
     summary TEXT NOT NULL,
     body TEXT NOT NULL DEFAULT '',
-    metadata_json TEXT NOT NULL,
-    delivery_mode TEXT NOT NULL,
-    UNIQUE (session_name, sequence)
+    metadata_json TEXT NOT NULL CHECK (json_valid(metadata_json)),
+    delivery_mode TEXT NOT NULL
 );
 
-CREATE INDEX events_stream_sequence_idx ON events(session_name, sequence);
-CREATE INDEX events_stream_id_idx ON events(session_name, event_id);
+CREATE UNIQUE INDEX events_stream_id_sequence ON events(stream_id, sequence);
+CREATE INDEX events_stream_id_id_idx ON events(stream_id, id);
+
+CREATE TABLE event_cursors (
+    stream_id TEXT NOT NULL REFERENCES event_streams(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('delivery', 'tick', 'heartbeat')),
+    next_sequence INTEGER NOT NULL CHECK (next_sequence >= 0),
+    PRIMARY KEY (stream_id, kind)
+);
 ```
 
 The migration history begins with a transaction-only goose migration. Goose
 records the migration version in its ledger in the same transaction as the
 schema changes; migration files do not use a `NO TRANSACTION` directive.
-
-```sql
--- +goose Up
-CREATE TABLE event_streams (
-    session_name TEXT PRIMARY KEY,
-    generation TEXT NOT NULL
-);
-
-CREATE TABLE events (
-    event_id TEXT PRIMARY KEY,
-    session_name TEXT NOT NULL REFERENCES event_streams(session_name),
-    sequence INTEGER NOT NULL CHECK (sequence > 0),
-    recorded_at TEXT NOT NULL,
-    type TEXT NOT NULL,
-    source TEXT NOT NULL,
-    direction TEXT NOT NULL,
-    summary TEXT NOT NULL,
-    body TEXT NOT NULL DEFAULT '',
-    metadata_json TEXT NOT NULL,
-    delivery_mode TEXT NOT NULL,
-    UNIQUE (session_name, sequence)
-);
-
-CREATE INDEX events_stream_sequence_idx ON events(session_name, sequence);
-
--- +goose Down
-DROP TABLE events;
-DROP TABLE event_streams;
-```
+Migrations are Atlas-generated from `schema.sql` (see
+`app/internal/persistence/doc.go`), so their exact SQL text — quoting,
+per-index `CREATE` statements — is authoritative over any excerpt here.
 
 The append query obtains the next sequence inside the caller's write
-transaction. The persistence append method creates a stream row first and
-retries a transaction only when SQLite reports a busy conflict; it never
-calculates a position outside the transaction.
+transaction. The persistence append method resolves the session's current
+stream first — rejecting the write if none exists — and retries a
+transaction only when SQLite reports a busy conflict; it never calculates a
+position outside the transaction.
 
 ```sql
 -- name: NextEventSequence :one
 SELECT COALESCE(MAX(sequence), 0) + 1
 FROM events
-WHERE session_name = ?;
+WHERE stream_id = ?;
 
 -- name: InsertEvent :exec
 INSERT INTO events (
-    event_id, session_name, sequence, recorded_at, type, source, direction,
+    id, stream_id, sequence, time, type, source, direction,
     summary, body, metadata_json, delivery_mode
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 ```
@@ -304,7 +306,7 @@ upgrade.
 | `ReserveUpSlot` | Delete reservations whose recorded PID is no longer live, read the parent’s active children and reservations, enforce the cap, and insert the child reservation in one write transaction. | Preserves the live-holder rule and the rejection for an already-reserved child. |
 | `ReleaseUpSlot` | Delete the named reservation in one write transaction. | Remains idempotent and best-effort at its existing call sites. |
 | `Delete` | Delete the session, its tasks, completion state, reservations, and parent relation in one write transaction. | Preserves orphaning of children and preserves event history. Tombstone creation remains a separate step until the destroy path is deliberately made one database transaction. |
-| `eventlog.Store.Append` | In one write transaction, create the stream if absent, read `NextEventSequence` from `MAX(sequence)`, and insert the event. | Preserves assigned ID/time, durable append, and per-session total order. |
+| `eventlog.Store.Append` | Starts a stream for a session with none yet (a plain event target, not necessarily one created through Create), then in one write transaction reads `NextEventSequence` from `MAX(sequence)` against the current stream and inserts the event. | Preserves the "publish needs no prior create" contract while keeping each append's own sequence assignment atomic. |
 | `CommitCursor` | Upsert one consumer’s next sequence in one write transaction. | Preserves at-least-once dispatch and reactor restart behavior. |
 | `WriteTombstone` | Upsert one tombstone in one write transaction. | Preserves the fail-closed tombstone checkpoint. |
 
@@ -378,17 +380,35 @@ second storage authority.
 
 ## Event positions and cursors
 
-An event cursor is the opaque `event.Cursor{Off, Ord, Gen}` value, with
+An event cursor is the opaque `event.Cursor{Off, Ord, StreamID}` value, with
 `CursorVersion` set to `2`. `Off` is the exclusive logical sequence in the
 selected event stream: `1` starts at the first row, and a cursor after event
-sequence `n` has `Off == n + 1`. `Gen` is `event_streams.generation`, and
-`Ord` is the requested order.
+sequence `n` has `Off == n + 1`. `StreamID` is `event_streams.id`, and `Ord`
+is the requested order.
 
-`EventPage` decodes only version-2 cursors, validates `Ord` and `Gen` against
-the selected stream, and reads `sequence >= Off` in ascending order. Its next
-cursor has the exclusive position after the final scanned event. It returns an
-empty page for a missing stream, preserves the current ascending and
-non-paginating descending contracts, and rejects a stale generation or order
+An event stream is the log of one session incarnation, not of a session
+name. A session create mints a new `event_streams` row (a fresh `id`,
+`session_name`, `created_at`); a down/up or `--force-recreate` keeps the
+existing session identity, so its stream, `id`, and `events.sequence` all
+continue unchanged. Destroying a session deletes only its `sessions` row —
+`event_streams` has no foreign key to `sessions` — so the destroyed
+incarnation's stream and `events` rows survive, reachable by their own `id`,
+but a later create under the same name is a new session and mints a new
+stream. A read by session name (`plect event list`, the Web API
+history/SSE, dispatcher/reactor cursors, the subtree read) resolves to the
+current stream: the `event_streams` row with the latest `created_at` for
+that name, via `(session_name, created_at DESC)`. A `StreamID` mismatch is
+therefore the expected outcome of a destroy and same-name recreate: a v2
+cursor issued for the destroyed incarnation fails validation against the
+new one, and the client's recovery path (discard the cursor, refetch
+history) is exactly the guard's purpose. Reading the destroyed incarnation's
+own events still requires its own `id`, not its session name.
+
+`EventPage` decodes only version-2 cursors, validates `Ord` and `StreamID`
+against the selected stream, and reads `sequence >= Off` in ascending order.
+Its next cursor has the exclusive position after the final scanned event. It
+returns an empty page for a missing stream, preserves the current ascending
+and non-paginating descending contracts, and rejects a stream-id or order
 mismatch as invalid input.
 
 `EventStreamResume` uses the same validation and position semantics. SSE
@@ -414,9 +434,9 @@ event sequences. A sidecar cursor or `TickBackoff.LastLogPosition` must be
 zero or an end boundary of a complete line; it becomes the sequence of the
 next complete event, skipping malformed lines exactly as legacy `List` does.
 An offset that is negative, beyond the complete log, inside a line, or inside a
-trailing partial line rejects the import. Dispatcher and reactor positions go
-to `event_consumer_positions`; the heartbeat position goes to
-`event_watermarks` under its named watermark.
+trailing partial line rejects the import. Dispatcher and reactor positions
+import into `event_cursors` under their own `kind` (`delivery`, `tick`); the
+heartbeat position imports under `heartbeat`.
 
 ## One-time importer inventory
 
@@ -427,11 +447,11 @@ alongside the database. The command reads the following runtime paths.
 
 | Legacy path | Validation and destination |
 | --- | --- |
-| `state.json` | Parse once; require the supported legacy envelope version; validate layer effect identities and tree relationships; import sessions, tasks, completion state, populations, and reservations. |
+| `state.json` | Parse once; require the supported legacy envelope version; validate layer effect identities and tree relationships; import sessions, tasks, completion state, populations, and reservations. Each session's `TickBackoff.LastLogPosition` translates through the same byte-boundary index as a `.cursor.<consumer>` file and imports into `event_cursors` as that session's `heartbeat` position. |
 | `state.json.lock` | Confirm it is not held before import; do not copy it. The access gate replaces it. |
-| `events/<escaped-session>/log.jsonl` | Decode complete lines in byte order; reject invalid event identity, session mismatch, duplicate ID, and a malformed complete line; discard only a trailing partial line, matching the live reader; import stream and events. |
-| `events/<escaped-session>/.gen` | Read one trimmed non-empty generation identifier when present; otherwise generate a new stream generation after recording that no old page cursor survives cutover. |
-| `events/<escaped-session>/.cursor.<consumer>` | Parse a non-negative decimal boundary, validate it against the log boundary index, and import the translated consumer position. |
+| `events/<escaped-session>/log.jsonl` | Decode complete lines in byte order; reject invalid event identity, session mismatch, duplicate ID, and a malformed complete line; discard only a trailing partial line, matching the live reader; import stream and events. A record with no `direction` imports as `internal`, counted in the import summary. |
+| `events/<escaped-session>/.gen` | Read one trimmed non-empty stream identifier when present and reuse it as `event_streams.id`; otherwise mint a fresh id after recording that no old page cursor survives cutover. |
+| `events/<escaped-session>/.cursor.<consumer>` | Parse a non-negative decimal boundary, validate it against the log boundary index, map `<consumer>` to its `event_cursors.kind` (`dispatcher` imports as `delivery`, `tick-reactor` imports as `tick`), and import the translated position. |
 | `events/<escaped-session>/tombstone.json` | Decode one tombstone, require that its embedded name matches the directory session, and import its snapshot and destruction time. |
 | `events/<escaped-session>/.lock` | Confirm it is not held before import; do not copy it. The database transaction and access gate replace it. |
 | `pending_delivery.json` | Decode subscribe and unsubscribe maps; require non-empty session and resource values; deduplicate entries into `pending_deliveries`. |

@@ -446,7 +446,6 @@ all = [
 	}
 	stop := startReactor(t, r)
 	t.Cleanup(stop)
-	time.Sleep(50 * time.Millisecond)
 
 	// First poll cycle: no prior baseline for this subscription, so the
 	// watcher can only establish one — never notify (summarizeChanges:
@@ -704,7 +703,6 @@ all = [
 	}
 	stop := startReactor(t, r)
 	t.Cleanup(stop)
-	time.Sleep(50 * time.Millisecond)
 
 	// First poll cycle: no linked PR exists yet (prNumberFile reads "none"),
 	// so this only establishes the issue subscription's baseline — never a

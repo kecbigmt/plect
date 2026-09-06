@@ -8,6 +8,32 @@ import (
 	"database/sql"
 )
 
+type Event struct {
+	ID           string
+	StreamID     string
+	Sequence     int64
+	Time         string
+	Type         string
+	Source       string
+	Direction    string
+	Summary      string
+	Body         string
+	MetadataJson string
+	DeliveryMode string
+}
+
+type EventCursor struct {
+	StreamID     string
+	Kind         string
+	NextSequence int64
+}
+
+type EventStream struct {
+	ID          string
+	SessionName string
+	CreatedAt   string
+}
+
 type NodeInstance struct {
 	SessionName string
 	NodeID      string

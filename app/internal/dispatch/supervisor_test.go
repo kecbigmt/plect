@@ -548,6 +548,9 @@ include     = ["plect.instruction"]
 	}
 
 	log := eventlog.NewStore(t.TempDir())
+	if _, err := log.NewStream("o/r-1"); err != nil {
+		t.Fatal(err)
+	}
 	hub := sessionhub.NewRegistry(log, sessionhub.WithPollInterval(2*time.Millisecond))
 	defer hub.Close()
 	sup := NewSupervisor(func() *config.Config { return currentCfg }, stateStore, log, hub)
@@ -570,9 +573,19 @@ include     = ["plect.instruction"]
 	if _, ok := active["o/r-1"]; !ok {
 		t.Fatal("dispatcher not started for an up session")
 	}
-	time.Sleep(50 * time.Millisecond) // let the dispatcher seed its cursor and reach Watch before the append below
+	// Wait for the dispatcher to seed its cursor (its first store touch,
+	// which now migrates a fresh SQLite database) before the append below,
+	// rather than a fixed sleep sized for the old file-backed store.
+	deadline := time.After(2 * time.Second)
+	for !log.HasCursor("o/r-1", dispatcherConsumer) {
+		select {
+		case <-deadline:
+			t.Fatal("dispatcher never seeded its cursor")
+		case <-time.After(time.Millisecond):
+		}
+	}
 
-	if _, _, _, err := log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Body: "go"}); err != nil {
+	if _, _, _, err := log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Body: "go", Direction: event.Internal}); err != nil {
 		t.Fatal(err)
 	}
 	if typ := recvType(t, recv); typ != event.TypeInstruction {

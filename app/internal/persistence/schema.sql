@@ -3,11 +3,7 @@
 -- migrations from it with Atlas Community Edition; do not hand-write
 -- migration SQL against a structural change already captured here.
 --
--- Runtime state tables: sessions, node-instance and task-instance state,
--- done_when / judge state, populations, and up-slot reservations. Event
--- tables (event_streams, events, event_consumer_positions,
--- event_watermarks, session_tombstones, pending_deliveries) belong to a
--- later slice.
+-- Runtime and event tables; session_tombstones/pending_deliveries stay file-based.
 --
 -- Nullability convention throughout: a column is NULL exactly when the
 -- domain value can be genuinely absent (never observed/resolved yet, or an
@@ -200,4 +196,39 @@ CREATE TABLE up_reservations (
     pid INTEGER NOT NULL,
     reserved_at TEXT NOT NULL,
     CHECK ((parent_session_name IS NOT NULL) != (virtual_root = 1))
+);
+
+-- One row per session incarnation, minted at session create (down/up and
+-- --force-recreate reuse it); not unique on session_name, so a read resolves to the latest created_at. No FK to sessions: a destroyed row survives, reachable by its own id.
+CREATE TABLE event_streams (
+    id TEXT PRIMARY KEY,
+    session_name TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX event_streams_session_name_created_at ON event_streams(session_name, created_at DESC);
+
+CREATE TABLE events (
+    id TEXT PRIMARY KEY,
+    stream_id TEXT NOT NULL REFERENCES event_streams(id),
+    sequence INTEGER NOT NULL CHECK (sequence > 0),
+    time TEXT NOT NULL,
+    type TEXT NOT NULL,
+    source TEXT NOT NULL,
+    direction TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound', 'internal')),
+    summary TEXT NOT NULL,
+    body TEXT NOT NULL DEFAULT '',
+    metadata_json TEXT NOT NULL CHECK (json_valid(metadata_json)),
+    delivery_mode TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX events_stream_id_sequence ON events(stream_id, sequence);
+CREATE INDEX events_stream_id_id_idx ON events(stream_id, id);
+
+-- delivery/tick are at-least-once commitments; heartbeat is a resettable mark; next_sequence is exclusive and 0 is valid (unconsumed).
+CREATE TABLE event_cursors (
+    stream_id TEXT NOT NULL REFERENCES event_streams(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('delivery', 'tick', 'heartbeat')),
+    next_sequence INTEGER NOT NULL CHECK (next_sequence >= 0),
+    PRIMARY KEY (stream_id, kind)
 );

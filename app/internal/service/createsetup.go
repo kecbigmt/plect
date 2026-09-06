@@ -84,6 +84,13 @@ func createWithWorkflowSetup(cfg *config.Config, store *state.Store, params Crea
 			Tasks:         make(map[string]*contract.TaskState),
 			CreatedAt:     now,
 		}
+		// Mint this incarnation's event stream before anything touches the
+		// log: AppendEvent/SetEventCursor require a current stream to
+		// already exist rather than silently starting one, so create is the
+		// one place responsible for starting it.
+		if _, err := eventlog.NewStore(store.Dir()).NewStream(sessionName); err != nil {
+			return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to start event stream: %v", err)}
+		}
 		// Seed the dispatcher's read cursor at this fresh session's empty log tail
 		// so the initial task instruction, appended below during create, is
 		// delivered. The dispatcher only starts once the run scope comes up (after

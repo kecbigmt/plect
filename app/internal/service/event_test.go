@@ -6,6 +6,7 @@ import (
 
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/domain"
+	"github.com/kecbigmt/plecture/app/internal/eventlog"
 	"github.com/kecbigmt/plecture/app/internal/state"
 	"github.com/kecbigmt/plecture/contracts/event"
 )
@@ -242,11 +243,55 @@ func TestEventPageRejectsStaleGenerationCursor(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Forge a cursor with a generation the log never had.
-	stale := event.Cursor{V: event.CursorVersion, Off: 0, Ord: event.OrderAsc, Gen: "01JXNEVER"}.Encode()
+	stale := event.Cursor{V: event.CursorVersion, Off: 0, Ord: event.OrderAsc, StreamID: "01JXNEVER"}.Encode()
 	_, err := EventPage(nil, store, session, EventPageParams{Cursor: stale})
 	var svcErr *Error
 	if !errors.As(err, &svcErr) || svcErr.Code != ErrInvalidInput {
 		t.Fatalf("want ErrInvalidInput for stale generation, got %v", err)
+	}
+}
+
+func TestEventPageRejectsCursorAcrossSessionDeleteAndRecreateUnderSameName(t *testing.T) {
+	store := state.NewStore(t.TempDir())
+	const session = "owner/repo-7"
+	if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote}); err != nil {
+		t.Fatal(err)
+	}
+	page, err := EventPage(nil, store, session, EventPageParams{Filter: event.Filter{Limit: 1}})
+	if err != nil || page.NextCursor == "" {
+		t.Fatalf("setup page: err=%v cursor=%q", err, page.NextCursor)
+	}
+
+	if err := store.Delete(session); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := eventlog.NewStore(store.Dir()).NewStream(session); err != nil {
+		t.Fatalf("new stream on recreate: %v", err)
+	}
+	if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote}); err != nil {
+		t.Fatalf("publish after recreate: %v", err)
+	}
+
+	_, err = EventPage(nil, store, session, EventPageParams{Cursor: page.NextCursor})
+	var svcErr *Error
+	if !errors.As(err, &svcErr) || svcErr.Code != ErrInvalidInput {
+		t.Fatalf("cursor from before a real destroy+recreate = %v, want ErrInvalidInput (stale against the new incarnation)", err)
+	}
+}
+
+// A cursor encoded under the retired byte-offset format must never be
+// reinterpreted as a sequence number.
+func TestEventPageRejectsOldVersionCursor(t *testing.T) {
+	store := state.NewStore(t.TempDir())
+	const session = "owner/repo-7"
+	if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote}); err != nil {
+		t.Fatal(err)
+	}
+	old := event.Cursor{V: event.CursorVersion - 1, Off: 0, Ord: event.OrderAsc, StreamID: "01JXNEVER"}.Encode()
+	_, err := EventPage(nil, store, session, EventPageParams{Cursor: old})
+	var svcErr *Error
+	if !errors.As(err, &svcErr) || svcErr.Code != ErrInvalidInput {
+		t.Fatalf("want ErrInvalidInput for an old-version cursor, got %v", err)
 	}
 }
 
@@ -308,11 +353,25 @@ func TestEventStreamResumeRejectsStaleGenerationCursor(t *testing.T) {
 	if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote}); err != nil {
 		t.Fatal(err)
 	}
-	stale := event.Cursor{V: event.CursorVersion, Off: 0, Ord: event.OrderAsc, Gen: "01JXNEVER"}.Encode()
+	stale := event.Cursor{V: event.CursorVersion, Off: 0, Ord: event.OrderAsc, StreamID: "01JXNEVER"}.Encode()
 	_, _, err := EventStreamResume(nil, store, session, stale)
 	var svcErr *Error
 	if !errors.As(err, &svcErr) || svcErr.Code != ErrInvalidInput {
 		t.Fatalf("want ErrInvalidInput for stale generation, got %v", err)
+	}
+}
+
+func TestEventStreamResumeRejectsOldVersionCursor(t *testing.T) {
+	store := state.NewStore(t.TempDir())
+	const session = "owner/repo-9"
+	if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote}); err != nil {
+		t.Fatal(err)
+	}
+	old := event.Cursor{V: event.CursorVersion - 1, Off: 0, Ord: event.OrderAsc, StreamID: "01JXNEVER"}.Encode()
+	_, _, err := EventStreamResume(nil, store, session, old)
+	var svcErr *Error
+	if !errors.As(err, &svcErr) || svcErr.Code != ErrInvalidInput {
+		t.Fatalf("want ErrInvalidInput for an old-version cursor, got %v", err)
 	}
 }
 

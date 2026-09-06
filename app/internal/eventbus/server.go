@@ -102,9 +102,7 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 // same contract as service.EventPage / the CLI): asc paginates forward from the
 // head (or ?cursor) and returns next_cursor; desc returns the most recent page
 // and does not paginate in v1. A cursor is validated against the requested order
-// and the log's current generation, so a stale or cross-order token is rejected
-// rather than silently resolving to the wrong record. The opaque byte offset is
-// kept off the wire here; the live stream (handleStream) exposes it directly.
+// and the log's current stream id, so a stale or cross-order token is rejected rather than silently resolving to the wrong record.
 func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 	session := r.URL.Query().Get("session")
 	if session == "" {
@@ -116,7 +114,7 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	gen, err := s.store.Gen(session)
+	streamID, err := s.store.StreamID(session)
 	if err != nil {
 		http.Error(w, "list failed", http.StatusInternalServerError) // avoid leaking FS paths
 		return
@@ -130,7 +128,7 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, derr.Error(), http.StatusBadRequest)
 			return
 		}
-		if verr := cur.Validate(order, gen); verr != nil {
+		if verr := cur.Validate(order, streamID); verr != nil {
 			http.Error(w, verr.Error(), http.StatusBadRequest)
 			return
 		}
@@ -159,19 +157,17 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 	if evs == nil {
 		evs = []event.Event{}
 	}
-	// A forward cursor only makes sense once the log exists (gen != ""); without
-	// it there is nothing to resume against, so next_cursor stays empty.
+	// No log yet (streamID == "") means nothing to resume against.
 	nextCursor := ""
-	if gen != "" {
-		nextCursor = event.Cursor{V: event.CursorVersion, Off: next, Ord: event.OrderAsc, Gen: gen}.Encode()
+	if streamID != "" {
+		nextCursor = event.Cursor{V: event.CursorVersion, Off: next, Ord: event.OrderAsc, StreamID: streamID}.Encode()
 	}
 	writeJSON(w, map[string]any{"events": evs, "next_cursor": nextCursor})
 }
 
 // handleStream is an SSE endpoint: it replays the session's events from the
 // cursor (Last-Event-ID header or ?since) then follows the log live. Each frame
-// carries `id: <resume cursor>` (the byte offset past that record) so a
-// reconnect with Last-Event-ID resumes with no gap and no re-delivery.
+// carries `id: <streamID>:<resume sequence>` — a rotation's numbering restarts, so a bare sequence alone cannot say which incarnation it resumes — an internal protocol between plect processes and the bus, not the browser-facing opaque cursor a webui relay re-encodes it as.
 func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	session := r.URL.Query().Get("session")
 	if session == "" {
@@ -186,6 +182,26 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	f := parseFilter(r)
 	f.Limit = 0 // a live stream is unbounded; Limit only applies to list paging
 
+	streamID, start, ok := resumeParam(r)
+	if !ok {
+		http.Error(w, "invalid resume token", http.StatusBadRequest)
+		return
+	}
+	if streamID != "" {
+		// Validated before any SSE bytes commit: a syntactically valid token
+		// naming an unknown or another session's stream must not read as a
+		// successful connection to this one.
+		owner, oerr := s.store.StreamOwner(streamID)
+		if oerr != nil {
+			http.Error(w, "resume lookup failed", http.StatusInternalServerError)
+			return
+		}
+		if owner != session {
+			http.Error(w, "unknown resume stream", http.StatusBadRequest)
+			return
+		}
+	}
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -194,12 +210,11 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 
 	ctx := r.Context()
-	start := sinceParam(r)
 	// A fresh stream (no resume cursor) with ?tail=N replays only the most recent
 	// N matching records instead of the whole log — the durable log is unbounded
 	// and survives destroy, so an unscoped replay could flood a new subscriber.
 	// A reconnect carries a cursor and skips this (it resumes exactly).
-	if start == 0 {
+	if streamID == "" && start == 0 {
 		if tail := tailParam(r); tail > 0 {
 			if off, err := s.store.TailOffset(session, f, tail); err == nil {
 				start = off
@@ -207,35 +222,44 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Join the session's shared reader, then replay history up to the join
-	// boundary; the live stream owns everything at/after it. Capturing the
-	// boundary at subscribe time (under the reader's lock) makes the handoff
-	// gap-free and dup-free.
+	// The boundary (with its stream id) is everything already broadcast at subscribe time; replay covers up to it, the live loop covers the rest.
 	sub := s.hub.SubscribeFrames(session)
 	defer sub.Close()
-	boundary := sub.Start()
+	boundary, boundaryStream := sub.Start(), sub.StreamID()
 
-	cursor := start
-	for cursor < boundary {
-		evs, offs, next, err := s.store.List(session, cursor, f)
+	curStream, curSeq := streamID, start
+	for curStream != boundaryStream || curSeq < boundary {
+		evs, offs, resolved, next, err := s.store.ReadFromStream(session, curStream, curSeq)
 		if err != nil {
 			return
 		}
+		if resolved != "" {
+			curStream = resolved
+		}
+		stopped := false
 		for i := range evs {
-			if offs[i] >= boundary {
+			if curStream == boundaryStream && offs[i] >= boundary {
+				stopped = true
 				break // the live stream delivers records at/after the boundary
+			}
+			if !f.Match(evs[i]) {
+				continue
 			}
 			resume := next
 			if i+1 < len(offs) {
 				resume = offs[i+1] // resume point = start of the next delivered record
 			}
 			b, _ := json.Marshal(evs[i])
-			fmt.Fprintf(w, "id: %d\ndata: %s\n\n", resume, b)
+			fmt.Fprintf(w, "id: %s\ndata: %s\n\n", event.EncodeResumeToken(curStream, resume), b)
 		}
-		if next <= cursor {
+		if stopped {
+			curSeq = boundary
 			break
 		}
-		cursor = min(next, boundary)
+		curSeq = next
+		if len(evs) == 0 {
+			break
+		}
 	}
 	flusher.Flush()
 
@@ -249,17 +273,17 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return // reader dropped a slow consumer; the client reconnects via Last-Event-ID
 			}
-			// Skip what replay already covered (a Last-Event-ID ahead of the join
-			// boundary) and apply the request's type filter (the reader is unfiltered).
-			if fr.Start < start || !f.Match(fr.Event) {
+			// Only compare within the stream replay ended on; a newer stream's frames start their own numbering.
+			if fr.StreamID == curStream && fr.Start < curSeq {
 				continue
 			}
-			// fr.Resume is the offset past this record. On a filtered stream that is
-			// the post-record offset rather than the next-matching one; both resume
-			// correctly (a reconnect re-reads and re-filters from the Last-Event-ID).
+			if !f.Match(fr.Event) {
+				continue
+			}
 			b, _ := json.Marshal(fr.Event)
-			fmt.Fprintf(w, "id: %d\ndata: %s\n\n", fr.Resume, b)
+			fmt.Fprintf(w, "id: %s\ndata: %s\n\n", event.EncodeResumeToken(fr.StreamID, fr.Resume), b)
 			flusher.Flush()
+			curStream, curSeq = fr.StreamID, fr.Resume
 			if !ka.Stop() {
 				select {
 				case <-ka.C:
@@ -285,14 +309,17 @@ func tailParam(r *http.Request) int {
 	return n
 }
 
-func sinceParam(r *http.Request) int64 {
-	if v := r.Header.Get("Last-Event-ID"); v != "" {
-		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
-			return n
-		}
+// resumeParam reads a resume token (Last-Event-ID header, else ?since). Absent resolves to a fresh-connect ("", 0, true); present-but-unparseable reports ok=false rather than silently falling back to a connection the client never asked for.
+func resumeParam(r *http.Request) (streamID string, seq int64, ok bool) {
+	v := r.Header.Get("Last-Event-ID")
+	if v == "" {
+		v = r.URL.Query().Get("since")
 	}
-	n, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
-	return n
+	if v == "" {
+		return "", 0, true
+	}
+	streamID, seq, ok = event.ParseResumeToken(v)
+	return streamID, seq, ok
 }
 
 func parseFilter(r *http.Request) event.Filter {

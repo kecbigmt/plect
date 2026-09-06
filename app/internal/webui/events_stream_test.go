@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -62,7 +64,7 @@ func fakeBus(t *testing.T) *httptest.Server {
 		w.(http.Flusher).Flush()
 		// keepalive comment, then one event with a body that spans lines.
 		_, _ = w.Write([]byte(": ping\n\n"))
-		_, _ = w.Write([]byte("id: 128\ndata: {\"id\":\"E1\",\"session_name\":\"o/r-1\",\"type\":\"claude.reply\",\"source\":\"claude\",\"summary\":\"hi there\"}\n\n"))
+		_, _ = w.Write([]byte("id: 01GEN000:128\ndata: {\"id\":\"E1\",\"session_name\":\"o/r-1\",\"type\":\"claude.reply\",\"source\":\"claude\",\"summary\":\"hi there\"}\n\n"))
 		w.(http.Flusher).Flush()
 	})
 	return httptest.NewServer(mux)
@@ -94,15 +96,16 @@ func TestEventsStream_RelaysRenderedRows(t *testing.T) {
 
 	// Read frames until we see the rendered event row (the fake bus stream ends
 	// after it, so the body closes and the scanner stops).
-	var sawPing, sawRow, sawID bool
+	var sawPing, sawRow bool
+	var gotID string
 	sc := bufio.NewScanner(resp.Body)
 	for sc.Scan() {
 		line := sc.Text()
 		switch {
 		case strings.HasPrefix(line, ": ping"):
 			sawPing = true
-		case line == "id: 128":
-			sawID = true
+		case strings.HasPrefix(line, "id: "):
+			gotID = strings.TrimPrefix(line, "id: ")
 		case strings.Contains(line, "claude.reply") && strings.Contains(line, "<li"):
 			sawRow = true
 		case strings.Contains(line, "hi there"):
@@ -112,11 +115,57 @@ func TestEventsStream_RelaysRenderedRows(t *testing.T) {
 	if !sawPing {
 		t.Error("keepalive comment was not forwarded to the browser")
 	}
-	if !sawID {
-		t.Error("resume id was not forwarded")
+	cur, err := event.DecodeCursor(gotID)
+	if err != nil {
+		t.Fatalf("resume id %q did not decode as an opaque cursor: %v", gotID, err)
+	}
+	if cur.V != event.CursorVersion || cur.Off != 128 || cur.Ord != event.OrderAsc || cur.StreamID != "01GEN000" {
+		t.Errorf("resume cursor = %+v, want V=%d Off=128 Ord=asc StreamID=01GEN000", cur, event.CursorVersion)
 	}
 	if !sawRow {
 		t.Error("event was not rendered as a timeline row")
+	}
+}
+
+func TestEventsStream_RawIntegerLastEventIDIsRejectedBeforeDialingBus(t *testing.T) {
+	bus := fakeBus(t)
+	defer bus.Close()
+
+	var mu sync.Mutex
+	var gotCursors []string
+	svc := &fakeService{
+		resumeFn: func(_, cursor string) (string, int64, error) {
+			mu.Lock()
+			gotCursors = append(gotCursors, cursor)
+			mu.Unlock()
+			if cursor == "" {
+				return "gen1", 0, nil
+			}
+			if _, err := event.DecodeCursor(cursor); err != nil {
+				return "", 0, err
+			}
+			return "gen1", 0, nil
+		},
+	}
+	srv := httptest.NewServer(withBus(svc, bus.URL).Routes())
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/events/stream?session=o/r-1", nil)
+	req.Header.Set("Last-Event-ID", "128") // pre-cutover raw byte offset
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (rejected before the bus is dialed)", resp.StatusCode)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Contains(gotCursors, "128") {
+		t.Fatalf("gotCursors = %v, want the raw Last-Event-ID (128) passed through for validation", gotCursors)
 	}
 }
 

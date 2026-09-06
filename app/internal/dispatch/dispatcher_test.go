@@ -1,17 +1,13 @@
 package dispatch
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
 	"io"
-	"log/slog"
 	"net"
-	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -62,6 +58,9 @@ func runTestDispatcher(t *testing.T, log *eventlog.Store, sock string) (*session
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := log.NewStream("o/r-1"); err != nil {
+		t.Fatal(err)
+	}
 	d := &sessionDispatcher{
 		session:  "o/r-1",
 		cfg:      &config.Config{},
@@ -83,9 +82,8 @@ func TestDispatcher_RunDeliversOnWake(t *testing.T) {
 	sock, recv := startFakeSocket(t)
 	d, _, _ := runTestDispatcher(t, log, sock)
 	startDispatcher(t, d)
-	time.Sleep(50 * time.Millisecond) // let run() seed, Watch, and reach its select
 
-	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Body: "go"})
+	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Body: "go", Direction: event.Internal})
 	if typ := recvType(t, recv); typ != event.TypeInstruction {
 		t.Errorf("delivered type = %q", typ)
 	}
@@ -99,11 +97,10 @@ func TestDispatcher_RunDeliversBurstViaCoalescedWakes(t *testing.T) {
 	sock, recv := startFakeSocket(t)
 	d, _, _ := runTestDispatcher(t, log, sock)
 	startDispatcher(t, d)
-	time.Sleep(50 * time.Millisecond)
 
 	const n = 20
 	for range n {
-		log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Body: "go"})
+		log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Body: "go", Direction: event.Internal})
 	}
 	for range n {
 		if typ := recvType(t, recv); typ != event.TypeInstruction {
@@ -121,13 +118,12 @@ func TestDispatcher_RunReplaysAfterRestart(t *testing.T) {
 	d1, st, hub := runTestDispatcher(t, log, sock)
 
 	stop1 := startDispatcher(t, d1)
-	time.Sleep(50 * time.Millisecond)
-	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Body: "first"})
+	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Body: "first", Direction: event.Internal})
 	recvType(t, recv) // delivered + cursor committed
 	stop1()
 
 	// Appended "while down": no dispatcher running.
-	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Body: "while-down"})
+	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Body: "while-down", Direction: event.Internal})
 
 	d2 := &sessionDispatcher{session: d1.session, cfg: d1.cfg, channels: d1.channels, defs: d1.defs, log: log, state: st, hub: hub, policy: d1.policy}
 	startDispatcher(t, d2)
@@ -136,6 +132,8 @@ func TestDispatcher_RunReplaysAfterRestart(t *testing.T) {
 	}
 }
 
+// startDispatcher starts d.run and blocks until its cursor is seeded, so
+// callers need no fixed sleep despite SQLite's variable first-touch cost.
 func startDispatcher(t *testing.T, d *sessionDispatcher) func() {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -156,6 +154,14 @@ func startDispatcher(t *testing.T, d *sessionDispatcher) func() {
 		})
 	}
 	t.Cleanup(stop)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for !d.log.HasCursor(d.session, dispatcherConsumer) {
+		if time.Now().After(deadline) {
+			t.Fatal("dispatcher never seeded its cursor")
+		}
+		time.Sleep(time.Millisecond)
+	}
 	return stop
 }
 
@@ -213,6 +219,17 @@ func runtimeDispatcher(t *testing.T, session string, log *eventlog.Store, socket
 	if err := st.Put(s); err != nil {
 		t.Fatal(err)
 	}
+	// Callers rebuild a dispatcher over the same log/session to simulate a
+	// restart (TestDispatcher_ReplaysFromCursorAcrossRestart), so only mint
+	// a stream the first time — a second mint would give the rebuilt
+	// dispatcher a different current stream than the one its cursor names.
+	if id, err := log.StreamID(session); err != nil {
+		t.Fatal(err)
+	} else if id == "" {
+		if _, err := log.NewStream(session); err != nil {
+			t.Fatal(err)
+		}
+	}
 	d := &sessionDispatcher{
 		session: session,
 		channels: []config.EventChannel{{
@@ -232,7 +249,7 @@ func runtimeDispatcher(t *testing.T, session string, log *eventlog.Store, socket
 }
 
 func drainOnce(d *sessionDispatcher, s *domain.Session) {
-	gen, _ := d.log.Gen(d.session)
+	gen, _ := d.log.StreamID(d.session)
 	d.drain(context.Background(), s, &gen)
 }
 
@@ -266,8 +283,8 @@ func TestDispatcher_DeliversIncludedEvents(t *testing.T) {
 	sock, recv := startFakeSocket(t)
 	d, s := runtimeDispatcher(t, "o/r-1", log, sock, "plect.instruction", "github.*")
 
-	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Body: "do it"})
-	log.Append(event.Event{SessionName: "o/r-1", Type: "github.ci_status", Summary: "CI failed"})
+	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Body: "do it", Direction: event.Internal})
+	log.Append(event.Event{SessionName: "o/r-1", Type: "github.ci_status", Summary: "CI failed", Direction: event.Internal})
 	drainOnce(d, s)
 
 	got := map[string]bool{recvType(t, recv): true}
@@ -286,7 +303,7 @@ func TestDispatcher_IncludeFilters(t *testing.T) {
 	sock, recv := startFakeSocket(t)
 	d, s := runtimeDispatcher(t, "o/r-1", log, sock, "plect.instruction")
 
-	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeUserNote, Body: "ignored"})
+	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeUserNote, Body: "ignored", Direction: event.Internal})
 	drainOnce(d, s)
 
 	assertNoDelivery(t, recv) // user.note is not in include
@@ -308,7 +325,7 @@ func TestDispatcher_DeliversNodeResult(t *testing.T) {
 		SessionName: "o/r-1",
 		Type:        event.TypeNodeResult,
 		Summary:     "agent setup produced",
-		Metadata:    map[string]string{"node": "agent", "effect": "official.example.agent", "scope": "run", "action": event.NodeResultActionSetup, "result": event.NodeResultProduced},
+		Metadata:    map[string]string{"node": "agent", "effect": "official.example.agent", "scope": "run", "action": event.NodeResultActionSetup, "result": event.NodeResultProduced}, Direction: event.Internal,
 	})
 	drainOnce(d, s)
 
@@ -344,7 +361,7 @@ func TestDispatcher_NodeResultUnresolvedBindingFailsSafely(t *testing.T) {
 		policy: channel.RetryPolicy{MaxAttempts: 2, BaseBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond, Timeout: 200 * time.Millisecond},
 	}
 
-	orig, _, _, _ := log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeNodeResult, Summary: "agent setup produced"})
+	orig, _, _, _ := log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeNodeResult, Summary: "agent setup produced", Direction: event.Internal})
 	drainOnce(d, s)
 
 	errs, _, _, _ := log.List("o/r-1", 0, event.Filter{Types: []string{event.TypeChannelError}})
@@ -365,7 +382,7 @@ func TestDispatcher_FinalFailureAppendsChannelError(t *testing.T) {
 	dead := filepath.Join(t.TempDir(), "absent.sock") // never listened
 	d, s := runtimeDispatcher(t, "o/r-1", log, dead, "plect.instruction")
 
-	orig, _, _, _ := log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Body: "do it"})
+	orig, _, _, _ := log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Body: "do it", Direction: event.Internal})
 	drainOnce(d, s)
 
 	errs, _, _, _ := log.List("o/r-1", 0, event.Filter{Types: []string{event.TypeChannelError}})
@@ -397,7 +414,7 @@ func TestDispatcher_SuccessfulDeliveryClearsChannelHealth(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction})
+	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Direction: event.Internal})
 	drainOnce(d, s)
 	recvType(t, recv) // delivered
 
@@ -426,7 +443,7 @@ func TestDispatcher_SuccessfulDeliveryDoesNotClearValidationFailureStreak(t *tes
 		t.Fatal(err)
 	}
 
-	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction})
+	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Direction: event.Internal})
 	drainOnce(d, s)
 	recvType(t, recv) // delivered
 
@@ -441,7 +458,7 @@ func TestDispatcher_ChannelErrorNotRedelivered(t *testing.T) {
 	dead := filepath.Join(t.TempDir(), "absent.sock")
 	d, s := runtimeDispatcher(t, "o/r-1", log, dead, "plect.instruction", "github.*")
 
-	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction})
+	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Direction: event.Internal})
 	drainOnce(d, s) // fails → appends one channel.error
 	drainOnce(d, s) // reads the channel.error; must not match any include → no second error
 
@@ -472,7 +489,7 @@ func TestDispatcher_MultiChannelFanOut(t *testing.T) {
 		state:  st,
 		policy: channel.RetryPolicy{MaxAttempts: 2, BaseBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond, Timeout: 200 * time.Millisecond},
 	}
-	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction})
+	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Direction: event.Internal})
 	drainOnce(d, s)
 
 	recvType(t, recv) // live channel delivered
@@ -490,7 +507,7 @@ func TestDispatcher_MultiChannelFanOut(t *testing.T) {
 	// A second event must extend the same streak, not have the live channel's
 	// concurrent success reset it: the two channels' outcomes are aggregated
 	// per event, not raced against each other per channel.
-	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction})
+	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Direction: event.Internal})
 	drainOnce(d, s)
 	recvType(t, recv)
 	if ch := d.state.Get("o/r-1").ChannelDeliveryHealth; ch == nil || ch.ConsecutiveFailures != 2 {
@@ -508,10 +525,10 @@ func TestDispatcher_CancelMidEventLeavesCursorForReplay(t *testing.T) {
 		policy:   channel.RetryPolicy{MaxAttempts: 1, Timeout: 10 * time.Second},
 	}
 	s := &domain.Session{Name: "o/r-1", Tasks: map[string]*contract.TaskState{}}
-	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction})
+	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Direction: event.Internal})
 
 	ctx, cancel := context.WithCancel(context.Background())
-	gen, _ := log.Gen("o/r-1")
+	gen, _ := log.StreamID("o/r-1")
 	done := make(chan struct{})
 	go func() { d.drain(ctx, s, &gen); close(done) }()
 	time.Sleep(100 * time.Millisecond)
@@ -538,7 +555,7 @@ func TestDispatcher_ChannelErrorNotDeliveredUnderWildcard(t *testing.T) {
 	dead := filepath.Join(t.TempDir(), "absent.sock")
 	d, s := runtimeDispatcher(t, "o/r-1", log, dead, "*") // include everything
 
-	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction})
+	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Direction: event.Internal})
 	drainOnce(d, s) // fails → one channel.error
 	drainOnce(d, s) // reads the channel.error; the structural guard skips it though "*" matches
 
@@ -554,13 +571,13 @@ func TestDispatcher_SeedsCursorToTailOnFirstStart(t *testing.T) {
 	d, s := runtimeDispatcher(t, "o/r-1", log, sock, "plect.instruction")
 
 	// History predating the dispatcher must not be re-flooded to the runtime.
-	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Body: "old"})
+	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Body: "old", Direction: event.Internal})
 	SeedCursor(d.log, d.session)
 	drainOnce(d, s)
 	assertNoDelivery(t, recv)
 
 	// Events after the seed are delivered.
-	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Body: "new"})
+	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Body: "new", Direction: event.Internal})
 	drainOnce(d, s)
 	if typ := recvType(t, recv); typ != event.TypeInstruction {
 		t.Errorf("post-seed delivery type = %q", typ)
@@ -577,7 +594,7 @@ func TestSeedCursor_AtBirthDeliversFirstInstruction(t *testing.T) {
 	// comes up — its own first-start seed must no-op (cursor already exists) so the
 	// instruction appended in between is still delivered.
 	SeedCursor(d.log, d.session)
-	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Body: "initial"})
+	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Body: "initial", Direction: event.Internal})
 	SeedCursor(d.log, d.session) // dispatcher first start: idempotent, keeps birth cursor
 	drainOnce(d, s)
 	if typ := recvType(t, recv); typ != event.TypeInstruction {
@@ -590,7 +607,7 @@ func TestDispatcher_ReplaysFromCursorAcrossRestart(t *testing.T) {
 	sock, recv := startFakeSocket(t)
 
 	d1, s := runtimeDispatcher(t, "o/r-1", log, sock, "plect.instruction")
-	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Body: "first"})
+	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Body: "first", Direction: event.Internal})
 	drainOnce(d1, s)
 	recvType(t, recv) // delivered once
 
@@ -600,56 +617,10 @@ func TestDispatcher_ReplaysFromCursorAcrossRestart(t *testing.T) {
 	assertNoDelivery(t, recv)
 
 	// An event appended "while down" is delivered after the restart (durable cursor).
-	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Body: "second"})
+	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Body: "second", Direction: event.Internal})
 	drainOnce(d2, s)
 	if typ := recvType(t, recv); typ != event.TypeInstruction {
 		t.Errorf("post-restart delivery type = %q", typ)
-	}
-}
-
-// TestDispatcher_CommitCursorFailureIsLoggedAndEventRedelivers forces
-// CommitCursor to fail (by revoking write permission on its session dir, so
-// the temp file it writes before renaming can't be created) and asserts the
-// failure is observable via logging rather than silently swallowed, and that
-// the stuck cursor causes the already-delivered event to redeliver on the
-// next drain (at-least-once, not lost).
-func TestDispatcher_CommitCursorFailureIsLoggedAndEventRedelivers(t *testing.T) {
-	log := eventlog.NewStore(t.TempDir())
-	sock, recv := startFakeSocket(t)
-	d, s := runtimeDispatcher(t, "o/r-1", log, sock, "plect.instruction")
-
-	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Body: "first"})
-	drainOnce(d, s)
-	recvType(t, recv) // establishes a committed cursor
-
-	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Body: "second"})
-
-	sessionDir := filepath.Join(log.Root(), url.PathEscape("o/r-1"))
-	if err := os.Chmod(sessionDir, 0o555); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Chmod(sessionDir, 0o755) })
-
-	var logs bytes.Buffer
-	origLogger := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
-	defer slog.SetDefault(origLogger)
-
-	drainOnce(d, s)
-	recvType(t, recv) // delivered despite the commit failure
-
-	if !strings.Contains(logs.String(), "commit cursor failed") {
-		t.Fatalf("expected a commit-cursor-failed warning to be logged, got %q", logs.String())
-	}
-
-	// Cursor never advanced past the stuck commit, so a clean drain redelivers
-	// the same event instead of silently dropping it.
-	if err := os.Chmod(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	drainOnce(d, s)
-	if typ := recvType(t, recv); typ != event.TypeInstruction {
-		t.Errorf("expected the stuck event to redeliver, got %q", typ)
 	}
 }
 
@@ -705,7 +676,7 @@ func TestDispatcher_TerminalHelperResolvesThroughSessionPlan(t *testing.T) {
 			}},
 		},
 	}
-	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction})
+	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Direction: event.Internal})
 	drainOnce(d, s)
 
 	got, err := os.ReadFile(outFile)

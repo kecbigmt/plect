@@ -11,7 +11,6 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/eventlog"
-	"github.com/kecbigmt/plecture/app/internal/state"
 	"github.com/kecbigmt/plecture/app/internal/task"
 	"github.com/kecbigmt/plecture/contracts/event"
 	contract "github.com/kecbigmt/plecture/contracts/state"
@@ -306,19 +305,6 @@ func TestTickSession_ChainCapAttemptEventRecordsNewStreakAfterPredicateGoesUnmet
 	}
 }
 
-// blockLogFile makes the given session's event log path a directory instead
-// of a file, so Append's open for writing fails with EISDIR — a structural
-// mismatch, not a permission bit, so it fails the same way for any user
-// including root (unlike a chmod-based block, which root bypasses).
-func blockLogFile(t *testing.T, store *state.Store, session string) string {
-	t.Helper()
-	logPath := filepath.Join(store.Dir(), "events", session, "log.jsonl")
-	if err := os.MkdirAll(logPath, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return logPath
-}
-
 func TestTickSession_ChainCapAttemptEventRetriesAfterPublishFailure(t *testing.T) {
 	store := testStore(t)
 	// No [done_when]: this instance's own done_when action would also try to
@@ -343,7 +329,7 @@ all = [ { check = "resource.state.checks_status", in = ["SUCCESS"] } ]
 	seedReviewWork(t, store, "work1", map[string]any{"checks_status": "SUCCESS"})
 	setParent(t, store, "work1", "parent1")
 
-	logPath := blockLogFile(t, store, "work1")
+	blockEventsDir(t, store)
 
 	res, err := TickSession(cfg, store, TickParams{SessionName: "work1", SkipRefresh: true})
 	if err != nil {
@@ -363,9 +349,6 @@ all = [ { check = "resource.state.checks_status", in = ["SUCCESS"] } ]
 		t.Fatalf("expected a chain-attempt event failure warning, got %+v", sp.Warnings)
 	}
 
-	if err := os.RemoveAll(logPath); err != nil {
-		t.Fatal(err)
-	}
 	res2, err := TickSession(cfg, store, TickParams{SessionName: "work1", SkipRefresh: true})
 	if err != nil {
 		t.Fatalf("TickSession(2): %v", err)
@@ -425,12 +408,16 @@ func TestTickSession_ChainCapAttemptMarkerDoesNotSurviveRecreationUnderTheSameNa
 	if _, err := TickSession(cfg, store, TickParams{SessionName: "work1", SkipRefresh: true}); err != nil {
 		t.Fatalf("TickSession(2): %v", err)
 	}
+	// A same-name recreate mints a new stream, so reading by session name
+	// now resolves to only that new incarnation: its own first refusal, not
+	// suppressed by the destroyed incarnation's marker (which shared no key
+	// with the new stream's id).
 	evs2, _, _, err := eventlog.NewStore(store.Dir()).List("work1", 0, event.Filter{Types: []string{event.TypeChainAttempt}})
 	if err != nil {
 		t.Fatalf("List(2): %v", err)
 	}
-	if len(evs2) != 2 {
-		t.Fatalf("chain-attempt events across a destroy and same-name recreation = %d, want 2 (the recreated session's own first refusal, not suppressed by the destroyed one's marker)", len(evs2))
+	if len(evs2) != 1 {
+		t.Fatalf("chain-attempt events on the recreated incarnation = %d, want 1 (its own first refusal, not suppressed by the destroyed one's marker)", len(evs2))
 	}
 }
 
@@ -446,7 +433,7 @@ func TestEvaluateSessionActions_ReturnedSnapshotIsImmuneToALaterStoreMutation(t 
 	if err != nil {
 		t.Fatalf("evaluateSessionActions: %v", err)
 	}
-	snapshot := sessionGeneration(session)
+	snapshot := session.CreatedAt
 
 	if err := store.Update("work1", func(s *domain.Session) error {
 		s.CreatedAt = s.CreatedAt.Add(time.Hour)
@@ -455,10 +442,10 @@ func TestEvaluateSessionActions_ReturnedSnapshotIsImmuneToALaterStoreMutation(t 
 		t.Fatalf("store.Update: %v", err)
 	}
 
-	if got := sessionGeneration(session); got != snapshot {
-		t.Fatalf("sessionGeneration(session) = %q after an unrelated store mutation, want %q unchanged", got, snapshot)
+	if got := session.CreatedAt; !got.Equal(snapshot) {
+		t.Fatalf("session.CreatedAt = %v after an unrelated store mutation, want %v unchanged", got, snapshot)
 	}
-	if live := sessionGeneration(store.Get("work1")); live == snapshot {
-		t.Fatal("test setup did not actually change the live session's generation")
+	if live := store.Get("work1").CreatedAt; live.Equal(snapshot) {
+		t.Fatal("test setup did not actually change the live session's CreatedAt")
 	}
 }

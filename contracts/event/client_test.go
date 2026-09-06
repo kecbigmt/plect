@@ -173,8 +173,8 @@ func TestClientSubscribeReplaysAndFollowsSSE(t *testing.T) {
 
 		ev1, _ := json.Marshal(Event{ID: "1", SessionName: "s", Type: "a"})
 		ev2, _ := json.Marshal(Event{ID: "2", SessionName: "s", Type: "b"})
-		fmt.Fprintf(w, "id: 10\ndata: %s\n\n", ev1)
-		fmt.Fprintf(w, "id: 20\ndata: %s\n\n", ev2)
+		fmt.Fprintf(w, "id: streamA:10\ndata: %s\n\n", ev1)
+		fmt.Fprintf(w, "id: streamA:20\ndata: %s\n\n", ev2)
 	})
 
 	var mu sync.Mutex
@@ -211,8 +211,8 @@ func TestClientSubscribeReplaysAndFollowsSSE(t *testing.T) {
 	if offs[0] != 10 || offs[1] != 20 {
 		t.Fatalf("received offsets %v, want [10 20]", offs)
 	}
-	if gotLastEventID != "5" {
-		t.Fatalf("Last-Event-ID header = %q, want %q", gotLastEventID, "5")
+	if gotLastEventID != ":5" {
+		t.Fatalf("Last-Event-ID header = %q, want %q", gotLastEventID, ":5")
 	}
 }
 
@@ -230,11 +230,11 @@ func TestClientSubscribeReconnectsOnStreamEnd(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		if attempt == 1 {
 			ev, _ := json.Marshal(Event{ID: "1", SessionName: "s"})
-			fmt.Fprintf(w, "id: 100\ndata: %s\n\n", ev)
-			return // stream ends; client must reconnect with Last-Event-ID: 100
+			fmt.Fprintf(w, "id: streamA:100\ndata: %s\n\n", ev)
+			return // stream ends; client must reconnect with Last-Event-ID: streamA:100
 		}
 		ev, _ := json.Marshal(Event{ID: "2", SessionName: "s"})
-		fmt.Fprintf(w, "id: 200\ndata: %s\n\n", ev)
+		fmt.Fprintf(w, "id: streamA:200\ndata: %s\n\n", ev)
 	})
 
 	var got []string
@@ -268,8 +268,8 @@ func TestClientSubscribeReconnectsOnStreamEnd(t *testing.T) {
 	if len(lastEventIDs) < 2 {
 		t.Fatalf("expected at least 2 connection attempts, got %d", len(lastEventIDs))
 	}
-	if lastEventIDs[1] != "100" {
-		t.Fatalf("reconnect Last-Event-ID = %q, want %q (resume from prior offset)", lastEventIDs[1], "100")
+	if lastEventIDs[1] != "streamA:100" {
+		t.Fatalf("reconnect Last-Event-ID = %q, want %q (resume from prior stream+offset)", lastEventIDs[1], "streamA:100")
 	}
 }
 
@@ -332,17 +332,17 @@ func TestFilterQueryAndListQueryEncoding(t *testing.T) {
 		t.Errorf("listQuery types = %q", lq.Get("types"))
 	}
 
-	sq := filterQuery("workspace-1", 42, f)
+	sq := filterQuery("workspace-1", "streamA:42", f)
 	if sq.Get("session") != "workspace-1" {
 		t.Errorf("filterQuery session = %q", sq.Get("session"))
 	}
-	if sq.Get("since") != "42" {
-		t.Errorf("filterQuery since = %q, want 42", sq.Get("since"))
+	if sq.Get("since") != "streamA:42" {
+		t.Errorf("filterQuery since = %q, want streamA:42", sq.Get("since"))
 	}
 
-	// since <= 0 is omitted: an unset resume position, not offset zero.
-	sq0 := filterQuery("workspace-1", 0, Filter{})
+	// an empty resume token is omitted: an unset resume position, not offset zero.
+	sq0 := filterQuery("workspace-1", "", Filter{})
 	if sq0.Has("since") {
-		t.Errorf("filterQuery since should be omitted for since=0, got %q", sq0.Get("since"))
+		t.Errorf("filterQuery since should be omitted for an empty resume token, got %q", sq0.Get("since"))
 	}
 }

@@ -94,6 +94,46 @@ func (q *Queries) DeleteUpReservation(ctx context.Context, childSessionName stri
 	return err
 }
 
+const getEventCursor = `-- name: GetEventCursor :one
+SELECT next_sequence FROM event_cursors WHERE stream_id = ? AND kind = ?
+`
+
+type GetEventCursorParams struct {
+	StreamID string
+	Kind     string
+}
+
+func (q *Queries) GetEventCursor(ctx context.Context, arg GetEventCursorParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, getEventCursor, arg.StreamID, arg.Kind)
+	var next_sequence int64
+	err := row.Scan(&next_sequence)
+	return next_sequence, err
+}
+
+const getEventStreamIDBySession = `-- name: GetEventStreamIDBySession :one
+
+SELECT id FROM event_streams WHERE session_name = ? ORDER BY created_at DESC LIMIT 1
+`
+
+// Events
+func (q *Queries) GetEventStreamIDBySession(ctx context.Context, sessionName string) (string, error) {
+	row := q.db.QueryRowContext(ctx, getEventStreamIDBySession, sessionName)
+	var id string
+	err := row.Scan(&id)
+	return id, err
+}
+
+const getEventStreamSessionName = `-- name: GetEventStreamSessionName :one
+SELECT session_name FROM event_streams WHERE id = ?
+`
+
+func (q *Queries) GetEventStreamSessionName(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRowContext(ctx, getEventStreamSessionName, id)
+	var session_name string
+	err := row.Scan(&session_name)
+	return session_name, err
+}
+
 const getPopulation = `-- name: GetPopulation :one
 
 SELECT workflow, name FROM populations WHERE workflow = ? AND name = ?
@@ -137,6 +177,73 @@ func (q *Queries) GetSession(ctx context.Context, name string) (Session, error) 
 		&i.RecordJson,
 	)
 	return i, err
+}
+
+const hasEventCursor = `-- name: HasEventCursor :one
+SELECT COUNT(*) FROM event_cursors WHERE stream_id = ? AND kind = ?
+`
+
+type HasEventCursorParams struct {
+	StreamID string
+	Kind     string
+}
+
+func (q *Queries) HasEventCursor(ctx context.Context, arg HasEventCursorParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, hasEventCursor, arg.StreamID, arg.Kind)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const insertEvent = `-- name: InsertEvent :exec
+INSERT INTO events (id, stream_id, sequence, time, type, source, direction, summary, body, metadata_json, delivery_mode)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type InsertEventParams struct {
+	ID           string
+	StreamID     string
+	Sequence     int64
+	Time         string
+	Type         string
+	Source       string
+	Direction    string
+	Summary      string
+	Body         string
+	MetadataJson string
+	DeliveryMode string
+}
+
+func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) error {
+	_, err := q.db.ExecContext(ctx, insertEvent,
+		arg.ID,
+		arg.StreamID,
+		arg.Sequence,
+		arg.Time,
+		arg.Type,
+		arg.Source,
+		arg.Direction,
+		arg.Summary,
+		arg.Body,
+		arg.MetadataJson,
+		arg.DeliveryMode,
+	)
+	return err
+}
+
+const insertEventStream = `-- name: InsertEventStream :exec
+INSERT INTO event_streams (id, session_name, created_at) VALUES (?, ?, ?)
+`
+
+type InsertEventStreamParams struct {
+	ID          string
+	SessionName string
+	CreatedAt   string
+}
+
+func (q *Queries) InsertEventStream(ctx context.Context, arg InsertEventStreamParams) error {
+	_, err := q.db.ExecContext(ctx, insertEventStream, arg.ID, arg.SessionName, arg.CreatedAt)
+	return err
 }
 
 const insertNodeInstance = `-- name: InsertNodeInstance :exec
@@ -307,6 +414,117 @@ func (q *Queries) ListChildSessionNames(ctx context.Context, parentSessionName s
 			return nil, err
 		}
 		items = append(items, name)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listEventStreamIDsBySession = `-- name: ListEventStreamIDsBySession :many
+SELECT id FROM event_streams WHERE session_name = ? ORDER BY created_at ASC
+`
+
+func (q *Queries) ListEventStreamIDsBySession(ctx context.Context, sessionName string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listEventStreamIDsBySession, sessionName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listEventStreamSessions = `-- name: ListEventStreamSessions :many
+SELECT DISTINCT session_name FROM event_streams ORDER BY session_name
+`
+
+func (q *Queries) ListEventStreamSessions(ctx context.Context) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listEventStreamSessions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var session_name string
+		if err := rows.Scan(&session_name); err != nil {
+			return nil, err
+		}
+		items = append(items, session_name)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listEventsFromByStream = `-- name: ListEventsFromByStream :many
+SELECT id, sequence, time, type, source, direction, summary, body, metadata_json, delivery_mode
+FROM events WHERE stream_id = ? AND sequence >= ? ORDER BY sequence
+`
+
+type ListEventsFromByStreamParams struct {
+	StreamID string
+	Sequence int64
+}
+
+type ListEventsFromByStreamRow struct {
+	ID           string
+	Sequence     int64
+	Time         string
+	Type         string
+	Source       string
+	Direction    string
+	Summary      string
+	Body         string
+	MetadataJson string
+	DeliveryMode string
+}
+
+func (q *Queries) ListEventsFromByStream(ctx context.Context, arg ListEventsFromByStreamParams) ([]ListEventsFromByStreamRow, error) {
+	rows, err := q.db.QueryContext(ctx, listEventsFromByStream, arg.StreamID, arg.Sequence)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListEventsFromByStreamRow
+	for rows.Next() {
+		var i ListEventsFromByStreamRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Sequence,
+			&i.Time,
+			&i.Type,
+			&i.Source,
+			&i.Direction,
+			&i.Summary,
+			&i.Body,
+			&i.MetadataJson,
+			&i.DeliveryMode,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -652,6 +870,17 @@ func (q *Queries) ListUpReservations(ctx context.Context) ([]UpReservation, erro
 	return items, nil
 }
 
+const nextEventSequence = `-- name: NextEventSequence :one
+SELECT COALESCE(MAX(sequence), 0) + 1 FROM events WHERE stream_id = ?
+`
+
+func (q *Queries) NextEventSequence(ctx context.Context, streamID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, nextEventSequence, streamID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const sessionParent = `-- name: SessionParent :one
 SELECT parent_session_name FROM sessions WHERE name = ?
 `
@@ -661,6 +890,22 @@ func (q *Queries) SessionParent(ctx context.Context, name string) (sql.NullStrin
 	var parent_session_name sql.NullString
 	err := row.Scan(&parent_session_name)
 	return parent_session_name, err
+}
+
+const upsertEventCursor = `-- name: UpsertEventCursor :exec
+INSERT INTO event_cursors (stream_id, kind, next_sequence) VALUES (?, ?, ?)
+ON CONFLICT(stream_id, kind) DO UPDATE SET next_sequence = excluded.next_sequence
+`
+
+type UpsertEventCursorParams struct {
+	StreamID     string
+	Kind         string
+	NextSequence int64
+}
+
+func (q *Queries) UpsertEventCursor(ctx context.Context, arg UpsertEventCursorParams) error {
+	_, err := q.db.ExecContext(ctx, upsertEventCursor, arg.StreamID, arg.Kind, arg.NextSequence)
+	return err
 }
 
 const upsertPopulation = `-- name: UpsertPopulation :exec

@@ -18,10 +18,10 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// reactorConsumer is this consumer's durable cursor name — distinct from
-// dispatch's "dispatcher" cursor so the two followers advance independently
+// reactorConsumer is this consumer's durable cursor kind — distinct from
+// dispatch's "delivery" cursor so the two followers advance independently
 // over the same log.
-const reactorConsumer = "tick-reactor"
+const reactorConsumer = "tick"
 
 // fallbackDrain re-drains even if a wake was missed/coalesced, mirroring
 // dispatch's fallback ticker: correctness rests on the durable cursor, so
@@ -83,9 +83,19 @@ type sessionReactor struct {
 	channelHealthEvery time.Duration
 }
 
+// effectiveLogger falls back to slog.Default() for a test-constructed
+// sessionReactor that (like a nil cfgFn) skips buildReactor and leaves
+// logger unset.
+func (r *sessionReactor) effectiveLogger() *slog.Logger {
+	if r.logger != nil {
+		return r.logger
+	}
+	return slog.Default()
+}
+
 func (r *sessionReactor) run(ctx context.Context) {
 	seedCursor(r.log, r.session)
-	startGen, _ := r.log.Gen(r.session)
+	startGen, _ := r.log.StreamID(r.session)
 	wake := r.hub.Watch(r.session)
 	defer wake.Close()
 	fallback := time.NewTicker(fallbackDrain)
@@ -130,7 +140,7 @@ func (r *sessionReactor) run(ctx context.Context) {
 			// permanently exit this loop (nothing restarts it) instead of
 			// retrying once the store recovers. Log and keep the loop alive
 			// to try again on the next wake/tick.
-			r.logger.Error("reactor: read session state failed", "session", r.session, "error", err)
+			r.effectiveLogger().Error("reactor: read session state failed", "session", r.session, "error", err)
 		} else if s == nil {
 			return // destroyed
 		} else if r.cfg.RunScopeUp(s) {
@@ -176,8 +186,7 @@ func seedCursor(log *eventlog.Store, session string) {
 // owns this session's follow loop) and rapid bursts coalesce into one tick,
 // exactly as verification-gate.md's serialization/debounce rule requires.
 func (r *sessionReactor) drain(ctx context.Context, startGen *string) {
-	if g, _ := r.log.Gen(r.session); *startGen != "" && g != *startGen {
-		// Log rotated/compacted: the byte cursor is meaningless, re-read from head.
+	if g, _ := r.log.StreamID(r.session); *startGen != "" && g != *startGen {
 		if err := r.log.CommitCursor(r.session, reactorConsumer, 0); err != nil {
 			slog.Default().Warn("reactor: reset cursor after log rotation failed", "session", r.session, "error", err)
 		}
@@ -424,7 +433,7 @@ func (r *sessionReactor) updateBackoff(ctx context.Context) {
 		}
 		return nil
 	}); err != nil {
-		r.logger.Warn("reactor: update tick backoff failed", "session", r.session, "error", err)
+		r.effectiveLogger().Warn("reactor: update tick backoff failed", "session", r.session, "error", err)
 	}
 }
 

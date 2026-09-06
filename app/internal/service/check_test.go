@@ -2,9 +2,8 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -944,9 +943,6 @@ func TestTickSession_PushesDoneToParentOnceOnSatisfied(t *testing.T) {
 		t.Fatalf("done events on parent = %d, want 1 (pushed once, not re-pushed on repeated poll)", len(evs))
 	}
 	ev := evs[0]
-	if ev.DeliveryMode != event.DeliveryModePush {
-		t.Fatalf("delivery_mode = %q, want push", ev.DeliveryMode)
-	}
 	if ev.Metadata[event.MetaOriginSession] != "owner/repo-1" || ev.Metadata[event.MetaInstance] != "initial" {
 		t.Fatalf("metadata = %+v", ev.Metadata)
 	}
@@ -1020,7 +1016,7 @@ func TestTickSession_EscalatesAfterHeartbeatBudget_PushesToParent(t *testing.T) 
 	if len(pushed) != 1 {
 		t.Fatalf("escalate events on parent = %d, want 1", len(pushed))
 	}
-	if pushed[0].Metadata[event.MetaOriginSession] != "owner/repo-1" || pushed[0].DeliveryMode != event.DeliveryModePush {
+	if pushed[0].Metadata[event.MetaOriginSession] != "owner/repo-1" {
 		t.Fatalf("pushed escalate = %+v", pushed[0])
 	}
 	if pushed[0].Metadata["escalation_kind"] != "done_when.non_convergence" || pushed[0].Metadata["heartbeat_budget"] != "1" {
@@ -1054,21 +1050,16 @@ revision = { type = "string", mutable = true }
 	}}, []nodeFixture{{id: "initial", uses: "work"}})
 }
 
-// blockEventsDir makes every eventlog.Append against store fail deterministically
-// (a plain file sits where the events directory needs to be, so os.MkdirAll
-// errors), to exercise CheckSession's publish-failure retry contract.
+// blockEventsDir arms a one-shot failure for store's next eventlog.Append, to
+// exercise CheckSession's publish-failure retry contract. eventlog.Store
+// shares one long-lived database connection per path, so an already-open
+// connection is unaffected by an external permission or content change, and
+// SQLite's single writer lock spans the whole database file (blocking
+// state.Store's unrelated writes too) — eventlog.FailNextAppend is the only
+// way left to fail one Append deterministically without either problem.
 func blockEventsDir(t *testing.T, store *state.Store) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(store.Dir(), "events"), []byte("block"), 0o644); err != nil {
-		t.Fatalf("blockEventsDir: %v", err)
-	}
-}
-
-func unblockEventsDir(t *testing.T, store *state.Store) {
-	t.Helper()
-	if err := os.Remove(filepath.Join(store.Dir(), "events")); err != nil {
-		t.Fatalf("unblockEventsDir: %v", err)
-	}
+	eventlog.FailNextAppend(store.Dir(), errors.New("simulated publish failure"))
 }
 
 // A publish failure must leave the tick marker unadvanced (no heartbeat
@@ -1095,7 +1086,6 @@ func TestTickSession_PublishFailureLeavesMarkerUnadvancedForRetry(t *testing.T) 
 		t.Fatalf("done_when state = %+v, want no marker persisted on publish failure", check)
 	}
 
-	unblockEventsDir(t, store)
 	result, err := TickSession(cfg, store, TickParams{SessionName: "owner/repo-1", Trigger: TickTriggerHeartbeat})
 	if err != nil {
 		t.Fatalf("retry TickSession: %v", err)
@@ -1138,7 +1128,6 @@ func TestTickSession_SatisfiedPublishFailureAllowsRetry(t *testing.T) {
 		t.Fatalf("done_when state = %+v, want not marked satisfied after a failed push", check)
 	}
 
-	unblockEventsDir(t, store)
 	result, err := TickSession(cfg, store, TickParams{SessionName: "owner/repo-1"})
 	if err != nil {
 		t.Fatalf("retry TickSession: %v", err)

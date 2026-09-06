@@ -23,12 +23,12 @@ const pollInterval = 500 * time.Millisecond
 // up is dropped rather than stalling the shared reader (see FrameSub.deliver).
 const frameBuffer = 256
 
-// Frame is one delivered event with its SSE resume offset (the byte offset past
-// the record — the same id-frame cursor the bus has always emitted).
+// Frame is one delivered event with its SSE resume position (the sequence past the record) and the id of the stream Start/Resume are scoped to.
 type Frame struct {
-	Event  event.Event
-	Start  int64 // byte offset where the record starts
-	Resume int64 // byte offset past the record
+	Event    event.Event
+	StreamID string
+	Start    int64 // sequence of the record itself, within StreamID
+	Resume   int64 // sequence past the record, within StreamID
 }
 
 // FrameSub is a live frame subscriber (SSE). Start is the reader's broadcast
@@ -37,6 +37,7 @@ type Frame struct {
 type FrameSub struct {
 	ch        chan Frame
 	start     int64
+	streamID  string
 	release   func()
 	closeOnce sync.Once
 	dead      bool // set under reader.mu after an overflow close
@@ -44,6 +45,9 @@ type FrameSub struct {
 
 func (s *FrameSub) Frames() <-chan Frame { return s.ch }
 func (s *FrameSub) Start() int64         { return s.start }
+
+// StreamID is the stream Start is scoped to, captured atomically with it at subscribe time; a caller replaying history up to Start must read that stream by this id, not by session name.
+func (s *FrameSub) StreamID() string { return s.streamID }
 
 // Close is idempotent so a double Close can't over-decrement the reader refcount.
 func (s *FrameSub) Close() { s.closeOnce.Do(s.release) }
@@ -96,42 +100,60 @@ type reader struct {
 	// wait on so neither can return while the reader might still touch the log.
 	done chan struct{}
 
-	mu     sync.Mutex
-	cursor int64 // broadcast watermark: everything < cursor has been broadcast
-	frames map[*FrameSub]struct{}
-	wakes  map[*WakeSub]struct{}
+	mu       sync.Mutex
+	streamID string // current stream id `cursor` is scoped to
+	cursor   int64  // broadcast watermark within streamID: everything < cursor has been broadcast
+	frames   map[*FrameSub]struct{}
+	wakes    map[*WakeSub]struct{}
 }
 
 func (r *reader) run(ctx context.Context) {
 	defer close(r.done)
-	cur := r.cursor
+	r.mu.Lock()
+	streamID, cur := r.streamID, r.cursor
+	r.mu.Unlock()
 	for {
-		evs, offs, next, err := r.store.List(r.session, cur, event.Filter{})
-		if err == nil && len(evs) > 0 {
-			r.mu.Lock()
-			for i := range evs {
-				resume := next
-				if i+1 < len(offs) {
-					resume = offs[i+1]
-				}
-				f := Frame{Event: evs[i], Start: offs[i], Resume: resume}
-				for s := range r.frames {
-					s.deliver(f)
-				}
-			}
-			for wk := range r.wakes {
-				wk.signal()
-			}
-			r.cursor = next
-			r.mu.Unlock()
-			cur = next
+		evs, offs, resolved, next, err := r.store.ReadFromStream(r.session, streamID, cur)
+		if err == nil && resolved != "" {
+			streamID, cur = resolved, next
 		}
+		if err == nil && len(evs) > 0 {
+			r.broadcast(streamID, evs, offs, next)
+			continue // more of a drain (or fresh backlog) may remain
+		}
+		r.setWatermark(streamID, cur)
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(r.poll):
 		}
 	}
+}
+
+func (r *reader) setWatermark(streamID string, cur int64) {
+	r.mu.Lock()
+	r.streamID, r.cursor = streamID, cur
+	r.mu.Unlock()
+}
+
+// broadcast delivers evs to every frame subscriber, signals every wake subscriber, and records the watermark — all under one lock, so a joining subscriber can never see a cursor predating an already-delivered batch.
+func (r *reader) broadcast(streamID string, evs []event.Event, offs []int64, next int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range evs {
+		resume := next
+		if i+1 < len(offs) {
+			resume = offs[i+1]
+		}
+		f := Frame{Event: evs[i], StreamID: streamID, Start: offs[i], Resume: resume}
+		for s := range r.frames {
+			s.deliver(f)
+		}
+	}
+	for wk := range r.wakes {
+		wk.signal()
+	}
+	r.streamID, r.cursor = streamID, next
 }
 
 // Registry owns at most one reader per session, ref-counted across all consumers.
@@ -171,7 +193,7 @@ func (reg *Registry) SubscribeFrames(session string) *FrameSub {
 	r := reg.acquire(session)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	sub := &FrameSub{ch: make(chan Frame, frameBuffer), start: r.cursor}
+	sub := &FrameSub{ch: make(chan Frame, frameBuffer), start: r.cursor, streamID: r.streamID}
 	sub.release = func() {
 		r.mu.Lock()
 		delete(r.frames, sub)
@@ -216,8 +238,8 @@ func (reg *Registry) acquire(session string) *reader {
 			frames:  map[*FrameSub]struct{}{},
 			wakes:   map[*WakeSub]struct{}{},
 		}
-		if _, _, end, err := reg.store.List(session, 0, event.Filter{}); err == nil {
-			r.cursor = end
+		if _, _, id, end, err := reg.store.ReadFromStream(session, "", 0); err == nil {
+			r.streamID, r.cursor = id, end
 		}
 		go r.run(ctx)
 		e = &entry{reader: r}

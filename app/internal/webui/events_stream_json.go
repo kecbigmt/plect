@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/kecbigmt/plecture/app/internal/service"
@@ -32,7 +31,7 @@ func (s *Server) handleSessionEventsStreamJSON(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	resp, err := s.openBusStream(r.Context(), s.busClient(), session, offset)
+	resp, err := s.openBusStream(r.Context(), s.busClient(), session, gen, offset)
 	if err != nil {
 		http.Error(w, "event bus unavailable", http.StatusBadGateway)
 		return
@@ -45,24 +44,14 @@ func (s *Server) handleSessionEventsStreamJSON(w http.ResponseWriter, r *http.Re
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	// An absent generation must be re-read because the first append creates it.
-	known := gen
-	resolveGen := func() string {
-		if known == "" {
-			if g, _, gerr := s.svc.EventStreamResume(session, ""); gerr == nil {
-				known = g
-			}
-		}
-		return known
-	}
-
-	_ = relayBusBodyJSON(resp.Body, w, flusher, resolveGen)
+	_ = relayBusBodyJSON(resp.Body, w, flusher)
 }
 
-func relayBusBodyJSON(body io.Reader, w io.Writer, flusher http.Flusher, resolveGen func() string) error {
+func relayBusBodyJSON(body io.Reader, w io.Writer, flusher http.Flusher) error {
 	sc := bufio.NewScanner(body)
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	var dataLines []string
+	var lastStreamID string
 	var lastOffset int64
 	for sc.Scan() {
 		line := sc.Text()
@@ -73,7 +62,7 @@ func relayBusBodyJSON(body io.Reader, w io.Writer, flusher http.Flusher, resolve
 			}
 			var ev event.Event
 			if json.Unmarshal([]byte(strings.Join(dataLines, "\n")), &ev) == nil {
-				cursor := event.Cursor{V: event.CursorVersion, Off: lastOffset, Ord: event.OrderAsc, Gen: resolveGen()}.Encode()
+				cursor := event.Cursor{V: event.CursorVersion, Off: lastOffset, Ord: event.OrderAsc, StreamID: lastStreamID}.Encode()
 				payload, merr := json.Marshal(webapi.EventFromDomain(ev))
 				if merr == nil {
 					if err := writeEventFrame(w, cursor, string(payload)); err != nil {
@@ -89,7 +78,7 @@ func relayBusBodyJSON(body io.Reader, w io.Writer, flusher http.Flusher, resolve
 			}
 			flusher.Flush()
 		case strings.HasPrefix(line, "id:"):
-			lastOffset, _ = strconv.ParseInt(strings.TrimSpace(line[3:]), 10, 64)
+			lastStreamID, lastOffset, _ = event.ParseResumeToken(strings.TrimSpace(line[3:]))
 		case strings.HasPrefix(line, "data:"):
 			dataLines = append(dataLines, strings.TrimPrefix(line[len("data:"):], " "))
 		}

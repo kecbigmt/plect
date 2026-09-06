@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 
 	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/persistence"
@@ -37,8 +36,6 @@ var ErrUpAlreadyReserved = domain.ErrUpAlreadyReserved
 // against a SQLite database in its data directory.
 type Store struct {
 	dir string
-	mu  sync.Mutex
-	db  *persistence.DB
 }
 
 // NewStore creates a Store using the given directory to hold the database.
@@ -64,22 +61,14 @@ func (s *Store) Dir() string {
 }
 
 // dbHandle opens and migrates the database on first use (via
-// persistence.EnsureCurrent, the same gated entry point every plect command
-// goes through) and memoizes the handle; a failed attempt is not cached, so
-// a transient error (e.g. a concurrent migration still in flight) does not
-// stick to the Store for its whole lifetime.
+// persistence.EnsureCurrentShared, the same gated entry point every plect
+// command goes through), sharing the connection pool with any eventlog.Store
+// over the same directory rather than each holding its own.
 func (s *Store) dbHandle() (*persistence.DB, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.db != nil {
-		return s.db, nil
-	}
-
-	db, err := persistence.EnsureCurrent(context.Background(), filepath.Join(s.dir, "store.db"))
+	db, err := persistence.EnsureCurrentShared(context.Background(), filepath.Join(s.dir, "store.db"))
 	if err != nil {
 		return nil, fmt.Errorf("state: open database: %w", err)
 	}
-	s.db = db
 	return db, nil
 }
 

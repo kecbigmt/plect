@@ -170,9 +170,9 @@ func (m DeliveryMode) Normalize() DeliveryMode {
 }
 
 // Event is both the durable log record and the pub/sub message. The replay
-// cursor is the byte offset of the record's line in the log file, carried
-// out-of-band (SSE id frame / List offsets) — never a field here. ID is the
-// identity/dedup key, not the cursor.
+// cursor is a per-stream sequence number, carried out-of-band (SSE id frame /
+// List offsets) — never a field here. ID is the identity/dedup key, not the
+// cursor.
 type Event struct {
 	ID          string            `json:"id"`           // ULID: global uniqueness + dedup
 	SessionName string            `json:"session_name"` // opaque session id; the log partition + routing key

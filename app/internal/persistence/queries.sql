@@ -173,3 +173,41 @@ ON CONFLICT(child_session_name) DO UPDATE SET
 
 -- name: DeleteUpReservation :exec
 DELETE FROM up_reservations WHERE child_session_name = ?;
+
+-- Events
+
+-- name: GetEventStreamIDBySession :one
+SELECT id FROM event_streams WHERE session_name = ? ORDER BY created_at DESC LIMIT 1;
+
+-- name: GetEventStreamSessionName :one
+SELECT session_name FROM event_streams WHERE id = ?;
+
+-- name: ListEventStreamIDsBySession :many
+SELECT id FROM event_streams WHERE session_name = ? ORDER BY created_at ASC;
+
+-- name: InsertEventStream :exec
+INSERT INTO event_streams (id, session_name, created_at) VALUES (?, ?, ?);
+
+-- name: ListEventStreamSessions :many
+SELECT DISTINCT session_name FROM event_streams ORDER BY session_name;
+
+-- name: NextEventSequence :one
+SELECT COALESCE(MAX(sequence), 0) + 1 FROM events WHERE stream_id = ?;
+
+-- name: InsertEvent :exec
+INSERT INTO events (id, stream_id, sequence, time, type, source, direction, summary, body, metadata_json, delivery_mode)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- name: ListEventsFromByStream :many
+SELECT id, sequence, time, type, source, direction, summary, body, metadata_json, delivery_mode
+FROM events WHERE stream_id = ? AND sequence >= ? ORDER BY sequence;
+
+-- name: HasEventCursor :one
+SELECT COUNT(*) FROM event_cursors WHERE stream_id = ? AND kind = ?;
+
+-- name: GetEventCursor :one
+SELECT next_sequence FROM event_cursors WHERE stream_id = ? AND kind = ?;
+
+-- name: UpsertEventCursor :exec
+INSERT INTO event_cursors (stream_id, kind, next_sequence) VALUES (?, ?, ?)
+ON CONFLICT(stream_id, kind) DO UPDATE SET next_sequence = excluded.next_sequence;

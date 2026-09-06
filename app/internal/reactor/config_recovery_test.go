@@ -52,6 +52,9 @@ func TestSessionReactor_ReArmsHeartbeatAfterWorkflowLoadRecovers(t *testing.T) {
 	if err := st.Put(session); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := log.NewStream("o/r-1"); err != nil {
+		t.Fatal(err)
+	}
 
 	sup := NewSupervisor(func() *config.Config { return cfg }, st, log, hub)
 	r := sup.buildReactor("o/r-1", session)
@@ -113,6 +116,9 @@ func TestSessionReactor_KeepsLastGoodTickConfigWhenWorkflowLoadFails(t *testing.
 		},
 	}
 	if err := st.Put(session); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := log.NewStream("o/r-1"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -177,6 +183,9 @@ func newRefreshFixture(t *testing.T, body string) (*sessionReactor, string) {
 		},
 	}
 	if err := st.Put(session); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := log.NewStream("o/r-1"); err != nil {
 		t.Fatal(err)
 	}
 	return NewSupervisor(func() *config.Config { return cfg }, st, log, hub).buildReactor("o/r-1", session), workflowPath

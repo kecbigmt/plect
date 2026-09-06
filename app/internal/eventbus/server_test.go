@@ -31,8 +31,8 @@ func TestBus_PublishAndList(t *testing.T) {
 	c, _, _ := newTestBus(t, "")
 	ctx := t.Context()
 
-	id, off, err := c.Publish(ctx, event.Event{SessionName: "owner/repo-1", Type: "user.note", Summary: "hi"})
-	if err != nil || id == "" || off != 0 {
+	id, off, err := c.Publish(ctx, event.Event{SessionName: "owner/repo-1", Type: "user.note", Summary: "hi", Direction: event.Internal})
+	if err != nil || id == "" || off != 1 {
 		t.Fatalf("publish: id=%q off=%d err=%v", id, off, err)
 	}
 
@@ -59,8 +59,8 @@ func TestBus_PublishAndList(t *testing.T) {
 func TestBus_ListFilter(t *testing.T) {
 	c, _, _ := newTestBus(t, "")
 	ctx := t.Context()
-	_, _, _ = c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "github.ci_status", Source: "github"})
-	_, _, _ = c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "slack.message", Source: "slack"})
+	_, _, _ = c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "github.ci_status", Source: "github", Direction: event.Internal})
+	_, _, _ = c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "slack.message", Source: "slack", Direction: event.Internal})
 
 	gh, _, err := c.List(ctx, "o/r-1", event.OrderAsc, "", event.Filter{Types: []string{"github.*"}})
 	if err != nil || len(gh) != 1 || gh[0].Type != "github.ci_status" {
@@ -78,12 +78,12 @@ func TestBus_AuthRequired(t *testing.T) {
 	_, baseURL, _ := newTestBus(t, "s3cret")
 
 	noTok := &event.Client{BaseURL: baseURL, HTTP: http.DefaultClient}
-	if _, _, err := noTok.Publish(t.Context(), event.Event{SessionName: "o/r-1", Type: "user.note"}); err == nil {
+	if _, _, err := noTok.Publish(t.Context(), event.Event{SessionName: "o/r-1", Type: "user.note", Direction: event.Internal}); err == nil {
 		t.Fatal("publish without token should be rejected")
 	}
 
 	withTok := &event.Client{BaseURL: baseURL, Token: "s3cret", HTTP: http.DefaultClient}
-	if _, _, err := withTok.Publish(t.Context(), event.Event{SessionName: "o/r-1", Type: "user.note"}); err != nil {
+	if _, _, err := withTok.Publish(t.Context(), event.Event{SessionName: "o/r-1", Type: "user.note", Direction: event.Internal}); err != nil {
 		t.Fatalf("publish with token should succeed: %v", err)
 	}
 }
@@ -94,7 +94,7 @@ func TestBus_StreamReplayThenLive(t *testing.T) {
 	defer cancel()
 
 	// pre-existing event must be replayed.
-	if _, _, err := c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "user.note", Summary: "first"}); err != nil {
+	if _, _, err := c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "user.note", Summary: "first", Direction: event.Internal}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -108,7 +108,7 @@ func TestBus_StreamReplayThenLive(t *testing.T) {
 	}
 
 	// a subsequent append must arrive live.
-	if _, _, err := c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "user.note", Summary: "second"}); err != nil {
+	if _, _, err := c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "user.note", Summary: "second", Direction: event.Internal}); err != nil {
 		t.Fatal(err)
 	}
 	if ev := recv(t, got); ev.Summary != "second" {
@@ -131,7 +131,7 @@ func TestBus_StreamLiveBurstNoGapNoDup(t *testing.T) {
 
 	const n = 30
 	for i := range n {
-		if _, _, err := c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "user.note", Summary: fmt.Sprintf("e%d", i)}); err != nil {
+		if _, _, err := c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "user.note", Summary: fmt.Sprintf("e%d", i), Direction: event.Internal}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -150,14 +150,49 @@ func TestBus_StreamLiveBurstNoGapNoDup(t *testing.T) {
 	}
 }
 
+func TestBus_StreamSurvivesRotation(t *testing.T) {
+	c, _, store := newTestBus(t, "")
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	if _, _, err := c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "user.note", Summary: "before", Direction: event.Internal}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := make(chan event.Event, 8)
+	go func() {
+		_ = c.Subscribe(ctx, "o/r-1", 0, event.Filter{}, func(ev event.Event, _ int64) { got <- ev })
+	}()
+	if ev := recv(t, got); ev.Summary != "before" {
+		t.Fatalf("replay = %q, want before", ev.Summary)
+	}
+
+	if _, err := store.NewStream("o/r-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "user.note", Summary: "after-1", Direction: event.Internal}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "user.note", Summary: "after-2", Direction: event.Internal}); err != nil {
+		t.Fatal(err)
+	}
+
+	if ev := recv(t, got); ev.Summary != "after-1" {
+		t.Fatalf("post-rotation live event = %q, want after-1 (not dropped, not reordered)", ev.Summary)
+	}
+	if ev := recv(t, got); ev.Summary != "after-2" {
+		t.Fatalf("post-rotation live event = %q, want after-2", ev.Summary)
+	}
+}
+
 // TestBus_StreamResume locks the cursor contract: each frame's `id` is the
 // resume point, and reconnecting with Last-Event-ID delivers events strictly
 // after the last one received — no re-delivery, no gap.
 func TestBus_StreamResume(t *testing.T) {
 	c, baseURL, _ := newTestBus(t, "")
 	ctx := t.Context()
-	_, _, _ = c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "user.note", Summary: "A"})
-	_, _, _ = c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "user.note", Summary: "B"})
+	_, _, _ = c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "user.note", Summary: "A", Direction: event.Internal})
+	_, _, _ = c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "user.note", Summary: "B", Direction: event.Internal})
 
 	id1, ev1 := firstFrame(t, baseURL, "o/r-1", "")
 	if ev1.Summary != "A" {
@@ -167,6 +202,75 @@ func TestBus_StreamResume(t *testing.T) {
 	if ev2.Summary != "B" {
 		t.Fatalf("after resume from id %q got %q, want B (no re-delivery of A)", id1, ev2.Summary)
 	}
+}
+
+func TestBus_StreamRejectsMalformedResumeToken(t *testing.T) {
+	_, baseURL, _ := newTestBus(t, "")
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/v1/stream?session="+url.QueryEscape("o/r-1"), nil)
+	req.Header.Set("Last-Event-ID", "128") // pre-cutover raw sequence, not a resume token
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (rejected before dialing SSE)", resp.StatusCode)
+	}
+}
+
+func TestBus_StreamRejectsUnownedResumeStream(t *testing.T) {
+	c, baseURL, _ := newTestBus(t, "")
+	ctx := t.Context()
+	if _, _, err := c.Publish(ctx, event.Event{SessionName: "o/other-1", Type: "user.note", Direction: event.Internal}); err != nil {
+		t.Fatal(err)
+	}
+	otherStream, _, err := c.List(ctx, "o/other-1", event.OrderAsc, "", event.Filter{})
+	if err != nil || len(otherStream) == 0 {
+		t.Fatalf("seed other session: events=%v err=%v", otherStream, err)
+	}
+
+	for name, token := range map[string]string{
+		"unknown stream":         "01UNKNOWNSTREAM0000000000:0",
+		"another session stream": event.EncodeResumeToken(mustStreamID(t, baseURL, "o/other-1"), 0),
+	} {
+		t.Run(name, func(t *testing.T) {
+			reqCtx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+			defer cancel()
+			req, _ := http.NewRequestWithContext(reqCtx, http.MethodGet, baseURL+"/v1/stream?session="+url.QueryEscape("o/r-1"), nil)
+			req.Header.Set("Last-Event-ID", token)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("stream: %v", err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (rejected before dialing SSE)", resp.StatusCode)
+			}
+		})
+	}
+}
+
+func mustStreamID(t *testing.T, baseURL, session string) string {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, baseURL+"/v1/events?session="+url.QueryEscape(session)+"&limit=1", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	defer resp.Body.Close()
+	var page struct {
+		NextCursor string `json:"next_cursor"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil || page.NextCursor == "" {
+		t.Fatalf("decode page: err=%v cursor=%q", err, page.NextCursor)
+	}
+	cur, err := event.DecodeCursor(page.NextCursor)
+	if err != nil {
+		t.Fatalf("decode cursor: %v", err)
+	}
+	return cur.StreamID
 }
 
 // An idle stream (no events) periodically emits a keepalive comment so the
@@ -202,7 +306,7 @@ func TestBus_StreamTail(t *testing.T) {
 	c, baseURL, _ := newTestBus(t, "")
 	ctx := t.Context()
 	for _, s := range []string{"A", "B", "C"} {
-		if _, _, err := c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "user.note", Summary: s}); err != nil {
+		if _, _, err := c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "user.note", Summary: s, Direction: event.Internal}); err != nil {
 			t.Fatal(err)
 		}
 	}

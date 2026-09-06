@@ -34,12 +34,13 @@ func startFakeChannelSocket(t *testing.T) (string, <-chan protocol.MessagePayloa
 	t.Cleanup(func() { ln.Close() })
 	recv := make(chan protocol.MessagePayload, 16)
 	go func() {
+		// Reads each connection to completion before accepting the next: a goroutine per connection would let two race to push to recv out of send order.
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
 				return
 			}
-			go func(conn net.Conn) {
+			func(conn net.Conn) {
 				defer conn.Close()
 				header := make([]byte, 4)
 				if _, err := io.ReadFull(conn, header); err != nil {

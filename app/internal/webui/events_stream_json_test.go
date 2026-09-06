@@ -3,6 +3,7 @@ package webui
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -31,8 +32,11 @@ func TestEventsStreamJSON_RejectsInvalidCursor(t *testing.T) {
 	}
 }
 
-func fakeBusJSON(t *testing.T, wantSince string) *httptest.Server {
+func fakeBusJSON(t *testing.T, wantSince, streamID string) *httptest.Server {
 	t.Helper()
+	if streamID == "" {
+		streamID = "01GEN000"
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/stream", func(w http.ResponseWriter, r *http.Request) {
 		if got := r.URL.Query().Get("since"); wantSince != "" && got != wantSince {
@@ -42,14 +46,14 @@ func fakeBusJSON(t *testing.T, wantSince string) *httptest.Server {
 		w.WriteHeader(http.StatusOK)
 		w.(http.Flusher).Flush()
 		_, _ = w.Write([]byte(": ping\n\n"))
-		_, _ = w.Write([]byte("id: 128\ndata: {\"id\":\"E1\",\"session_name\":\"acme/session-x\",\"type\":\"acme.reply\",\"source\":\"acme\",\"summary\":\"hi there\"}\n\n"))
+		fmt.Fprintf(w, "id: %s:128\ndata: {\"id\":\"E1\",\"session_name\":\"acme/session-x\",\"type\":\"acme.reply\",\"source\":\"acme\",\"summary\":\"hi there\"}\n\n", streamID)
 		w.(http.Flusher).Flush()
 	})
 	return httptest.NewServer(mux)
 }
 
 func TestEventsStreamJSON_RelaysEventsWithOpaqueResumeCursor(t *testing.T) {
-	bus := fakeBusJSON(t, "")
+	bus := fakeBusJSON(t, "", "")
 	defer bus.Close()
 
 	svc := &fakeService{resumeGen: "01GEN000"}
@@ -103,10 +107,14 @@ func TestEventsStreamJSON_RelaysEventsWithOpaqueResumeCursor(t *testing.T) {
 }
 
 func TestEventsStreamJSON_ResumesBusFromDecodedCursor(t *testing.T) {
-	bus := fakeBusJSON(t, "64")
+	bus := fakeBusJSON(t, "01GEN000:64", "01GEN000")
 	defer bus.Close()
 
-	svc := &fakeService{resumeGen: "01GEN000", resumeOffset: 64}
+	var gotCursors []string
+	svc := &fakeService{resumeFn: func(_, cursor string) (string, int64, error) {
+		gotCursors = append(gotCursors, cursor)
+		return "01GEN000", 64, nil
+	}}
 	srv := httptest.NewServer(withBus(svc, bus.URL).Routes())
 	defer srv.Close()
 
@@ -121,25 +129,16 @@ func TestEventsStreamJSON_ResumesBusFromDecodedCursor(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body would confirm since= assertion inside fakeBusJSON", resp.StatusCode)
 	}
-	// Reading the first line synchronizes with the handler before gotResumeCursor is checked.
-	_, _ = bufio.NewReader(resp.Body).ReadString('\n')
-	if svc.gotResumeCursor != "some-opaque-token" {
-		t.Errorf("resume cursor = %q", svc.gotResumeCursor)
+	if len(gotCursors) != 1 || gotCursors[0] != "some-opaque-token" {
+		t.Errorf("gotCursors = %v, want exactly one call decoding the request's cursor", gotCursors)
 	}
 }
 
-func TestEventsStreamJSON_ResolvesGenerationEstablishedByTheFirstLiveEvent(t *testing.T) {
-	bus := fakeBusJSON(t, "")
+func TestEventsStreamJSON_FrameCursorCarriesTheBusFrameStreamID(t *testing.T) {
+	bus := fakeBusJSON(t, "", "01REAL000")
 	defer bus.Close()
 
-	calls := 0
-	svc := &fakeService{resumeFn: func(string, string) (string, int64, error) {
-		calls++
-		if calls == 1 {
-			return "", 0, nil
-		}
-		return "01REAL000", 0, nil
-	}}
+	svc := &fakeService{resumeGen: "01CONNECT"}
 	srv := httptest.NewServer(withBus(svc, bus.URL).Routes())
 	defer srv.Close()
 
@@ -166,8 +165,8 @@ func TestEventsStreamJSON_ResolvesGenerationEstablishedByTheFirstLiveEvent(t *te
 	if err != nil {
 		t.Fatalf("decode cursor: %v", err)
 	}
-	if decoded.Gen != "01REAL000" {
-		t.Errorf("frame cursor generation = %q, want the generation established by the first event, not the empty one seen at connect time", decoded.Gen)
+	if decoded.StreamID != "01REAL000" {
+		t.Errorf("frame cursor stream id = %q, want the bus frame's own stream id %q, not the connect-time one (%q)", decoded.StreamID, "01REAL000", "01CONNECT")
 	}
 }
 

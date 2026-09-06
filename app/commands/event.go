@@ -277,7 +277,7 @@ func init() {
 	eventPublishCmd.MarkFlagRequired("type")
 
 	eventTailCmd.Flags().BoolVar(&eventJSON, "json", false, "Output as JSON lines")
-	eventTailCmd.Flags().Int64Var(&eventSince, "since", 0, "Start byte offset (replay cursor)")
+	eventTailCmd.Flags().Int64Var(&eventSince, "since", 0, "Start sequence (replay cursor)")
 	eventTailCmd.Flags().StringArrayVar(&eventTypes, "type", nil, "Filter by type glob (repeatable and/or comma-separated)")
 	eventTailCmd.Flags().StringVar(&eventSource, "source", "", "Filter by source (comma-separated)")
 	eventTailCmd.Flags().StringVar(&eventDirection, "direction", "", "Filter by direction")

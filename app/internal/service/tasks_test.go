@@ -46,6 +46,7 @@ func TestPutBestEffort_PutFailureLogsWarningWithoutPanicking(t *testing.T) {
 
 func seedSession(t *testing.T, store interface {
 	Put(*domain.Session) error
+	Dir() string
 }, sessionName, ownerRepo string, number int, workflow string, tasks map[string]*contract.TaskState) {
 	t.Helper()
 	now := time.Now()
@@ -60,6 +61,12 @@ func seedSession(t *testing.T, store interface {
 	}
 	if err := store.Put(session); err != nil {
 		t.Fatalf("seed: %v", err)
+	}
+	// A real session create mints its event stream (createsetup.go); a test
+	// that seeds state directly, bypassing Create, needs the same so
+	// AppendEvent/SetEventCursor find a current stream instead of erroring.
+	if _, err := eventlog.NewStore(store.Dir()).NewStream(sessionName); err != nil {
+		t.Fatalf("seed: new stream: %v", err)
 	}
 }
 
@@ -805,11 +812,11 @@ func TestUp_ForceRecreateResetsRuntimeWithoutPrev(t *testing.T) {
 	}
 	setParent(t, store, "org/repo-child", sessionName)
 	logStore := eventlog.NewStore(store.Dir())
-	_, _, next, err := logStore.Append(event.Event{SessionName: sessionName, Type: event.TypeUserEmit, Source: event.SourceCLI})
+	_, _, next, err := logStore.Append(event.Event{SessionName: sessionName, Type: event.TypeUserEmit, Source: event.SourceCLI, Direction: event.Internal})
 	if err != nil {
 		t.Fatalf("append event: %v", err)
 	}
-	if err := logStore.CommitCursor(sessionName, "consumer", next); err != nil {
+	if err := logStore.CommitCursor(sessionName, "delivery", next); err != nil {
 		t.Fatalf("commit cursor: %v", err)
 	}
 
@@ -862,7 +869,7 @@ func TestUp_ForceRecreateResetsRuntimeWithoutPrev(t *testing.T) {
 	if len(evs) == 0 || evs[0].Type != event.TypeUserEmit {
 		t.Fatalf("event log not preserved: %+v", evs)
 	}
-	cursor, err := logStore.ReadCursor(sessionName, "consumer")
+	cursor, err := logStore.ReadCursor(sessionName, "delivery")
 	if err != nil {
 		t.Fatalf("read cursor: %v", err)
 	}
@@ -957,11 +964,11 @@ func TestUp_ForceRecreateCleanupFailurePreservesInspectableState(t *testing.T) {
 	}
 	setParent(t, store, "org/repo-child", sessionName)
 	logStore := eventlog.NewStore(store.Dir())
-	_, _, next, err := logStore.Append(event.Event{SessionName: sessionName, Type: event.TypeUserEmit, Source: event.SourceCLI})
+	_, _, next, err := logStore.Append(event.Event{SessionName: sessionName, Type: event.TypeUserEmit, Source: event.SourceCLI, Direction: event.Internal})
 	if err != nil {
 		t.Fatalf("append event: %v", err)
 	}
-	if err := logStore.CommitCursor(sessionName, "consumer", next); err != nil {
+	if err := logStore.CommitCursor(sessionName, "delivery", next); err != nil {
 		t.Fatalf("commit cursor: %v", err)
 	}
 
@@ -1005,7 +1012,7 @@ func TestUp_ForceRecreateCleanupFailurePreservesInspectableState(t *testing.T) {
 	if channel == nil || channel.Status != contract.TaskStatusCleaned || channel.Outputs["thread"] != "old-thread" {
 		t.Fatalf("channel task = %+v, want later cleanup result persisted", channel)
 	}
-	cursor, err := logStore.ReadCursor(sessionName, "consumer")
+	cursor, err := logStore.ReadCursor(sessionName, "delivery")
 	if err != nil {
 		t.Fatalf("read cursor: %v", err)
 	}
@@ -1086,11 +1093,11 @@ func TestUp_ForceRecreateProviderSetupFailurePersistsInspectableState(t *testing
 	}
 	setParent(t, store, "org/repo-child", sessionName)
 	logStore := eventlog.NewStore(store.Dir())
-	_, _, next, err := logStore.Append(event.Event{SessionName: sessionName, Type: event.TypeUserEmit, Source: event.SourceCLI})
+	_, _, next, err := logStore.Append(event.Event{SessionName: sessionName, Type: event.TypeUserEmit, Source: event.SourceCLI, Direction: event.Internal})
 	if err != nil {
 		t.Fatalf("append event: %v", err)
 	}
-	if err := logStore.CommitCursor(sessionName, "consumer", next); err != nil {
+	if err := logStore.CommitCursor(sessionName, "delivery", next); err != nil {
 		t.Fatalf("commit cursor: %v", err)
 	}
 
@@ -1129,7 +1136,7 @@ func TestUp_ForceRecreateProviderSetupFailurePersistsInspectableState(t *testing
 	if fileExists(oldWorkdirPath) {
 		t.Fatalf("old workdir %q still exists", oldWorkdirPath)
 	}
-	cursor, err := logStore.ReadCursor(sessionName, "consumer")
+	cursor, err := logStore.ReadCursor(sessionName, "delivery")
 	if err != nil {
 		t.Fatalf("read cursor: %v", err)
 	}
@@ -1388,11 +1395,11 @@ func TestUp_ForceRecreateFailureStagesPersistInspectableState(t *testing.T) {
 			}
 			setParent(t, store, "org/repo-child", sessionName)
 			logStore := eventlog.NewStore(store.Dir())
-			_, _, next, err := logStore.Append(event.Event{SessionName: sessionName, Type: event.TypeUserEmit, Source: event.SourceCLI})
+			_, _, next, err := logStore.Append(event.Event{SessionName: sessionName, Type: event.TypeUserEmit, Source: event.SourceCLI, Direction: event.Internal})
 			if err != nil {
 				t.Fatalf("append event: %v", err)
 			}
-			if err := logStore.CommitCursor(sessionName, "consumer", next); err != nil {
+			if err := logStore.CommitCursor(sessionName, "delivery", next); err != nil {
 				t.Fatalf("commit cursor: %v", err)
 			}
 
@@ -1436,7 +1443,7 @@ func TestUp_ForceRecreateFailureStagesPersistInspectableState(t *testing.T) {
 					t.Fatalf("task %q = %+v, want absent", taskName, st)
 				}
 			}
-			cursor, err := logStore.ReadCursor(sessionName, "consumer")
+			cursor, err := logStore.ReadCursor(sessionName, "delivery")
 			if err != nil {
 				t.Fatalf("read cursor: %v", err)
 			}

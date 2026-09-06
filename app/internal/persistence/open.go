@@ -109,6 +109,13 @@ func (db *DB) Close() error {
 	return writeErr
 }
 
+// OpenConnections is the combined open-connection count across both pools,
+// for a caller (a test, or a shutdown check) that needs to observe a real
+// handle count rather than infer it from object identity.
+func (db *DB) OpenConnections() int {
+	return db.read.Stats().OpenConnections + db.write.Stats().OpenConnections
+}
+
 // WithImmediateTx runs fn inside a write transaction that begins with
 // BEGIN IMMEDIATE: it reserves the single SQLite writer lock before fn
 // executes any statement, so a read fn performs before a later write in

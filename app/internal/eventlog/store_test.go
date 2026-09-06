@@ -1,15 +1,12 @@
 package eventlog
 
 import (
-	"bytes"
 	"context"
-	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -27,7 +24,7 @@ func TestMain(m *testing.M) {
 		n, _ := strconv.Atoi(os.Getenv("EVENTLOG_CHILD_N"))
 		s := NewStore(dir)
 		for range n {
-			if _, _, _, err := s.Append(event.Event{SessionName: session, Type: "test.tick", Source: "test"}); err != nil {
+			if _, _, _, err := s.Append(event.Event{SessionName: session, Type: "test.tick", Source: "test", Direction: event.Internal}); err != nil {
 				os.Exit(1)
 			}
 		}
@@ -230,7 +227,7 @@ func TestAppendAndList(t *testing.T) {
 	}
 	var offsets []int64
 	for _, w := range want {
-		_, off, next, err := s.Append(event.Event{SessionName: session, Type: w.typ, Source: w.src})
+		_, off, next, err := s.Append(event.Event{SessionName: session, Type: w.typ, Source: w.src, Direction: event.Internal})
 		if err != nil {
 			t.Fatalf("append: %v", err)
 		}
@@ -239,11 +236,6 @@ func TestAppendAndList(t *testing.T) {
 		}
 		offsets = append(offsets, off)
 		_ = next
-	}
-
-	// directory name must be the escaped opaque session, not owner/repo split
-	if _, err := os.Stat(filepath.Join(s.root, "octocat%2Fhello-world-42", "log.jsonl")); err != nil {
-		t.Fatalf("expected escaped session dir: %v", err)
 	}
 
 	all, offs, _, err := s.List(session, 0, event.Filter{})
@@ -275,16 +267,16 @@ func TestAppendAndList(t *testing.T) {
 	}
 }
 
-func TestSessionsEnumeratesLogDirs(t *testing.T) {
+func TestSessionsEnumeratesTouchedStreams(t *testing.T) {
 	s := NewStore(t.TempDir())
 
-	// No root yet → empty, no error.
+	// No stream touched yet → empty, no error.
 	if names, err := s.Sessions(); err != nil || len(names) != 0 {
 		t.Fatalf("empty store: names=%v err=%v", names, err)
 	}
 
 	for _, name := range []string{"octocat/hello-world-42", "owner/repo-1", "owner/repo-1+tag"} {
-		if _, _, _, err := s.Append(event.Event{SessionName: name, Type: "t"}); err != nil {
+		if _, _, _, err := s.Append(event.Event{SessionName: name, Type: "t", Direction: event.Internal}); err != nil {
 			t.Fatalf("append %s: %v", name, err)
 		}
 	}
@@ -292,7 +284,8 @@ func TestSessionsEnumeratesLogDirs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sessions: %v", err)
 	}
-	// Sorted, and the opaque names are decoded back from their escaped dir names.
+	// Sorted, including names containing "/" (an opaque session name, not
+	// interpreted as owner/repo).
 	want := []string{"octocat/hello-world-42", "owner/repo-1", "owner/repo-1+tag"}
 	if len(got) != len(want) {
 		t.Fatalf("sessions = %v, want %v", got, want)
@@ -314,7 +307,7 @@ func TestListAcrossMergesNamedSessions(t *testing.T) {
 		{"root", "r1"}, {"work", "w1"}, {"outside", "x1"}, {"work", "w2"}, {"root", "r2"},
 	}
 	for _, e := range seq {
-		if _, _, _, err := s.Append(event.Event{SessionName: e.session, Type: "t", Source: "test", Summary: e.summary}); err != nil {
+		if _, _, _, err := s.Append(event.Event{SessionName: e.session, Type: "t", Source: "test", Summary: e.summary, Direction: event.Internal}); err != nil {
 			t.Fatalf("append: %v", err)
 		}
 	}
@@ -341,72 +334,6 @@ func TestListAcrossMergesNamedSessions(t *testing.T) {
 	// An empty name set yields no events, not an error (an empty subtree is valid).
 	if evs, err := s.ListAcross(nil, event.Filter{}); err != nil || len(evs) != 0 {
 		t.Fatalf("empty name set = (%v, %v), want (nil, nil)", summaries(evs), err)
-	}
-}
-
-func TestListDropsTornTrailingLine(t *testing.T) {
-	s := NewStore(t.TempDir())
-	const session = "o/r-1"
-	_, _, next, err := s.Append(event.Event{SessionName: session, Type: "a"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	// simulate an in-flight append: a partial line with no trailing newline
-	f, err := os.OpenFile(s.logPath(session), os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.WriteString(`{"id":"x","session_name":"o/r-1","type":"b"`) // no "}\n"
-	f.Close()
-
-	evs, _, gotNext, err := s.List(session, 0, event.Filter{})
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	if len(evs) != 1 || evs[0].Type != "a" {
-		t.Fatalf("expected only the complete record, got %d", len(evs))
-	}
-	if gotNext != next {
-		t.Fatalf("next=%d, want %d (partial line not counted)", gotNext, next)
-	}
-}
-
-func TestListSkipsMalformedLineButAdvancesCursorPastIt(t *testing.T) {
-	s := NewStore(t.TempDir())
-	var logs bytes.Buffer
-	s.logger = slog.New(slog.NewTextHandler(&logs, nil))
-
-	const session = "o/r-2"
-	if _, _, _, err := s.Append(event.Event{SessionName: session, Type: "a"}); err != nil {
-		t.Fatal(err)
-	}
-
-	f, err := os.OpenFile(s.logPath(session), os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.WriteString("{not valid json}\n"); err != nil {
-		t.Fatal(err)
-	}
-	f.Close()
-
-	_, _, next, err := s.Append(event.Event{SessionName: session, Type: "b"})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	evs, _, gotNext, err := s.List(session, 0, event.Filter{})
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	if len(evs) != 2 || evs[0].Type != "a" || evs[1].Type != "b" {
-		t.Fatalf("expected the two well-formed records, got %+v", evs)
-	}
-	if gotNext != next {
-		t.Fatalf("next=%d, want %d: cursor must advance past the malformed line, or every later event wedges behind it", gotNext, next)
-	}
-	if !strings.Contains(logs.String(), "malformed") || !strings.Contains(logs.String(), session) {
-		t.Fatalf("expected a malformed-record warning naming the session, got %q", logs.String())
 	}
 }
 
@@ -460,7 +387,7 @@ func TestTailReturnsLastN(t *testing.T) {
 	s := NewStore(t.TempDir())
 	const session = "owner/repo-9"
 	for i := range 25 {
-		if _, _, _, err := s.Append(event.Event{SessionName: session, Type: "t", Summary: strconv.Itoa(i)}); err != nil {
+		if _, _, _, err := s.Append(event.Event{SessionName: session, Type: "t", Summary: strconv.Itoa(i), Direction: event.Internal}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -497,7 +424,7 @@ func TestTailOffset(t *testing.T) {
 	s := NewStore(t.TempDir())
 	const session = "owner/repo-9"
 	for i := range 25 {
-		if _, _, _, err := s.Append(event.Event{SessionName: session, Type: "t", Summary: strconv.Itoa(i)}); err != nil {
+		if _, _, _, err := s.Append(event.Event{SessionName: session, Type: "t", Summary: strconv.Itoa(i), Direction: event.Internal}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -538,7 +465,7 @@ func TestTailAppliesFilterToTheRing(t *testing.T) {
 		if i%2 == 0 {
 			typ = "keep"
 		}
-		if _, _, _, err := s.Append(event.Event{SessionName: session, Type: typ, Summary: strconv.Itoa(i)}); err != nil {
+		if _, _, _, err := s.Append(event.Event{SessionName: session, Type: typ, Summary: strconv.Itoa(i), Direction: event.Internal}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -559,23 +486,23 @@ func TestGen(t *testing.T) {
 	const session = "owner/repo-9"
 
 	// No log yet → no generation, no error.
-	if g, err := s.Gen(session); err != nil || g != "" {
+	if g, err := s.StreamID(session); err != nil || g != "" {
 		t.Fatalf("gen of empty log = %q (err=%v), want empty", g, err)
 	}
 
-	if _, _, _, err := s.Append(event.Event{SessionName: session, Type: "a"}); err != nil {
+	if _, _, _, err := s.Append(event.Event{SessionName: session, Type: "a", Direction: event.Internal}); err != nil {
 		t.Fatal(err)
 	}
-	g1, err := s.Gen(session)
+	g1, err := s.StreamID(session)
 	if err != nil || g1 == "" {
 		t.Fatalf("gen after first append = %q (err=%v), want non-empty", g1, err)
 	}
 
 	// Stable across further appends (no rotation).
-	if _, _, _, err := s.Append(event.Event{SessionName: session, Type: "b"}); err != nil {
+	if _, _, _, err := s.Append(event.Event{SessionName: session, Type: "b", Direction: event.Internal}); err != nil {
 		t.Fatal(err)
 	}
-	g2, err := s.Gen(session)
+	g2, err := s.StreamID(session)
 	if err != nil || g2 != g1 {
 		t.Fatalf("gen changed across appends: %q → %q", g1, g2)
 	}
@@ -598,7 +525,10 @@ func summaryAt(evs []event.Event, i int) string {
 
 func TestCursorRoundTrip(t *testing.T) {
 	s := NewStore(t.TempDir())
-	const session, consumer = "o/r-1", "claude"
+	const session, consumer = "o/r-1", "delivery"
+	if _, err := s.NewStream(session); err != nil {
+		t.Fatal(err)
+	}
 	if off, err := s.ReadCursor(session, consumer); err != nil || off != 0 {
 		t.Fatalf("missing cursor should be 0: off=%d err=%v", off, err)
 	}
@@ -613,7 +543,10 @@ func TestCursorRoundTrip(t *testing.T) {
 
 func TestHasCursor(t *testing.T) {
 	s := NewStore(t.TempDir())
-	const session, consumer = "o/r-1", "dispatcher"
+	const session, consumer = "o/r-1", "delivery"
+	if _, err := s.NewStream(session); err != nil {
+		t.Fatal(err)
+	}
 	if s.HasCursor(session, consumer) {
 		t.Error("HasCursor true before any commit")
 	}
@@ -636,7 +569,7 @@ func TestFollowDeliversNewEvents(t *testing.T) {
 	go func() { _ = s.Follow(ctx, session, 0, func(ev event.Event, _ int64) { got <- ev }) }()
 
 	time.Sleep(50 * time.Millisecond)
-	if _, _, _, err := s.Append(event.Event{SessionName: session, Type: "live"}); err != nil {
+	if _, _, _, err := s.Append(event.Event{SessionName: session, Type: "live", Direction: event.Internal}); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -646,5 +579,120 @@ func TestFollowDeliversNewEvents(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Follow did not deliver the appended event")
+	}
+}
+
+func TestReadFromStream_TraversesEveryIntermediateIncarnation(t *testing.T) {
+	store := NewStore(t.TempDir())
+	const session = "o/r-1"
+
+	stream1, err := store.NewStream(session)
+	if err != nil {
+		t.Fatalf("new stream 1: %v", err)
+	}
+	if _, _, _, err := store.Append(event.Event{SessionName: session, Type: "user.note", Body: "s1", Direction: event.Internal}); err != nil {
+		t.Fatalf("append to stream 1: %v", err)
+	}
+
+	if _, err := store.NewStream(session); err != nil {
+		t.Fatalf("new stream 2: %v", err)
+	}
+	if _, _, _, err := store.Append(event.Event{SessionName: session, Type: "user.note", Body: "s2", Direction: event.Internal}); err != nil {
+		t.Fatalf("append to stream 2: %v", err)
+	}
+
+	if _, err := store.NewStream(session); err != nil {
+		t.Fatalf("new stream 3: %v", err)
+	}
+	if _, _, _, err := store.Append(event.Event{SessionName: session, Type: "user.note", Body: "s3", Direction: event.Internal}); err != nil {
+		t.Fatalf("append to stream 3: %v", err)
+	}
+
+	var got []string
+	streamID, cur := stream1, int64(2)
+	for i := 0; i < 6 && len(got) < 2; i++ {
+		evs, _, resolved, next, err := store.ReadFromStream(session, streamID, cur)
+		if err != nil {
+			t.Fatalf("iteration %d: %v", i, err)
+		}
+		for _, ev := range evs {
+			got = append(got, ev.Body)
+		}
+		if resolved != "" {
+			streamID = resolved
+		}
+		cur = next
+	}
+	if len(got) != 2 || got[0] != "s2" || got[1] != "s3" {
+		t.Fatalf("delivered %v, want [s2 s3] (the intermediate incarnation must not be skipped)", got)
+	}
+}
+
+func TestReadFromStream_EmptyIntermediateIncarnationDoesNotStopTheWalk(t *testing.T) {
+	store := NewStore(t.TempDir())
+	const session = "o/r-1"
+
+	stream1, err := store.NewStream(session)
+	if err != nil {
+		t.Fatalf("new stream 1: %v", err)
+	}
+	if _, _, _, err := store.Append(event.Event{SessionName: session, Type: "user.note", Body: "s1", Direction: event.Internal}); err != nil {
+		t.Fatalf("append to stream 1: %v", err)
+	}
+
+	if _, err := store.NewStream(session); err != nil {
+		t.Fatalf("new stream 2: %v", err)
+	}
+
+	if _, err := store.NewStream(session); err != nil {
+		t.Fatalf("new stream 3: %v", err)
+	}
+	if _, _, _, err := store.Append(event.Event{SessionName: session, Type: "user.note", Body: "s3", Direction: event.Internal}); err != nil {
+		t.Fatalf("append to stream 3: %v", err)
+	}
+
+	evs, _, resolved, _, err := store.ReadFromStream(session, stream1, 2)
+	if err != nil {
+		t.Fatalf("ReadFromStream: %v", err)
+	}
+	if len(evs) != 1 || evs[0].Body != "s3" {
+		t.Fatalf("evs = %v, want [s3] (the empty stream2 must not stop the walk before reaching stream3)", evs)
+	}
+	if resolved == stream1 {
+		t.Fatal("resolved stream id did not advance past the drained incarnation")
+	}
+}
+
+func TestResidentPathsShareOneConnectionPerDatabase(t *testing.T) {
+	dir := t.TempDir()
+	const session = "o/r-1"
+
+	first, err := NewStore(dir).dbHandle()
+	if err != nil {
+		t.Fatalf("first dbHandle: %v", err)
+	}
+
+	for i := 0; i < 50; i++ {
+		s := NewStore(dir)
+		if _, _, _, err := s.Append(event.Event{SessionName: session, Type: "user.note", Direction: event.Internal}); err != nil {
+			t.Fatalf("append %d: %v", i, err)
+		}
+		if _, err := s.StreamID(session); err != nil {
+			t.Fatalf("stream id %d: %v", i, err)
+		}
+		if _, _, _, err := s.List(session, 0, event.Filter{}); err != nil {
+			t.Fatalf("list %d: %v", i, err)
+		}
+		if err := s.CommitCursor(session, "delivery", 1); err != nil {
+			t.Fatalf("commit cursor %d: %v", i, err)
+		}
+	}
+
+	current, err := NewStore(dir).dbHandle()
+	if err != nil {
+		t.Fatalf("final dbHandle: %v", err)
+	}
+	if current != first {
+		t.Fatal("the shared connection changed across 50 fresh Store values over the same directory; want the same one reused throughout, not a new pool opened per call")
 	}
 }
