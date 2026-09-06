@@ -50,7 +50,7 @@ describe("Conversation", () => {
     expect(await screen.findByText(/no events recorded/i)).toBeInTheDocument();
   });
 
-  it("renders an inbound event with a body as a readable utterance", async () => {
+  it("renders a user.emit event with a body as a readable utterance", async () => {
     vi.mocked(fetch).mockResolvedValue(
       jsonResponse({
         events: [
@@ -67,8 +67,9 @@ describe("Conversation", () => {
         ],
       }),
     );
-    renderConversation("team/a");
+    const { container } = renderConversation("team/a");
     expect(await screen.findByText("Please check the deploy status.")).toBeInTheDocument();
+    expect(container.querySelector('[data-event-style="utterance"]')).toBeInTheDocument();
   });
 
   it("renders an internal event with no body as a compact row showing type, source, and summary", async () => {
@@ -92,7 +93,7 @@ describe("Conversation", () => {
     expect(screen.getByText("lifecycle.created")).toBeInTheDocument();
   });
 
-  it("keeps type and summary visible for an unrecognized inbound event with a body, not just its rendered text", async () => {
+  it("keeps an unrecognized inbound event with a body on the compact path, with its type and summary still visible", async () => {
     vi.mocked(fetch).mockResolvedValue(
       jsonResponse({
         events: [
@@ -109,10 +110,12 @@ describe("Conversation", () => {
         ],
       }),
     );
-    renderConversation("team/a");
+    const { container } = renderConversation("team/a");
     expect(await screen.findByText("Hello from acme")).toBeInTheDocument();
     expect(screen.getByText("acme.chat_message")).toBeInTheDocument();
     expect(screen.getByText("acme message received")).toBeInTheDocument();
+    expect(container.querySelector('[data-event-style="compact"]')).toBeInTheDocument();
+    expect(container.querySelector('[data-event-style="utterance"]')).not.toBeInTheDocument();
   });
 
   it("keeps an unrecognized event type on the compact path with its metadata visible", async () => {

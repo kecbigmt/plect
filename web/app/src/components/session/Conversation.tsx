@@ -95,17 +95,20 @@ export function Conversation({
   );
 }
 
-// Utterance vs. compact is driven only by the event's own recorded
-// direction and body — never inferred from type, and never derived from
-// the session's current status — so an unrecognized type still renders
-// sensibly: a body-bearing inbound/outbound record (a user message, a
-// delivered instruction, a pushed kick) reads as a message; everything
-// else (internal records, and inbound/outbound records with no body, such
-// as a bare terminal.done push) is a compact row. Both branches keep type,
-// source, summary, body, and metadata visible regardless of whether this
-// UI recognizes the type — only the layout differs.
+// Only the two conversational types contracts/event itself defines — a
+// user's own input and a task instruction delivered to a runtime — render
+// as a message; every other type, including any provider- or plugin-
+// defined type this UI has never heard of, stays on the compact path with
+// its type, source, summary, body, and metadata still fully visible
+// (docs/design/web-ui.md's amendment: unknown types stay compact). Never
+// inferred from the session's current status, and never widened to "any
+// body-bearing inbound/outbound record" — that would let an unrecognized
+// type borrow a layout that hides its own type and summary behind a
+// message bubble.
+const UTTERANCE_TYPES: ReadonlySet<string> = new Set(["user.emit", "plect.instruction"]);
+
 function isUtterance(event: SessionEvent): boolean {
-  return (event.direction === "inbound" || event.direction === "outbound") && !!event.body?.trim();
+  return UTTERANCE_TYPES.has(event.type) && !!event.body?.trim();
 }
 
 function EventRow({
@@ -122,7 +125,7 @@ function EventRow({
 
   if (isUtterance(event)) {
     return (
-      <article className="rounded-md border border-border p-2 text-sm">
+      <article data-event-style="utterance" className="rounded-md border border-border p-2 text-sm">
         <header className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
           <span>
             <code>{event.type}</code> · {event.source} · {event.direction}
@@ -140,7 +143,7 @@ function EventRow({
   }
 
   return (
-    <article className="flex flex-col gap-1 rounded-md border border-dashed border-border p-2 text-xs">
+    <article data-event-style="compact" className="flex flex-col gap-1 rounded-md border border-dashed border-border p-2 text-xs">
       <div className="flex items-center justify-between gap-2">
         <span className="font-medium text-foreground">{event.summary || event.type}</span>
         <time dateTime={event.time} className="shrink-0 text-muted-foreground">
