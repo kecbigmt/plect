@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { Conversation } from "@/components/session/Conversation";
+import { sessionEventsQueryKey } from "@/lib/useEvents";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -421,6 +422,79 @@ describe("Conversation", () => {
     // opportunity to run before asserting it produced nothing.
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(screen.queryByText("late-arrival")).not.toBeInTheDocument();
+  });
+
+  it("aborts the previous session's connection on switch", async () => {
+    let teamASignal: AbortSignal | undefined;
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const url = requestUrl(input);
+      const session = url.searchParams.get("session");
+      if (url.pathname.endsWith("/events/stream")) {
+        if (session === "team/a") {
+          teamASignal = init?.signal ?? undefined;
+        }
+        return Promise.resolve(sseResponse(""));
+      }
+      return Promise.resolve(jsonResponse({ events: [] }));
+    });
+
+    const queryClient = new QueryClient();
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}>
+        <Conversation sessionName="team/a" onSelectSession={vi.fn()} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText(/no events recorded/i);
+    expect(teamASignal?.aborted).toBe(false);
+
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <Conversation sessionName="team/b" onSelectSession={vi.fn()} />
+      </QueryClientProvider>,
+    );
+
+    expect(teamASignal?.aborted).toBe(true);
+  });
+
+  it("remounts the live timeline even when the newly selected session's history is already cached", async () => {
+    // Pre-populated so team/b's history never passes through isPending,
+    // ruling out an isPending-gated unmount as what isolates the switch.
+    vi.mocked(fetch).mockImplementation((input) => {
+      const url = requestUrl(input);
+      const session = url.searchParams.get("session");
+      if (url.pathname.endsWith("/events/stream")) {
+        if (session === "team/a") {
+          return Promise.resolve(
+            sseResponse(
+              'id: cur-1\ndata: {"id":"01","sessionName":"team/a","time":"2026-01-01T00:00:01Z","type":"user.note","source":"cli","direction":"internal","summary":"team-a-live"}\n\n',
+            ),
+          );
+        }
+        return Promise.resolve(sseResponse(""));
+      }
+      return Promise.resolve(jsonResponse({ events: [] }));
+    });
+
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(sessionEventsQueryKey("team/b"), {
+      pages: [{ events: [], nextCursor: undefined }],
+      pageParams: [undefined],
+    });
+
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}>
+        <Conversation sessionName="team/a" onSelectSession={vi.fn()} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText("team-a-live");
+
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <Conversation sessionName="team/b" onSelectSession={vi.fn()} />
+      </QueryClientProvider>,
+    );
+
+    expect(screen.queryByText("team-a-live")).not.toBeInTheDocument();
   });
 
   it("opens the live subscription even when the session's history starts out empty", async () => {

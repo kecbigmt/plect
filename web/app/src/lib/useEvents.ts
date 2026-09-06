@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 
 import { fetchEventPage, type SessionEvent, type SessionEventPage } from "@/lib/eventsApi";
@@ -52,49 +52,31 @@ export function dedupeEventsById(
 
 // resumeCursor is "" for a session with no log yet, a valid fresh-stream
 // position, so historyReady is a separate signal rather than inferred from it.
+// The caller mounts one instance per session (keyed by sessionName), so a
+// callback from a superseded connection can only reach an already-unmounted
+// instance's state, never the newly selected session's.
 export function useLiveEvents(sessionName: string | null, historyReady: boolean, resumeCursor: string) {
   const queryClient = useQueryClient();
   const [liveEvents, setLiveEvents] = useState<SessionEvent[]>([]);
   const [state, setState] = useState<EventStreamState>("connecting");
-  const controllerRef = useRef<AbortController | null>(null);
-  const mounted = useRef(false);
-
-  // Passive cleanup would leave the obsolete connection active through the next commit.
-  useLayoutEffect(() => {
-    if (!mounted.current) {
-      mounted.current = true;
-      return;
-    }
-    controllerRef.current?.abort();
-    setLiveEvents([]);
-    setState("connecting");
-  }, [sessionName]);
 
   useEffect(() => {
     if (sessionName === null || !historyReady) {
       return;
     }
     const controller = new AbortController();
-    controllerRef.current = controller;
     openEventStream(
       sessionName,
       resumeCursor,
       {
         onEvent: (event) => {
-          if (controller.signal.aborted) {
-            return;
-          }
           setLiveEvents((prev) => (prev.some((e) => e.id === event.id) ? prev : [...prev, event]));
-          // Direct derivation would be incomplete: not every state change
-          // emits an event.
+          // Invalidated, not derived from the event, since not every state
+          // change emits one.
           queryClient.invalidateQueries({ queryKey: sessionDetailQueryKey(sessionName) });
           queryClient.invalidateQueries({ queryKey: sessionListQueryKey() });
         },
-        onStateChange: (s) => {
-          if (!controller.signal.aborted) {
-            setState(s);
-          }
-        },
+        onStateChange: setState,
       },
       controller.signal,
     );
