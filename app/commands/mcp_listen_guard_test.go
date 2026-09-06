@@ -34,10 +34,10 @@ func TestMain(m *testing.M) {
 		}
 		os.Exit(0)
 	}
-	// A runner environment that predefines XDG_CONFIG_HOME (GitHub Actions'
-	// ubuntu runners do) would otherwise leak through tests that fake HOME
-	// via t.Setenv but never touch XDG_CONFIG_HOME. Tests that want to
-	// simulate it opt back in with t.Setenv.
+	// PLECT_CONFIG_HOME and XDG_CONFIG_HOME both outrank HOME in
+	// confighome.Resolve()'s precedence, so left ambient either would bypass
+	// every test's HOME-based isolation below.
+	os.Unsetenv(confighome.EnvVar)
 	os.Unsetenv(confighome.XDGEnvVar)
 	os.Exit(m.Run())
 }
