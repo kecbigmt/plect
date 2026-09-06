@@ -218,8 +218,7 @@ CREATE TABLE events (
     direction TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound', 'internal')),
     summary TEXT NOT NULL,
     body TEXT NOT NULL DEFAULT '',
-    metadata_json TEXT NOT NULL CHECK (json_valid(metadata_json)),
-    delivery_mode TEXT NOT NULL
+    metadata_json TEXT NOT NULL CHECK (json_valid(metadata_json))
 );
 
 CREATE UNIQUE INDEX events_stream_id_sequence ON events(stream_id, sequence);

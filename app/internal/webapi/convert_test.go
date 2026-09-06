@@ -249,16 +249,15 @@ func TestEventFromDomain_OmitsUnsetOptionalFields(t *testing.T) {
 		t.Errorf("Metadata = %v, want nil for no metadata", got.Metadata)
 	}
 	if got.DeliveryMode != nil {
-		t.Errorf("DeliveryMode = %v, want nil for the zero (pull) value", got.DeliveryMode)
+		t.Errorf("DeliveryMode = %v, want nil for a non-terminal type", got.DeliveryMode)
 	}
 }
 
 func TestEventFromDomain_MapsPushDeliveryMode(t *testing.T) {
 	got := EventFromDomain(event.Event{
-		ID:           "01JXAMPLE0000000000000003",
-		SessionName:  "team/parent",
-		Type:         event.TypeTerminalDone,
-		DeliveryMode: event.DeliveryModePush,
+		ID:          "01JXAMPLE0000000000000003",
+		SessionName: "team/parent",
+		Type:        event.TypeTerminalDone,
 	})
 
 	if got.DeliveryMode == nil || *got.DeliveryMode != webapiv1.Push {

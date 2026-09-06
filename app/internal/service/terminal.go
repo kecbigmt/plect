@@ -70,8 +70,8 @@ func PublishTerminalToParent(cfg *config.Config, store *state.Store, origin stri
 	return publishTerminalTo(cfg, store, origin, target, true, p)
 }
 
-// publishTerminalTo appends a delivery_mode=push terminal event into target's
-// own log (D1: push routing writes into the *receiving* session's partition,
+// publishTerminalTo appends a plect.terminal.* event into target's own log
+// (D1: push routing writes into the *receiving* session's partition,
 // not the origin's, so the receiver's own dispatcher — which only ever reads
 // its own log — delivers it once the receiver's workflow channels include
 // the plect.terminal.* type). Metadata carries the origin session and its
@@ -122,14 +122,13 @@ func publishTerminalTo(cfg *config.Config, store *state.Store, origin, target st
 		summary = fmt.Sprintf("%s (from %s)", summary, origin)
 	}
 	stored, _, _, aerr := eventlog.NewStore(store.Dir()).Append(event.Event{
-		SessionName:  target,
-		Type:         p.Type,
-		Source:       event.SourcePlect,
-		Direction:    event.Inbound,
-		Summary:      summary,
-		Body:         p.Body,
-		Metadata:     meta,
-		DeliveryMode: event.DeliveryModePush,
+		SessionName: target,
+		Type:        p.Type,
+		Source:      event.SourcePlect,
+		Direction:   event.Inbound,
+		Summary:     summary,
+		Body:        p.Body,
+		Metadata:    meta,
 	})
 	if aerr != nil {
 		return "", nil, &Error{Code: ErrExecutionFailed, Message: aerr.Error()}

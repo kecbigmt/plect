@@ -4,7 +4,34 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/kecbigmt/plecture/contracts/event"
 )
+
+// deliveryLabel replaces the retired stored DeliveryMode field: the DELIVERY
+// column derives from whether the type carries the terminal-event prefix,
+// not from a value a producer could set independently of what it published.
+func TestDeliveryLabel_DerivesFromTerminalTypePrefix(t *testing.T) {
+	cases := []struct {
+		name string
+		typ  string
+		want string
+	}{
+		{"terminal done", event.TypeTerminalDone, "push"},
+		{"terminal escalate", event.TypeTerminalEscalate, "push"},
+		{"terminal dead", event.TypeTerminalDead, "push"},
+		{"ordinary progress event", event.TypeUserNote, "pull"},
+		{"a type merely containing the terminal word is not the prefix", "plect.terminal", "pull"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := deliveryLabel(event.Event{Type: c.typ})
+			if got != c.want {
+				t.Errorf("deliveryLabel(Type: %q) = %q, want %q", c.typ, got, c.want)
+			}
+		})
+	}
+}
 
 func TestSplitTypesArg(t *testing.T) {
 	cases := []struct {
@@ -34,16 +61,15 @@ func TestSplitTypesArg(t *testing.T) {
 // repeatable --type inputs both split and trim, matching MCP's types/source.
 func TestBuildEventFilter_SplitsAndTrimsTypesAndSources(t *testing.T) {
 	origTypes, origSource := eventTypes, eventSource
-	origDirection, origDelivery, origLimit := eventDirection, eventDelivery, eventLimit
+	origDirection, origLimit := eventDirection, eventLimit
 	t.Cleanup(func() {
 		eventTypes, eventSource = origTypes, origSource
-		eventDirection, eventDelivery, eventLimit = origDirection, origDelivery, origLimit
+		eventDirection, eventLimit = origDirection, origLimit
 	})
 
 	eventTypes = []string{"github.*, claude.reply", "slack.message"}
 	eventSource = " github, slack "
 	eventDirection = "inbound"
-	eventDelivery = "push"
 	eventLimit = 5
 
 	f := buildEventFilter()

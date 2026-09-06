@@ -48,6 +48,25 @@ func TestHandleEventShow_ReturnsPublishedEvent(t *testing.T) {
 	}
 }
 
+// A caller still naming the retired delivery_mode input must be told loudly
+// that it does nothing, rather than have the argument silently ignored and
+// the caller believe its delivery preference was honored.
+func TestHandleEventPublish_RejectsDeliveryModeArgument(t *testing.T) {
+	setUpConfigHome(t)
+
+	result, err := handleEventPublish(context.Background(), reqWith(map[string]any{
+		"session":       "owner/repo-1",
+		"type":          event.TypeUserNote,
+		"delivery_mode": "push",
+	}))
+	if err != nil {
+		t.Fatalf("handleEventPublish: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected error result for a delivery_mode argument")
+	}
+}
+
 func TestHandleEventShow_UnknownIDReturnsError(t *testing.T) {
 	setUpConfigHome(t)
 

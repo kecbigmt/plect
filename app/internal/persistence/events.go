@@ -70,7 +70,6 @@ func (db *DB) AppendEvent(ctx context.Context, ev event.Event) (sequence int64, 
 			Summary:      ev.Summary,
 			Body:         ev.Body,
 			MetadataJson: metadataJSON,
-			DeliveryMode: string(ev.DeliveryMode),
 		}); err != nil {
 			return fmt.Errorf("insert event %q: %w", ev.ID, err)
 		}
@@ -374,15 +373,14 @@ func eventFromRow(row sqlcgen.ListEventsFromByStreamRow, session string) (event.
 		return event.Event{}, fmt.Errorf("parse event %q metadata: %w", row.ID, err)
 	}
 	return event.Event{
-		ID:           row.ID,
-		SessionName:  session,
-		Time:         t,
-		Type:         row.Type,
-		Source:       row.Source,
-		Direction:    event.Direction(row.Direction),
-		Summary:      row.Summary,
-		Body:         row.Body,
-		Metadata:     metadata,
-		DeliveryMode: event.DeliveryMode(row.DeliveryMode),
+		ID:          row.ID,
+		SessionName: session,
+		Time:        t,
+		Type:        row.Type,
+		Source:      row.Source,
+		Direction:   event.Direction(row.Direction),
+		Summary:     row.Summary,
+		Body:        row.Body,
+		Metadata:    metadata,
 	}, nil
 }

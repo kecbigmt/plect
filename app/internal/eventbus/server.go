@@ -81,8 +81,17 @@ func (s *Server) auth(next http.Handler) http.Handler {
 }
 
 func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if err := rejectDeliveryModeField(body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	var ev event.Event
-	if err := json.NewDecoder(r.Body).Decode(&ev); err != nil {
+	if err := json.Unmarshal(body, &ev); err != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
@@ -96,6 +105,21 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"id": stored.ID, "offset": off})
+}
+
+// rejectDeliveryModeField reports an actionable error when the publish body
+// still names the retired delivery_mode field: event.Event no longer
+// declares it, so json.Unmarshal would otherwise silently drop the key
+// rather than tell the caller their delivery preference does nothing.
+func rejectDeliveryModeField(body []byte) error {
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(body, &probe); err != nil {
+		return nil // let the ordinary decode below produce the invalid-json error
+	}
+	if _, ok := probe["delivery_mode"]; ok {
+		return fmt.Errorf("delivery_mode is no longer accepted; delivery is derived from the event type's %q prefix", event.TypeTerminalPrefix)
+	}
+	return nil
 }
 
 // handleList returns one page of a session's events using opaque cursors (the
@@ -326,11 +350,10 @@ func parseFilter(r *http.Request) event.Filter {
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	return event.Filter{
-		Types:        event.SplitCSV(q.Get("types")),
-		Sources:      event.SplitCSV(q.Get("source")),
-		Direction:    event.Direction(q.Get("direction")),
-		DeliveryMode: event.DeliveryMode(q.Get("delivery_mode")),
-		Limit:        limit,
+		Types:     event.SplitCSV(q.Get("types")),
+		Sources:   event.SplitCSV(q.Get("source")),
+		Direction: event.Direction(q.Get("direction")),
+		Limit:     limit,
 	}
 }
 

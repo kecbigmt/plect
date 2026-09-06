@@ -214,8 +214,8 @@ func TestRoundTrip_EventPageUnknownTypeAndMetadataSurviveDecode(t *testing.T) {
 	if unknown.SessionName != "team/parent" {
 		t.Errorf("SessionName = %q, want team/parent (the receiver, distinct from metadata's origin_session)", unknown.SessionName)
 	}
-	if unknown.DeliveryMode == nil || *unknown.DeliveryMode != webapiv1.Push {
-		t.Errorf("DeliveryMode = %v, want push", unknown.DeliveryMode)
+	if unknown.DeliveryMode != nil {
+		t.Errorf("DeliveryMode = %v, want nil (absent in fixture)", unknown.DeliveryMode)
 	}
 }
 

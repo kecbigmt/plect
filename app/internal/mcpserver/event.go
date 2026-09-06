@@ -23,7 +23,6 @@ var eventListTool = mcp.NewTool("plect_event_list",
 	mcp.WithString("types", mcp.Description("Comma-separated type globs to include (e.g. \"widget.*,user.emit\")")),
 	mcp.WithString("source", mcp.Description("Comma-separated sources to include (e.g. \"cli,mcp\")")),
 	mcp.WithString("direction", mcp.Description("Filter by direction: inbound|outbound|internal")),
-	mcp.WithString("delivery_mode", mcp.Description("Filter by delivery mode: push (terminal done/escalate/dead events) or pull (ordinary progress events)")),
 	mcp.WithString("order", mcp.Description("List order: asc (oldest first, paginates via next_cursor) or desc (newest first, most recent page). Default asc.")),
 	mcp.WithString("cursor", mcp.Description("Opaque pagination token from a prior page's next_cursor (asc only); empty = first page")),
 	mcp.WithNumber("limit", mcp.Description("Max events to return; 0 = all")),
@@ -82,11 +81,10 @@ func handleEventList(ctx context.Context, request mcp.CallToolRequest) (*mcp.Cal
 		return errorResult(err), nil
 	}
 	f := event.Filter{
-		Types:        event.SplitCSV(request.GetString("types", "")),
-		Sources:      event.SplitCSV(request.GetString("source", "")),
-		Direction:    event.Direction(request.GetString("direction", "")),
-		DeliveryMode: event.DeliveryMode(request.GetString("delivery_mode", "")),
-		Limit:        request.GetInt("limit", 0),
+		Types:     event.SplitCSV(request.GetString("types", "")),
+		Sources:   event.SplitCSV(request.GetString("source", "")),
+		Direction: event.Direction(request.GetString("direction", "")),
+		Limit:     request.GetInt("limit", 0),
 	}
 	params := service.EventPageParams{
 		Order:  order,
@@ -132,6 +130,12 @@ func handleEventShow(ctx context.Context, request mcp.CallToolRequest) (*mcp.Cal
 }
 
 func handleEventPublish(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// delivery_mode named a retired input: silently dropping it would tell a
+	// caller their delivery preference is honored when it no longer does
+	// anything — delivery is derived from the published type's own prefix.
+	if _, ok := request.GetArguments()["delivery_mode"]; ok {
+		return mcp.NewToolResultError(fmt.Sprintf("delivery_mode is no longer accepted; delivery is derived from the event type's %q prefix", event.TypeTerminalPrefix)), nil
+	}
 	store := state.NewStore("")
 	session := request.GetString("session", "")
 	if session == "" {

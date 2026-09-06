@@ -55,16 +55,15 @@ func TestAppendEvent_RoundTripsEveryField(t *testing.T) {
 	}
 
 	want := event.Event{
-		ID:           "01JXAMPLE",
-		SessionName:  session,
-		Time:         when,
-		Type:         "widget.message",
-		Source:       "widget",
-		Direction:    event.Inbound,
-		Summary:      "hello",
-		Body:         "hello body",
-		Metadata:     map[string]string{"k": "v"},
-		DeliveryMode: event.DeliveryModePush,
+		ID:          "01JXAMPLE",
+		SessionName: session,
+		Time:        when,
+		Type:        "widget.message",
+		Source:      "widget",
+		Direction:   event.Inbound,
+		Summary:     "hello",
+		Body:        "hello body",
+		Metadata:    map[string]string{"k": "v"},
 	}
 	if _, err := db.AppendEvent(ctx, want); err != nil {
 		t.Fatalf("append: %v", err)
@@ -83,7 +82,7 @@ func TestAppendEvent_RoundTripsEveryField(t *testing.T) {
 	ev := got[0]
 	if ev.ID != want.ID || ev.SessionName != want.SessionName || !ev.Time.Equal(want.Time) ||
 		ev.Type != want.Type || ev.Source != want.Source || ev.Direction != want.Direction ||
-		ev.Summary != want.Summary || ev.Body != want.Body || ev.DeliveryMode != want.DeliveryMode {
+		ev.Summary != want.Summary || ev.Body != want.Body {
 		t.Fatalf("round-tripped event = %+v, want %+v", ev, want)
 	}
 	if ev.Metadata["k"] != "v" {

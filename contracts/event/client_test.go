@@ -305,11 +305,10 @@ func TestClientSubscribeErrorStatusTriggersRetry(t *testing.T) {
 
 func TestFilterQueryAndListQueryEncoding(t *testing.T) {
 	f := Filter{
-		Types:        []string{"acme.*", "widget.*"},
-		Sources:      []string{"example", "other"},
-		Direction:    Inbound,
-		DeliveryMode: DeliveryModePush,
-		Limit:        5,
+		Types:     []string{"acme.*", "widget.*"},
+		Sources:   []string{"example", "other"},
+		Direction: Inbound,
+		Limit:     5,
 	}
 
 	lq := listQuery("workspace-1", OrderDesc, "abc", f)
@@ -324,9 +323,6 @@ func TestFilterQueryAndListQueryEncoding(t *testing.T) {
 	}
 	if lq.Get("direction") != string(Inbound) {
 		t.Errorf("listQuery direction = %q", lq.Get("direction"))
-	}
-	if lq.Get("delivery_mode") != string(DeliveryModePush) {
-		t.Errorf("listQuery delivery_mode = %q", lq.Get("delivery_mode"))
 	}
 	if !strings.Contains(lq.Get("types"), "acme.*") {
 		t.Errorf("listQuery types = %q", lq.Get("types"))

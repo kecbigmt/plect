@@ -150,25 +150,6 @@ const (
 	MetaInstance = "instance"
 )
 
-// DeliveryMode distinguishes a pushed terminal signal from an ordinary
-// pull-only event (P2). The zero value behaves as pull, so existing events
-// and Filter callers with no opinion on delivery_mode are unaffected.
-type DeliveryMode string
-
-const (
-	DeliveryModePush DeliveryMode = "push"
-	DeliveryModePull DeliveryMode = "pull"
-)
-
-// Normalize returns m with the zero value mapped to DeliveryModePull, so
-// comparisons never need to treat "" and "pull" as two different states.
-func (m DeliveryMode) Normalize() DeliveryMode {
-	if m == "" {
-		return DeliveryModePull
-	}
-	return m
-}
-
 // Event is both the durable log record and the pub/sub message. The replay
 // cursor is a per-stream sequence number, carried out-of-band (SSE id frame /
 // List offsets) — never a field here. ID is the identity/dedup key, not the
@@ -183,23 +164,18 @@ type Event struct {
 	Summary     string            `json:"summary"`        // one-line render for timelines
 	Body        string            `json:"body,omitempty"` // full text payload
 	Metadata    map[string]string `json:"metadata,omitempty"`
-	// DeliveryMode marks a terminal event pushed one hop to a parent/ancestor
-	// (P2). Empty means pull: an ordinary progress event, read via
-	// subtree/stream query or subscribe, never pushed.
-	DeliveryMode DeliveryMode `json:"delivery_mode,omitempty"`
 }
 
 // Filter selects events for listing or subscription. A zero Filter matches
 // everything (Limit is applied by the caller, not by Match).
 type Filter struct {
-	Types        []string     // glob patterns; empty = any
-	Sources      []string     // exact; empty = any
-	Direction    Direction    // exact; empty = any
-	DeliveryMode DeliveryMode // exact; empty = any
-	Limit        int          // 0 = no limit (caller-applied)
+	Types     []string  // glob patterns; empty = any
+	Sources   []string  // exact match; empty = any
+	Direction Direction // exact; empty = any
+	Limit     int       // 0 = no limit (caller-applied)
 }
 
-// Match reports whether ev satisfies the filter's Types/Sources/Direction/DeliveryMode.
+// Match reports whether ev satisfies the filter's Types/Sources/Direction.
 func (f Filter) Match(ev Event) bool {
 	if len(f.Types) > 0 {
 		ok := false
@@ -217,9 +193,6 @@ func (f Filter) Match(ev Event) bool {
 		return false
 	}
 	if f.Direction != "" && ev.Direction != f.Direction {
-		return false
-	}
-	if f.DeliveryMode != "" && ev.DeliveryMode.Normalize() != f.DeliveryMode.Normalize() {
 		return false
 	}
 	return true
