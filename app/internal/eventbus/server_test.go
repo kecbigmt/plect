@@ -209,11 +209,6 @@ func TestBus_StreamResume(t *testing.T) {
 	}
 }
 
-// TestBus_StreamRejectsMalformedResumeToken pins that a Last-Event-ID that
-// isn't a valid "<streamID>:<seq>" resume token (a pre-cutover raw sequence,
-// or garbage) is rejected before any SSE bytes are written, rather than
-// silently falling back to a fresh connect and serving whatever session the
-// query param names anyway.
 func TestBus_StreamRejectsMalformedResumeToken(t *testing.T) {
 	_, baseURL, _ := newTestBus(t, "")
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
@@ -228,6 +223,61 @@ func TestBus_StreamRejectsMalformedResumeToken(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (rejected before dialing SSE)", resp.StatusCode)
 	}
+}
+
+func TestBus_StreamRejectsUnownedResumeStream(t *testing.T) {
+	c, baseURL, _ := newTestBus(t, "")
+	ctx := t.Context()
+	if _, _, err := c.Publish(ctx, event.Event{SessionName: "o/other-1", Type: "user.note", Direction: event.Internal}); err != nil {
+		t.Fatal(err)
+	}
+	otherStream, _, err := c.List(ctx, "o/other-1", event.OrderAsc, "", event.Filter{})
+	if err != nil || len(otherStream) == 0 {
+		t.Fatalf("seed other session: events=%v err=%v", otherStream, err)
+	}
+
+	for name, token := range map[string]string{
+		"unknown stream":         "01UNKNOWNSTREAM0000000000:0",
+		"another session stream": event.EncodeResumeToken(mustStreamID(t, baseURL, "o/other-1"), 0),
+	} {
+		t.Run(name, func(t *testing.T) {
+			reqCtx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+			defer cancel()
+			req, _ := http.NewRequestWithContext(reqCtx, http.MethodGet, baseURL+"/v1/stream?session="+url.QueryEscape("o/r-1"), nil)
+			req.Header.Set("Last-Event-ID", token)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("stream: %v", err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (rejected before dialing SSE)", resp.StatusCode)
+			}
+		})
+	}
+}
+
+// mustStreamID resolves session's current stream id via a bus list call
+// (the id is present on every returned event's opaque cursor once one exists).
+func mustStreamID(t *testing.T, baseURL, session string) string {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, baseURL+"/v1/events?session="+url.QueryEscape(session)+"&limit=1", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	defer resp.Body.Close()
+	var page struct {
+		NextCursor string `json:"next_cursor"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil || page.NextCursor == "" {
+		t.Fatalf("decode page: err=%v cursor=%q", err, page.NextCursor)
+	}
+	cur, err := event.DecodeCursor(page.NextCursor)
+	if err != nil {
+		t.Fatalf("decode cursor: %v", err)
+	}
+	return cur.StreamID
 }
 
 // An idle stream (no events) periodically emits a keepalive comment so the

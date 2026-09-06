@@ -187,6 +187,20 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid resume token", http.StatusBadRequest)
 		return
 	}
+	if streamID != "" {
+		// Validated before any SSE bytes commit: a syntactically valid token
+		// naming an unknown or another session's stream must not read as a
+		// successful connection to this one.
+		owner, oerr := s.store.StreamOwner(streamID)
+		if oerr != nil {
+			http.Error(w, "resume lookup failed", http.StatusInternalServerError)
+			return
+		}
+		if owner != session {
+			http.Error(w, "unknown resume stream", http.StatusBadRequest)
+			return
+		}
+	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")

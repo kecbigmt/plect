@@ -11,7 +11,6 @@ import (
 	"github.com/kecbigmt/plecture/contracts/event"
 )
 
-// TestEventlogAndStateShareOneConnectionPoolClosedByOwner pins real, deterministic ownership: eventlog.Store and state.Store opened over the same directory hand out the same pool, and its owner can actually close it — verified via OpenConnections, not object identity.
 func TestEventlogAndStateShareOneConnectionPoolClosedByOwner(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "store.db")

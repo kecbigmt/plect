@@ -582,10 +582,6 @@ func TestFollowDeliversNewEvents(t *testing.T) {
 	}
 }
 
-// TestReadFromStream_TraversesEveryIntermediateIncarnation pins that two
-// rotations landing between a caller's calls do not skip the intermediate
-// incarnation: draining a superseded stream must advance to the very next
-// one in creation order, not jump straight to whatever is current.
 func TestReadFromStream_TraversesEveryIntermediateIncarnation(t *testing.T) {
 	store := NewStore(t.TempDir())
 	const session = "o/r-1"
@@ -605,7 +601,7 @@ func TestReadFromStream_TraversesEveryIntermediateIncarnation(t *testing.T) {
 		t.Fatalf("append to stream 2: %v", err)
 	}
 
-	if _, err := store.NewStream(session); err != nil { // stream3: current
+	if _, err := store.NewStream(session); err != nil {
 		t.Fatalf("new stream 3: %v", err)
 	}
 	if _, _, _, err := store.Append(event.Event{SessionName: session, Type: "user.note", Body: "s3", Direction: event.Internal}); err != nil {
@@ -632,6 +628,41 @@ func TestReadFromStream_TraversesEveryIntermediateIncarnation(t *testing.T) {
 	}
 	if len(got) != 2 || got[0] != "s2" || got[1] != "s3" {
 		t.Fatalf("delivered %v, want [s2 s3] (the intermediate incarnation must not be skipped)", got)
+	}
+}
+
+func TestReadFromStream_EmptyIntermediateIncarnationDoesNotStopTheWalk(t *testing.T) {
+	store := NewStore(t.TempDir())
+	const session = "o/r-1"
+
+	stream1, err := store.NewStream(session)
+	if err != nil {
+		t.Fatalf("new stream 1: %v", err)
+	}
+	if _, _, _, err := store.Append(event.Event{SessionName: session, Type: "user.note", Body: "s1", Direction: event.Internal}); err != nil {
+		t.Fatalf("append to stream 1: %v", err)
+	}
+
+	if _, err := store.NewStream(session); err != nil { // stream2: intermediate, never gets an event
+		t.Fatalf("new stream 2: %v", err)
+	}
+
+	if _, err := store.NewStream(session); err != nil {
+		t.Fatalf("new stream 3: %v", err)
+	}
+	if _, _, _, err := store.Append(event.Event{SessionName: session, Type: "user.note", Body: "s3", Direction: event.Internal}); err != nil {
+		t.Fatalf("append to stream 3: %v", err)
+	}
+
+	evs, _, resolved, _, err := store.ReadFromStream(session, stream1, 2)
+	if err != nil {
+		t.Fatalf("ReadFromStream: %v", err)
+	}
+	if len(evs) != 1 || evs[0].Body != "s3" {
+		t.Fatalf("evs = %v, want [s3] (the empty stream2 must not stop the walk before reaching stream3)", evs)
+	}
+	if resolved == stream1 {
+		t.Fatal("resolved stream id did not advance past the drained incarnation")
 	}
 }
 

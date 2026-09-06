@@ -346,23 +346,35 @@ func (s *Store) ReadFromStream(session, streamID string, cursor int64) (evs []ev
 	if len(oldEvs) > 0 {
 		return oldEvs, oldSeqs, streamID, tailSeq(oldSeqs, cursor), nil
 	}
-	// streamID is exhausted: move to the very next incarnation in creation
-	// order, not straight to current — two or more rotations since the last
-	// call would otherwise skip an intermediate incarnation's events entirely.
-	nextID := current
-	if ids, lerr := db.EventStreamIDsBySession(context.Background(), session); lerr == nil {
-		for i, id := range ids {
-			if id == streamID && i+1 < len(ids) {
-				nextID = ids[i+1]
-				break
-			}
+	// streamID's tail is exhausted: walk forward by id through every later incarnation until one has events or is current, so an empty one is never mistaken for "nothing more".
+	ids, lerr := db.EventStreamIDsBySession(context.Background(), session)
+	if lerr != nil {
+		return nil, nil, streamID, cursor, fmt.Errorf("eventlog: read stream: %w", lerr)
+	}
+	start := len(ids)
+	for i, id := range ids {
+		if id == streamID {
+			start = i + 1
+			break
 		}
 	}
-	newEvs, newSeqs, err := db.ListEventsFromStreamID(context.Background(), nextID, session, 0)
-	if err != nil {
-		return nil, nil, nextID, 0, fmt.Errorf("eventlog: read stream: %w", err)
+	for _, id := range ids[start:] {
+		nextEvs, nextSeqs, nerr := db.ListEventsFromStreamID(context.Background(), id, session, 0)
+		if nerr != nil {
+			return nil, nil, streamID, cursor, fmt.Errorf("eventlog: read stream: %w", nerr)
+		}
+		if len(nextEvs) > 0 || id == current {
+			return nextEvs, nextSeqs, id, tailSeq(nextSeqs, 0), nil
+		}
 	}
-	return newEvs, newSeqs, nextID, tailSeq(newSeqs, 0), nil
+	// streamID named an incarnation this session no longer lists (or the
+	// walk somehow never reached current, which is always in ids): current
+	// from its head is the only position left that is still guaranteed correct.
+	curEvs, curSeqs, cerr := db.ListEventsFromStreamID(context.Background(), current, session, 0)
+	if cerr != nil {
+		return nil, nil, streamID, cursor, fmt.Errorf("eventlog: read stream: %w", cerr)
+	}
+	return curEvs, curSeqs, current, tailSeq(curSeqs, 0), nil
 }
 
 func tailSeq(seqs []int64, fallback int64) int64 {
@@ -454,6 +466,21 @@ func (s *Store) StreamID(session string) (string, error) {
 		return "", fmt.Errorf("eventlog: stream id: %w", err)
 	}
 	return id, nil
+}
+
+// StreamOwner returns the session that owns streamID, or "" if no stream has
+// that id — for a caller validating a resume token's stream id before ever
+// trusting it, independent of reading anything from that stream.
+func (s *Store) StreamOwner(streamID string) (string, error) {
+	db, err := s.dbHandle()
+	if err != nil {
+		return "", err
+	}
+	owner, err := db.EventStreamSessionName(context.Background(), streamID)
+	if err != nil {
+		return "", fmt.Errorf("eventlog: stream owner: %w", err)
+	}
+	return owner, nil
 }
 
 // NewStream mints a new incarnation's stream for session (a session create,

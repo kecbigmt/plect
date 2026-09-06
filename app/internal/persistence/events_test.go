@@ -282,9 +282,6 @@ func TestSetEventCursor_RejectsMissingCurrentStream(t *testing.T) {
 	}
 }
 
-// TestListEventsFromStreamID_RejectsAStreamBelongingToAnotherSession pins
-// that a caller-supplied stream id (a bus reconnect's resume token) cannot be
-// used to read and relabel another session's events as the caller's own.
 func TestListEventsFromStreamID_RejectsAStreamBelongingToAnotherSession(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()

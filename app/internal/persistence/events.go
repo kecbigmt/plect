@@ -185,12 +185,9 @@ func (db *DB) ListEventsFromStreamID(ctx context.Context, streamID, session stri
 	err := db.WithReadTx(ctx, func(tx *sql.Tx) error {
 		q := sqlcgen.New(tx)
 		// streamID rides in from a caller-controlled resume token, so its ownership is checked rather than trusted.
-		owner, oerr := q.GetEventStreamSessionName(ctx, streamID)
+		owner, oerr := eventStreamSessionName(ctx, q, streamID)
 		if oerr != nil {
-			if errors.Is(oerr, sql.ErrNoRows) {
-				return nil
-			}
-			return fmt.Errorf("get owner of stream %q: %w", streamID, oerr)
+			return oerr
 		}
 		if owner != session {
 			return fmt.Errorf("stream %q does not belong to session %q", streamID, session)
@@ -216,6 +213,30 @@ func (db *DB) ListEventsFromStreamID(ctx context.Context, streamID, session stri
 		return nil, nil, err
 	}
 	return evs, seqs, nil
+}
+
+// EventStreamSessionName returns the session that owns streamID, or "" if no stream has that id — for validating a resume token before trusting it, independent of reading that stream's rows.
+func (db *DB) EventStreamSessionName(ctx context.Context, streamID string) (string, error) {
+	var owner string
+	err := db.WithReadTx(ctx, func(tx *sql.Tx) error {
+		var qerr error
+		owner, qerr = eventStreamSessionName(ctx, sqlcgen.New(tx), streamID)
+		return qerr
+	})
+	return owner, err
+}
+
+// eventStreamSessionName is EventStreamSessionName's transaction-scoped
+// primitive, shared with ListEventsFromStreamID's own ownership check.
+func eventStreamSessionName(ctx context.Context, q *sqlcgen.Queries, streamID string) (string, error) {
+	owner, err := q.GetEventStreamSessionName(ctx, streamID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", fmt.Errorf("get owner of stream %q: %w", streamID, err)
+	}
+	return owner, nil
 }
 
 // HasEventCursor reports whether cursorName has ever been committed for
