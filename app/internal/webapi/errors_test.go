@@ -36,7 +36,7 @@ func TestApiError_ClassifiesEveryKnownServiceErrorCode(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.code, func(t *testing.T) {
-			status, body := apiError(&service.Error{Code: tt.code, Message: "boom"})
+			status, body := ApiError(&service.Error{Code: tt.code, Message: "boom"})
 			if status != tt.status {
 				t.Errorf("status = %d, want %d", status, tt.status)
 			}
@@ -49,7 +49,7 @@ func TestApiError_ClassifiesEveryKnownServiceErrorCode(t *testing.T) {
 }
 
 func TestApiError_UnknownServiceErrorCodeIsAnUnclassifiedExecutionFailure(t *testing.T) {
-	status, body := apiError(&service.Error{Code: "not_a_real_code", Message: "boom"})
+	status, body := ApiError(&service.Error{Code: "not_a_real_code", Message: "boom"})
 	if status != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", status)
 	}
@@ -66,7 +66,7 @@ func TestApiError_UnknownServiceErrorCodeIsAnUnclassifiedExecutionFailure(t *tes
 // is a 500: this package never guesses at a 4xx for an error the service
 // layer did not itself classify.
 func TestApiError_PlainErrorIsA500ExecutionFailure(t *testing.T) {
-	status, body := apiError(errors.New("disk full"))
+	status, body := ApiError(errors.New("disk full"))
 	if status != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", status)
 	}

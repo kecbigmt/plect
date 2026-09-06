@@ -1,15 +1,31 @@
+import { Profiler } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { Conversation } from "@/components/session/Conversation";
+import { sessionEventsQueryKey } from "@/lib/useEvents";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+function sseResponse(frames: string): Response {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(frames));
+      controller.close();
+    },
+  });
+  return new Response(stream, { status: 200 });
+}
+
+function requestUrl(input: RequestInfo | URL): URL {
+  return new URL(String(input instanceof Request ? input.url : input), "http://localhost");
 }
 
 function renderConversation(sessionName: string, onSelectSession: (name: string) => void = vi.fn()) {
@@ -314,5 +330,265 @@ describe("Conversation", () => {
     );
     const restoredRegion = await screen.findByRole("region", { name: /conversation/i });
     expect(restoredRegion.scrollTop).toBe(120);
+  });
+
+  it("shows an event delivered via the live stream, deduplicated against history by ID", async () => {
+    vi.mocked(fetch).mockImplementation((input) => {
+      if (requestUrl(input).pathname.endsWith("/events/stream")) {
+        return Promise.resolve(
+          sseResponse(
+            'id: cur-2\ndata: {"id":"01","sessionName":"team/a","time":"2026-01-01T00:00:01Z","type":"user.note","source":"cli","direction":"internal","summary":"first"}\n\n' +
+              'id: cur-3\ndata: {"id":"02","sessionName":"team/a","time":"2026-01-01T00:00:02Z","type":"user.note","source":"cli","direction":"internal","summary":"live-arrived"}\n\n',
+          ),
+        );
+      }
+      return Promise.resolve(
+        jsonResponse({
+          events: [
+            {
+              id: "01",
+              sessionName: "team/a",
+              time: "2026-01-01T00:00:01Z",
+              type: "user.note",
+              source: "cli",
+              direction: "internal",
+              summary: "first",
+            },
+          ],
+          nextCursor: "cur-1",
+        }),
+      );
+    });
+    renderConversation("team/a");
+
+    expect(await screen.findByText("first")).toBeInTheDocument();
+    expect(await screen.findByText("live-arrived")).toBeInTheDocument();
+    expect(screen.getAllByText("first")).toHaveLength(1);
+  });
+
+  it("cancels the previous session's stream on switch, so a delayed frame never enters the new session's timeline", async () => {
+    let pushLate!: (text: string) => void;
+    const teamAStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        pushLate = (text) => controller.enqueue(new TextEncoder().encode(text));
+      },
+    });
+
+    vi.mocked(fetch).mockImplementation((input) => {
+      const url = requestUrl(input);
+      const session = url.searchParams.get("session");
+      if (url.pathname.endsWith("/events/stream")) {
+        return Promise.resolve(session === "team/a" ? new Response(teamAStream, { status: 200 }) : sseResponse(""));
+      }
+      return Promise.resolve(
+        jsonResponse({
+          events: [
+            {
+              id: session === "team/a" ? "a1" : "b1",
+              sessionName: session ?? "",
+              time: "2026-01-01T00:00:01Z",
+              type: "user.note",
+              source: "cli",
+              direction: "internal",
+              summary: session === "team/a" ? "first-a" : "first-b",
+            },
+          ],
+          nextCursor: "cur-1",
+        }),
+      );
+    });
+
+    const queryClient = new QueryClient();
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}>
+        <Conversation sessionName="team/a" onSelectSession={vi.fn()} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText("first-a");
+
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <Conversation sessionName="team/b" onSelectSession={vi.fn()} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText("first-b");
+
+    pushLate(
+      'id: cur-late\ndata: {"id":"late","sessionName":"team/a","time":"2026-01-01T00:00:03Z","type":"user.note","source":"cli","direction":"internal","summary":"late-arrival"}\n\n',
+    );
+    // A real delay, not a negative waitFor (which would pass immediately by
+    // just checking "not yet in the DOM" before the pushed frame has even
+    // had a chance to propagate): give the read loop's promise chain every
+    // opportunity to run before asserting it produced nothing.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.queryByText("late-arrival")).not.toBeInTheDocument();
+  });
+
+  it("aborts the previous session's connection on switch", async () => {
+    let teamASignal: AbortSignal | undefined;
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const url = requestUrl(input);
+      const session = url.searchParams.get("session");
+      if (url.pathname.endsWith("/events/stream")) {
+        if (session === "team/a") {
+          teamASignal = init?.signal ?? undefined;
+        }
+        return Promise.resolve(sseResponse(""));
+      }
+      return Promise.resolve(jsonResponse({ events: [] }));
+    });
+
+    const queryClient = new QueryClient();
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}>
+        <Conversation sessionName="team/a" onSelectSession={vi.fn()} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText(/no events recorded/i);
+    expect(teamASignal?.aborted).toBe(false);
+
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <Conversation sessionName="team/b" onSelectSession={vi.fn()} />
+      </QueryClientProvider>,
+    );
+
+    expect(teamASignal?.aborted).toBe(true);
+  });
+
+  it("remounts the live timeline even when the newly selected session's history is already cached", async () => {
+    // Cached history skips the isPending branch entirely, so only the key can isolate this switch.
+    vi.mocked(fetch).mockImplementation((input) => {
+      const url = requestUrl(input);
+      const session = url.searchParams.get("session");
+      if (url.pathname.endsWith("/events/stream")) {
+        if (session === "team/a") {
+          return Promise.resolve(
+            sseResponse(
+              'id: cur-1\ndata: {"id":"01","sessionName":"team/a","time":"2026-01-01T00:00:01Z","type":"user.note","source":"cli","direction":"internal","summary":"team-a-live"}\n\n',
+            ),
+          );
+        }
+        return Promise.resolve(sseResponse(""));
+      }
+      return Promise.resolve(jsonResponse({ events: [] }));
+    });
+
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(sessionEventsQueryKey("team/b"), {
+      pages: [{ events: [], nextCursor: undefined }],
+      pageParams: [undefined],
+    });
+
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}>
+        <Conversation sessionName="team/a" onSelectSession={vi.fn()} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText("team-a-live");
+
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <Conversation sessionName="team/b" onSelectSession={vi.fn()} />
+      </QueryClientProvider>,
+    );
+
+    expect(screen.queryByText("team-a-live")).not.toBeInTheDocument();
+  });
+
+  it("opens the live subscription even when the session's history starts out empty", async () => {
+    // Only the first connection attempt matters here — the mock stream ends
+    // after one frame, so the module may have already reconnected (a real
+    // resume, cursor: "cur-1") by the time later assertions run.
+    let firstStreamCursorParam: string | null | undefined;
+    vi.mocked(fetch).mockImplementation((input) => {
+      const url = requestUrl(input);
+      if (url.pathname.endsWith("/events/stream")) {
+        if (firstStreamCursorParam === undefined) {
+          firstStreamCursorParam = url.searchParams.get("cursor");
+        }
+        return Promise.resolve(
+          sseResponse(
+            'id: cur-1\ndata: {"id":"01","sessionName":"team/a","time":"2026-01-01T00:00:01Z","type":"user.note","source":"cli","direction":"internal","summary":"first-live-event"}\n\n',
+          ),
+        );
+      }
+      return Promise.resolve(jsonResponse({ events: [] }));
+    });
+
+    renderConversation("team/a");
+
+    expect(await screen.findByText("first-live-event")).toBeInTheDocument();
+    expect(firstStreamCursorParam).toBeNull();
+  });
+
+  it("never commits a render showing a previous session's live event under the newly selected session", async () => {
+    vi.mocked(fetch).mockImplementation((input) => {
+      const url = requestUrl(input);
+      const session = url.searchParams.get("session");
+      if (url.pathname.endsWith("/events/stream")) {
+        if (session === "team/a") {
+          return Promise.resolve(
+            sseResponse(
+              'id: cur-1\ndata: {"id":"01","sessionName":"team/a","time":"2026-01-01T00:00:01Z","type":"user.note","source":"cli","direction":"internal","summary":"team-a-live"}\n\n',
+            ),
+          );
+        }
+        return Promise.resolve(sseResponse(""));
+      }
+      return Promise.resolve(jsonResponse({ events: [] }));
+    });
+
+    // A settled-state assertion alone would miss an intermediate commit.
+    const commits: string[] = [];
+    const onRender = () => commits.push(document.body.textContent ?? "");
+    const queryClient = new QueryClient();
+    const tree = (name: string) => (
+      <QueryClientProvider client={queryClient}>
+        <Profiler id="conversation" onRender={onRender}>
+          <Conversation sessionName={name} onSelectSession={vi.fn()} />
+        </Profiler>
+      </QueryClientProvider>
+    );
+
+    const { rerender } = render(tree("team/a"));
+    await screen.findByText("team-a-live");
+    commits.length = 0;
+
+    rerender(tree("team/b"));
+    await screen.findByText(/no events recorded/i);
+
+    expect(commits.some((textContent) => textContent.includes("team-a-live"))).toBe(false);
+  });
+
+  it("never commits a render showing session A's stale connection banner under newly selected session B", async () => {
+    vi.mocked(fetch).mockImplementation((input) => {
+      const url = requestUrl(input);
+      const session = url.searchParams.get("session");
+      if (url.pathname.endsWith("/events/stream")) {
+        return Promise.resolve(session === "team/a" ? new Response(null, { status: 401 }) : sseResponse(""));
+      }
+      return Promise.resolve(jsonResponse({ events: [] }));
+    });
+
+    const commits: string[] = [];
+    const onRender = () => commits.push(document.body.textContent ?? "");
+    const queryClient = new QueryClient();
+    const tree = (name: string) => (
+      <QueryClientProvider client={queryClient}>
+        <Profiler id="conversation" onRender={onRender}>
+          <Conversation sessionName={name} onSelectSession={vi.fn()} />
+        </Profiler>
+      </QueryClientProvider>
+    );
+
+    const { rerender } = render(tree("team/a"));
+    await screen.findByText(/sign-in expired/i);
+    commits.length = 0;
+
+    rerender(tree("team/b"));
+    await screen.findByText(/no events recorded/i);
+
+    expect(commits.some((textContent) => textContent.includes("Sign-in expired"))).toBe(false);
   });
 });

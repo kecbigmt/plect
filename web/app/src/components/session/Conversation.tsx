@@ -1,15 +1,12 @@
 import { useLayoutEffect, useRef } from "react";
 
-import type { SessionEvent } from "@/lib/eventsApi";
-import { dedupeEventsById, useSessionEvents } from "@/lib/useEvents";
+import type { SessionEvent, SessionEventPage } from "@/lib/eventsApi";
+import { dedupeEventsById, useLiveEvents, useSessionEvents } from "@/lib/useEvents";
+import type { EventStreamState } from "@/lib/eventStream";
 import { Button } from "@/components/ui/button";
 
-// Unlike DetailPane's key={sessionName} remount, this component never
-// unmounts on selection change: a fresh queryKey already renders isPending
-// with no data (TanStack Query's own default), so nothing here needs a
-// remount to avoid leaking a previous session's events, and keeping the one
-// scroll container alive across a switch is what lets restoreScrollPosition
-// below put a revisited session back where its reading left off.
+// This component itself never remounts on selection change: its scroll
+// position must survive a switch.
 export function Conversation({
   sessionName,
   onSelectSession,
@@ -54,7 +51,7 @@ export function Conversation({
     );
   }
 
-  const items = dedupeEventsById(events.data.pages);
+  const firstPage = events.data.pages[0];
 
   return (
     // overflow-auto (not the ancestor) owns the scroll container, so
@@ -68,6 +65,46 @@ export function Conversation({
       className="flex min-h-0 flex-1 flex-col overflow-auto p-3"
       onScroll={(e) => scrollPositions.current.set(sessionName, e.currentTarget.scrollTop)}
     >
+      <LiveTimeline
+        key={sessionName}
+        sessionName={sessionName}
+        historyReady={firstPage !== undefined}
+        resumeCursor={firstPage?.nextCursor ?? ""}
+        pages={events.data.pages}
+        onSelectSession={onSelectSession}
+        hasNextPage={events.hasNextPage}
+        isFetchingNextPage={events.isFetchingNextPage}
+        onFetchNextPage={() => void events.fetchNextPage()}
+      />
+    </div>
+  );
+}
+
+function LiveTimeline({
+  sessionName,
+  historyReady,
+  resumeCursor,
+  pages,
+  onSelectSession,
+  hasNextPage,
+  isFetchingNextPage,
+  onFetchNextPage,
+}: {
+  sessionName: string;
+  historyReady: boolean;
+  resumeCursor: string;
+  pages: readonly SessionEventPage[];
+  onSelectSession: (name: string) => void;
+  hasNextPage: boolean;
+  isFetchingNextPage: boolean;
+  onFetchNextPage: () => void;
+}) {
+  const live = useLiveEvents(sessionName, historyReady, resumeCursor);
+  const items = dedupeEventsById(pages, live.liveEvents);
+
+  return (
+    <>
+      <LiveStateBanner state={live.state} />
       {items.length === 0 ? (
         <p className="text-sm text-muted-foreground">No events recorded yet.</p>
       ) : (
@@ -79,20 +116,39 @@ export function Conversation({
           ))}
         </ul>
       )}
-      {events.hasNextPage && (
+      {hasNextPage && (
         <Button
           type="button"
           variant="outline"
           size="default"
           className="mt-3 self-center"
-          disabled={events.isFetchingNextPage}
-          onClick={() => void events.fetchNextPage()}
+          disabled={isFetchingNextPage}
+          onClick={onFetchNextPage}
         >
-          {events.isFetchingNextPage ? "Loading…" : "Load more"}
+          {isFetchingNextPage ? "Loading…" : "Load more"}
         </Button>
       )}
-    </div>
+    </>
   );
+}
+
+// Hiding transient reconnects avoids flickering a banner on every brief blip.
+function LiveStateBanner({ state }: { state: EventStreamState }) {
+  if (state === "auth-expired") {
+    return (
+      <p role="alert" className="mb-2 rounded-md border border-border bg-muted p-2 text-xs text-muted-foreground">
+        Sign-in expired — live updates are paused. Reload the page to sign in again.
+      </p>
+    );
+  }
+  if (state === "unavailable") {
+    return (
+      <p role="alert" className="mb-2 rounded-md border border-border bg-muted p-2 text-xs text-muted-foreground">
+        Live updates are unavailable. New events may not appear until you reload.
+      </p>
+    );
+  }
+  return null;
 }
 
 // Only the two conversational types contracts/event itself defines get

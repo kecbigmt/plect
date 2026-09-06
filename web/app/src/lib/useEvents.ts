@@ -1,6 +1,9 @@
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
+import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 
 import { fetchEventPage, type SessionEvent, type SessionEventPage } from "@/lib/eventsApi";
+import { openEventStream, type EventStreamState } from "@/lib/eventStream";
+import { sessionDetailQueryKey, sessionListQueryKey } from "@/lib/useSessions";
 
 export function sessionEventsQueryKey(sessionName: string) {
   return ["events", sessionName] as const;
@@ -17,36 +20,67 @@ export function useSessionEvents(sessionName: string | null) {
     queryFn: ({ pageParam }) =>
       fetchEventPage(sessionName!, { cursor: pageParam, order: "asc" }),
     initialPageParam: undefined as string | undefined,
-    // The read contract hands back nextCursor whenever the session's log
-    // exists at all, independent of whether that particular page had any
-    // events (docs/design/web-ui-event-history.md) — so a page that comes
-    // back empty means "caught up for now," not "no cursor was issued".
-    // Stopping there rather than following that cursor keeps Load more from
-    // becoming a control that re-fetches the same empty tail forever; this
-    // PR renders history pages only; a live subscription (#407) is what
-    // picks up new events past this point.
+    // Following an already-empty page's cursor would refetch the same
+    // caught-up tail forever.
     getNextPageParam: (lastPage) => (lastPage.events.length === 0 ? undefined : lastPage.nextCursor),
     enabled: sessionName !== null,
     retry: false,
   });
 }
 
-// Flattens pages in fetch order, deduplicating by event ID rather than by
-// content: an ascending page can hand back an event an earlier page already
-// returned (a refetch replays the same forward position), but a genuinely
-// distinct record — an origin event and the parent notification it caused —
-// must never collapse just because their text happens to match.
-export function dedupeEventsById(pages: readonly SessionEventPage[] | undefined): SessionEvent[] {
-  if (!pages) {
-    return [];
-  }
+// IDs distinguish otherwise-identical records; history wins the overlap a
+// live replay's own catch-up can re-deliver.
+export function dedupeEventsById(
+  pages: readonly SessionEventPage[] | undefined,
+  liveEvents: readonly SessionEvent[] = [],
+): SessionEvent[] {
   const byId = new Map<string, SessionEvent>();
-  for (const page of pages) {
+  for (const page of pages ?? []) {
     for (const e of page.events) {
       if (!byId.has(e.id)) {
         byId.set(e.id, e);
       }
     }
   }
+  for (const e of liveEvents) {
+    if (!byId.has(e.id)) {
+      byId.set(e.id, e);
+    }
+  }
   return [...byId.values()];
+}
+
+// resumeCursor is "" for a session with no log yet, a valid fresh-stream
+// position, so historyReady is a separate signal rather than inferred from it.
+// The caller mounts one instance per session (keyed by sessionName), so a
+// callback from a superseded connection can only reach an already-unmounted
+// instance's state, never the newly selected session's.
+export function useLiveEvents(sessionName: string | null, historyReady: boolean, resumeCursor: string) {
+  const queryClient = useQueryClient();
+  const [liveEvents, setLiveEvents] = useState<SessionEvent[]>([]);
+  const [state, setState] = useState<EventStreamState>("connecting");
+
+  useEffect(() => {
+    if (sessionName === null || !historyReady) {
+      return;
+    }
+    const controller = new AbortController();
+    openEventStream(
+      sessionName,
+      resumeCursor,
+      {
+        onEvent: (event) => {
+          setLiveEvents((prev) => (prev.some((e) => e.id === event.id) ? prev : [...prev, event]));
+          // Direct derivation would be incomplete: not every state change emits an event.
+          queryClient.invalidateQueries({ queryKey: sessionDetailQueryKey(sessionName) });
+          queryClient.invalidateQueries({ queryKey: sessionListQueryKey() });
+        },
+        onStateChange: setState,
+      },
+      controller.signal,
+    );
+    return () => controller.abort();
+  }, [sessionName, historyReady, resumeCursor, queryClient]);
+
+  return { liveEvents, state };
 }

@@ -61,6 +61,7 @@ func (v Validation) validateEffect(def *Definition, pos Position) error {
 	// itself is: a misspelled probe, verb, or joint key is a declaration with
 	// no consumer, and reading it as an unset one would leave the author
 	// believing it is in force.
+	hasAlive := false
 	if health, ok := def.Body["health"]; ok {
 		at := childPos(pos, "health")
 		tbl, err := table(health, at)
@@ -70,11 +71,30 @@ func (v Validation) validateEffect(def *Definition, pos Position) error {
 		if err := rejectUnknownFields(tbl, at, "alive", "activity"); err != nil {
 			return err
 		}
-		for _, probe := range []string{"alive", "activity"} {
-			if err := v.action(tbl, probe, surfaceEffectHealth, at); err != nil {
+		// alive is the one probe admitting the noop variant, so it parses
+		// through ParseAliveAction rather than the v.action helper every
+		// other action-bearing field uses.
+		if raw, ok := tbl["alive"]; ok {
+			hasAlive = true
+			aliveAt := childPos(at, "alive")
+			action, err := ParseAliveAction(raw, aliveAt)
+			if err != nil {
+				return err
+			}
+			if err := v.checkAction(action, surfaceEffectHealth, aliveAt); err != nil {
 				return err
 			}
 		}
+		if err := v.action(tbl, "activity", surfaceEffectHealth, at); err != nil {
+			return err
+		}
+	}
+	if _, hasSetup := def.Body["setup"]; hasSetup && !hasAlive {
+		// A setup-bearing effect owns a surface that can vanish, so "not
+		// observed" has to be a reviewed choice — a noop action — rather than
+		// a declaration nobody wrote.
+		return newDiag(CodeHealthAliveRequired, LayerStructural, childPos(childPos(pos, "health"), "alive"),
+			"an effect with setup declares [health.alive], as an executable probe or as an explicit noop")
 	}
 	if terminal, ok := def.Body["terminal"]; ok {
 		at := childPos(pos, "terminal")

@@ -57,6 +57,9 @@ scope = "run"
 [tmux.setup]
 type   = "shell"
 script = "echo '{}'"
+
+[tmux.health.alive]
+type = "noop"
 `)
 	writeFile(t, filepath.Join(globalDir, "workflows", "coding.toml"), `
 [coding]
@@ -145,6 +148,9 @@ scope = "run"
 [tmux.setup]
 type   = "shell"
 script = "echo '{}'"
+
+[tmux.health.alive]
+type = "noop"
 `)
 	// `setup` is required for a workspace provider; omitting it fails the load.
 	writeFile(t, filepath.Join(globalDir, "workspaces", "broken.toml"), `
@@ -199,6 +205,9 @@ scope = "run"
 [tmux.setup]
 type   = "shell"
 script = "echo '{}'"
+
+[tmux.health.alive]
+type = "noop"
 `)
 	writeFile(t, filepath.Join(globalDir, "channels", "claude_channel.toml"), `
 [claude_channel]
@@ -260,6 +269,9 @@ scope = "run"
 [tmux.setup]
 type   = "shell"
 script = "echo '{}'"
+
+[tmux.health.alive]
+type = "noop"
 `)
 	// unix_socket missing `body` => LoadChannels itself fails (not a validation
 	// mismatch), so WorkflowShow returns the wrapped load error, not ErrInvalidInput.
@@ -310,6 +322,9 @@ scope = "run"
 [tmux.setup]
 type   = "shell"
 script = "echo '{}'"
+
+[tmux.health.alive]
+type = "noop"
 `)
 	writeFile(t, filepath.Join(globalDir, "workflows", "withchan.toml"), `
 [withchan]
@@ -377,6 +392,9 @@ scope = "run"
 [tmux.setup]
 type   = "shell"
 script = "echo '{}'"
+
+[tmux.health.alive]
+type = "noop"
 
 [tmux.inputs_schema]
 type = "object"

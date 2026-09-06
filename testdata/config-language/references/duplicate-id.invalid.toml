@@ -9,6 +9,9 @@ type = "exec"
 bin  = "okf-goal"
 args = ["task", "validate-goal-resource"]
 
+[goal_review.health.alive]
+type = "noop"
+
 [goal_review_duplicate]
 kind = "workflow"
 

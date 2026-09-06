@@ -510,6 +510,9 @@ scope = "run"
 [tmux.setup]
 type   = "shell"
 script = "echo '{}'"
+
+[tmux.health.alive]
+type = "noop"
 `)
 	// Task shell must come from a trusted layer — load from a workspace dir one
 	// level below the declaring overlay.
@@ -552,6 +555,9 @@ scope = "run"
 [tmux.setup]
 type   = "shell"
 script = "echo global"
+
+[tmux.health.alive]
+type = "noop"
 `)
 	repoDir := filepath.Join(tmpHome, "workspace_dirs", "repo")
 	writeFile(t, filepath.Join(repoDir, ".plect", "tasks", "tmux.toml"), `
@@ -562,6 +568,9 @@ scope = "session"
 [tmux.setup]
 type   = "shell"
 script = "echo session"
+
+[tmux.health.alive]
+type = "noop"
 `)
 	workspaceDirPath := filepath.Join(repoDir, "session")
 	if err := os.MkdirAll(workspaceDirPath, 0o755); err != nil {
@@ -1056,6 +1065,9 @@ kind = "effect"
 [teardown.setup]
 type   = "shell"
 script = "echo '{}'"
+
+[teardown.health.alive]
+type = "noop"
 `)
 	workspaceDirPath := filepath.Join(repoDir, "session")
 	if err := os.MkdirAll(workspaceDirPath, 0o755); err != nil {
@@ -1226,6 +1238,9 @@ kind = "effect"
 [runtime.setup]
 type   = "shell"
 script = "echo deeper"
+
+[runtime.health.alive]
+type = "noop"
 `)
 		workspaceDirPath := filepath.Join(repoDir, "overlay", "session")
 		if err := os.MkdirAll(workspaceDirPath, 0o755); err != nil {
@@ -1450,7 +1465,7 @@ func TestLoadDeclarations_CrossLayerCrossKindCoexists(t *testing.T) {
 	pluginDir := t.TempDir()
 	base := t.TempDir()
 	writeFile(t, filepath.Join(pluginDir, "config", "tasks", "shared.toml"),
-		"[shared]\nkind = \"effect\"\n\n[shared.setup]\ntype = \"shell\"\nscript = \"true\"\n")
+		"[shared]\nkind = \"effect\"\n\n[shared.setup]\ntype = \"shell\"\nscript = \"true\"\n\n[shared.health.alive]\ntype = \"noop\"\n")
 	writeFile(t, filepath.Join(base, "channels", "shared.toml"),
 		"[shared]\nkind = \"channel\"\ntype = \"exec\"\ncommand = \"true\"\n")
 	cfg := &Config{BaseDir: base, PluginDirs: []string{pluginDir}}
@@ -1478,7 +1493,7 @@ func TestLoadTaskDefinitions_NestedReservedBasenameStillLoads(t *testing.T) {
 	for _, name := range []string{"config.toml", "catalogs.toml", "plect.lock.toml"} {
 		base := t.TempDir()
 		writeFile(t, filepath.Join(base, "effects", name),
-			"[nested]\nkind = \"effect\"\n\n[nested.setup]\ntype = \"shell\"\nscript = \"true\"\n")
+			"[nested]\nkind = \"effect\"\n\n[nested.setup]\ntype = \"shell\"\nscript = \"true\"\n\n[nested.health.alive]\ntype = \"noop\"\n")
 		effects, err := (&Config{BaseDir: base}).LoadTaskDefinitions("")
 		if err != nil {
 			t.Fatalf("%s: LoadTaskDefinitions: %v", name, err)

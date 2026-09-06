@@ -50,6 +50,9 @@ scope = "run"
 type   = "shell"
 script = "echo runtime"
 
+[runtime.health.alive]
+type = "noop"
+
 [runtime.inputs_schema]
 tmux_session = { type = "string" }
 

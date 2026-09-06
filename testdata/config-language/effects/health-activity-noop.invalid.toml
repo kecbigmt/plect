@@ -1,0 +1,18 @@
+# plect-fixture: result=invalid layer=structural diagnostic=PLECTURE-CFG-ACTION-TYPE-UNKNOWN entry=definitions
+# reason: noop is legal only under [health.alive]; activity is evidence of life, which a non-observation cannot supply.
+
+[runtime]
+kind = "effect"
+
+[runtime.setup]
+type = "exec"
+bin  = "agent-runtime"
+args = ["launch"]
+
+[runtime.health.alive]
+type = "exec"
+bin  = "agent-runtime"
+args = ["probe"]
+
+[runtime.health.activity]
+type = "noop"

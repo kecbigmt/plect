@@ -63,8 +63,12 @@ func TestLoadTaskDefinitions_HealthProbesAreIndependent(t *testing.T) {
 			wantAlive: "kill -0 $pid",
 		},
 		{
-			name:         "activity only",
-			table:        "[runtime.health.activity]\ntype = \"exec\"\ncommand = \"agent-activity\"\nargs = [\"probe\"]\n",
+			// A setup-bearing effect always declares alive, so the
+			// activity-only shape this test targets is exercised alongside
+			// a noop alive rather than with alive absent entirely.
+			name:         "activity, alongside a noop alive",
+			table:        "[runtime.health.alive]\ntype = \"noop\"\n\n[runtime.health.activity]\ntype = \"exec\"\ncommand = \"agent-activity\"\nargs = [\"probe\"]\n",
+			wantAlive:    "noop",
 			wantActivity: "agent-activity probe",
 		},
 		{
@@ -116,7 +120,9 @@ script = "true"
 }
 
 func TestLoadTaskDefinitions_HealthBareTableRejected(t *testing.T) {
-	cfg := writeEffectDoc(t, t.TempDir(), "runtime", "[runtime]\nkind = \"effect\"\nscope = \"run\"\n"+effectSetupHook+"\n[runtime.health]\n")
+	// No setup: a setup-bearing effect's own mandatory-alive rule would fire
+	// first and mask the bare-table rule this test targets.
+	cfg := writeEffectDoc(t, t.TempDir(), "runtime", "[runtime]\nkind = \"effect\"\nscope = \"run\"\n\n[runtime.health]\n")
 	_, err := cfg.LoadTaskDefinitions("")
 	if err == nil {
 		t.Fatal("expected an error for a [health] table declaring no probe")

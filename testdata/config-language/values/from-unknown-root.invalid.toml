@@ -8,3 +8,6 @@ kind = "effect"
 type = "exec"
 bin  = "okf-goal"
 args = ["--owner", { from = "event.metadata.owner" }]
+
+[bootstrap.health.alive]
+type = "noop"

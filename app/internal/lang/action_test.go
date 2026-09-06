@@ -51,6 +51,7 @@ func TestParseActionRejections(t *testing.T) {
 		code Code
 	}{
 		{"an unknown type", map[string]any{"type": "python", "script": "print('hi')"}, CodeActionTypeUnknown},
+		{"noop, legal only through ParseAliveAction", map[string]any{"type": "noop"}, CodeActionTypeUnknown},
 		{"no type", map[string]any{"bin": "okf-goal"}, CodeFieldRequired},
 		{"a field from the other variant", map[string]any{"type": "shell", "script": "true", "args": []any{"--flag"}}, CodeActionVariant},
 		{"a shell field on an exec action", map[string]any{"type": "exec", "bin": "x", "bind": map[string]any{}}, CodeActionVariant},
@@ -67,6 +68,36 @@ func TestParseActionRejections(t *testing.T) {
 			_, err := ParseAction(tc.raw, Position{})
 			wantDiag(t, err, tc.code, LayerStructural)
 		})
+	}
+}
+
+func TestParseAliveActionNoop(t *testing.T) {
+	a, err := ParseAliveAction(map[string]any{"type": "noop"}, Position{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Type != ActionNoop {
+		t.Fatalf("got %+v", a)
+	}
+	if got := a.Source(); got != "noop" {
+		t.Errorf("Source() = %q, want %q", got, "noop")
+	}
+}
+
+func TestParseAliveActionRejectsFieldsOnNoop(t *testing.T) {
+	_, err := ParseAliveAction(map[string]any{"type": "noop", "script": "true"}, Position{})
+	wantDiag(t, err, CodeFieldUnknown, LayerStructural)
+}
+
+// ParseAliveAction delegates everything but noop to ParseAction, so exec and
+// shell behave identically through either entry point.
+func TestParseAliveActionDelegatesOtherVariants(t *testing.T) {
+	a, err := ParseAliveAction(map[string]any{"type": "exec", "bin": "gh-guard"}, Position{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Type != ActionExec || a.Bin != "gh-guard" {
+		t.Fatalf("got %+v", a)
 	}
 }
 

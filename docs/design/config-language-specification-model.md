@@ -73,7 +73,7 @@ The schema can describe rules such as:
 * valid fields for a task, workflow, channel, workspace provider, and other definition kinds;
 * required and optional fields;
 * mutually exclusive variants;
-* action variants such as `exec` and `shell`;
+* action variants such as `exec`, `shell`, and `noop`;
 * tagged value shapes such as:
 
 ```toml

@@ -31,7 +31,7 @@ general-purpose expression language of its own.
 | [`declarations.md`](declarations.md) | Definition blocks, discovery, namespaces, and the reference grammar |
 | [`values.md`](values.md) | The five value forms, the tagged-value vocabulary, and the per-surface roots |
 | [`expressions.md`](expressions.md) | The Plecture CEL profile |
-| [`actions.md`](actions.md) | `exec` and `shell` actions, `bin` versus `command`, and the binding transport |
+| [`actions.md`](actions.md) | `exec`, `shell`, and `noop` actions, `bin` versus `command`, and the binding transport |
 | [`plugins.md`](plugins.md) | Plugin and catalog manifests |
 | [`config.md`](config.md) | The reserved root files |
 
@@ -131,7 +131,7 @@ the CLI's name would claim the language's rules for one of its consumers.
 | `PLECTURE-CFG-VALUE-DEFAULT-AND-OPTIONAL` | structural | `default` and `optional` are mutually exclusive. |
 | `PLECTURE-CFG-VALUE-TAG-UNKNOWN` | structural | A tagged value uses a key outside the vocabulary. |
 | `PLECTURE-CFG-VALUE-TAG-SURFACE` | structural | A capability tag appears on a surface that consumes data only. |
-| `PLECTURE-CFG-ACTION-TYPE-UNKNOWN` | structural | An action's `type` is neither `exec` nor `shell`. |
+| `PLECTURE-CFG-ACTION-TYPE-UNKNOWN` | structural | An action's `type` is outside the vocabulary its position admits: `exec` or `shell` everywhere, plus `noop` under `[health.alive]` only. |
 | `PLECTURE-CFG-ACTION-VARIANT` | structural | An action carries a field belonging to the other variant. |
 | `PLECTURE-CFG-ACTION-BIN-AND-COMMAND` | structural | An exec action names its executable through `bin` or `command`, exactly once. |
 | `PLECTURE-CFG-SHELL-INTERPOLATION` | structural | Shell source is literal; it carries no Plecture or CEL interpolation. |
@@ -152,6 +152,7 @@ the CLI's name would claim the language's rules for one of its consumers.
 | `PLECTURE-CFG-FIRST-OBSERVE-FAILED` | instantiation | The observation instantiation performs failed, so no instance is created; the observer's own error is reported. |
 | `PLECTURE-CFG-BIN-UNKNOWN` | semantic | An executable reference resolves to no declared executable. |
 | `PLECTURE-CFG-TERMINAL-UNAVAILABLE` | semantic | A terminal capability is consumed where no effect in the plan declares that verb. |
+| `PLECTURE-CFG-HEALTH-ALIVE-REQUIRED` | structural | An effect declares `setup` without declaring `[health.alive]`. |
 | `PLECTURE-CFG-NESTING-CYCLE` | semantic | A nesting chain reaches itself. |
 | `PLECTURE-CFG-NESTING-OUTPUT-MUTABLE` | semantic | A computed nested output is marked mutable. |
 | `PLECTURE-CFG-NESTING-PROJECTION-MISMATCH` | semantic | A direct nested projection disagrees with the inner output's type or mutability. |

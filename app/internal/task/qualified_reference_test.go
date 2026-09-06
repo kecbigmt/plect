@@ -34,6 +34,9 @@ scope = "run"
 [runtime.setup]
 type   = "shell"
 script = "echo plugin-effect"
+
+[runtime.health.alive]
+type = "noop"
 `)
 	write(filepath.Join(pluginDir, "config", "channels", "delivery.toml"), `
 [delivery]

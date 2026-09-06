@@ -1,0 +1,8 @@
+# plect-fixture: result=invalid layer=structural diagnostic=PLECTURE-CFG-ACTION-TYPE-UNKNOWN entry=definitions
+# reason: noop is legal only under [health.alive]; setup always runs something, so the position never widens to admit it.
+
+[runtime]
+kind = "effect"
+
+[runtime.setup]
+type = "noop"

@@ -174,6 +174,30 @@ func EventPage(cfg *config.Config, store *state.Store, identifier string, p Even
 	return res, nil
 }
 
+// EventStreamResume validates a resume cursor via EventPage's own check: an
+// offset from one log generation must never be read against another.
+func EventStreamResume(cfg *config.Config, store *state.Store, identifier, cursor string) (gen string, offset int64, err error) {
+	name, err := resolveSessionName(cfg, store, identifier)
+	if err != nil {
+		return "", 0, err
+	}
+	gen, gerr := eventlog.NewStore(store.Dir()).Gen(name)
+	if gerr != nil {
+		return "", 0, &Error{Code: ErrExecutionFailed, Message: gerr.Error()}
+	}
+	if cursor == "" {
+		return gen, 0, nil
+	}
+	cur, derr := event.DecodeCursor(cursor)
+	if derr != nil {
+		return "", 0, &Error{Code: ErrInvalidInput, Message: derr.Error()}
+	}
+	if verr := cur.Validate(event.OrderAsc, gen); verr != nil {
+		return "", 0, &Error{Code: ErrInvalidInput, Message: verr.Error()}
+	}
+	return gen, cur.Off, nil
+}
+
 // EventPageSubtree returns one page of the merged event timeline for the subtree
 // rooted at identifier (the root session plus all its descendants), in time
 // order by event id. asc (default) pages forward via a ULID keyset cursor and

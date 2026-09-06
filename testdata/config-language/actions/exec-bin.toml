@@ -21,6 +21,9 @@ args = [
   { from = "inputs.assignees", default = "" },
 ]
 
+[bootstrap.health.alive]
+type = "noop"
+
 [bootstrap.inputs_schema]
 type                 = "object"
 required             = ["owner"]

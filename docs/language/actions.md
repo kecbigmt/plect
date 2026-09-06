@@ -4,7 +4,8 @@ An action is a lifecycle execution: an effect's `setup` or `cleanup`, a health o
 terminal probe, a workspace provider's `setup`, `cleanup`, or `subscribe`, a
 resource observer's `observe` or `finalize`, and a channel's delivery.
 
-Every action declares a `type`. There are two variants.
+Every action declares a `type`: `exec` and `shell` everywhere, and `noop`,
+legal only under `[health.alive]`.
 
 ## exec
 
@@ -32,6 +33,9 @@ args = [
   "--assignees",
   { from = "inputs.assignees", default = "" },
 ]
+
+[bootstrap.health.alive]
+type = "noop"
 
 [bootstrap.inputs_schema]
 type                 = "object"
@@ -80,9 +84,48 @@ session_name = { from = "session.name" }
 send_text    = { terminal = "send_text" }
 send_keys    = { terminal = "send_keys" }
 activity_bin = { bin = "codex-agent-activity" }
+
+[runtime.health.alive]
+type = "noop"
 ```
 
 Each `bind` key becomes a shell variable name.
+
+## noop
+
+A noop action runs nothing and exits zero. It declares nothing beyond its
+`type`, and it is legal only under `[health.alive]`: everywhere else an action
+runs something, so `noop` there is a load error naming the position.
+
+<!-- fixture: effects/health-alive-noop.toml -->
+```toml
+[write_instruction]
+kind  = "effect"
+scope = "session"
+
+[write_instruction.setup]
+type   = "shell"
+script = 'printf %s "$instruction"'
+
+[write_instruction.setup.bind]
+instruction = { from = "inputs.instruction" }
+
+[write_instruction.health.alive]
+type = "noop"
+
+[write_instruction.inputs_schema]
+type                 = "object"
+required             = ["instruction"]
+additionalProperties = false
+
+[write_instruction.inputs_schema.properties]
+instruction = { type = "string" }
+```
+
+`noop` means a setup-bearing effect's liveness is deliberately never
+re-observed — a systemd `RemainAfterExit=`-style declaration, not the absence
+of one. See [`effects.md`](effects.md#health) for the load rule that makes
+`[health.alive]` mandatory.
 
 ## The binding transport
 
@@ -146,11 +189,13 @@ An exec action names its executable exactly once, through `bin` or `command`.
 
 ## Validation rules
 
-- An action's `type` is `exec` or `shell`.
+- An action's `type` is `exec` or `shell`, or, under `[health.alive]` only,
+  `noop`.
 - An exec action declares exactly one of `bin` and `command`.
 - A shell action declares `script`, and no exec-variant field.
 - `script` contains no Plecture or CEL interpolation.
 - An exec action's `command` is never a computed value.
+- A noop action declares nothing beyond `type`.
 - A capability tag appears only where that capability is consumable: an action
   binding, or an argv element of an action that accepts one.
 - A `terminal` capability requires some effect in the plan to declare that verb.

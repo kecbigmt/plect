@@ -250,6 +250,104 @@ func TestEventPageRejectsStaleGenerationCursor(t *testing.T) {
 	}
 }
 
+func TestEventStreamResumeDecodesEventPageCursor(t *testing.T) {
+	store := state.NewStore(t.TempDir())
+	const session = "owner/repo-9"
+	for range 3 {
+		if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page, err := EventPage(nil, store, session, EventPageParams{Filter: event.Filter{Limit: 2}})
+	if err != nil || page.NextCursor == "" {
+		t.Fatalf("setup page: err=%v cursor=%q", err, page.NextCursor)
+	}
+
+	gen, offset, err := EventStreamResume(nil, store, session, page.NextCursor)
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if gen == "" {
+		t.Fatal("resume: expected a non-empty generation")
+	}
+
+	rest, err := EventPage(nil, store, session, EventPageParams{Cursor: page.NextCursor})
+	if err != nil {
+		t.Fatalf("rest page: %v", err)
+	}
+	if len(rest.Events) != 1 {
+		t.Fatalf("rest page = %+v, want the one remaining event", rest.Events)
+	}
+	direct, _, _, err := EventList(nil, store, session, offset, event.Filter{})
+	if err != nil || len(direct) != 1 || direct[0].ID != rest.Events[0].ID {
+		t.Fatalf("EventList from resumed offset = %+v (err=%v), want %+v", direct, err, rest.Events)
+	}
+}
+
+func TestEventStreamResumeEmptyCursorIsFreshConnect(t *testing.T) {
+	store := state.NewStore(t.TempDir())
+	const session = "owner/repo-9"
+	if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote}); err != nil {
+		t.Fatal(err)
+	}
+	gen, offset, err := EventStreamResume(nil, store, session, "")
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if gen == "" {
+		t.Fatal("resume: expected a non-empty generation even with no cursor")
+	}
+	if offset != 0 {
+		t.Fatalf("offset = %d, want 0 for a fresh connect", offset)
+	}
+}
+
+func TestEventStreamResumeRejectsStaleGenerationCursor(t *testing.T) {
+	store := state.NewStore(t.TempDir())
+	const session = "owner/repo-9"
+	if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote}); err != nil {
+		t.Fatal(err)
+	}
+	stale := event.Cursor{V: event.CursorVersion, Off: 0, Ord: event.OrderAsc, Gen: "01JXNEVER"}.Encode()
+	_, _, err := EventStreamResume(nil, store, session, stale)
+	var svcErr *Error
+	if !errors.As(err, &svcErr) || svcErr.Code != ErrInvalidInput {
+		t.Fatalf("want ErrInvalidInput for stale generation, got %v", err)
+	}
+}
+
+func TestEventStreamResumeRejectsOrderMismatchCursor(t *testing.T) {
+	store := state.NewStore(t.TempDir())
+	const session = "owner/repo-9"
+	if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote}); err != nil {
+		t.Fatal(err)
+	}
+	page, err := EventPage(nil, store, session, EventPageParams{Filter: event.Filter{Limit: 1}})
+	if err != nil || page.NextCursor == "" {
+		t.Fatalf("setup page: err=%v cursor=%q", err, page.NextCursor)
+	}
+	cur, err := event.DecodeCursor(page.NextCursor)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	cur.Ord = event.OrderDesc
+	_, _, err = EventStreamResume(nil, store, session, cur.Encode())
+	var svcErr *Error
+	if !errors.As(err, &svcErr) || svcErr.Code != ErrInvalidInput {
+		t.Fatalf("want ErrInvalidInput for order mismatch, got %v", err)
+	}
+}
+
+func TestEventStreamResumeRejectsMalformedCursor(t *testing.T) {
+	store := state.NewStore(t.TempDir())
+	const session = "owner/repo-9"
+	_, _, err := EventStreamResume(nil, store, session, "not-a-real-cursor")
+	var svcErr *Error
+	if !errors.As(err, &svcErr) || svcErr.Code != ErrInvalidInput {
+		t.Fatalf("want ErrInvalidInput for malformed cursor, got %v", err)
+	}
+}
+
 func TestEventListUnknownSessionIsEmpty(t *testing.T) {
 	store := state.NewStore(t.TempDir())
 	evs, _, next, err := EventList(nil, store, "never/created-1", 0, event.Filter{})

@@ -30,6 +30,9 @@ scope = "run"
 type   = "shell"
 script = "true"
 
+[claude.health.alive]
+type = "noop"
+
 [claude.outputs_schema]
 type = "object"
 
@@ -148,6 +151,9 @@ scope = "session"
 [tmux.setup]
 type   = "shell"
 script = "true"
+
+[tmux.health.alive]
+type = "noop"
 `,
 		"outer": `
 [outer]
@@ -401,6 +407,9 @@ uses = "claude"
 type   = "shell"
 script = "jq -nc '{guard_dir:\"/tmp/guard\"}'"
 
+[outer.health.alive]
+type = "noop"
+
 [outer.outputs.bind]
 pid = { from = "inner.outputs.pid" }
 socket = { from = "inner.outputs.socket_path" }
@@ -432,6 +441,9 @@ uses = "claude"
 [outer.setup]
 type   = "shell"
 script = "jq -nc '{pane:\"%1\"}'"
+
+[outer.health.alive]
+type = "noop"
 
 [outer.terminal.attach]
 type   = "shell"

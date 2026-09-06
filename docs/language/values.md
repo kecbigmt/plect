@@ -32,6 +32,9 @@ args = [
   { from = "inputs.owner" },
 ]
 
+[bootstrap.health.alive]
+type = "noop"
+
 [bootstrap.inputs_schema]
 type                 = "object"
 required             = ["owner"]

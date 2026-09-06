@@ -1,0 +1,30 @@
+# plect-fixture: result=valid entry=definitions
+# reason: the mandatory alive declaration applies independently to each layer of a nesting chain; the outer layer's noop does not suppress the inner layer's own executable probe.
+
+[guarded_runtime]
+kind  = "effect"
+scope = "run"
+
+[guarded_runtime.setup]
+type   = "shell"
+script = "true"
+
+[guarded_runtime.health.alive]
+type = "noop"
+
+[guarded_runtime.inner]
+uses = "agent_runtime"
+
+[agent_runtime]
+kind  = "effect"
+scope = "run"
+
+[agent_runtime.setup]
+type = "exec"
+bin  = "agent-runtime"
+args = ["launch"]
+
+[agent_runtime.health.alive]
+type = "exec"
+bin  = "agent-runtime"
+args = ["probe"]

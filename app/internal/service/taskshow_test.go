@@ -32,6 +32,9 @@ scope = "session"
 [claude.setup]
 type   = "shell"
 script = "true"
+
+[claude.health.alive]
+type = "noop"
 `)
 	writeTaskFile(t, base, "guarded", `
 [guarded]
@@ -85,6 +88,9 @@ scope = "run"
 [claude.setup]
 type   = "shell"
 script = "true"
+
+[claude.health.alive]
+type = "noop"
 `)
 	detail, err := TaskShow(&config.Config{BaseDir: base}, "", "claude")
 	if err != nil {

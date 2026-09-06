@@ -73,13 +73,20 @@ func effectFixtureDoc(d taskFixture) string {
 		fmt.Fprintf(&b, "scope = %q\n", d.scope)
 	}
 	b.WriteString(bare)
+	alive := d.alive
+	if alive == "" && d.setup != "" {
+		// Every setup-bearing effect must declare [health.alive]; a fixture
+		// that doesn't care about liveness gets the noop filler rather than
+		// spelling out an always-true shell probe at every call site.
+		alive = "__noop__"
+	}
 	actions := []struct {
 		path   string
 		script string
 	}{
 		{"setup", d.setup},
 		{"cleanup", d.cleanup},
-		{"health.alive", d.alive},
+		{"health.alive", alive},
 		{"health.activity", d.activity},
 	}
 	if d.attach != "" || d.capture != "" || d.sendText != "" || d.sendKeys != "" {
@@ -104,6 +111,10 @@ func effectFixtureDoc(d taskFixture) string {
 	}
 	for _, action := range actions {
 		if action.script == "" {
+			continue
+		}
+		if action.script == "__noop__" {
+			fmt.Fprintf(&b, "\n[%s.%s]\ntype = \"noop\"\n", d.id, action.path)
 			continue
 		}
 		b.WriteString(shellFixtureAction(d.id, action.path, action.script))

@@ -70,16 +70,22 @@ one per implementation technique.
 
 ## Validation rules
 
-- `[health]` is optional. An effect declaring no table contributes nothing to
-  health.
-- `alive` and `activity` are each optional and independent: neither implies
-  the other. A `[health]` table declaring neither is a load error — the only
+- `[health]` is optional for an effect declaring no `setup`; such an effect
+  contributes nothing to health. An effect that declares `setup` declares
+  `[health.alive]`, so that "not observed" is a reviewed choice rather than an
+  omission.
+- `activity` is optional and independent of `alive`: neither implies the
+  other. A `[health]` table declaring neither is a load error — the only
   reason to write the header is to declare a probe.
 - Unknown keys under `[health]` are a load error naming the offending key. A
   readiness-style third probe is a non-goal: health answers "is this surface
   present and moving", not "may traffic be sent".
-- Each member is an action: either variant, with its values declared in
-  `bind` or in `args` rather than interpolated into the script.
+- Each member is an action: exec, shell, or, for `alive` only, `noop` — a
+  declared non-observation, with its values declared in `bind` or in `args`
+  rather than interpolated into the script. `noop` is legal only under
+  `[health.alive]`; the rule applies independently to every layer of a nesting
+  chain, and a `noop` layer does not suppress an inner layer's own executable
+  probe.
 - Both members observe the same roots `cleanup` does, minus the ones a probe
   has no business reading: the effect's own outputs (`self.outputs.<key>`),
   its resolved inputs (`inputs.<key>`), and the session and workspace. A

@@ -24,6 +24,13 @@ script = 'tmux kill-session -t "$session_name" 2>/dev/null || true'
 [pane.cleanup.bind]
 session_name = { from = "self.outputs.session_name" }
 
+[pane.health.alive]
+type   = "shell"
+script = 'tmux has-session -t "$session_name"'
+
+[pane.health.alive.bind]
+session_name = { from = "self.outputs.session_name" }
+
 [pane.outputs_schema]
 type     = "object"
 required = ["session_name"]

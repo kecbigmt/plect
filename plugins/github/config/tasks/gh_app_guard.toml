@@ -59,6 +59,13 @@ owner             = { from = "inputs.owner", default = "" }
 repo              = { from = "inputs.repo", default = "" }
 private_key_path  = { from = "inputs.private_key_path" }
 
+[gh_app_guard.health.alive]
+type   = "shell"
+script = 'test -x "$dir/gh"'
+
+[gh_app_guard.health.alive.bind]
+dir = { from = "self.outputs.dir" }
+
 [gh_app_guard.cleanup]
 type   = "shell"
 script = '[ -n "${dir-}" ] && rm -rf "$dir"; true'

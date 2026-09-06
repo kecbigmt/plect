@@ -1,3 +1,6 @@
 == goal_bootstrap / setup
 call[0]: "okf-goal" "task" "bootstrap" "--workspace-dir" "<workspace>" "--owner" "acme" "--session" "acme/widget-1" "--assignees" "[\"user:acme\"]"
 outputs: {"created":"0"}
+
+== goal_bootstrap / health.alive
+alive
