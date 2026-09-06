@@ -5,7 +5,9 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -106,7 +108,17 @@ func TestEventsStreamJSON_ResumesBusFromDecodedCursor(t *testing.T) {
 	bus := fakeBusJSON(t, "64")
 	defer bus.Close()
 
-	svc := &fakeService{resumeGen: "01GEN000", resumeOffset: 64}
+	// resolveGen re-resolves on every relayed frame (a stream can rotate
+	// mid-connection), so it calls EventStreamResume with "" again after
+	// the initial decode — track every call instead of the single last one.
+	var mu sync.Mutex
+	var gotCursors []string
+	svc := &fakeService{resumeFn: func(_, cursor string) (string, int64, error) {
+		mu.Lock()
+		gotCursors = append(gotCursors, cursor)
+		mu.Unlock()
+		return "01GEN000", 64, nil
+	}}
 	srv := httptest.NewServer(withBus(svc, bus.URL).Routes())
 	defer srv.Close()
 
@@ -121,10 +133,12 @@ func TestEventsStreamJSON_ResumesBusFromDecodedCursor(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body would confirm since= assertion inside fakeBusJSON", resp.StatusCode)
 	}
-	// Reading the first line synchronizes with the handler before gotResumeCursor is checked.
+	// Reading the first line synchronizes with the handler before gotCursors is checked.
 	_, _ = bufio.NewReader(resp.Body).ReadString('\n')
-	if svc.gotResumeCursor != "some-opaque-token" {
-		t.Errorf("resume cursor = %q", svc.gotResumeCursor)
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Contains(gotCursors, "some-opaque-token") {
+		t.Errorf("gotCursors = %v, want the request's decoded cursor among them", gotCursors)
 	}
 }
 

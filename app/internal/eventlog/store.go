@@ -280,6 +280,27 @@ func (s *Store) List(session string, since int64, f event.Filter) (evs []event.E
 	return evs, seqs, next, nil
 }
 
+// ListFromStreamID is List's stream-scoped counterpart: it reads streamID's
+// own rows directly, bypassing session-name resolution to current, so a
+// caller can drain a superseded stream's tail after a same-name recreate has
+// made a newer one current — the only way to reach those rows once that has
+// happened.
+func (s *Store) ListFromStreamID(streamID, session string, since int64) (evs []event.Event, seqs []int64, next int64, err error) {
+	db, err := s.dbHandle()
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	evs, seqs, err = db.ListEventsFromStreamID(context.Background(), streamID, session, max(since, 0))
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("eventlog: list from stream: %w", err)
+	}
+	next = since
+	if len(seqs) > 0 {
+		next = seqs[len(seqs)-1] + 1
+	}
+	return evs, seqs, next, nil
+}
+
 // Tail returns up to the last `limit` events matching f for a session, in
 // append order (oldest first); limit <= 0 returns all matches. It scans the log
 // but retains only the last `limit` matching records in a ring, bounding memory

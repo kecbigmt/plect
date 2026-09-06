@@ -81,11 +81,13 @@ func (s *Server) handleSessionEventsStream(w http.ResponseWriter, r *http.Reques
 	flusher.Flush()
 
 	known := gen
+	// Re-resolved on every call rather than cached: a destroy + same-name
+	// recreate mints a new stream mid-connection, and a cursor still
+	// carrying the superseded id would validate against the wrong
+	// incarnation on the browser's next reconnect.
 	resolveGen := func() string {
-		if known == "" {
-			if g, _, gerr := s.svc.EventStreamResume(session, ""); gerr == nil {
-				known = g
-			}
+		if g, _, gerr := s.svc.EventStreamResume(session, ""); gerr == nil {
+			known = g
 		}
 		return known
 	}

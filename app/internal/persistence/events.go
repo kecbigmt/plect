@@ -155,6 +155,40 @@ func (db *DB) ListEventsFrom(ctx context.Context, session string, since int64) (
 	return evs, seqs, nil
 }
 
+// ListEventsFromStreamID returns every event of the given stream id at or
+// after sequence `since`, bypassing session-name resolution — the only way
+// to reach a superseded stream's rows once a same-name recreate has made a
+// newer one current. session names the returned events (the caller already
+// knows it; a superseded stream's own row carries the same session_name,
+// but events itself never did).
+func (db *DB) ListEventsFromStreamID(ctx context.Context, streamID, session string, since int64) ([]event.Event, []int64, error) {
+	var evs []event.Event
+	var seqs []int64
+	err := db.WithReadTx(ctx, func(tx *sql.Tx) error {
+		q := sqlcgen.New(tx)
+		rows, err := q.ListEventsFromByStream(ctx, sqlcgen.ListEventsFromByStreamParams{
+			StreamID: streamID,
+			Sequence: since,
+		})
+		if err != nil {
+			return fmt.Errorf("list events for stream %q from %d: %w", streamID, since, err)
+		}
+		for _, row := range rows {
+			ev, err := eventFromRow(row, session)
+			if err != nil {
+				return err
+			}
+			evs = append(evs, ev)
+			seqs = append(seqs, row.Sequence)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return evs, seqs, nil
+}
+
 // HasEventCursor reports whether cursorName has ever been committed for
 // session's current stream, distinguishing "never started" from a
 // committed position of 0. A session with no current stream reports false,

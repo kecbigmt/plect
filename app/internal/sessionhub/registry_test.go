@@ -310,6 +310,50 @@ func TestRegistry_LastUnsubscribeJoinsReaderGoroutine(t *testing.T) {
 	}
 }
 
+// TestRegistry_ActiveReaderSurvivesStreamRotation pins that an already-open
+// live reader keeps delivering every event, in order, across a destroy +
+// same-name recreate (a new stream, sequence restarting at 1) — not
+// stalling past the old stream's watermark, and not landing mid-stream once
+// the new stream's own sequence happens to catch up to it.
+// TestRegistry_ActiveReaderSurvivesStreamRotation pins that an already-open
+// live reader keeps delivering every event, in order, across a destroy +
+// same-name recreate (a new stream, sequence restarting at 1): first
+// whatever the superseded stream still had unbroadcast, then the new
+// stream's own records from its first row — not stalling past the old
+// stream's watermark, and not landing mid-way through the new stream once
+// its own sequence happens to catch up to it.
+func TestRegistry_ActiveReaderSurvivesStreamRotation(t *testing.T) {
+	store := eventlog.NewStore(t.TempDir())
+	store.Append(event.Event{SessionName: "o/r-1", Type: "user.note", Body: "old-seen", Direction: event.Internal})
+	// A slow poll gives every write below a wide window to land before the
+	// reader's first check, so the rotation is guaranteed to be mid-flight
+	// rather than possibly already resolved by the time it looks.
+	reg := NewRegistry(store, WithPollInterval(200*time.Millisecond))
+	defer reg.Close()
+	sub := reg.SubscribeFrames("o/r-1")
+	defer sub.Close()
+
+	oldTail, _, _, _ := store.Append(event.Event{SessionName: "o/r-1", Type: "user.note", Body: "old-tail", Direction: event.Internal})
+	if _, err := store.NewStream("o/r-1"); err != nil {
+		t.Fatal(err)
+	}
+	stored1, _, _, _ := store.Append(event.Event{SessionName: "o/r-1", Type: "user.note", Body: "new-first", Direction: event.Internal})
+	stored2, _, _, _ := store.Append(event.Event{SessionName: "o/r-1", Type: "user.note", Body: "new-second", Direction: event.Internal})
+
+	f0 := recvFrame(t, sub)
+	if f0.Event.ID != oldTail.ID || f0.Event.Body != "old-tail" {
+		t.Fatalf("first frame = %+v, want the superseded stream's own unbroadcast tail record", f0.Event)
+	}
+	f1 := recvFrame(t, sub)
+	if f1.Event.ID != stored1.ID || f1.Event.Body != "new-first" || f1.StreamID == f0.StreamID {
+		t.Fatalf("second frame = %+v (stream %s), want new-first on a distinct stream from %s", f1.Event, f1.StreamID, f0.StreamID)
+	}
+	f2 := recvFrame(t, sub)
+	if f2.Event.ID != stored2.ID || f2.Event.Body != "new-second" || f2.StreamID != f1.StreamID {
+		t.Fatalf("third frame = %+v (stream %s), want new-second on the same stream as %s", f2.Event, f2.StreamID, f1.StreamID)
+	}
+}
+
 func TestRegistry_CloseJoinsReaderGoroutines(t *testing.T) {
 	store := eventlog.NewStore(t.TempDir())
 	reg := NewRegistry(store, WithPollInterval(50*time.Millisecond))
