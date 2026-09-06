@@ -7,7 +7,13 @@ associated lock, cursor, generation, and tombstone files. CLI commands, the
 daemon, and the Web backend access local persistence directly.
 
 There is no measured performance problem or observed consistency failure
-motivating this decision. The primary concern is maintaining safe upgrades
+motivating this decision. The present maintenance surface is concrete:
+`contracts/state.SchemaVersion` is 7, and state mutations such as `Put`,
+`Update`, and `ReserveUpSlot` load and rewrite the complete state file under
+an exclusive lock. The event store separately manages logs, locks,
+generations, tombstones, and consumer cursors. Deferring the change is
+operationally possible, but leaves the next format change on that file-based
+migration path. The primary concern is maintaining safe upgrades
 as Plecture is distributed to more users and maintained by more contributors.
 Extending file-based persistence with coordinated multi-file migrations,
 interruption recovery, and version tracking would increase the storage
@@ -57,13 +63,24 @@ contract changes.
 Preserve the local multi-process access model initially. Do not combine this
 migration with mandatory daemon ownership of all storage. Store the database
 on local disk; remote clients access Plecture through its service interfaces,
-not a shared database file over a network filesystem.
+not a shared database file over a network filesystem. The persistence package
+owns connection configuration: use WAL and a bounded busy timeout on every
+connection, and enable required foreign-key enforcement consistently. These
+settings support concurrent access but do not replace migration exclusion.
 
 ### Driver and query access
 
 Use `database/sql` with `github.com/mattn/go-sqlite3`. Accept cgo in core
 builds and provide compiled core binaries for supported targets. Source
 installation remains supported with the documented C toolchain requirements.
+The repository's existing installation path is `go install`; compiled release
+packaging is new work and a prerequisite for the storage cutover, not an
+existing capability. Update installation documentation in the same change.
+
+A cgo-disabled build of the driver can select a stub that compiles but cannot
+open a database. Prevent distribution of such a core binary with a build-time
+guard, and test `CGO_ENABLED=0` explicitly. Successful compilation in a CI job
+with a C compiler does not establish this failure behavior.
 
 Keep the driver and database implementation inside core persistence packages.
 Shared contracts must not acquire this dependency merely to expose state
@@ -86,7 +103,13 @@ conversions where structural differences do not capture intent.
 Use pressly/goose as a Go library to execute migration SQL embedded in the
 core binary. It is the runtime authority for which migrations have been
 applied. Do not also use Atlas to apply migrations to user databases or
-maintain a competing applied-version ledger.
+maintain a competing applied-version ledger. Retire
+`contracts/state.SchemaVersion` as a live persistence authority after cutover;
+legacy format versions belong only to the one-time importer. Retain shared
+state types only for concrete consumers, and remove or relocate the legacy
+`StateFile` envelope and file-reading contract as appropriate. In particular,
+`contracts/state` must no longer promise that consumers can read `state.json`.
+Do not redefine its old version constant as a database or service version.
 
 ```text
 schema.sql + existing migration history
@@ -103,7 +126,8 @@ conversion that cannot be inferred from the final schema.
 Pin tool versions and the Community Edition distribution explicitly. Normal
 builds consume committed generated code; users do not need Atlas or sqlc.
 The workflow must run without Atlas login, cloud services, or proprietary
-features. Do not depend on CE-excluded objects such as views or triggers
+features. Use a SQLite in-memory development database for planning; no
+container service is required. Do not depend on CE-excluded objects such as views or triggers
 without revisiting how their declarations remain under the same authority.
 
 CI verifies reproducible generation and that applying the migration history
@@ -121,6 +145,12 @@ schema after obtaining exclusion, and prevent new accesses until migration
 finishes. A process-local mutex or SQLite's single-writer behavior alone does
 not establish application-version compatibility.
 
+Carry forward `loadLocked` and `validateStateVersion`'s existing rejection
+of unsupported versions and unreadable state on write paths. Extend explicit
+error propagation to read paths rather than retaining `load()`'s empty-state
+fallback. This preserves an existing safeguard rather than introducing a
+second validation authority.
+
 Check the supported persistence version before normal access. Reject unknown
 newer or unsupported versions with an actionable error. Do not silently
 initialize an empty database when existing durable state is unreadable or a
@@ -137,7 +167,14 @@ event ordering, consumer progress, generation/tombstone semantics, and dynamic
 values. Translate file-offset cursors deliberately rather than treating them
 as database row identifiers. Do not retain permanent dual writes or silently
 fall back to the old files after cutover. Account for old binaries that still
-understand only the legacy layout.
+understand only the legacy layout. Leaving `state.json` absent is insufficient:
+legacy code treats absence as a fresh store. The cutover procedure must leave
+an explicit rejection marker, such as a legacy JSON envelope with an
+unsupported version, and verify refusal by the supported legacy binaries.
+That marker contains no live state and is not a fallback store. Because some
+legacy read paths suppress errors, verify startup and mutation behavior, not
+just the header parser, and document which older versions are outside the
+supported upgrade path.
 
 Follow the repository's pre-1.0 policy: document the supported upgrade path,
 backup, and recovery procedure in `docs/migrations/` in the same change that
@@ -148,7 +185,9 @@ subsequent updates unless separately preserved.
 Before rollout, validate the pinned toolchain with schema generation, goose
 application, and declaration equivalence. Exercise old-data upgrades,
 interrupted migrations and restart, concurrent startup/migration exclusion,
-unsupported-version rejection, and the initial import. Exact lock mechanics,
+unsupported-version rejection, and the initial import. Include the actual
+SQLite JSON expressions in the sqlc/Atlas compatibility checks. Characterize
+existing update callbacks before moving them into database transactions. Exact lock mechanics,
 the migration command/startup interaction, and table layout require a focused
 implementation design; they are not implied by selecting SQLite.
 
@@ -159,7 +198,11 @@ implementation design; they are not implied by selecting SQLite.
   promised performance improvement.
 - Runtime dependencies include the driver and goose. Atlas CE and sqlc add
   development-tool maintenance but are not user installation requirements.
-- Core release builds require cgo toolchains. Plugin build independence remains
+- Core release builds require cgo toolchains. A release pipeline for supported
+  targets, documented source-build prerequisites, and protection against the
+  cgo-disabled stub are required before cutover. CI must exercise these build
+  paths in addition to ordinary builds on compiler-equipped runners.
+  Plugin build independence remains
   an architectural constraint, not an assumption about every plugin's own
   dependencies.
 - The initial import has real cost and risk. Preserving current behavior and
@@ -179,6 +222,26 @@ files requires machinery that SQLite and migration tooling already provide
 within a database. There is no specific file-format requirement that justifies
 owning that machinery for core runtime state.
 
+### Migrate state only and retain the JSONL event store
+
+This is the cheapest initial SQLite transition. State has an explicit evolving
+format, while the event record does not have an equivalent schema-version
+field. Keeping JSONL avoids importing historical logs and translating byte
+cursors, generations, and tombstones. It also preserves directly inspectable
+per-session transcripts. A later event migration could be triggered by a
+specific query or consistency requirement.
+
+Choose a combined transition to retire the second persistence discipline:
+event logs and sidecars otherwise retain their own locking, lifecycle,
+backup, and recovery rules. `ListAcross` already reads and merges multiple
+session logs for cross-session history. One database allows related event and
+consumption metadata to migrate together and permits atomic state/event
+updates where existing service operations require them. This is a maintenance
+tradeoff, not evidence of a present query bottleneck or a claim that every
+state change must produce an event. The import and cursor-validation cost is
+materially higher; combined storage is justified by removing the old event
+store after cutover, not by permanent dual storage or hypothetical speedups.
+
 ### SQLite with handwritten SQL migrations only
 
 This is a valid smaller toolchain. It does not provide the chosen declarative
@@ -194,9 +257,18 @@ replace reviewed semantic migrations.
 
 ### A cgo-free SQLite driver
 
-This simplifies some build environments. cgo-free core builds are not a
-requirement, so choose mattn/go-sqlite3 and handle toolchains in release
-packaging rather than selecting primarily on cross-compilation convenience.
+`modernc.org/sqlite` avoids C toolchains for contributors and CI, simplifies
+cross-compilation, and works with goose and sqlc through `database/sql`.
+Those are real maintenance advantages, especially before release packaging
+exists. Its Go port also introduces a translated SQLite implementation and
+supporting runtime dependencies whose versions must remain aligned.
+
+Prefer mattn/go-sqlite3 to use the upstream C SQLite implementation directly
+and avoid maintaining that additional translation/runtime dependency chain.
+This is an upstream-implementation preference, not a demonstrated correctness
+or performance defect in modernc. Accept the C toolchain and release-packaging
+cost explicitly, subject to the cutover prerequisites above. Both remain
+credible drivers; cgo being permitted alone would not justify this choice.
 
 ### bbolt or a server database
 
