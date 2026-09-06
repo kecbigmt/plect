@@ -137,11 +137,6 @@ func TestEventsStreamJSON_ResumesBusFromDecodedCursor(t *testing.T) {
 	}
 }
 
-// TestEventsStreamJSON_FrameCursorCarriesTheBusFrameStreamID pins that the
-// outgoing cursor's stream id comes from the bus frame's own resume token,
-// not from a value resolved separately at connect time — the source of the
-// mislabeling bug where a frame still draining a superseded stream was
-// stamped with whatever stream had since become current.
 func TestEventsStreamJSON_FrameCursorCarriesTheBusFrameStreamID(t *testing.T) {
 	bus := fakeBusJSON(t, "", "01REAL000")
 	defer bus.Close()

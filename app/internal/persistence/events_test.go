@@ -197,13 +197,6 @@ func TestEventStreamID_EmptyUntilCreatedThenStableAcrossAppends(t *testing.T) {
 	}
 }
 
-// TestEventStreamID_RecreateMintsANewCurrentIncarnation pins that
-// CreateEventStream always inserts, never looks up first, so calling it
-// again for the same session name (a session create on a name whose prior
-// incarnation was destroyed) mints a distinct id and EventStreamID resolves
-// to that new row — the latest by created_at — not the superseded one. The
-// old stream's own rows are untouched (no delete anywhere in this package),
-// so its sequence does not leak into the new stream's numbering.
 func TestEventStreamID_RecreateMintsANewCurrentIncarnation(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()

@@ -310,10 +310,6 @@ func TestRegistry_LastUnsubscribeJoinsReaderGoroutine(t *testing.T) {
 	}
 }
 
-// TestRegistry_ActiveReaderSurvivesStreamRotation pins that an already-open
-// live reader delivers every event across a destroy + same-name recreate:
-// first whatever the superseded stream still had unbroadcast, then the new
-// stream's own records from its first row — none dropped, none reordered.
 func TestRegistry_ActiveReaderSurvivesStreamRotation(t *testing.T) {
 	store := eventlog.NewStore(t.TempDir())
 	store.Append(event.Event{SessionName: "o/r-1", Type: "user.note", Body: "old-seen", Direction: event.Internal})

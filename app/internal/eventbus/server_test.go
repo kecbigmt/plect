@@ -150,11 +150,6 @@ func TestBus_StreamLiveBurstNoGapNoDup(t *testing.T) {
 	}
 }
 
-// TestBus_StreamSurvivesRotation exercises the full stack a browser or CLI
-// subscriber actually uses (contracts/event.Client over the bus's live SSE
-// endpoint, backed by the shared sessionhub reader) across a same-name
-// destroy + recreate: every event must still arrive exactly once, in order,
-// including the superseded stream's own unbroadcast tail.
 func TestBus_StreamSurvivesRotation(t *testing.T) {
 	c, _, store := newTestBus(t, "")
 	ctx, cancel := context.WithCancel(t.Context())
@@ -257,8 +252,6 @@ func TestBus_StreamRejectsUnownedResumeStream(t *testing.T) {
 	}
 }
 
-// mustStreamID resolves session's current stream id via a bus list call
-// (the id is present on every returned event's opaque cursor once one exists).
 func mustStreamID(t *testing.T, baseURL, session string) string {
 	t.Helper()
 	req, _ := http.NewRequest(http.MethodGet, baseURL+"/v1/events?session="+url.QueryEscape(session)+"&limit=1", nil)

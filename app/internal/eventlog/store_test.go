@@ -666,7 +666,6 @@ func TestReadFromStream_EmptyIntermediateIncarnationDoesNotStopTheWalk(t *testin
 	}
 }
 
-// TestResidentPathsShareOneConnectionPerDatabase pins deterministic pool ownership: every resident service path constructs a fresh eventlog.Store per call, so reusing the identical *persistence.DB across many such calls (not a fresh one each time) is what "no handles left open" means here.
 func TestResidentPathsShareOneConnectionPerDatabase(t *testing.T) {
 	dir := t.TempDir()
 	const session = "o/r-1"

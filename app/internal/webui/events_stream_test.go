@@ -129,10 +129,6 @@ func TestEventsStream_RelaysRenderedRows(t *testing.T) {
 	}
 }
 
-// A pre-cutover raw byte offset (or any other undecodable token) must be
-// rejected before the bus is ever dialed, matching the JSON relay and the
-// bus stream's own contract: the client's recovery path is to discard the
-// cursor and refetch history, not to receive an unannounced fresh connect.
 func TestEventsStream_RawIntegerLastEventIDIsRejectedBeforeDialingBus(t *testing.T) {
 	bus := fakeBus(t)
 	defer bus.Close()

@@ -251,7 +251,6 @@ func TestEventPageRejectsStaleGenerationCursor(t *testing.T) {
 	}
 }
 
-// A real session create mints a new incarnation's stream, unlike a plain publish into whatever stream already exists, so a cursor issued before a destroy + same-name recreate must be rejected as stale against the new incarnation.
 func TestEventPageRejectsCursorAcrossSessionDeleteAndRecreateUnderSameName(t *testing.T) {
 	store := state.NewStore(t.TempDir())
 	const session = "owner/repo-7"
