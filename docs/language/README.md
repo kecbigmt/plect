@@ -131,7 +131,7 @@ the CLI's name would claim the language's rules for one of its consumers.
 | `PLECTURE-CFG-VALUE-DEFAULT-AND-OPTIONAL` | structural | `default` and `optional` are mutually exclusive. |
 | `PLECTURE-CFG-VALUE-TAG-UNKNOWN` | structural | A tagged value uses a key outside the vocabulary. |
 | `PLECTURE-CFG-VALUE-TAG-SURFACE` | structural | A capability tag appears on a surface that consumes data only. |
-| `PLECTURE-CFG-ACTION-TYPE-UNKNOWN` | structural | An action's `type` is neither `exec` nor `shell`. |
+| `PLECTURE-CFG-ACTION-TYPE-UNKNOWN` | structural | An action's `type` is outside the vocabulary its position admits: `exec` or `shell` everywhere, plus `noop` under `[health.alive]` only. |
 | `PLECTURE-CFG-ACTION-VARIANT` | structural | An action carries a field belonging to the other variant. |
 | `PLECTURE-CFG-ACTION-BIN-AND-COMMAND` | structural | An exec action names its executable through `bin` or `command`, exactly once. |
 | `PLECTURE-CFG-SHELL-INTERPOLATION` | structural | Shell source is literal; it carries no Plecture or CEL interpolation. |

@@ -23,7 +23,7 @@ issue, and the residues it surfaced are owner calls on the specification PR.
 | `tasks/` | The task document: its contracts, completion predicate, and instruction body |
 | `values/` | The five value forms and the tagged-value vocabulary |
 | `references/` | Declaration identity, ids, and the dotted reference grammar |
-| `actions/` | `exec` and `shell` actions, `bin` versus `command`, bindings |
+| `actions/` | `exec`, `shell`, and `noop` actions, `bin` versus `command`, bindings |
 | `expressions/` | The CEL profile |
 | `nesting/` | The nesting joint and its output boundary |
 | `effects/` | The effect kind: lifecycle, health, terminal, nesting |

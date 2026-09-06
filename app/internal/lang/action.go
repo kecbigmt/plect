@@ -5,8 +5,10 @@ import (
 	"strings"
 )
 
-// Action is one lifecycle execution, in either of the language's two
-// variants. Exactly one variant's fields are populated, named by Type.
+// Action is one lifecycle execution: exec or shell everywhere, plus a third
+// variant, noop, legal only where ParseAliveAction is the parser
+// ([health.alive]). Exactly one variant's fields are populated, named by
+// Type; noop populates none of them.
 type Action struct {
 	Type string
 
