@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/kecbigmt/plecture/app/internal/confighome"
+	"github.com/kecbigmt/plecture/app/internal/persistence"
 	"github.com/kecbigmt/plecture/app/internal/state"
 	"github.com/spf13/cobra"
 )
@@ -43,7 +44,16 @@ identifier no resolver matches selects a workflow explicitly (see
 		if err := state.NewStore("").CheckReadable(); err != nil {
 			return err
 		}
-		return nil
+		// Runtime state itself still lives in state.json; a later change
+		// cuts the state store over to SQLite. This call only ensures
+		// store.db's own schema is current so every command keeps that
+		// invariant true from the moment the database exists, not just
+		// once something reads it.
+		db, err := persistence.EnsureCurrent(cmd.Context(), persistence.DefaultPath())
+		if err != nil {
+			return err
+		}
+		return db.Close()
 	},
 }
 

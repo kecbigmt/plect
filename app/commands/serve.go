@@ -49,6 +49,10 @@ Config (including which plugins are mounted) is re-resolved periodically, so
 a plugin enabled after this command started becomes visible without a
 restart, within one refresh interval.`,
 	Args: cobra.NoArgs,
+	// serve is a rootCmd subcommand with no PersistentPreRunE of its own, so
+	// it inherits root.go's persistence.EnsureCurrent call ahead of this
+	// RunE — store.db's schema is already current before the socket below
+	// is even created.
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		socket := serveEventBusSocket
 		if socket == "" {

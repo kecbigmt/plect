@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io/fs"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -25,6 +26,17 @@ const busyTimeoutMillis = 5000
 type DB struct {
 	read  *sql.DB
 	write *sql.DB
+
+	// gate is this database's migration access gate (see gate.go),
+	// derived from its file path. Migrate and WithImmediateTx both go
+	// through it so every later slice inherits the gating for free.
+	gate *accessGate
+
+	// migrations is the goose migration source. It defaults to the
+	// embedded production tree; tests in this package override it via
+	// direct field assignment (same package) to exercise interrupted and
+	// concurrent migrations without touching the real migrations/ tree.
+	migrations fs.FS
 }
 
 // Open sets WAL journaling, a bounded busy timeout, and foreign-key
@@ -61,7 +73,7 @@ func Open(path string) (*DB, error) {
 		return nil, fmt.Errorf("ping write handle: %w", err)
 	}
 
-	return &DB{read: read, write: write}, nil
+	return &DB{read: read, write: write, gate: newAccessGate(path), migrations: migrationsSourceFS()}, nil
 }
 
 func (db *DB) Close() error {
@@ -83,6 +95,12 @@ func (db *DB) Close() error {
 // to fn's error rather than replacing it, so a genuine fn error is never
 // masked by a rollback failure.
 func (db *DB) WithImmediateTx(ctx context.Context, fn func(*sql.Tx) error) error {
+	unlock, err := db.gate.accessShared()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
 	tx, err := db.write.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin immediate transaction: %w", err)

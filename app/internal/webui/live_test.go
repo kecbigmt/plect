@@ -1,12 +1,15 @@
 package webui
 
 import (
+	"context"
+	"database/sql"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/kecbigmt/plecture/app/internal/persistence"
 	"github.com/kecbigmt/plecture/app/internal/state"
 )
 
@@ -47,6 +50,44 @@ func TestNewLiveServiceRejectsStateVersionMismatch(t *testing.T) {
 	}
 	if string(data) != string(original) {
 		t.Fatalf("mismatched state file was rewritten: got %q, want unchanged %q", data, original)
+	}
+}
+
+// TestNewLiveService_RefusesADatabaseNewerThanSupported proves
+// persistence.EnsureCurrent runs from NewLiveService, not only from the
+// `plect` CLI's root.go: plect-web has no cobra parent chain of its own, so
+// this is its one entry point for the store.db currency check.
+func TestNewLiveService_RefusesADatabaseNewerThanSupported(t *testing.T) {
+	dataHome := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dataHome)
+
+	dbPath := filepath.Join(dataHome, "plect", "store.db")
+	seed, err := persistence.EnsureCurrent(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("seed EnsureCurrent: %v", err)
+	}
+	// Fabricate a ledger entry ahead of every migration this binary embeds
+	// by inserting directly into goose's own ledger table, the same
+	// unsupported-newer-version scenario EnsureCurrent must refuse.
+	// Goose migration versions are 14-digit timestamps (YYYYMMDDHHMMSS), so
+	// this literal must exceed that magnitude to read as "newer", not just
+	// as a different number.
+	if err := seed.WithImmediateTx(context.Background(), func(tx *sql.Tx) error {
+		_, err := tx.Exec("INSERT INTO goose_db_version (version_id, is_applied) VALUES (99999999999999, 1)")
+		return err
+	}); err != nil {
+		t.Fatalf("seed a newer-than-supported ledger row: %v", err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = NewLiveService()
+	if err == nil {
+		t.Fatal("NewLiveService() over a database newer than this binary supports must fail")
+	}
+	if !strings.Contains(err.Error(), "newer than this binary supports") {
+		t.Fatalf("error = %q, want an actionable newer-than-supported message", err)
 	}
 }
 

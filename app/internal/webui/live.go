@@ -1,7 +1,10 @@
 package webui
 
 import (
+	"context"
+
 	"github.com/kecbigmt/plecture/app/internal/config"
+	"github.com/kecbigmt/plecture/app/internal/persistence"
 	"github.com/kecbigmt/plecture/app/internal/service"
 	"github.com/kecbigmt/plecture/app/internal/state"
 	"github.com/kecbigmt/plecture/contracts/event"
@@ -18,6 +21,16 @@ type LiveService struct {
 func NewLiveService() (*LiveService, error) {
 	store := state.NewStore("")
 	if err := store.CheckReadable(); err != nil {
+		return nil, err
+	}
+	// plect-web has no cobra parent chain of its own (unlike the `plect`
+	// CLI's root.go), so it is its own entry point for the same store.db
+	// currency check every other entry point performs.
+	db, err := persistence.EnsureCurrent(context.Background(), persistence.DefaultPath())
+	if err != nil {
+		return nil, err
+	}
+	if err := db.Close(); err != nil {
 		return nil, err
 	}
 	cfg, err := config.Load()
