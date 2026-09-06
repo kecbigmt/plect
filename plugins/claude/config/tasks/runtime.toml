@@ -44,6 +44,30 @@ scope = "run"
 [runtime.setup]
 type   = "shell"
 script = '''
+# Terminates each of $PANE_PID's still-owned claude children, reconfirmed
+# by both parentage and comm immediately before TERM and again before the
+# KILL escalation: a child that exited and had its pid reused by an
+# unrelated same-user claude process must not carry the escalation to it.
+# The pane's own root process, and the multiplexer session behind it, are
+# never touched.
+terminate_claude_children() {
+  is_claude_child() {
+    [ "$(ps -o ppid= -p "$1" 2>/dev/null | tr -d '[:space:]')" = "$PANE_PID" ] || return 1
+    case "$(ps -p "$1" -o comm= 2>/dev/null | tr -d '[:space:]')" in claude|claude-*) return 0 ;; esac
+    return 1
+  }
+  for CHILD in $(pgrep -P "$PANE_PID" 2>/dev/null); do
+    if is_claude_child "$CHILD"; then
+      kill -TERM "$CHILD" 2>/dev/null
+      for _ in 1 2 3 4 5; do
+        sleep 0.5
+        kill -0 "$CHILD" 2>/dev/null || break
+      done
+      is_claude_child "$CHILD" && kill -KILL "$CHILD" 2>/dev/null
+    fi
+  done
+}
+
 PREV_SID="${prev_session_id-}"
 if [ -n "$PREV_SID" ]; then
   SID="$PREV_SID"
@@ -159,6 +183,14 @@ if [ -n "$PREV_SID" ]; then
   CLAUDE_CMD="$CLAUDE_CMD || claude --session-id $SID --mcp-config $MCP --settings $HOOKS $CHANNELS_FLAG $MODEL_FLAG $EFFORT_FLAG $DISALLOWED_FLAG"
 fi
 
+# Resolved before anything is typed: this is the identity terminate_claude_
+# children searches under, so a launch is only attempted once it exists.
+PANE_PID=$(sh -c "$terminal_pid" terminal-pid 2>/dev/null)
+if [ -z "$PANE_PID" ]; then
+  echo "could not resolve the pane's own pid before launch" >&2
+  exit 1
+fi
+
 # The terminal verbs compose against whichever effect in this workflow
 # declares the interactive endpoint — never a concrete multiplexer named
 # here directly.
@@ -184,8 +216,7 @@ sh -c "$send_keys" terminal-send-keys Enter
 # a network volume, even though claude itself did come up. A warm pane still
 # clears in a couple of iterations, so a longer default only costs time on
 # the failure path.
-LAUNCH_TIMEOUT="${launch_timeout:-120s}"
-LAUNCH_TIMEOUT_SECONDS="${LAUNCH_TIMEOUT%s}"
+LAUNCH_TIMEOUT_SECONDS="${launch_timeout%s}"
 ATTEMPTS=$((LAUNCH_TIMEOUT_SECONDS * 2))
 
 PREV_PID="${prev_pid-}"
@@ -205,41 +236,28 @@ while [ "$i" -lt "$ATTEMPTS" ]; do
   sh -c "$send_keys" terminal-send-keys Enter
 done
 if [ -z "$PID" ]; then
-  echo "claude not detected within $LAUNCH_TIMEOUT for session_id $SID (prev_pid=$PREV_PID)" >&2
+  echo "claude not detected within $launch_timeout for session_id $SID (prev_pid=$PREV_PID)" >&2
   # A launch that typed its command but never registered a session file can
   # still be visibly alive in the pane (the banner-clearing Enters above
   # reach a real claude prompt, just not one that ever wrote to
   # ~/.claude/sessions). Leaving that process running would trap the next
   # `plect up`: its retry types a second launch line into a pane that
-  # already holds a live claude, and the retry fails the same way. Killing
-  # whatever claude child the pane still holds, on top of failing this node,
-  # is what keeps the retry's pane clean.
-  PANE_PID=$(sh -c "$terminal_pid" terminal-pid 2>/dev/null)
-  if [ -n "$PANE_PID" ]; then
-    for CHILD in $(pgrep -P "$PANE_PID" 2>/dev/null); do
-      COMM=$(ps -p "$CHILD" -o comm= 2>/dev/null | tr -d '[:space:]')
-      case "$COMM" in
-        claude|claude-*)
-          kill -TERM "$CHILD" 2>/dev/null
-          for _ in 1 2 3 4 5; do
-            sleep 0.5
-            kill -0 "$CHILD" 2>/dev/null || break
-          done
-          kill -KILL "$CHILD" 2>/dev/null || true
-          ;;
-      esac
-    done
-  fi
+  # already holds a live claude, and the retry fails the same way.
+  terminate_claude_children
   exit 1
 fi
 
-jq -nc \
+OUTPUT=$(jq -nc \
   --argjson pid "$PID" \
   --arg sid "$SID" \
   --arg sock "$SOCKET" \
   --arg mcp "$MCP" \
   --arg hooks "$HOOKS" \
-  '{pid:$pid, session_id:$sid, socket_path:$sock, mcp_config:$mcp, hooks_settings:$hooks}'
+  '{pid:$pid, session_id:$sid, socket_path:$sock, mcp_config:$mcp, hooks_settings:$hooks}') || {
+    terminate_claude_children
+    exit 1
+  }
+printf '%s\n' "$OUTPUT"
 '''
 
 [runtime.setup.bind]
@@ -251,7 +269,7 @@ effort              = { from = "inputs.effort", optional = true }
 launch_env          = { from = "inputs.launch_env", optional = true }
 mcp_servers         = { from = "inputs.mcp_servers", optional = true }
 path_prepend        = { from = "inputs.path_prepend", optional = true }
-launch_timeout      = { from = "inputs.launch_timeout", optional = true }
+launch_timeout      = { from = "inputs.launch_timeout", default = "120s" }
 activity_bin        = { bin = "claude-agent-activity" }
 mcp_servers_bin     = { bin = "claude-mcp-servers" }
 channel_server_bin  = { bin = "channel-server" }
@@ -371,8 +389,10 @@ mcp_servers  = { type = "string", pattern = "^[^']*$" }
 path_prepend = { type = "string", pattern = "^[A-Za-z0-9_./:-]*$" }
 # launch_timeout: restricted to digits-plus-"s" so the setup script can strip
 # the suffix and use the result directly in shell arithmetic — no separate
-# duration parser needed, and no non-numeric value can reach $(( )).
-launch_timeout = { type = "string", pattern = "^[1-9][0-9]*s$" }
+# duration parser needed, and no non-numeric value can reach $(( )). The
+# effective default of 120s is applied by this effect's own setup.bind
+# (`default = "120s"` on the launch_timeout binding), not by this key.
+launch_timeout = { type = "string", pattern = "^[1-9][0-9]*s$", default = "120s" }
 
 [runtime.outputs_schema]
 type     = "object"

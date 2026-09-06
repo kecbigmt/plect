@@ -1,22 +1,70 @@
 # What each of this plugin's effects is exercised with when its invocation
-# record is regenerated. The launch line typed into the terminal is the
-# contract here, so every steering input is set. bin/ pins the profile name,
-# answers the pane introspection each launch performs, and — for the headless
-# shape — stands in for the worker's own readiness signal.
+# record is regenerated. bin/ pins the profile name and answers the pane
+# introspection each launch performs. pgrep/ps report a process distinct
+# from the pane's own root (PLECT_EFFECT_PID), so a kill-on-failure
+# scenario can prove it left the pane alone.
 
+# This proves the timed-out launch's child is killed, the pane survives,
+# and a retry against that same pane succeeds.
 [[codex]]
-inputs = { model = "gpt-5.6-sol", effort = "high", launch_env = '{"PLECT_TEAM_CONTEXT":"acme"}', path_prepend = "/spy/guard" }
-# The readiness poll reads the endpoint; a bare prompt line is neither the
-# boot banner nor the busy indicator, so it reads as ready.
-capture = "› "
+name                       = "launch-timeout-then-retry-succeeds"
+inputs                     = { launch_timeout = "1s" }
+capture                    = "esc to interrupt"
+retry_inputs               = { model = "gpt-5.6-sol", effort = "high", launch_env = '{"PLECT_TEAM_CONTEXT":"acme"}', path_prepend = "/spy/guard" }
+retry_capture              = "› "
+expect_worker_process_dead = true
+# A failed node never reaches health probes in real orchestration.
+hooks                      = ["setup"]
 
-# The launch reads the session transcript to learn its own session id.
 [[codex.files]]
 path    = ".codex/sessions/rollout.jsonl"
 content = '{"type":"session_meta","payload":{"cwd":"WORKSPACE","session_id":"11111111-2222-3333-4444-555555555555"}}'
 
+# This proves cleanup also runs when the final output-construction call
+# fails (see bin/jq), not only on a detection timeout.
+[[codex]]
+name                       = "launch-succeeds-then-output-fails-kills-worker"
+capture                    = "› "
+fail_output                = true
+expect_worker_process_dead = true
+hooks                      = ["setup"]
+
+[[codex.files]]
+path    = ".codex/sessions/rollout.jsonl"
+content = '{"type":"session_meta","payload":{"cwd":"WORKSPACE","session_id":"11111111-2222-3333-4444-555555555555"}}'
+
+# This proves the timed-out launch's worker is killed, the pane survives,
+# and a retry against that same pane succeeds.
 [[exec_runtime]]
-inputs = { model = "gpt-5.6-sol", effort = "high", launch_env = '{"PLECT_TEAM_CONTEXT":"acme"}', path_prepend = "/spy/guard" }
+name                       = "launch-timeout-then-retry-succeeds"
+inputs                     = { launch_env = '{"PLECT_TEST_NEVER_READY":"1"}', launch_timeout = "1s" }
+retry_inputs               = { model = "gpt-5.6-sol", effort = "high", launch_env = '{"PLECT_TEAM_CONTEXT":"acme"}', path_prepend = "/spy/guard" }
+expect_worker_process_dead = true
+hooks                      = ["setup"]
+
+# This proves a worker.pid naming the pane's own pid is rejected, and
+# cleanup still lands on the real worker.
+[[exec_runtime]]
+name                        = "poisoned-pidfile-kills-real-worker"
+inputs                      = { launch_env = '{"PLECT_TEST_POISON_PID":"1"}', launch_timeout = "1s" }
+expect_worker_process_dead  = true
+hooks                       = ["setup"]
+
+# This proves cleanup still finds the worker when it never wrote
+# worker.pid at all.
+[[exec_runtime]]
+name                        = "no-pid-report-kills-real-worker"
+inputs                      = { launch_env = '{"PLECT_TEST_NO_PID_REPORT":"1"}', launch_timeout = "1s" }
+expect_worker_process_dead  = true
+hooks                       = ["setup"]
+
+# This proves cleanup also runs when the final output-construction call
+# fails (see bin/jq), not only on a detection timeout.
+[[exec_runtime]]
+name                       = "launch-succeeds-then-output-fails-kills-worker"
+fail_output                = true
+expect_worker_process_dead = true
+hooks                      = ["setup"]
 
 [[codex_initial_prompt]]
 inputs  = { terminal_ready = "acme-widget-1", agent_session = "1234", prompt = "rendered instruction", repeat = "" }

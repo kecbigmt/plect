@@ -52,6 +52,25 @@ type effectScenario struct {
 	// or cleanup path be verified by a real process's death rather than by
 	// trusting that a recorded call did what it claims.
 	ExpectLiveProcessDead bool `toml:"expect_live_process_dead"`
+	// ExpectWorkerProcessDead asserts effectHarness.workerProcess died while
+	// liveProcess (the endpoint's own root process) survived — the proof a
+	// kill-on-failure path needs when the launched thing is not the
+	// endpoint's own root process.
+	ExpectWorkerProcessDead bool `toml:"expect_worker_process_dead"`
+	// RetryInputs reruns setup with these inputs against the same sandbox
+	// and live processes a first attempt (using Inputs) left behind, so a
+	// retry-succeeds claim is checked against that exact state rather than
+	// a separately-started scenario that only shares on-disk paths.
+	RetryInputs  map[string]string `toml:"retry_inputs"`
+	RetryCapture string            `toml:"retry_capture"`
+	// FailOutput makes each plugin's own jq stand-in fail the one call that
+	// assembles setup's final output line, once everything else — the
+	// launch, its detection, its readiness — has already succeeded. This is
+	// the only reachable way to exercise "a non-zero exit after the process
+	// was started" that is not the detection timeout: every value that call
+	// assembles is already validated by the time setup reaches it, so no
+	// scenario input can make it fail on its own.
+	FailOutput bool `toml:"fail_output"`
 }
 
 type effectScenarioFile struct {
