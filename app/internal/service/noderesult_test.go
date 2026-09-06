@@ -11,8 +11,6 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// nodeResultEvents reads every plect.node.result event recorded for a
-// session, in append order.
 func nodeResultEvents(t *testing.T, store interface{ Dir() string }, sessionName string) []event.Event {
 	t.Helper()
 	evs, _, _, err := eventlog.NewStore(store.Dir()).List(sessionName, 0, event.Filter{Types: []string{event.TypeNodeResult}})
@@ -137,9 +135,6 @@ func TestDown_RecordsNodeResultForCleanedNode(t *testing.T) {
 	}
 }
 
-// The member never transitions from down to up during an in-place repair —
-// it was already up throughout — so this asserts plect.node.result lands on
-// its own, without a plect.workflow_population.up alongside it.
 func TestUp_PopulationMemberRepairRecordsNodeResultWithoutUpTransition(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -163,15 +158,11 @@ func TestUp_PopulationMemberRepairRecordsNodeResultWithoutUpTransition(t *testin
 		t.Fatalf("set population provenance: %v", err)
 	}
 
-	// No Observer: this mirrors the population evaluator's own repair call
-	// (internal/population/runtime.go), which passes none.
+	// No Observer, mirroring internal/population/runtime.go's repair call.
 	if _, err := Up(cfg, store, UpParams{Identifier: sessionName}); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
 
-	// The vanished pane fails its liveness check, so the repair is three
-	// separate node.result facts: the failed check itself, the cleanup it
-	// triggers, and the re-setup that follows — not one.
 	evs := nodeResultEvents(t, store, sessionName)
 	if len(evs) != 3 {
 		t.Fatalf("node.result events = %d, want 3: %+v", len(evs), evs)

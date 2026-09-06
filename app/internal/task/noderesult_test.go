@@ -12,17 +12,13 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// resultCall captures one ResultObserver.OnResult invocation for assertions.
 type resultCall struct {
 	scope, node, effect, action, result string
 	elapsed                             time.Duration
 	body                                string
 }
 
-// resultRecordingObserver implements both Observer (so RunSetup/RunCleanup
-// accept it) and ResultObserver (so it also captures every plect.node.result
-// report), the same composition app/internal/service's nodeResultObserver
-// performs against whatever CLI/UI Observer a caller supplies.
+// resultRecordingObserver captures ResultObserver.OnResult invocations.
 type resultRecordingObserver struct {
 	results []resultCall
 }
@@ -113,11 +109,8 @@ func TestRunSetup_ReportsNodeResult_AliveSkip(t *testing.T) {
 	}
 }
 
-// TestRunSetup_ReportsNodeResult_AliveFailureThenRebuild pins the failing
-// half of the liveness check: it is a completed action in its own right
-// (action=alive, result=failed), reported before the cleanup and re-setup
-// it then triggers — not folded into either of theirs, since the rebuild
-// that follows can succeed even though the check itself did not.
+// The failed check gets its own result, ahead of the cleanup/re-setup pair
+// it triggers.
 func TestRunSetup_ReportsNodeResult_AliveFailureThenRebuild(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -150,11 +143,6 @@ func TestRunSetup_ReportsNodeResult_AliveFailureThenRebuild(t *testing.T) {
 	}
 }
 
-// TestResolveWorkflowNodes_EffectIsCatalogQualified pins that a
-// plect.node.result's effect identifies the node's `uses` target — the
-// address a definitions map (as app/internal/config.LoadTaskDefinitions
-// returns it) is actually keyed by — not the definition's own local
-// TaskDefinition.ID, which differs whenever the definition is plugin-owned.
 func TestResolveWorkflowNodes_EffectIsCatalogQualified(t *testing.T) {
 	defs := map[string]config.TaskDefinition{
 		"official.example.agent": {ID: "agent", Scope: "run", Setup: shellStub("echo '{}'")},

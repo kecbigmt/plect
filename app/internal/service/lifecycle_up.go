@@ -137,11 +137,8 @@ func Up(cfg *config.Config, store *state.Store, params UpParams) (*UpResult, err
 	if err != nil {
 		return nil, err
 	}
-	// Wrapping here covers every path below — cleanup, force-recreate, and
-	// the ordinary setup pass — including the unattended callers (population
-	// repair, tick's own re-up) that pass no Observer at all, so a
-	// population member's in-place repair still gets plect.node.result
-	// without an up/down transition.
+	// Before every path below (cleanup, force-recreate, ordinary setup),
+	// including callers that pass no Observer at all.
 	params.Observer = withNodeResultRecording(store, sessionName, params.Observer)
 	// Bringing up an existing session runs run-scoped tasks against it; clamp
 	// it to the active guard. The auto-create paths above already guard

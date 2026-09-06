@@ -11,9 +11,7 @@ import (
 	"github.com/kecbigmt/plecture/contracts/event"
 )
 
-// noopTaskObserver lets nodeResultObserver always hold a callable inner
-// Observer: several lifecycle callers (population repair, tick's own
-// re-up) pass none at all.
+// noopTaskObserver: several lifecycle callers pass no Observer at all.
 type noopTaskObserver struct{}
 
 func (noopTaskObserver) OnStart(string, string)                                 {}
@@ -21,25 +19,15 @@ func (noopTaskObserver) OnSkip(string, string, string)                          
 func (noopTaskObserver) OnSuccess(string, string, time.Duration, []byte)        {}
 func (noopTaskObserver) OnFailure(string, string, time.Duration, error, []byte) {}
 
-// nodeResultObserver wraps a task.Observer with plect.node.result recording:
-// every terminal node outcome task.RunSetup/RunCleanup reports (via the
-// optional task.ResultObserver extension) is appended to sessionName's own
-// event log, in addition to being forwarded to inner for CLI/UI rendering.
-// Delivering the appended event to a workflow channel is the ordinary
-// session dispatcher's job, which already follows this same log.
 type nodeResultObserver struct {
 	inner       task.Observer
 	log         *eventlog.Store
 	sessionName string
 }
 
-// withNodeResultRecording returns an Observer that also appends
-// plect.node.result to sessionName's log, wrapping inner (nil is fine — see
-// noopTaskObserver) for the CLI/UI callbacks. Call sites reassign their own
-// Observer field with the result before it reaches task.RunSetup/RunCleanup;
-// wrapping an already-wrapped Observer is harmless; reportResult (task.go)
-// asserts only the outermost value RunSetup/RunCleanup was actually given,
-// so exactly one event is still appended, to the same sessionName either way.
+// withNodeResultRecording wraps inner (nil becomes noopTaskObserver) so
+// task.RunSetup/RunCleanup's plect.node.result reports are appended to
+// sessionName's log, in addition to inner's own CLI/UI rendering.
 func withNodeResultRecording(store *state.Store, sessionName string, inner task.Observer) task.Observer {
 	if inner == nil {
 		inner = noopTaskObserver{}
@@ -56,10 +44,8 @@ func (o *nodeResultObserver) OnFailure(scope, id string, elapsed time.Duration, 
 	o.inner.OnFailure(scope, id, elapsed, err, stderr)
 }
 
-// OnResult implements task.ResultObserver. A best-effort append (like the
-// population engine's own event.Event writes) — a node result missing from
-// the log is a lesser failure than aborting the lifecycle operation over a
-// log-append error the caller has no way to act on.
+// A failed append is swallowed, like the population engine's own
+// event.Event writes: it must not abort the lifecycle operation.
 func (o *nodeResultObserver) OnResult(scope, node, effectID, action, result string, elapsed time.Duration, body string) {
 	_, _, _, _ = o.log.Append(event.Event{
 		SessionName: o.sessionName,

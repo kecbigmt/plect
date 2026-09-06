@@ -233,12 +233,9 @@ func resolveWorkflowNodes(wf config.WorkflowFile, defs map[string]config.TaskDef
 		if err != nil {
 			return nil, err
 		}
-		// node.Uses is the catalog-qualified address already canonicalized
-		// against defs' own keys; def.ID is only the definition's local name,
-		// which differs from it whenever the definition is plugin-owned.
-		// TaskID must carry the address: a later stale-node cleanup re-looks
-		// up the definition by it, and it is the identifier reported for the
-		// node's effect.
+		// def.ID is only the definition's local name; a stale-node cleanup
+		// re-looks the definition up by TaskID, so it must carry node.Uses
+		// (the address defs is actually keyed by) instead.
 		resolved.TaskID = node.Uses
 		resolved.Inputs = node.Inputs
 		out = append(out, resolved)
@@ -636,28 +633,16 @@ func observerOr(o Observer) Observer {
 }
 
 // ResultObserver is an optional Observer extension. RunSetup and RunCleanup
-// type-assert for it at every terminal outcome — a setup or cleanup
-// completing, and a produced node's liveness check passing — so a caller
-// that wants a durable plect.node.result record (app/internal/service) can
-// compose it without widening the base Observer interface that every
-// progress-UI implementation (e.g. StreamReporter) must satisfy.
-//
-// action is one of contracts/event's NodeResultAction* constants, result one
-// of its NodeResult* outcome constants. body is the bounded stderr/error
-// tail the runner already captured for the failure; empty otherwise.
+// type-assert for it, so a caller wanting a durable record composes it
+// without widening Observer itself for every existing implementation.
 type ResultObserver interface {
 	OnResult(scope, node, effectID, action, result string, elapsed time.Duration, body string)
 }
 
-// nodeResultBodyLimit bounds how much of a failure's stderr or error text a
-// plect.node.result event carries: the log is a durable delivery surface for
-// channels, not a dump for arbitrarily large script output — state.Outputs
-// remains the authority for anything larger.
+// nodeResultBodyLimit: the log is a delivery surface for channels, not a
+// dump for arbitrary script output.
 const nodeResultBodyLimit = 4096
 
-// nodeResultBody prefers captured stderr over the error text, matching what
-// an operator would look at first; a script's own stderr almost always
-// explains the failure better than the wrapping Go error string around it.
 func nodeResultBody(err error, stderr []byte) string {
 	if s := strings.TrimSpace(string(stderr)); s != "" {
 		return boundedTail(s, nodeResultBodyLimit)
@@ -668,9 +653,6 @@ func nodeResultBody(err error, stderr []byte) string {
 	return ""
 }
 
-// boundedTail keeps the last limit bytes of s, matching "bounded stderr or
-// error tail": the most recent output is the most likely to explain a
-// failure, so truncation drops the head rather than the tail.
 func boundedTail(s string, limit int) string {
 	if len(s) <= limit {
 		return s
@@ -684,34 +666,24 @@ func reportResult(obs Observer, r Resolved, action, result string, elapsed time.
 	}
 }
 
-// reportSetupSuccess and reportSetupFailure pair every RunSetup terminal
-// outcome with its plect.node.result report, so a plain action, a nested
-// chain, and every input/schema failure branch report through one seam.
-// reportSetupFailure returns err unchanged so call sites can `return
-// reportSetupFailure(...)`.
 func reportSetupSuccess(obs Observer, r Resolved, elapsed time.Duration, stderr []byte) {
 	obs.OnSuccess(r.Scope, r.NodeID, elapsed, stderr)
 	reportResult(obs, r, event.NodeResultActionSetup, event.NodeResultProduced, elapsed, "")
 }
 
+// reportSetupFailure returns err unchanged so a call site can `return
+// reportSetupFailure(...)`.
 func reportSetupFailure(obs Observer, r Resolved, elapsed time.Duration, err error, stderr []byte) error {
 	obs.OnFailure(r.Scope, r.NodeID, elapsed, err, stderr)
 	reportResult(obs, r, event.NodeResultActionSetup, event.NodeResultFailed, elapsed, nodeResultBody(err, stderr))
 	return err
 }
 
-// reportAliveSkip reports the one case where a skip is itself a completed
-// lifecycle action: a produced node's liveness probe passed, so setup is
-// short-circuited. RunCleanup's other OnSkip reasons ("no setup state",
-// "already cleaned") report nothing — no action was taken.
 func reportAliveSkip(obs Observer, r Resolved, elapsed time.Duration) {
 	obs.OnSkip(r.Scope, r.NodeID, "already produced")
 	reportResult(obs, r, event.NodeResultActionAlive, event.NodeResultSkipped, elapsed, "")
 }
 
-// reportCleanupSuccess and reportCleanupFailure mirror the setup pair for
-// RunCleanup's terminal outcomes, including the no-declared-cleanup case
-// (treated as an immediate cleaned) and a nested chain's cleanup.
 func reportCleanupSuccess(obs Observer, r Resolved, elapsed time.Duration, stderr []byte) {
 	obs.OnSuccess(r.Scope, r.NodeID, elapsed, stderr)
 	reportResult(obs, r, event.NodeResultActionCleanup, event.NodeResultCleaned, elapsed, "")
@@ -746,10 +718,8 @@ func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, ta
 				reportAliveSkip(obs, r, aliveElapsed)
 				continue
 			}
-			// The liveness check itself is a completed action distinct from
-			// whatever the ensuing cleanup and re-setup report: it can fail
-			// even when the node's eventual rebuild succeeds, so it needs its
-			// own result rather than being folded into either of theirs.
+			// The rebuild below can succeed on its own, so the failed check
+			// needs its own result rather than folding into either of theirs.
 			reportResult(obs, r, event.NodeResultActionAlive, event.NodeResultFailed, aliveElapsed, nodeResultBody(aliveErr, nil))
 			if invalidateErr := invalidateProducedNode(goCtx, r, ordered, aliveErr, session, tasks, obs); invalidateErr != nil {
 				return invalidateErr

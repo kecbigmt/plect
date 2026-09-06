@@ -23,8 +23,7 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// startFakeChannelSocket listens on a unix socket and decodes each framed
-// message it receives, standing in for a runtime's own delivery endpoint
+// startFakeChannelSocket stands in for a runtime's own delivery endpoint,
 // the same way app/internal/dispatch's own tests do.
 func startFakeChannelSocket(t *testing.T) (string, <-chan protocol.MessagePayload) {
 	t.Helper()
@@ -65,12 +64,9 @@ func startFakeChannelSocket(t *testing.T) (string, <-chan protocol.MessagePayloa
 	return path, recv
 }
 
-// TestUp_PopulationMemberNodeResultDeliveredThroughChannel is the full-stack
-// counterpart of TestUp_PopulationMemberRepairRecordsNodeResultWithoutUpTransition:
-// it drives a real dispatch.Supervisor against the session Up produces, and
-// asserts the plect.node.result event actually reaches the workflow's
-// channel — not just that it lands in the log.
-func TestUp_PopulationMemberNodeResultDeliveredThroughChannel(t *testing.T) {
+// The member starts already produced and up, with an alive probe that
+// always fails, so Up repairs it in place rather than transitioning it.
+func TestUp_PopulationMemberInPlaceRepairDeliversNodeResultThroughChannel(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
 	}
@@ -78,7 +74,13 @@ func TestUp_PopulationMemberNodeResultDeliveredThroughChannel(t *testing.T) {
 	store := testStore(t)
 	sessionName := "session1"
 	cfg := writeWorkflowFixture(t, t.TempDir(), "default",
-		[]taskFixture{{id: "agent", scope: "run", setup: fmt.Sprintf(`printf '{"socket_path":"%s"}'`, sock)}},
+		[]taskFixture{{
+			id:      "agent",
+			scope:   "run",
+			setup:   fmt.Sprintf(`printf '{"socket_path":"%s"}'`, sock),
+			alive:   "false",
+			cleanup: "true",
+		}},
 		[]nodeFixture{{id: "agent"}},
 	)
 	if err := os.MkdirAll(filepath.Join(cfg.BaseDir, "channels"), 0o755); err != nil {
@@ -106,7 +108,9 @@ include = ["plect.node.result"]
 path = { from = "nodes.agent.outputs.socket_path" }
 `)
 
-	seedSession(t, store, sessionName, "acct", 1, "default", map[string]*contract.TaskState{})
+	seedSession(t, store, sessionName, "acct", 1, "default", map[string]*contract.TaskState{
+		"agent": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Outputs: map[string]any{"socket_path": sock}},
+	})
 	if err := store.Update(sessionName, func(s *domain.Session) error {
 		s.Population = &contract.PopulationProvenance{Workflow: "default", Name: "pop"}
 		return nil
@@ -115,15 +119,15 @@ path = { from = "nodes.agent.outputs.socket_path" }
 	}
 
 	log := eventlog.NewStore(store.Dir())
-	// Seed the dispatcher's cursor at the empty tail before Up ever appends
-	// anything — the same ordering service.Create relies on for its own
-	// initial-instruction delivery — so the supervisor's dispatcher, started
-	// after Up below, still delivers the event Up appends before it starts.
 	dispatch.SeedCursor(log, sessionName)
 
-	// No Observer: mirrors internal/population/runtime.go's real repair call.
 	if _, err := Up(cfg, store, UpParams{Identifier: sessionName}); err != nil {
 		t.Fatalf("Up: %v", err)
+	}
+	if upEvents, _, _, err := log.List(sessionName, 0, event.Filter{Types: []string{event.TypeWorkflowPopulationUp}}); err != nil {
+		t.Fatalf("list workflow_population.up events: %v", err)
+	} else if len(upEvents) != 0 {
+		t.Fatalf("in-place repair recorded a population up transition: %+v", upEvents)
 	}
 
 	hub := sessionhub.NewRegistry(log)
@@ -133,16 +137,23 @@ path = { from = "nodes.agent.outputs.socket_path" }
 	defer cancel()
 	go sup.Run(ctx)
 
-	select {
-	case pl := <-recv:
-		var ev map[string]any
-		if err := json.Unmarshal([]byte(pl.Text), &ev); err != nil {
-			t.Fatalf("payload is not event json: %v", err)
+	wantActions := []string{event.NodeResultActionAlive, event.NodeResultActionCleanup, event.NodeResultActionSetup}
+	for i, want := range wantActions {
+		select {
+		case pl := <-recv:
+			var ev map[string]any
+			if err := json.Unmarshal([]byte(pl.Text), &ev); err != nil {
+				t.Fatalf("delivery %d: payload is not event json: %v", i, err)
+			}
+			if ev["type"] != event.TypeNodeResult {
+				t.Fatalf("delivery %d type = %v, want %q", i, ev["type"], event.TypeNodeResult)
+			}
+			md, _ := ev["metadata"].(map[string]any)
+			if md["action"] != want {
+				t.Fatalf("delivery %d action = %v, want %q", i, md["action"], want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("delivery %d (action=%s) was not received", i, want)
 		}
-		if ev["type"] != event.TypeNodeResult {
-			t.Fatalf("delivered type = %v, want %q", ev["type"], event.TypeNodeResult)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("plect.node.result was not delivered to the channel")
 	}
 }
