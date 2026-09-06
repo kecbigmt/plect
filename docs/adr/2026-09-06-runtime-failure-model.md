@@ -79,14 +79,21 @@ but never repairs it automatically. Repair occurs only during an explicit
 `plect up`; this avoids making a periodic observation cycle mutate external
 resources or retry a provider action without operator or workflow intent.
 
-The migration adds `[health].alive` to `gh_app_guard`, `slack_subscribe`,
-`gh_guard`, and `worktree`. Once their session is up, each participates in the
-same plan health evaluation even where its own scope is `session`. Losing one
-therefore produces the ordinary `health.unhealthy` escalation to the nearest
-live parent, with the failing effect named. The next `plect up` observes the
-failed liveness check, reconstructs the affected node and its dependents, and
-clears the condition after the rebuilt plan passes health. A health sweep only
-reports and escalates; it never runs cleanup or setup to repair the effect.
+The migration adds `[health].alive` to `gh_app_guard`, `slack_subscribe`, and
+`gh_guard`. Once their session is up, each participates in the same plan health
+evaluation even where its own scope is `session`. Losing one therefore produces
+the ordinary `health.unhealthy` escalation to the nearest live parent, with the
+failing effect named. The next `plect up` observes the failed liveness check,
+reconstructs the affected node and its dependents, and clears the condition
+after the rebuilt plan passes health. A health sweep only reports and
+escalates; it never runs cleanup or setup to repair the effect.
+
+This decision applies only to workflow effects. Workspace providers establish
+the session workspace before the workflow plan exists; they have neither a
+`scope` nor a `[health]` surface, and their setup does not run in the node walk
+described here. Recovering a vanished workspace provider output, including a
+worktree lost across a container replacement, remains follow-up work rather
+than an unspecified extension of this effect rule.
 
 ```toml
 [gh_app_guard]
@@ -200,6 +207,9 @@ directly, with a reason naming the node and its failed dependency or setup
 error. That rule also covers a failed `reuse = "record"` node, which has no
 existence probe to run. Activity continues to compose from produced run-scoped
 instances only.
+
+`cleaned` is neither failed nor missing. After a deliberate `plect down`, its
+current-plan entries therefore do not make the down session unhealthy.
 
 A stale task entry for a node no longer in the workflow contributes to neither
 run nor health; stale-node cleanup owns that lifecycle. A failed or missing
@@ -447,12 +457,20 @@ configuration-language change. The one-time migration is:
 3. Run the config-language conformance fixtures and plugin selftests for the
    changed plugins.
 
+The migration does not change workspace providers. They are not workflow
+effects and do not participate in this plan-health or reuse model. Their
+separate recovery semantics need a later decision that specifies a provider
+lifecycle member, when it runs, and how a bound `workspace_dir` is rebuilt.
+
 `plect ls --json` consumers retain the existing binary `run` enum. Health
 reports now name failed or missing completed current-plan nodes. It never
 interprets not-yet-attempted nodes during an active `up` as missing. A session
 whose plan cannot be resolved retains its derived run state from task records
 and reports the plan-resolution error as health evaluation failure for that
 session; one broken workflow does not prevent other sessions from being listed.
+The changed health composition supersedes the run-scoped-only composition rule
+in `docs/design/health-declaration.md`; that design document changes with the
+implementation work.
 
 Node-result events make setup progress and failure visible to session
 channels, event subscribers, and population-produced sessions without changing
@@ -477,15 +495,16 @@ after owner ratification.
 
 ### Add a separate validity mechanism
 
-Rejected. The shipped catalog has 14 setup-bearing effects. Four already
+Rejected. The shipped catalog has 11 setup-bearing effects. Four already
 declare `alive`: `pane`, `runtime`, `codex`, and `exec_runtime`. The migration
-classifies the other ten without a third case: `gh_app_guard`,
-`slack_subscribe`, `gh_guard`, and `worktree` gain `alive`; `thread_workspace`,
-`codex_initial_prompt`, `claude_initial_prompt`, `slack_thread`,
-`local_okf`, and `goal_bootstrap` declare `reuse = "record"`. No effect has a
-reuse condition stricter than liveness. A `valid` action would therefore
-duplicate an existing liveness probe or be unused, adding a lifecycle member
-without a concrete consumer.
+classifies the other seven without a third case: `gh_app_guard`,
+`slack_subscribe`, and `gh_guard` gain `alive`; `codex_initial_prompt`,
+`claude_initial_prompt`, `slack_thread`, and `goal_bootstrap` declare
+`reuse = "record"`. No effect has a reuse condition stricter than liveness.
+A `valid` action would therefore duplicate an existing liveness probe or be
+unused, adding a lifecycle member without a concrete consumer. Workspace
+providers such as `worktree`, `thread_workspace`, and `local_okf` are outside
+this inventory because they are not effects or workflow nodes.
 
 ### Store liveness as a second durable truth
 
