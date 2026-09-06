@@ -258,3 +258,35 @@ func TestAuth_PostRequiresAuth(t *testing.T) {
 		t.Fatalf("status = %d, want 401", rec.Code)
 	}
 }
+
+// Auth: the generated JSON API (GET /api/v1/sessions and its detail route) sits
+// behind the same gate as every other route — an unauthenticated request gets
+// a JSON 401, not the session data. TestAuth_APIPathGetsJSONNotRedirect proves
+// this generically for /api/v1/bootstrap; this proves it for the read models
+// this task adds, since isAPIPath's prefix match is easy to satisfy without
+// actually wiring a route into the guarded mux.
+func TestAuth_APIV1SessionsRequiresAuth(t *testing.T) {
+	for _, path := range []string{"/api/v1/sessions", "/api/v1/sessions/owner/repo-7"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		w := httptest.NewRecorder()
+		authServer().ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("path %s: status = %d, want 401", path, w.Code)
+		}
+		if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+			t.Errorf("path %s: Content-Type = %q, want application/json", path, ct)
+		}
+	}
+}
+
+// Auth: a valid cookie or Bearer token grants access to the JSON API read
+// models, the same as it does for the HTML routes.
+func TestAuth_APIV1SessionsCookieGrantsAccess(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sessions", nil)
+	req.AddCookie(&http.Cookie{Name: authCookieName, Value: "secret"})
+	w := httptest.NewRecorder()
+	authServer().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+}

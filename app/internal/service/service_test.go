@@ -300,6 +300,176 @@ func TestStatus_ProjectsTree(t *testing.T) {
 	}
 }
 
+// A grandchild's ParentSession/Children stay one level deep — Status does not
+// flatten a multi-level tree into the root's Children — and a session with no
+// ParentSession that sits outside the tree entirely remains its own
+// independent root rather than getting swept into it.
+func TestStatus_ProjectsTree_GrandchildAndIndependentRootStayDistinct(t *testing.T) {
+	cfg := &config.Config{}
+	store := testStore(t)
+	now := time.Now()
+	for _, n := range []string{"org/root-a", "org/child-b", "org/grandchild-c", "org/root-d"} {
+		if err := store.Put(&domain.Session{Name: n, CreatedAt: now, UpdatedAt: now}); err != nil {
+			t.Fatalf("seed %s: %v", n, err)
+		}
+	}
+	setParent(t, store, "org/child-b", "org/root-a")
+	setParent(t, store, "org/grandchild-c", "org/child-b")
+
+	entries, err := List(cfg, store)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	byName := make(map[string]ListEntry, len(entries))
+	for _, e := range entries {
+		byName[e.SessionName] = e
+	}
+	if got := byName["org/root-a"].ParentSession; got != "" {
+		t.Errorf("root-a ParentSession = %q, want empty", got)
+	}
+	if got := byName["org/root-d"].ParentSession; got != "" {
+		t.Errorf("independent root-d ParentSession = %q, want empty", got)
+	}
+
+	root, err := Status(cfg, store, "org/root-a")
+	if err != nil {
+		t.Fatalf("Status(root-a): %v", err)
+	}
+	if want := []string{"org/child-b"}; !slices.Equal(root.Identity.Children, want) {
+		t.Errorf("root-a Children = %v, want %v (grandchild must not flatten in)", root.Identity.Children, want)
+	}
+
+	grandchild, err := Status(cfg, store, "org/grandchild-c")
+	if err != nil {
+		t.Fatalf("Status(grandchild-c): %v", err)
+	}
+	if grandchild.Identity.ParentSession != "org/child-b" {
+		t.Errorf("grandchild-c ParentSession = %q, want org/child-b", grandchild.Identity.ParentSession)
+	}
+
+	independentRoot, err := Status(cfg, store, "org/root-d")
+	if err != nil {
+		t.Fatalf("Status(root-d): %v", err)
+	}
+	if independentRoot.Identity.ParentSession != "" {
+		t.Errorf("root-d ParentSession = %q, want empty", independentRoot.Identity.ParentSession)
+	}
+	if len(independentRoot.Identity.Children) != 0 {
+		t.Errorf("root-d Children = %v, want none", independentRoot.Identity.Children)
+	}
+}
+
+// Two sessions created under a shared "root:<name>" pseudo-parent
+// (domain.ImplicitRootParent's explicit, opt-in form — see
+// resolveParentSession) are an explicit sibling group: List/Status report the
+// same ParentSession string on both, so a reader can derive siblinghood by
+// equality, but the anchor session itself gains no Children entry for
+// them — a pseudo-parent is not a real, selectable parent session. Mirrors
+// state.TestStore_NormalizeSessionTreeTreatsRootPrefixAsPseudoParent one layer
+// up, at the List/Status projection this task's read models are built on.
+func TestStatus_ProjectsTree_ExplicitRootGroupSiblings(t *testing.T) {
+	cfg := &config.Config{}
+	store := testStore(t)
+	now := time.Now()
+	if err := store.Put(&domain.Session{Name: "org/group-anchor", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("seed anchor: %v", err)
+	}
+	for _, n := range []string{"org/sibling-x", "org/sibling-y"} {
+		if err := store.Put(&domain.Session{
+			Name: n, CreatedAt: now, UpdatedAt: now,
+			ParentSession: "root:org/group-anchor",
+		}); err != nil {
+			t.Fatalf("seed %s: %v", n, err)
+		}
+	}
+
+	const wantGroup = "root:org/group-anchor"
+	entries, err := List(cfg, store)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	for _, name := range []string{"org/sibling-x", "org/sibling-y"} {
+		var found bool
+		for _, e := range entries {
+			if e.SessionName != name {
+				continue
+			}
+			found = true
+			if e.ParentSession != wantGroup {
+				t.Errorf("%s ParentSession = %q, want %q", name, e.ParentSession, wantGroup)
+			}
+		}
+		if !found {
+			t.Fatalf("List did not include %s", name)
+		}
+
+		status, err := Status(cfg, store, name)
+		if err != nil {
+			t.Fatalf("Status(%s): %v", name, err)
+		}
+		if status.Identity.ParentSession != wantGroup {
+			t.Errorf("Status(%s).ParentSession = %q, want %q", name, status.Identity.ParentSession, wantGroup)
+		}
+	}
+
+	anchor, err := Status(cfg, store, "org/group-anchor")
+	if err != nil {
+		t.Fatalf("Status(anchor): %v", err)
+	}
+	if len(anchor.Identity.Children) != 0 {
+		t.Errorf("anchor Children = %v, want none (siblings are not the anchor's children)", anchor.Identity.Children)
+	}
+}
+
+// A session whose parent is later removed from the store becomes an
+// independent root rather than a dangling reference — state.Store detaches
+// the pointer on delete (state.TestStore_DeleteDetachesSessionTreeLinks), and
+// this proves that detached fact reads back correctly through List/Status,
+// the layer this task's read models sit on: "records with missing parents
+// remain visible" (docs/design/web-ui.md), not hidden or erroring.
+func TestStatus_ProjectsTree_OrphanedAfterParentDeleted(t *testing.T) {
+	cfg := &config.Config{}
+	store := testStore(t)
+	now := time.Now()
+	if err := store.Put(&domain.Session{Name: "org/parent-p", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("seed parent: %v", err)
+	}
+	if err := store.Put(&domain.Session{Name: "org/child-q", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("seed child: %v", err)
+	}
+	setParent(t, store, "org/child-q", "org/parent-p")
+
+	if err := store.Delete("org/parent-p"); err != nil {
+		t.Fatalf("Delete(parent): %v", err)
+	}
+
+	entries, err := List(cfg, store)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var found bool
+	for _, e := range entries {
+		if e.SessionName != "org/child-q" {
+			continue
+		}
+		found = true
+		if e.ParentSession != "" {
+			t.Errorf("orphaned child ParentSession = %q, want empty", e.ParentSession)
+		}
+	}
+	if !found {
+		t.Fatal("List no longer includes the orphaned child")
+	}
+
+	status, err := Status(cfg, store, "org/child-q")
+	if err != nil {
+		t.Fatalf("Status(orphaned child): %v", err)
+	}
+	if status.Identity.ParentSession != "" {
+		t.Errorf("Status ParentSession = %q, want empty", status.Identity.ParentSession)
+	}
+}
+
 func TestSetConversation(t *testing.T) {
 	store := testStore(t)
 	now := time.Now()

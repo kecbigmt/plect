@@ -167,6 +167,95 @@ func TestAcceptance_ApiV1SessionDetailUnknownNameIs404(t *testing.T) {
 	}
 }
 
+// Acceptance: the generated JSON API's thin adapter preserves the session
+// tree — parent/child/grandchild plus an independent root — end to end
+// through the real state.Store and service.List/Status, not just through the
+// fake SessionReader webapi's and service's own package tests use.
+//
+// Given a root, its child, its grandchild, and an unrelated independent root
+// persisted in a temp state store,
+// When GET /api/v1/sessions and GET /api/v1/sessions/<name> are served by the
+// live service,
+// Then each response's parentSession/children preserve that structure, and
+// the independent root stays distinct from the tree.
+func TestAcceptance_ApiV1SessionsPreserveParentChildGrandchildAndIndependentRoots(t *testing.T) {
+	store := state.NewStore(t.TempDir())
+	now := time.Now()
+	for _, n := range []string{"acceptance/root-a", "acceptance/child-b", "acceptance/grandchild-c", "acceptance/root-d"} {
+		if err := store.Put(&domain.Session{Name: n, CreatedAt: now, UpdatedAt: now}); err != nil {
+			t.Fatalf("seed %s: %v", n, err)
+		}
+	}
+	for child, parent := range map[string]string{
+		"acceptance/child-b":      "acceptance/root-a",
+		"acceptance/grandchild-c": "acceptance/child-b",
+	} {
+		if err := store.Update(child, func(s *domain.Session) error {
+			s.ParentSession = parent
+			return nil
+		}); err != nil {
+			t.Fatalf("set parent for %s: %v", child, err)
+		}
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	isolateMachineConfig(cfg)
+	svc := newLiveService(cfg, store)
+
+	listRec := get(t, svc, "/api/v1/sessions")
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want 200; body: %s", listRec.Code, listRec.Body)
+	}
+	var list webapiv1.SessionListResponse
+	if err := json.NewDecoder(listRec.Body).Decode(&list); err != nil {
+		t.Fatalf("decode SessionListResponse: %v", err)
+	}
+	byName := make(map[string]webapiv1.SessionSummary, len(list.Items))
+	for _, item := range list.Items {
+		byName[item.SessionName] = item
+	}
+	if got := byName["acceptance/root-a"].ParentSession; got != nil {
+		t.Errorf("root-a parentSession = %v, want absent", got)
+	}
+	if got := byName["acceptance/root-d"].ParentSession; got != nil {
+		t.Errorf("independent root-d parentSession = %v, want absent", got)
+	}
+
+	detail := func(name string) webapiv1.SessionDetail {
+		t.Helper()
+		rec := get(t, svc, "/api/v1/sessions/"+name)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("detail(%s) status = %d, want 200; body: %s", name, rec.Code, rec.Body)
+		}
+		var d webapiv1.SessionDetail
+		if err := json.NewDecoder(rec.Body).Decode(&d); err != nil {
+			t.Fatalf("decode SessionDetail(%s): %v", name, err)
+		}
+		return d
+	}
+
+	root := detail("acceptance/root-a")
+	if root.Children == nil || len(*root.Children) != 1 || (*root.Children)[0] != "acceptance/child-b" {
+		t.Errorf("root-a children = %v, want [acceptance/child-b] (grandchild must not flatten in)", root.Children)
+	}
+
+	grandchild := detail("acceptance/grandchild-c")
+	if grandchild.ParentSession == nil || *grandchild.ParentSession != "acceptance/child-b" {
+		t.Errorf("grandchild-c parentSession = %v, want acceptance/child-b", grandchild.ParentSession)
+	}
+
+	independentRoot := detail("acceptance/root-d")
+	if independentRoot.ParentSession != nil {
+		t.Errorf("root-d parentSession = %v, want absent", independentRoot.ParentSession)
+	}
+	if independentRoot.Children != nil {
+		t.Errorf("root-d children = %v, want absent", independentRoot.Children)
+	}
+}
+
 // Acceptance: the real service stack, driven through the HTTP handler, renders
 // the detail page for a session that exists in state.json.
 //

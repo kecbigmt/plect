@@ -94,6 +94,78 @@ func TestDetailFromStatus_MapsRunAndHealthIndependently(t *testing.T) {
 	}
 }
 
+// Every domain.HealthState value, stalled included, must survive the wire
+// conversion under its own name — a session can be up and stalled at once,
+// and this is the one member most likely to be missed since it was added
+// after healthy/unhealthy/undeclared.
+func TestDetailFromStatus_MapsEveryHealthState(t *testing.T) {
+	cases := []struct {
+		domain domain.HealthState
+		wire   webapiv1.SessionHealthState
+	}{
+		{domain.HealthHealthy, webapiv1.Healthy},
+		{domain.HealthUnhealthy, webapiv1.Unhealthy},
+		{domain.HealthUndeclared, webapiv1.Undeclared},
+		{domain.HealthStalled, webapiv1.Stalled},
+	}
+	for _, tt := range cases {
+		result := &service.StatusResult{
+			Identity: service.StatusIdentity{SessionName: "s", CreatedAt: time.Now()},
+			Runtime:  service.StatusRuntime{Run: domain.RunUp, Health: tt.domain},
+		}
+		got := detailFromStatus(result)
+		if got.Health == nil || *got.Health != tt.wire {
+			t.Errorf("domain health %q -> wire %v, want %v", tt.domain, got.Health, tt.wire)
+		}
+	}
+}
+
+// A destroyed session is neither "missing" (404, no record ever existed) nor
+// an ordinary live result — Destroyed/DestroyedAt must round-trip as present,
+// non-nil values so a client can tell the two apart.
+func TestDetailFromStatus_MapsDestroyedFields(t *testing.T) {
+	destroyedAt := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	result := &service.StatusResult{
+		Identity:    service.StatusIdentity{SessionName: "team/workspace-a", CreatedAt: time.Now()},
+		Runtime:     service.StatusRuntime{Run: domain.RunDown},
+		Destroyed:   true,
+		DestroyedAt: destroyedAt,
+	}
+
+	got := detailFromStatus(result)
+
+	if got.Destroyed == nil || !*got.Destroyed {
+		t.Errorf("Destroyed = %v, want true", got.Destroyed)
+	}
+	if got.DestroyedAt == nil || !got.DestroyedAt.Equal(destroyedAt) {
+		t.Errorf("DestroyedAt = %v, want %v", got.DestroyedAt, destroyedAt)
+	}
+}
+
+// Parent/child identifiers are preserved verbatim — this package does not
+// resolve, validate, or otherwise reinterpret the tree service.Status already
+// computed from ParentSession.
+func TestDetailFromStatus_MapsParentAndChildren(t *testing.T) {
+	result := &service.StatusResult{
+		Identity: service.StatusIdentity{
+			SessionName:   "team/workspace-b",
+			CreatedAt:     time.Now(),
+			ParentSession: "team/workspace-a",
+			Children:      []string{"team/workspace-c", "team/workspace-d"},
+		},
+		Runtime: service.StatusRuntime{Run: domain.RunUp},
+	}
+
+	got := detailFromStatus(result)
+
+	if got.ParentSession == nil || *got.ParentSession != "team/workspace-a" {
+		t.Errorf("ParentSession = %v, want team/workspace-a", got.ParentSession)
+	}
+	if got.Children == nil || len(*got.Children) != 2 || (*got.Children)[0] != "team/workspace-c" || (*got.Children)[1] != "team/workspace-d" {
+		t.Errorf("Children = %v, want [team/workspace-c team/workspace-d]", got.Children)
+	}
+}
+
 func TestSummaryFromListEntry_MapsRequiredAndOptionalFields(t *testing.T) {
 	now := time.Now()
 	entry := service.ListEntry{
