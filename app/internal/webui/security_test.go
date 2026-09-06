@@ -258,3 +258,30 @@ func TestAuth_PostRequiresAuth(t *testing.T) {
 		t.Fatalf("status = %d, want 401", rec.Code)
 	}
 }
+
+// isAPIPath's prefix match alone doesn't prove these routes are actually
+// mounted inside the guarded mux; TestAuth_APIPathGetsJSONNotRedirect only
+// covers /api/v1/bootstrap.
+func TestAuth_APIV1SessionsRequiresAuth(t *testing.T) {
+	for _, path := range []string{"/api/v1/sessions", "/api/v1/sessions/owner/repo-7"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		w := httptest.NewRecorder()
+		authServer().ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("path %s: status = %d, want 401", path, w.Code)
+		}
+		if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+			t.Errorf("path %s: Content-Type = %q, want application/json", path, ct)
+		}
+	}
+}
+
+func TestAuth_APIV1SessionsCookieGrantsAccess(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sessions", nil)
+	req.AddCookie(&http.Cookie{Name: authCookieName, Value: "secret"})
+	w := httptest.NewRecorder()
+	authServer().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+}
