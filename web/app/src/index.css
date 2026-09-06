@@ -1,4 +1,6 @@
-@import "tailwindcss";
+@import "tailwindcss" source(none);
+@source "../index.html";
+@source "./**/*.{ts,tsx}";
 @import "tw-animate-css";
 
 /* A small, independent token set — this shell does not share
