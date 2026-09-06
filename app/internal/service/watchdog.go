@@ -109,12 +109,17 @@ func (r HealthReport) State() domain.HealthState {
 	return domain.HealthStalled
 }
 
-// EvaluateHealth runs every produced run-scoped task's declared `[health]`
-// probes for name. A session with no produced run-scoped tasks (already
-// `plect down`, or a purely session-scoped resource) has nothing to probe and
-// reports healthy — L2 only detects a process/runtime/subscription that died
-// while it was supposed to be up, not a session that was deliberately brought
-// down. The first failing alive probe wins; Reason names the failing task.
+// EvaluateHealth composes health over every run-scoped node the session's
+// frozen workflow currently declares — not only the produced subset. A
+// produced node runs its declared `[health]` probes; a failed or missing
+// node is a structural failure, reported unhealthy with a reason naming the
+// node. This composition is only evaluated for a session with at least one
+// produced run-scoped task: a session with none (already `plect down`, or a
+// purely session-scoped resource) has no health verdict at all — L2 only
+// detects a process/runtime/subscription that died while it was supposed to
+// be up, not a session that was deliberately brought down. The first
+// failing probe, whether an alive probe or a structural failure, wins;
+// Reason names the failing node.
 func EvaluateHealth(cfg *config.Config, store *state.Store, name string) (HealthReport, error) {
 	s, err := store.GetE(name)
 	if err != nil {
@@ -127,7 +132,16 @@ func EvaluateHealth(cfg *config.Config, store *state.Store, name string) (Health
 	if err != nil {
 		return HealthReport{}, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("load task declarations: %v", err)}
 	}
-	wf := sessionWorkflowConfig(cfg, s.Workflow, s.WorkspaceDirPath)
+	// A session's frozen workflow failing to resolve is this session's own
+	// plan-resolution failure, not a silent absence of a plan: unlike
+	// sessionWorkflowConfig (used where a best-effort address lookup is
+	// fine), a session naming a workflow that no longer exists must surface
+	// as an error here so one broken workflow reports as one session's
+	// health-evaluation failure rather than a falsely healthy verdict.
+	wf, wfErr := resolveSessionWorkflow(cfg, s)
+	if wfErr != nil {
+		return HealthReport{}, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("resolve workflow: %v", wfErr)}
+	}
 	healthCfg := config.DefaultHealthcheckConfig()
 	if wf != nil {
 		healthCfg = config.NormalizeHealthcheckConfig(wf.Healthcheck)
@@ -154,6 +168,45 @@ func sessionWorkflowConfig(cfg *config.Config, workflowID, workspaceDirPath stri
 		return nil
 	}
 	return &wf
+}
+
+// resolveSessionWorkflow loads the session's frozen workflow, distinguishing
+// "no workflow declared" (nil, nil — a manually created or legacy session
+// has no current plan to evaluate) from "a workflow is declared but no
+// longer resolves" (an error) — the latter is a per-session plan-resolution
+// failure, e.g. the workflow was renamed or removed after the session froze
+// it.
+func resolveSessionWorkflow(cfg *config.Config, s *domain.Session) (*config.WorkflowFile, error) {
+	if s.Workflow == "" {
+		return nil, nil
+	}
+	workflows, err := cfg.LoadWorkflows(s.WorkspaceDirPath)
+	if err != nil {
+		return nil, err
+	}
+	wf, ok := workflows[s.Workflow]
+	if !ok {
+		return nil, fmt.Errorf("workflow %q not found", s.Workflow)
+	}
+	return &wf, nil
+}
+
+// currentPlanRunScopedNodeIDs returns every run-scoped node the session's
+// frozen workflow currently declares, sorted for a deterministic
+// first-failure report. A node the workflow no longer declares is absent
+// from this list regardless of what session.Tasks still holds for it, which
+// is what makes a stale task entry inert to health.
+func currentPlanRunScopedNodeIDs(nodes map[string]string, defs map[string]config.TaskDefinition) []string {
+	var ids []string
+	for id, address := range nodes {
+		def, ok := defs[address]
+		if !ok || def.Scope != config.TaskScopeRun {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	return ids
 }
 
 func healthTerminalPlan(tasks map[string]*contract.TaskState, nodes map[string]string, defs map[string]config.TaskDefinition) (*task.Plan, error) {
@@ -265,44 +318,69 @@ func evaluateHealthFor(name string, tasks map[string]*contract.TaskState, docs m
 	activityFingerprintParts := []string{}
 	probeErrors := []ProbeError{}
 
-	for _, key := range sortedTaskKeys(tasks) {
-		st := tasks[key]
-		if st == nil || st.Scope != contract.TaskScopeRun || st.Status != contract.TaskStatusProduced {
-			continue
-		}
-		def := defs[instanceDefinitionAddress(key, st, nodes)]
-		comp, compErr := composeInstance(def, st, vars)
-		if compErr != nil {
-			probeErrors = append(probeErrors, ProbeError{Instance: key, Reason: compErr.Error()})
-			continue
-		}
-
-		// alive composes by AND and activity by OR across the layers of a
-		// chain exactly as they compose across instances, so both fall out of
-		// walking one flat target list.
-		for _, target := range probeTargets(key, def, st, comp) {
-			if target.Alive != nil {
-				declared = true
-				if aliveErr := task.RunAliveProbe(context.Background(), target.probe(target.Alive), vars); aliveErr != nil {
-					return HealthReport{SessionName: name, Healthy: false, Declared: true, ProbeErrors: probeErrors, Reason: fmt.Sprintf("%s: %v", target.Label, aliveErr), LastCheckedAt: now}
+	// The structural composition — a failed or missing current-plan node is
+	// itself an AND failure — only applies once the session has actually come
+	// up. Nothing in the current plan is missing yet for a session that never
+	// produced any run-scoped node: an aborted first-node `up`, or a session
+	// that was deliberately brought down, reads as no verdict rather than
+	// unhealthy.
+	if runScopeUp(tasks) {
+		for _, nodeID := range currentPlanRunScopedNodeIDs(nodes, defs) {
+			st := tasks[nodeID]
+			switch {
+			case st == nil:
+				return HealthReport{SessionName: name, Healthy: false, Declared: true, ProbeErrors: probeErrors, Reason: fmt.Sprintf("%s: missing from the current plan", nodeID), LastCheckedAt: now}
+			case st.Status == contract.TaskStatusCleaned:
+				// Deliberately torn down, not failed or missing: contributes
+				// nothing.
+				continue
+			case st.Status == contract.TaskStatusFailed:
+				// A node whose [health].alive is a noop has no liveness probe
+				// to run, so this structural check is the only place a failed
+				// noop node's failure reaches the health report.
+				errText := st.Error
+				if errText == "" {
+					errText = "setup failed"
 				}
-			}
-			if target.Activity == nil {
+				return HealthReport{SessionName: name, Healthy: false, Declared: true, ProbeErrors: probeErrors, Reason: fmt.Sprintf("%s: %s", nodeID, errText), LastCheckedAt: now}
+			case st.Status != contract.TaskStatusProduced:
 				continue
 			}
-			sig, sigErr := task.RunActivityProbe(context.Background(), target.probe(target.Activity), vars)
-			switch {
-			case sigErr != nil:
-				probeErrors = append(probeErrors, activityProbeError(target.Label, target.Activity.Source(), sigErr))
-			case sig != nil:
-				activityDeclared = true
-				// A probe may only lower this instance's expectation: no
-				// envelope can manufacture an expectation done_when does not
-				// already see.
-				if sig.SilenceExpected {
-					activityDue = false
+
+			def := defs[instanceDefinitionAddress(nodeID, st, nodes)]
+			comp, compErr := composeInstance(def, st, vars)
+			if compErr != nil {
+				probeErrors = append(probeErrors, ProbeError{Instance: nodeID, Reason: compErr.Error()})
+				continue
+			}
+
+			// alive composes by AND and activity by OR across the layers of a
+			// chain exactly as they compose across instances, so both fall out of
+			// walking one flat target list.
+			for _, target := range probeTargets(nodeID, def, st, comp) {
+				if target.Alive != nil {
+					declared = true
+					if aliveErr := task.RunAliveProbe(context.Background(), target.probe(target.Alive), vars); aliveErr != nil {
+						return HealthReport{SessionName: name, Healthy: false, Declared: true, ProbeErrors: probeErrors, Reason: fmt.Sprintf("%s: %v", target.Label, aliveErr), LastCheckedAt: now}
+					}
 				}
-				activityFingerprintParts = append(activityFingerprintParts, target.Label+":"+sig.Fingerprint)
+				if target.Activity == nil {
+					continue
+				}
+				sig, sigErr := task.RunActivityProbe(context.Background(), target.probe(target.Activity), vars)
+				switch {
+				case sigErr != nil:
+					probeErrors = append(probeErrors, activityProbeError(target.Label, target.Activity.Source(), sigErr))
+				case sig != nil:
+					activityDeclared = true
+					// A probe may only lower this instance's expectation: no
+					// envelope can manufacture an expectation done_when does not
+					// already see.
+					if sig.SilenceExpected {
+						activityDue = false
+					}
+					activityFingerprintParts = append(activityFingerprintParts, target.Label+":"+sig.Fingerprint)
+				}
 			}
 		}
 	}

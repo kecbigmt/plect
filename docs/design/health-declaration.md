@@ -1,9 +1,11 @@
 # Health declaration
 
 This design is governed by
-[`../adr/2026-08-18-health-declaration.md`](../adr/2026-08-18-health-declaration.md)
-and, for the activity envelope's shape,
-[`../adr/2026-08-18-activity-envelope-fingerprint-centric.md`](../adr/2026-08-18-activity-envelope-fingerprint-centric.md).
+[`../adr/2026-08-18-health-declaration.md`](../adr/2026-08-18-health-declaration.md),
+for the activity envelope's shape,
+[`../adr/2026-08-18-activity-envelope-fingerprint-centric.md`](../adr/2026-08-18-activity-envelope-fingerprint-centric.md),
+and, for the current-plan composition rule below,
+[`../adr/2026-09-06-runtime-failure-model.md`](../adr/2026-09-06-runtime-failure-model.md).
 
 ## Design Core
 
@@ -170,15 +172,28 @@ is expected.
 
 ## Composition across instances
 
-A session's health is composed from every produced run-scoped effect instance:
+A session's health is composed over every run-scoped node its current plan
+declares — the frozen workflow's node set, not only the produced subset:
 
-- **`alive` composes by AND.** Liveness is a chain of necessary resources, so
-  any failing probe makes the session unhealthy, reported with the failing
-  instance named.
-- **`activity` composes by OR.** Activity is evidence of life, so evidence
-  from any instance counts. Core joins the declaring instances' fingerprints
-  into one composite and treats a change anywhere in it as the session having
-  moved.
+- **`alive` composes by AND over the current plan.** Liveness is a chain of
+  necessary resources. A produced node runs its declared probe in the
+  ordinary way; a failing probe, a failed node, or a node with no task state
+  at all (missing) makes the session unhealthy, reported with the failing or
+  absent node named. A cleaned node is neither failed nor missing and
+  contributes nothing — a session brought down deliberately is not unhealthy
+  for it. A node the current plan no longer declares (a stale task entry)
+  likewise contributes nothing, whatever its own task state says.
+- **`activity` composes by OR over the produced run-scoped instances.**
+  Activity is evidence of life, so evidence from any produced instance
+  counts. Core joins the declaring instances' fingerprints into one composite
+  and treats a change anywhere in it as the session having moved. A node that
+  is failed, missing, or not yet produced casts no vote here — activity is
+  only ever evidence a live instance actually reported.
+
+This composition is evaluated only for a session with at least one produced
+run-scoped node. A session with none — either it was never brought up, or its
+current-plan run-scoped nodes are all cleaned after a deliberate teardown —
+has no health verdict.
 
 An instance declaring no `[health]` contributes nothing to either composition:
 it is vacuous in the AND and casts no vote in the OR. So does one whose
