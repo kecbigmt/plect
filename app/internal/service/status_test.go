@@ -152,6 +152,44 @@ func TestStatus_IdentityCarriesCreateTimeInputs(t *testing.T) {
 	}
 }
 
+func TestStatus_SlackThreadNodeOutputsAreReadableUnderTheNode(t *testing.T) {
+	store := testStore(t)
+	cfg := writeWorkflowFixture(t, t.TempDir(), "default",
+		[]taskFixture{{id: "slack_thread", scope: contract.TaskScopeSession, setup: "true"}},
+		[]nodeFixture{{id: "slack_thread"}})
+	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+		"slack_thread": {
+			Scope:  contract.TaskScopeSession,
+			TaskID: "slack_thread",
+			Status: contract.TaskStatusProduced,
+			Outputs: map[string]any{
+				"thread_ts":  "1234567890.123456",
+				"channel_id": "C01ABCDEF",
+				"permalink":  "https://example.test/archives/C01ABCDEF/p1234567890123456",
+			},
+		},
+	})
+
+	result, err := Status(cfg, store, "owner/repo-1")
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+
+	var work *StatusTask
+	for i := range result.Work {
+		if result.Work[i].Instance == "slack_thread" {
+			work = &result.Work[i]
+		}
+	}
+	if work == nil {
+		t.Fatalf("Work = %+v, want an entry for slack_thread", result.Work)
+	}
+	if work.Outputs["thread_ts"] != "1234567890.123456" || work.Outputs["channel_id"] != "C01ABCDEF" ||
+		work.Outputs["permalink"] != "https://example.test/archives/C01ABCDEF/p1234567890123456" {
+		t.Errorf("slack_thread outputs = %+v, want thread_ts/channel_id/permalink readable", work.Outputs)
+	}
+}
+
 // Summarize is the default `plect status --json` projection: only instances
 // with a done_when, and only the leaf/chain fields an orchestrator needs —
 // never the instance's full (unfiltered) outputs map.

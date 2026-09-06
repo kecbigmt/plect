@@ -342,7 +342,6 @@ func (db *DB) loadSessionExtras(ctx context.Context, q sqlcgen.DBTX, s *domain.S
 // itself is unchanged; this type exists only at the persistence boundary.
 type sessionPayload struct {
 	Branch                  string                  `json:"branch,omitempty"`
-	Conversation            *contract.Conversation  `json:"conversation,omitempty"`
 	Message                 *contract.Message       `json:"message,omitempty"`
 	Inputs                  map[string]any          `json:"inputs,omitempty"`
 	Health                  *contract.HealthState   `json:"health,omitempty"`
@@ -359,7 +358,6 @@ type sessionPayload struct {
 func marshalSessionRecord(s *domain.Session) (string, error) {
 	data, err := json.Marshal(sessionPayload{
 		Branch:                  s.Branch,
-		Conversation:            s.Conversation,
 		Message:                 s.Message,
 		Inputs:                  s.Inputs,
 		Health:                  s.Health,
@@ -381,7 +379,6 @@ func unmarshalSessionRecord(recordJSON string) (*domain.Session, error) {
 	}
 	return &contract.Session{
 		Branch:                  p.Branch,
-		Conversation:            p.Conversation,
 		Message:                 p.Message,
 		Inputs:                  p.Inputs,
 		Health:                  p.Health,

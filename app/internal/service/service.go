@@ -99,7 +99,7 @@ func resolveSession(cfg *config.Config, store *state.Store, identifier string) (
 // (session name, create-time alias, or resource id) to a session, using the
 // same lookup order as the internal resolver. It hands back the raw
 // mutating-lifecycle-owned session, so a caller that mutates the session
-// (e.g. to update its conversation or message) can call this directly, but a
+// (e.g. to update its message) can call this directly, but a
 // caller that only needs the canonical name should call ResolveSessionName
 // instead, and one that needs read-only session fields should call a
 // dedicated projection function instead of reading the raw struct.
@@ -402,17 +402,6 @@ func sessionHealthReport(cfg *config.Config, store *state.Store, name string) (H
 	return report, report.State()
 }
 
-func conversationJSON(conv *domain.Conversation) string {
-	if conv == nil {
-		return ""
-	}
-	b, err := json.Marshal(conv)
-	if err != nil {
-		return ""
-	}
-	return string(b)
-}
-
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
@@ -503,20 +492,6 @@ func workflowDisplayOutputs(s *domain.Session) map[string]any {
 		maps.Copy(out, ws.Outputs)
 	}
 	return out
-}
-
-// SetConversation updates the Conversation field of an existing session.
-func SetConversation(cfg *config.Config, store *state.Store, identifier string, conv *domain.Conversation) error {
-	sessionName, session, err := resolveSession(cfg, store, identifier)
-	if err != nil {
-		return err
-	}
-	if guardErr := checkSessionGuard(cfg, sessionName); guardErr != nil {
-		return guardErr
-	}
-	session.Conversation = conv
-	session.UpdatedAt = time.Now()
-	return store.Put(session)
 }
 
 // SetMessage updates the session-level self-reported status message. An empty

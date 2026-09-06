@@ -26,13 +26,9 @@ func TestStore_PutAndGet(t *testing.T) {
 		ResourceID:       "https://example.test/owner/repo/items/123",
 		Branch:           "issue/123",
 		WorkspaceDirPath: "/tmp/workdirs/github.com/owner/repo/issue-123",
-		Conversation: &domain.Conversation{
-			Source: "Slack",
-			URL:    "https://exampleorg.slack.com/archives/C01ABCDEF/p1234567890123456",
-			Metadata: map[string]string{
-				"thread_ts":  "1234567890.123456",
-				"channel_id": "C01ABCDEF",
-			},
+		Message: &domain.Message{
+			Text:      "running tests",
+			UpdatedAt: now,
 		},
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -53,11 +49,8 @@ func TestStore_PutAndGet(t *testing.T) {
 	if got.ResourceID != session.ResourceID {
 		t.Errorf("ResourceID = %q, want %q", got.ResourceID, session.ResourceID)
 	}
-	if got.Conversation == nil || got.Conversation.Source != "Slack" {
-		t.Errorf("Conversation not persisted correctly")
-	}
-	if got.Conversation.URL != "https://exampleorg.slack.com/archives/C01ABCDEF/p1234567890123456" {
-		t.Errorf("Conversation URL = %q", got.Conversation.URL)
+	if got.Message == nil || got.Message.Text != "running tests" {
+		t.Errorf("Message not persisted correctly")
 	}
 }
 

@@ -47,16 +47,15 @@ type StatusRuntimeTask struct {
 
 // StatusRuntime is layer 2: whether the session is actually alive right now.
 type StatusRuntime struct {
-	Run                domain.RunState      `json:"run"`
-	Health             domain.HealthState   `json:"health,omitempty"`
-	LastCheckedAt      time.Time            `json:"last_checked_at,omitzero"`
-	LastActivityAt     time.Time            `json:"last_activity_at,omitzero"`
-	Tasks              []StatusRuntimeTask  `json:"tasks,omitempty"`
-	WorkspaceDirPath   string               `json:"workspace_dir_path,omitempty"`
-	WorkspaceDirExists bool                 `json:"workspace_dir_exists"`
-	Conversation       *domain.Conversation `json:"conversation,omitempty"`
-	Message            *domain.Message      `json:"message,omitempty"`
-	AttachCommand      string               `json:"attach_command,omitempty"`
+	Run                domain.RunState     `json:"run"`
+	Health             domain.HealthState  `json:"health,omitempty"`
+	LastCheckedAt      time.Time           `json:"last_checked_at,omitzero"`
+	LastActivityAt     time.Time           `json:"last_activity_at,omitzero"`
+	Tasks              []StatusRuntimeTask `json:"tasks,omitempty"`
+	WorkspaceDirPath   string              `json:"workspace_dir_path,omitempty"`
+	WorkspaceDirExists bool                `json:"workspace_dir_exists"`
+	Message            *domain.Message     `json:"message,omitempty"`
+	AttachCommand      string              `json:"attach_command,omitempty"`
 }
 
 // StatusChain is one [[chains]] evaluation against a task instance's facts —
@@ -220,7 +219,6 @@ func Status(cfg *config.Config, store *state.Store, identifier string) (*StatusR
 			Tasks:              runtimeTaskViews(session),
 			WorkspaceDirPath:   session.WorkspaceDirPath,
 			WorkspaceDirExists: wtExists,
-			Conversation:       session.Conversation,
 			Message:            session.Message,
 			AttachCommand:      attachCommandFor(cfg, session),
 		},

@@ -91,10 +91,6 @@
     <dl class="grid grid-cols-1 gap-x-4 gap-y-1 text-body sm:grid-cols-[8rem_1fr]">
       <dt class="text-muted-foreground">workspace dir</dt>
       <dd class="break-all">{{ .Runtime.WorkspaceDirPath }}{{ if not .Runtime.WorkspaceDirExists }} <span class="text-destructive">(missing)</span>{{ end }}</dd>
-      {{- if .Runtime.Conversation }}
-      <dt class="text-muted-foreground">conversation</dt>
-      <dd class="break-all">{{ .Runtime.Conversation.Source }}{{ if .Runtime.Conversation.URL }} — <a class="rounded-sm underline underline-offset-2 hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" href="{{ .Runtime.Conversation.URL }}">{{ .Runtime.Conversation.URL }}</a>{{ end }}</dd>
-      {{- end }}
       {{- if .Runtime.Message }}
       <dt class="text-muted-foreground">message</dt>
       <dd class="break-all">{{ .Runtime.Message.Text }} <span class="text-muted-foreground">({{ .Runtime.Message.UpdatedAt.Format "2006-01-02 15:04" }})</span></dd>

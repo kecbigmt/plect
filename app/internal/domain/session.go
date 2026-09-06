@@ -40,9 +40,6 @@ const (
 	HealthStalled HealthState = "stalled"
 )
 
-// Conversation is an alias for the shared contract type.
-type Conversation = contract.Conversation
-
 // Message is an alias for the shared contract type.
 type Message = contract.Message
 

@@ -3,9 +3,7 @@ package service
 import (
 	"os"
 	"path/filepath"
-	"reflect"
 	"runtime"
-	"strings"
 	"testing"
 
 	"github.com/kecbigmt/plecture/app/internal/config"
@@ -218,44 +216,10 @@ func TestShippedSlackThreadProvider_HasNoSubscriptionRegistry(t *testing.T) {
 	}
 }
 
-// stubPlectRecordingArgv logs plect's argv instead of running it for real:
-// `state set-conversation` needs a session already in a real state store,
-// which this test never creates one of.
-func stubPlectRecordingArgv(t *testing.T, log string) {
-	t.Helper()
-	dir := t.TempDir()
-	script := "#!/usr/bin/env sh\n" +
-		"for a in \"$@\"; do printf '%s\\n' \"$a\"; done >> " + shQuoteForTest(log) + "\n" +
-		"printf -- '--\\n' >> " + shQuoteForTest(log) + "\n"
-	if err := os.WriteFile(filepath.Join(dir, "plect"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-}
-
-func shQuoteForTest(v string) string { return "'" + strings.ReplaceAll(v, "'", `'\''`) + "'" }
-
-func firstPlectCall(t *testing.T, log string) []string {
-	t.Helper()
-	raw, err := os.ReadFile(log)
-	if err != nil {
-		t.Fatalf("read %s: %v", log, err)
-	}
-	call, _, _ := strings.Cut(string(raw), "--\n")
-	call = strings.TrimSuffix(call, "\n")
-	if call == "" {
-		return nil
-	}
-	return strings.Split(call, "\n")
-}
-
-// TestShippedSlackThreadProvider_SetupRecordsConversationAndCreatesWorkspace
-// runs the shipped setup/cleanup scripts themselves, not a stand-in for them.
-func TestShippedSlackThreadProvider_SetupRecordsConversationAndCreatesWorkspace(t *testing.T) {
+// TestShippedSlackThreadProvider_SetupCreatesWorkspace runs the shipped
+// setup/cleanup scripts themselves, not a stand-in for them.
+func TestShippedSlackThreadProvider_SetupCreatesWorkspace(t *testing.T) {
 	prov := loadShippedWorkspaceProvider(t, "slack", "thread_workspace")
-
-	plectLog := filepath.Join(t.TempDir(), "plect.log")
-	stubPlectRecordingArgv(t, plectLog)
 
 	workspaceDirsRoot := t.TempDir()
 	const (
@@ -287,17 +251,6 @@ func TestShippedSlackThreadProvider_SetupRecordsConversationAndCreatesWorkspace(
 		t.Fatalf("setup did not create %q as a directory: %v", workspaceDir, statErr)
 	}
 
-	wantCall := []string{
-		"state", "set-conversation", sessionName,
-		"--source", "Slack",
-		"--url", permalink,
-		"--meta", "thread_ts=" + threadTS,
-		"--meta", "channel_id=" + channelID,
-	}
-	if gotCall := firstPlectCall(t, plectLog); !reflect.DeepEqual(gotCall, wantCall) {
-		t.Errorf("plect argv = %v, want %v", gotCall, wantCall)
-	}
-
 	tasks := map[string]*contract.TaskState{
 		contract.WorkflowPseudoNodeID: {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, Outputs: outputs},
 	}
@@ -324,7 +277,6 @@ func TestShippedSlackThreadProvider_SetupToleratesJSONSpecialCharactersInWorkspa
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			prov := loadShippedWorkspaceProvider(t, "slack", "thread_workspace")
-			stubPlectRecordingArgv(t, filepath.Join(t.TempDir(), "plect.log"))
 
 			workspaceDirsRoot := filepath.Join(t.TempDir(), tt.root)
 			vars := effect.WorkflowHookVars{

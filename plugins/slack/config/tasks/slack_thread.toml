@@ -17,12 +17,6 @@ thread_ts=$(printf '%s' "$resp" | jq -er '.thread_ts')
 response_channel_id=$(printf '%s' "$resp" | jq -er '.channel_id')
 permalink=$(printf '%s' "$resp" | jq -er '.permalink')
 
-plect state set-conversation "$session_name" \
-  --source Slack \
-  --url "$permalink" \
-  --meta "thread_ts=$thread_ts" \
-  --meta "channel_id=$response_channel_id"
-
 jq -nc \
   --arg thread_ts "$thread_ts" \
   --arg channel_id "$response_channel_id" \
@@ -31,10 +25,9 @@ jq -nc \
 '''
 
 [slack_thread.setup.bind]
-base_url     = { from = "inputs.base_url" }
-channel_id   = { from = "inputs.channel_id" }
-root_text    = { from = "inputs.root_text" }
-session_name = { from = "session.name" }
+base_url   = { from = "inputs.base_url" }
+channel_id = { from = "inputs.channel_id" }
+root_text  = { from = "inputs.root_text" }
 
 # Deliberately never re-observed: a deleted or archived Slack thread must not
 # be silently recreated, because a replacement thread would split the

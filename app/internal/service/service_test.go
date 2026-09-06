@@ -496,83 +496,6 @@ func TestStatus_ProjectsTree_OrphanedAfterParentDeleted(t *testing.T) {
 	}
 }
 
-func TestSetConversation(t *testing.T) {
-	store := testStore(t)
-	now := time.Now()
-	store.Put(&domain.Session{
-		Name:      "owner/repo-1",
-		CreatedAt: now,
-		UpdatedAt: now,
-	})
-
-	conv := &domain.Conversation{
-		Source:   "Slack",
-		URL:      "https://exampleorg.slack.com/archives/C123/p456",
-		Metadata: map[string]string{"thread_ts": "456", "channel_id": "C123"},
-	}
-	err := SetConversation(nil, store, "owner/repo-1", conv)
-	if err != nil {
-		t.Fatalf("SetConversation() error: %v", err)
-	}
-
-	got := store.Get("owner/repo-1")
-	if got.Conversation == nil {
-		t.Fatal("Conversation should be set")
-	}
-	if got.Conversation.Source != "Slack" {
-		t.Errorf("Source = %q, want %q", got.Conversation.Source, "Slack")
-	}
-	if got.Conversation.URL != "https://exampleorg.slack.com/archives/C123/p456" {
-		t.Errorf("URL = %q, want %q", got.Conversation.URL, "https://exampleorg.slack.com/archives/C123/p456")
-	}
-	if got.Conversation.Metadata["thread_ts"] != "456" {
-		t.Errorf("Metadata[thread_ts] = %q, want %q", got.Conversation.Metadata["thread_ts"], "456")
-	}
-	if got.Conversation.Metadata["channel_id"] != "C123" {
-		t.Errorf("Metadata[channel_id] = %q, want %q", got.Conversation.Metadata["channel_id"], "C123")
-	}
-}
-
-func TestSetConversation_SessionNotFound(t *testing.T) {
-	store := testStore(t)
-	conv := &domain.Conversation{Source: "Slack", URL: "https://example.com"}
-	err := SetConversation(nil, store, "owner/repo-999", conv)
-	if err == nil {
-		t.Fatal("expected error for missing session")
-	}
-	svcErr, ok := err.(*Error)
-	if !ok {
-		t.Fatalf("expected *Error, got %T", err)
-	}
-	if svcErr.Code != ErrSessionNotFound {
-		t.Errorf("Code = %q, want %q", svcErr.Code, ErrSessionNotFound)
-	}
-}
-
-// SetConversation is a per-session write path (hook scripts call it to attach
-// a Slack thread), so it must honor SessionGuard like Create/Destroy/EventPublish
-// — otherwise a guarded orchestrator could still relabel another owner's
-// session's conversation.
-func TestSetConversation_SessionGuardBlocksCrossOwner(t *testing.T) {
-	store := testStore(t)
-	now := time.Now()
-	store.Put(&domain.Session{Name: "exampleorg/repo-26", CreatedAt: now, UpdatedAt: now})
-	cfg := &config.Config{SessionGuard: "^acme/"}
-
-	conv := &domain.Conversation{Source: "Slack", URL: "https://example.com"}
-	err := SetConversation(cfg, store, "exampleorg/repo-26", conv)
-	if err == nil {
-		t.Fatal("expected session-guard rejection for cross-owner conversation write")
-	}
-	svcErr, ok := err.(*Error)
-	if !ok || svcErr.Code != ErrRepoNotAllowed {
-		t.Errorf("want ErrRepoNotAllowed, got %v", err)
-	}
-	if store.Get("exampleorg/repo-26").Conversation != nil {
-		t.Error("blocked SetConversation must not mutate the session")
-	}
-}
-
 func TestSetMessage(t *testing.T) {
 	store := testStore(t)
 	now := time.Now()
@@ -733,7 +656,7 @@ func TestSetMessage_SessionNotFound(t *testing.T) {
 }
 
 // SetMessage is a per-session write path (hook scripts call it on every turn
-// boundary), so it must honor SessionGuard like SetConversation —
+// boundary), so it must honor SessionGuard like Create/Destroy/EventPublish —
 // otherwise a guarded orchestrator could still relabel another owner's
 // session's status.
 func TestSetMessage_SessionGuardBlocksCrossOwner(t *testing.T) {

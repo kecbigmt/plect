@@ -12,14 +12,6 @@ import (
 	"time"
 )
 
-// Conversation holds information about an external communication channel
-// associated with a session (e.g., a chat thread).
-type Conversation struct {
-	Source   string            `json:"source"`             // Display label for the chat platform
-	URL      string            `json:"url"`                // Permalink to the conversation
-	Metadata map[string]string `json:"metadata,omitempty"` // Plugin-specific data (thread_ts, channel_id, etc.)
-}
-
 // Message is a session-level, self-reported free-text status line: the
 // session's current activity, or empty when the session is idle. plect does
 // not interpret Text; it is a slot for external updaters, not a plect
@@ -225,7 +217,6 @@ type Session struct {
 	Alias            string                `json:"alias,omitempty"`
 	Branch           string                `json:"branch"`
 	WorkspaceDirPath string                `json:"workspace_dir_path"`
-	Conversation     *Conversation         `json:"conversation,omitempty"`
 	Message          *Message              `json:"message,omitempty"`
 	Workflow         string                `json:"workflow,omitempty"`
 	Population       *PopulationProvenance `json:"population,omitempty"`

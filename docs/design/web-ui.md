@@ -77,9 +77,9 @@ unknown event kinds. Display task, node, and child-session links only when
 recorded references support them. Do not synthesize history from state changes.
 
 The timeline represents Plecture's event log, not guaranteed transcripts from
-every agent or external chat. The persisted Conversation field describes an
-external conversation's source, URL, and metadata; it is not a transcript.
-Expose its external URL when available.
+every agent or external chat. An external conversation's URL, when a node's
+outputs carry one, is exposed through the task/node links described above,
+not through a distinguished session-level field.
 
 The session timeline contains that session's records, including notifications
 delivered through existing routes. It does not silently include every descendant
