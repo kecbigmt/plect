@@ -116,11 +116,20 @@ rebuilds task outputs, dynamic instances, environment state, runtime
 observation state, and provider outputs. This avoids retaining a record whose
 cleanup or inputs may refer to the lost workspace.
 
-An ordinary `plect up` does not diagnose a vanished provider output before it
-tries to load the workflow or plan. Its resulting failure is the signal to
-inspect the workspace and choose the explicit recovery command. A provider
-author who needs a narrower repair keeps that operation in its own plugin
-until two concrete consumers establish a safe shared lifecycle contract.
+An ordinary `plect up` does not verify a vanished provider output. Discovery
+treats the missing workspace-directory layer as empty, so trusted workflow and
+plan loading can succeed with the workspace overlay silently omitted. A
+produced node whose definition was available only through that lost layer can
+then fail stale-node cleanup because its effect definition is unknown. A node
+whose setup, probe, terminal, or later command uses the recorded directory can
+fail at that later action. A session without either kind of node can complete
+`up` while retaining a dangling `workspace_dir`. None of these outcomes is a
+reliable detection surface; an operator who knows the workspace vanished uses
+the explicit recovery command rather than waiting for one.
+
+A provider author who needs a narrower repair keeps that operation in its own
+plugin until two concrete consumers establish a safe shared lifecycle
+contract.
 
 The decision preserves the runtime-failure model's boundary: workflow effects
 declare liveness because they participate in a plan and health cycle; workspace
@@ -159,6 +168,17 @@ the explicit full teardown to protect external resources and uncommitted work.
 It adds a second authority without removing the operator decision, so it does
 not meet a present consumer need.
 
+This option would not migrate stored records. A custom provider without the
+optional action would retain its existing skip behavior. Adding the action to
+the three shipped providers would make every existing session using one run a
+pre-plan check at its next `plect up`; a failed check would need new pseudo-node
+failure and descendant-invalidation state before setup could run again. Its
+implementation tests would extend `TestKindSurfaceMatchesSchema` and
+`TestProviderContracts` for the new declaration and roots, add provider
+liveness cases beside `TestRunWorkflowSetup_IdempotentSkip`, add an `Up`
+recovery case beside `TestUp_ForceRecreateResetsRuntimeWithoutPrev`, and update
+the shipped-provider integration coverage.
+
 ### Run provider setup on every `plect up`
 
 Rejected. This changes a recorded production action into an unconditional
@@ -168,3 +188,12 @@ conversation writes for the shipped providers. It also does not specify what
 happens when setup emits a different `workspace_dir` while produced workflow
 nodes still bind the old one. Re-running setup therefore cannot replace the
 explicit teardown-and-rebuild lifecycle.
+
+This option would not migrate stored records, but it would rewrite the
+`@workflow` produced record and mirrored `workspace_dir_path` on every `up` for
+every existing provider-backed session. Its implementation would replace the
+skip asserted by `TestRunWorkflowSetup_IdempotentSkip`, revisit the retry
+contract in `TestRunWorkflowSetup_PrevSurvivesRetry`, add repeated-`up` cases
+to `TestCreate_WorkflowSetupPath`, and update the GitHub, Slack, and local
+knowledge-bundle setup integration tests to assert repeated side effects and
+changed outputs.
