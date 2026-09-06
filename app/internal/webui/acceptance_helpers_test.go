@@ -25,26 +25,24 @@ func isolateMachineConfig(cfg *config.Config) {
 	cfg.Plugins = nil
 }
 
-func sinceFromQuery(r *http.Request) int64 {
-	v := r.URL.Query().Get("since")
-	if v == "" {
-		return 0
-	}
-	var n int64
-	_, _ = fmt.Sscanf(v, "%d", &n)
-	return n
-}
-
 // startEventBusRelay is a minimal bus that replays a session's events from
 // the real store over SSE, from an offset given by a "since" query parameter
-// — a stand-in for the real event bus daemon, exercising the JSON relay
-// layer (app/internal/webui/events_stream_json.go's client side) and cursor
-// decoding against a real service+eventlog stack, not the bus's own fan-out.
+// (the bus's own "<streamID>:<seq>" resume-token format, see
+// event.EncodeResumeToken) — a stand-in for the real event bus daemon,
+// exercising the JSON relay layer (app/internal/webui/events_stream_json.go's
+// client side) and cursor decoding against a real service+eventlog stack,
+// not the bus's own fan-out.
 func startEventBusRelay(t *testing.T, cfg *config.Config, store *state.Store) *httptest.Server {
 	t.Helper()
 	bus := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		session := r.URL.Query().Get("session")
-		evs, offs, _, err := service.EventList(cfg, store, session, sinceFromQuery(r), event.Filter{})
+		_, since, _ := event.ParseResumeToken(r.URL.Query().Get("since"))
+		evs, offs, _, err := service.EventList(cfg, store, session, since, event.Filter{})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		streamID, _, err := service.EventStreamResume(cfg, store, session, "")
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -54,7 +52,7 @@ func startEventBusRelay(t *testing.T, cfg *config.Config, store *state.Store) *h
 		w.(http.Flusher).Flush()
 		for i, ev := range evs {
 			b, _ := json.Marshal(ev)
-			fmt.Fprintf(w, "id: %d\ndata: %s\n\n", offs[i], b)
+			fmt.Fprintf(w, "id: %s\ndata: %s\n\n", event.EncodeResumeToken(streamID, offs[i]), b)
 		}
 		w.(http.Flusher).Flush()
 	}))

@@ -150,6 +150,46 @@ func TestBus_StreamLiveBurstNoGapNoDup(t *testing.T) {
 	}
 }
 
+// TestBus_StreamSurvivesRotation exercises the full stack a browser or CLI
+// subscriber actually uses (contracts/event.Client over the bus's live SSE
+// endpoint, backed by the shared sessionhub reader) across a same-name
+// destroy + recreate: every event must still arrive exactly once, in order,
+// including the superseded stream's own unbroadcast tail.
+func TestBus_StreamSurvivesRotation(t *testing.T) {
+	c, _, store := newTestBus(t, "")
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	if _, _, err := c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "user.note", Summary: "before", Direction: event.Internal}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := make(chan event.Event, 8)
+	go func() {
+		_ = c.Subscribe(ctx, "o/r-1", 0, event.Filter{}, func(ev event.Event, _ int64) { got <- ev })
+	}()
+	if ev := recv(t, got); ev.Summary != "before" {
+		t.Fatalf("replay = %q, want before", ev.Summary)
+	}
+
+	if _, err := store.NewStream("o/r-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "user.note", Summary: "after-1", Direction: event.Internal}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "user.note", Summary: "after-2", Direction: event.Internal}); err != nil {
+		t.Fatal(err)
+	}
+
+	if ev := recv(t, got); ev.Summary != "after-1" {
+		t.Fatalf("post-rotation live event = %q, want after-1 (not dropped, not reordered)", ev.Summary)
+	}
+	if ev := recv(t, got); ev.Summary != "after-2" {
+		t.Fatalf("post-rotation live event = %q, want after-2", ev.Summary)
+	}
+}
+
 // TestBus_StreamResume locks the cursor contract: each frame's `id` is the
 // resume point, and reconnecting with Last-Event-ID delivers events strictly
 // after the last one received — no re-delivery, no gap.

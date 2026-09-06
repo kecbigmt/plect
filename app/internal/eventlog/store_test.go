@@ -581,3 +581,37 @@ func TestFollowDeliversNewEvents(t *testing.T) {
 		t.Fatal("Follow did not deliver the appended event")
 	}
 }
+
+// TestResidentPathsShareOneConnectionPerDatabase pins deterministic pool ownership: every resident service path constructs a fresh eventlog.Store per call, so reusing the identical *persistence.DB across many such calls (not a fresh one each time) is what "no handles left open" means here.
+func TestResidentPathsShareOneConnectionPerDatabase(t *testing.T) {
+	dir := t.TempDir()
+	const session = "o/r-1"
+
+	first, err := NewStore(dir).dbHandle()
+	if err != nil {
+		t.Fatalf("first dbHandle: %v", err)
+	}
+
+	for i := 0; i < 50; i++ {
+		s := NewStore(dir)
+		if _, _, _, err := s.Append(event.Event{SessionName: session, Type: "user.note", Direction: event.Internal}); err != nil {
+			t.Fatalf("append %d: %v", i, err)
+		}
+		if _, err := s.StreamID(session); err != nil {
+			t.Fatalf("stream id %d: %v", i, err)
+		}
+		if _, _, _, err := s.List(session, 0, event.Filter{}); err != nil {
+			t.Fatalf("list %d: %v", i, err)
+		}
+		if err := s.CommitCursor(session, "delivery", 1); err != nil {
+			t.Fatalf("commit cursor %d: %v", i, err)
+		}
+	}
+
+	dbCacheMu.Lock()
+	current := dbCache[filepath.Join(dir, "store.db")]
+	dbCacheMu.Unlock()
+	if current != first {
+		t.Fatal("the cached connection changed across 50 fresh Store values over the same directory; want the same one reused throughout, not a new pool opened per call")
+	}
+}

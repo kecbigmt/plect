@@ -33,10 +33,14 @@ const pollInterval = 500 * time.Millisecond
 type Store struct {
 	dir    string
 	root   string // <dir>/events: tombstone + chain-attempt sidecars only
-	mu     sync.Mutex
-	db     *persistence.DB
 	logger *slog.Logger
 }
+
+// dbCache shares one *persistence.DB per database path across every Store value for that path, since Store is constructed fresh per call throughout this codebase and would otherwise leak one connection pool per call in a resident process.
+var (
+	dbCacheMu sync.Mutex
+	dbCache   = map[string]*persistence.DB{}
+)
 
 // Root returns the events directory this store reads/writes (for diagnostics —
 // e.g. confirming the resident process and writers resolve the same log tree).
@@ -56,19 +60,46 @@ func NewStore(dir string) *Store {
 	return &Store{dir: dir, root: filepath.Join(dir, "events"), logger: slog.Default()}
 }
 
-// dbHandle lazily opens, migrates, and memoizes the database (mirroring state.Store.dbHandle).
 func (s *Store) dbHandle() (*persistence.DB, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.db != nil {
-		return s.db, nil
+	return dbHandleForPath(filepath.Join(s.dir, "store.db"))
+}
+
+func dbHandleForPath(path string) (*persistence.DB, error) {
+	dbCacheMu.Lock()
+	defer dbCacheMu.Unlock()
+	if db, ok := dbCache[path]; ok {
+		return db, nil
 	}
-	db, err := persistence.EnsureCurrent(context.Background(), filepath.Join(s.dir, "store.db"))
+	db, err := persistence.EnsureCurrent(context.Background(), path)
 	if err != nil {
 		return nil, fmt.Errorf("eventlog: open database: %w", err)
 	}
-	s.db = db
+	dbCache[path] = db
 	return db, nil
+}
+
+// injectedAppendFailures queues a one-shot error FailNextAppend arms for a database path, consumed by the next Append against it.
+var (
+	injectedAppendFailuresMu sync.Mutex
+	injectedAppendFailures   = map[string]error{}
+)
+
+// FailNextAppend makes the next Append against dir's database return err instead of writing, then reverts to normal. Production code never needs this: with one shared connection per path, a real file-level fault (a permission or lock change) would also block state.Store's unrelated writes to the same file.
+func FailNextAppend(dir string, err error) {
+	injectedAppendFailuresMu.Lock()
+	injectedAppendFailures[filepath.Join(dir, "store.db")] = err
+	injectedAppendFailuresMu.Unlock()
+}
+
+func takeInjectedAppendFailure(path string) error {
+	injectedAppendFailuresMu.Lock()
+	defer injectedAppendFailuresMu.Unlock()
+	err, ok := injectedAppendFailures[path]
+	if !ok {
+		return nil
+	}
+	delete(injectedAppendFailures, path)
+	return err
 }
 
 // sessionDir returns the directory holding a session's log, encoding the opaque
@@ -107,14 +138,20 @@ func (s *Store) Append(ev event.Event) (stored event.Event, seq, next int64, err
 		ev.ID = newULID(ev.Time)
 	}
 
+	dbPath := filepath.Join(s.dir, "store.db")
+	if ferr := takeInjectedAppendFailure(dbPath); ferr != nil {
+		return ev, 0, 0, ferr
+	}
 	db, err := s.dbHandle()
 	if err != nil {
 		return ev, 0, 0, err
 	}
 	ctx := context.Background()
-	if id, gerr := db.EventStreamID(ctx, ev.SessionName); gerr != nil {
+	id, gerr := db.EventStreamID(ctx, ev.SessionName)
+	if gerr != nil {
 		return ev, 0, 0, fmt.Errorf("eventlog: append: %w", gerr)
-	} else if id == "" {
+	}
+	if id == "" {
 		if _, cerr := db.CreateEventStream(ctx, ev.SessionName); cerr != nil {
 			return ev, 0, 0, fmt.Errorf("eventlog: append: %w", cerr)
 		}
@@ -295,6 +332,43 @@ func (s *Store) ListFromStreamID(streamID, session string, since int64) (evs []e
 		next = seqs[len(seqs)-1] + 1
 	}
 	return evs, seqs, next, nil
+}
+
+// ReadFromStream returns the next batch for a caller tracking (streamID, cursor) across repeated calls, resolving the current id and rows in one atomic read so a rotation between two calls is never observed as the old cursor misapplied to the new stream. On a detected rotation the superseded stream's own remaining (now-immutable) tail is drained by id before ever switching. streamID == "" starts at the head; resolvedStreamID == "" only when session has no stream yet.
+func (s *Store) ReadFromStream(session, streamID string, cursor int64) (evs []event.Event, seqs []int64, resolvedStreamID string, next int64, err error) {
+	db, err := s.dbHandle()
+	if err != nil {
+		return nil, nil, streamID, cursor, err
+	}
+	evs, seqs, current, err := db.ListCurrentEventsFrom(context.Background(), session, cursor)
+	if err != nil {
+		return nil, nil, streamID, cursor, fmt.Errorf("eventlog: read stream: %w", err)
+	}
+	if current == "" {
+		return nil, nil, "", cursor, nil
+	}
+	if streamID == "" || streamID == current {
+		return evs, seqs, current, tailSeq(seqs, cursor), nil
+	}
+	oldEvs, oldSeqs, derr := db.ListEventsFromStreamID(context.Background(), streamID, session, cursor)
+	if derr != nil {
+		return nil, nil, streamID, cursor, fmt.Errorf("eventlog: read stream: %w", derr)
+	}
+	if len(oldEvs) > 0 {
+		return oldEvs, oldSeqs, streamID, tailSeq(oldSeqs, cursor), nil
+	}
+	newEvs, newSeqs, _, err := db.ListCurrentEventsFrom(context.Background(), session, 0)
+	if err != nil {
+		return nil, nil, current, 0, fmt.Errorf("eventlog: read stream: %w", err)
+	}
+	return newEvs, newSeqs, current, tailSeq(newSeqs, 0), nil
+}
+
+func tailSeq(seqs []int64, fallback int64) int64 {
+	if len(seqs) == 0 {
+		return fallback
+	}
+	return seqs[len(seqs)-1] + 1
 }
 
 // Tail returns up to the last `limit` events matching f for a session, in

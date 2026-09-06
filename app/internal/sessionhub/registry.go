@@ -37,6 +37,7 @@ type Frame struct {
 type FrameSub struct {
 	ch        chan Frame
 	start     int64
+	streamID  string
 	release   func()
 	closeOnce sync.Once
 	dead      bool // set under reader.mu after an overflow close
@@ -44,6 +45,9 @@ type FrameSub struct {
 
 func (s *FrameSub) Frames() <-chan Frame { return s.ch }
 func (s *FrameSub) Start() int64         { return s.start }
+
+// StreamID is the stream Start is scoped to, captured atomically with it at subscribe time; a caller replaying history up to Start must read that stream by this id, not by session name.
+func (s *FrameSub) StreamID() string { return s.streamID }
 
 // Close is idempotent so a double Close can't over-decrement the reader refcount.
 func (s *FrameSub) Close() { s.closeOnce.Do(s.release) }
@@ -109,31 +113,15 @@ func (r *reader) run(ctx context.Context) {
 	streamID, cur := r.streamID, r.cursor
 	r.mu.Unlock()
 	for {
-		// A same-name recreate mints a new stream, so streamID/cur (scoped to the superseded one) must drain its own tail by id before reading the new one.
-		if id, err := r.store.StreamID(r.session); err == nil && id != "" {
-			if streamID == "" {
-				streamID = id
-			} else if streamID != id {
-				evs, offs, next, derr := r.store.ListFromStreamID(streamID, r.session, cur)
-				if derr == nil && len(evs) > 0 {
-					r.broadcast(streamID, evs, offs, next)
-					r.mu.Lock()
-					r.streamID, r.cursor = streamID, next
-					r.mu.Unlock()
-					cur = next
-					continue // more of the superseded stream may remain
-				}
-				streamID, cur = id, 0
-			}
+		evs, offs, resolved, next, err := r.store.ReadFromStream(r.session, streamID, cur)
+		if err == nil && resolved != "" {
+			streamID, cur = resolved, next
 		}
-		evs, offs, next, err := r.store.List(r.session, cur, event.Filter{})
 		if err == nil && len(evs) > 0 {
 			r.broadcast(streamID, evs, offs, next)
-			cur = next
+			continue // more of a drain (or fresh backlog) may remain
 		}
-		r.mu.Lock()
-		r.streamID, r.cursor = streamID, cur
-		r.mu.Unlock()
+		r.setWatermark(streamID, cur)
 		select {
 		case <-ctx.Done():
 			return
@@ -142,7 +130,13 @@ func (r *reader) run(ctx context.Context) {
 	}
 }
 
-// broadcast delivers evs (all from streamID) to every frame subscriber and signals every wake subscriber; takes r.mu itself.
+func (r *reader) setWatermark(streamID string, cur int64) {
+	r.mu.Lock()
+	r.streamID, r.cursor = streamID, cur
+	r.mu.Unlock()
+}
+
+// broadcast delivers evs to every frame subscriber, signals every wake subscriber, and records the watermark — all under one lock, so a joining subscriber can never see a cursor predating an already-delivered batch.
 func (r *reader) broadcast(streamID string, evs []event.Event, offs []int64, next int64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -159,6 +153,7 @@ func (r *reader) broadcast(streamID string, evs []event.Event, offs []int64, nex
 	for wk := range r.wakes {
 		wk.signal()
 	}
+	r.streamID, r.cursor = streamID, next
 }
 
 // Registry owns at most one reader per session, ref-counted across all consumers.
@@ -198,7 +193,7 @@ func (reg *Registry) SubscribeFrames(session string) *FrameSub {
 	r := reg.acquire(session)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	sub := &FrameSub{ch: make(chan Frame, frameBuffer), start: r.cursor}
+	sub := &FrameSub{ch: make(chan Frame, frameBuffer), start: r.cursor, streamID: r.streamID}
 	sub.release = func() {
 		r.mu.Lock()
 		delete(r.frames, sub)
@@ -243,14 +238,8 @@ func (reg *Registry) acquire(session string) *reader {
 			frames:  map[*FrameSub]struct{}{},
 			wakes:   map[*WakeSub]struct{}{},
 		}
-		// Seeded before cursor: a rotation landing between these two reads
-		// then yields a harmless duplicate delivery; the other order would
-		// silently drop the superseded stream's tail, the bug this file guards against.
-		if id, err := reg.store.StreamID(session); err == nil {
-			r.streamID = id
-		}
-		if _, _, end, err := reg.store.List(session, 0, event.Filter{}); err == nil {
-			r.cursor = end
+		if _, _, id, end, err := reg.store.ReadFromStream(session, "", 0); err == nil {
+			r.streamID, r.cursor = id, end
 		}
 		go r.run(ctx)
 		e = &entry{reader: r}

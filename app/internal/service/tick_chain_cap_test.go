@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -306,21 +307,12 @@ func TestTickSession_ChainCapAttemptEventRecordsNewStreakAfterPredicateGoesUnmet
 	}
 }
 
-// blockLogFile makes every eventlog.Append against store fail
-// deterministically: each call site builds a fresh eventlog.Store over
-// store.Dir() (service/event.go's own convention), so stripping write
-// permission from the shared store.db forces that fresh open to fail —
-// while store's own state.Store connection, already established before
-// this runs, keeps working, since Unix permission checks apply at open(2),
-// not to an already-open descriptor. It returns the blocked path so the
-// caller can restore it once the test no longer needs the failure.
-func blockLogFile(t *testing.T, store *state.Store) string {
+// blockLogFile arms a one-shot failure for store's next eventlog.Append (see
+// blockEventsDir in check_test.go for why file-level fault injection no
+// longer reaches it).
+func blockLogFile(t *testing.T, store *state.Store) {
 	t.Helper()
-	dbPath := filepath.Join(store.Dir(), "store.db")
-	if err := os.Chmod(dbPath, 0o444); err != nil {
-		t.Fatal(err)
-	}
-	return dbPath
+	eventlog.FailNextAppend(store.Dir(), errors.New("simulated publish failure"))
 }
 
 func TestTickSession_ChainCapAttemptEventRetriesAfterPublishFailure(t *testing.T) {
@@ -347,7 +339,7 @@ all = [ { check = "resource.state.checks_status", in = ["SUCCESS"] } ]
 	seedReviewWork(t, store, "work1", map[string]any{"checks_status": "SUCCESS"})
 	setParent(t, store, "work1", "parent1")
 
-	dbPath := blockLogFile(t, store)
+	blockLogFile(t, store)
 
 	res, err := TickSession(cfg, store, TickParams{SessionName: "work1", SkipRefresh: true})
 	if err != nil {
@@ -367,9 +359,6 @@ all = [ { check = "resource.state.checks_status", in = ["SUCCESS"] } ]
 		t.Fatalf("expected a chain-attempt event failure warning, got %+v", sp.Warnings)
 	}
 
-	if err := os.Chmod(dbPath, 0o644); err != nil {
-		t.Fatal(err)
-	}
 	res2, err := TickSession(cfg, store, TickParams{SessionName: "work1", SkipRefresh: true})
 	if err != nil {
 		t.Fatalf("TickSession(2): %v", err)

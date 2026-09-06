@@ -3,11 +3,10 @@ package webui
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -33,8 +32,14 @@ func TestEventsStreamJSON_RejectsInvalidCursor(t *testing.T) {
 	}
 }
 
-func fakeBusJSON(t *testing.T, wantSince string) *httptest.Server {
+// fakeBusJSON mimics the bus's /v1/stream: it emits one frame whose id is the
+// bus's internal "<streamID>:<seq>" resume token. streamID defaults to
+// "01GEN000" when empty.
+func fakeBusJSON(t *testing.T, wantSince, streamID string) *httptest.Server {
 	t.Helper()
+	if streamID == "" {
+		streamID = "01GEN000"
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/stream", func(w http.ResponseWriter, r *http.Request) {
 		if got := r.URL.Query().Get("since"); wantSince != "" && got != wantSince {
@@ -44,14 +49,14 @@ func fakeBusJSON(t *testing.T, wantSince string) *httptest.Server {
 		w.WriteHeader(http.StatusOK)
 		w.(http.Flusher).Flush()
 		_, _ = w.Write([]byte(": ping\n\n"))
-		_, _ = w.Write([]byte("id: 128\ndata: {\"id\":\"E1\",\"session_name\":\"acme/session-x\",\"type\":\"acme.reply\",\"source\":\"acme\",\"summary\":\"hi there\"}\n\n"))
+		fmt.Fprintf(w, "id: %s:128\ndata: {\"id\":\"E1\",\"session_name\":\"acme/session-x\",\"type\":\"acme.reply\",\"source\":\"acme\",\"summary\":\"hi there\"}\n\n", streamID)
 		w.(http.Flusher).Flush()
 	})
 	return httptest.NewServer(mux)
 }
 
 func TestEventsStreamJSON_RelaysEventsWithOpaqueResumeCursor(t *testing.T) {
-	bus := fakeBusJSON(t, "")
+	bus := fakeBusJSON(t, "", "")
 	defer bus.Close()
 
 	svc := &fakeService{resumeGen: "01GEN000"}
@@ -105,18 +110,12 @@ func TestEventsStreamJSON_RelaysEventsWithOpaqueResumeCursor(t *testing.T) {
 }
 
 func TestEventsStreamJSON_ResumesBusFromDecodedCursor(t *testing.T) {
-	bus := fakeBusJSON(t, "64")
+	bus := fakeBusJSON(t, "01GEN000:64", "01GEN000")
 	defer bus.Close()
 
-	// resolveGen re-resolves on every relayed frame (a stream can rotate
-	// mid-connection), so it calls EventStreamResume with "" again after
-	// the initial decode — track every call instead of the single last one.
-	var mu sync.Mutex
 	var gotCursors []string
 	svc := &fakeService{resumeFn: func(_, cursor string) (string, int64, error) {
-		mu.Lock()
 		gotCursors = append(gotCursors, cursor)
-		mu.Unlock()
 		return "01GEN000", 64, nil
 	}}
 	srv := httptest.NewServer(withBus(svc, bus.URL).Routes())
@@ -133,27 +132,21 @@ func TestEventsStreamJSON_ResumesBusFromDecodedCursor(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body would confirm since= assertion inside fakeBusJSON", resp.StatusCode)
 	}
-	// Reading the first line synchronizes with the handler before gotCursors is checked.
-	_, _ = bufio.NewReader(resp.Body).ReadString('\n')
-	mu.Lock()
-	defer mu.Unlock()
-	if !slices.Contains(gotCursors, "some-opaque-token") {
-		t.Errorf("gotCursors = %v, want the request's decoded cursor among them", gotCursors)
+	if len(gotCursors) != 1 || gotCursors[0] != "some-opaque-token" {
+		t.Errorf("gotCursors = %v, want exactly one call decoding the request's cursor", gotCursors)
 	}
 }
 
-func TestEventsStreamJSON_ResolvesGenerationEstablishedByTheFirstLiveEvent(t *testing.T) {
-	bus := fakeBusJSON(t, "")
+// TestEventsStreamJSON_FrameCursorCarriesTheBusFrameStreamID pins that the
+// outgoing cursor's stream id comes from the bus frame's own resume token,
+// not from a value resolved separately at connect time — the source of the
+// mislabeling bug where a frame still draining a superseded stream was
+// stamped with whatever stream had since become current.
+func TestEventsStreamJSON_FrameCursorCarriesTheBusFrameStreamID(t *testing.T) {
+	bus := fakeBusJSON(t, "", "01REAL000")
 	defer bus.Close()
 
-	calls := 0
-	svc := &fakeService{resumeFn: func(string, string) (string, int64, error) {
-		calls++
-		if calls == 1 {
-			return "", 0, nil
-		}
-		return "01REAL000", 0, nil
-	}}
+	svc := &fakeService{resumeGen: "01CONNECT"}
 	srv := httptest.NewServer(withBus(svc, bus.URL).Routes())
 	defer srv.Close()
 
@@ -181,7 +174,7 @@ func TestEventsStreamJSON_ResolvesGenerationEstablishedByTheFirstLiveEvent(t *te
 		t.Fatalf("decode cursor: %v", err)
 	}
 	if decoded.StreamID != "01REAL000" {
-		t.Errorf("frame cursor stream id = %q, want the id established by the first event, not the empty one seen at connect time", decoded.StreamID)
+		t.Errorf("frame cursor stream id = %q, want the bus frame's own stream id %q, not the connect-time one (%q)", decoded.StreamID, "01REAL000", "01CONNECT")
 	}
 }
 

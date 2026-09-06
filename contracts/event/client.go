@@ -116,18 +116,14 @@ func (c *Client) List(ctx context.Context, session string, order Order, cursor s
 // expected to dedup by Event.ID across reconnects. Returns when ctx is done.
 func (c *Client) Subscribe(ctx context.Context, session string, since int64, f Filter, fn func(Event, int64)) error {
 	backoff := 200 * time.Millisecond
+	var streamID string
 	cursor := since
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		n, err := c.streamOnce(ctx, session, cursor, f, func(ev Event, off int64) {
-			// off is the SSE `id` = the resume cursor (offset past this record),
-			// so the next reconnect requests since=off (no +1, no re-read).
-			cursor = off
-			fn(ev, off)
-		})
-		_ = n
+		nextStreamID, nextCursor, _, err := c.streamOnce(ctx, session, streamID, cursor, f, fn)
+		streamID, cursor = nextStreamID, nextCursor
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -145,33 +141,35 @@ func (c *Client) Subscribe(ctx context.Context, session string, since int64, f F
 	}
 }
 
-// streamOnce opens a single SSE connection and dispatches events until the
-// stream ends or ctx is cancelled. It returns the number of events delivered.
-func (c *Client) streamOnce(ctx context.Context, session string, since int64, f Filter, fn func(Event, int64)) (int, error) {
-	u := c.BaseURL + "/v1/stream?" + filterQuery(session, since, f).Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return 0, err
+// streamOnce opens a single SSE connection and dispatches events until the stream ends or ctx is cancelled, returning the (streamID, sequence) to resume from on the next reconnect and the number of events delivered.
+func (c *Client) streamOnce(ctx context.Context, session, streamID string, since int64, f Filter, fn func(Event, int64)) (nextStreamID string, nextSince int64, count int, err error) {
+	var resumeToken string
+	if since > 0 || streamID != "" {
+		resumeToken = EncodeResumeToken(streamID, since)
+	}
+	u := c.BaseURL + "/v1/stream?" + filterQuery(session, resumeToken, f).Encode()
+	req, rerr := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if rerr != nil {
+		return streamID, since, 0, rerr
 	}
 	req.Header.Set("Accept", "text/event-stream")
-	if since > 0 {
-		req.Header.Set("Last-Event-ID", strconv.FormatInt(since, 10))
+	if resumeToken != "" {
+		req.Header.Set("Last-Event-ID", resumeToken)
 	}
 	c.auth(req)
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return 0, err
+	resp, derr := c.HTTP.Do(req)
+	if derr != nil {
+		return streamID, since, 0, derr
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("subscribe: %s", resp.Status)
+		return streamID, since, 0, fmt.Errorf("subscribe: %s", resp.Status)
 	}
 
 	sc := bufio.NewScanner(resp.Body)
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	var dataLines []string
-	var lastID int64
-	count := 0
+	lastStreamID, lastSeq := streamID, since
 	for sc.Scan() {
 		line := sc.Text()
 		switch {
@@ -181,17 +179,19 @@ func (c *Client) streamOnce(ctx context.Context, session string, since int64, f 
 			}
 			var ev Event
 			if err := json.Unmarshal([]byte(strings.Join(dataLines, "\n")), &ev); err == nil {
-				fn(ev, lastID)
+				fn(ev, lastSeq)
 				count++
 			}
 			dataLines = dataLines[:0]
 		case strings.HasPrefix(line, "id:"):
-			lastID, _ = strconv.ParseInt(strings.TrimSpace(line[3:]), 10, 64)
+			if sid, seq, ok := ParseResumeToken(strings.TrimSpace(line[3:])); ok {
+				lastStreamID, lastSeq = sid, seq
+			}
 		case strings.HasPrefix(line, "data:"):
 			dataLines = append(dataLines, strings.TrimPrefix(strings.TrimPrefix(line[5:], " "), ""))
 		}
 	}
-	return count, sc.Err()
+	return lastStreamID, lastSeq, count, sc.Err()
 }
 
 // addFilterParams encodes the type/source/direction/delivery_mode/limit
@@ -230,14 +230,12 @@ func listQuery(session string, order Order, cursor string, f Filter) url.Values 
 	return q
 }
 
-// filterQuery encodes session + sequence `since` + filter for the streaming
-// path (GET /v1/stream), whose replay cursor rides as the SSE id frame /
-// Last-Event-ID. session rides as a query param for the same reason as listQuery.
-func filterQuery(session string, since int64, f Filter) url.Values {
+// filterQuery encodes session + resume token + filter for the streaming path (GET /v1/stream); resumeToken is "" for a fresh connect.
+func filterQuery(session, resumeToken string, f Filter) url.Values {
 	q := url.Values{}
 	q.Set("session", session)
-	if since > 0 {
-		q.Set("since", strconv.FormatInt(since, 10))
+	if resumeToken != "" {
+		q.Set("since", resumeToken)
 	}
 	addFilterParams(q, f)
 	return q

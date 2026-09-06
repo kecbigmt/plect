@@ -121,38 +121,44 @@ func (db *DB) EventStreamSessions(ctx context.Context) ([]string, error) {
 // with no current stream returns empty, not an error: a read has nothing to
 // reject a missing stream against, unlike an append or a cursor commit.
 func (db *DB) ListEventsFrom(ctx context.Context, session string, since int64) ([]event.Event, []int64, error) {
-	var evs []event.Event
-	var seqs []int64
-	err := db.WithReadTx(ctx, func(tx *sql.Tx) error {
+	evs, seqs, _, err := db.listCurrentEventsFrom(ctx, session, since)
+	return evs, seqs, err
+}
+
+// ListCurrentEventsFrom is ListEventsFrom's counterpart that also returns the current stream id, resolved atomically with the rows in the same read transaction rather than a separate, racing StreamID-then-List.
+func (db *DB) ListCurrentEventsFrom(ctx context.Context, session string, since int64) (evs []event.Event, seqs []int64, streamID string, err error) {
+	return db.listCurrentEventsFrom(ctx, session, since)
+}
+
+func (db *DB) listCurrentEventsFrom(ctx context.Context, session string, since int64) (evs []event.Event, seqs []int64, streamID string, err error) {
+	err = db.WithReadTx(ctx, func(tx *sql.Tx) error {
 		q := sqlcgen.New(tx)
-		streamID, err := q.GetEventStreamIDBySession(ctx, session)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
+		id, gerr := q.GetEventStreamIDBySession(ctx, session)
+		if gerr != nil {
+			if errors.Is(gerr, sql.ErrNoRows) {
 				return nil
 			}
-			return fmt.Errorf("get event stream id for %q: %w", session, err)
+			return fmt.Errorf("get event stream id for %q: %w", session, gerr)
 		}
-		rows, err := q.ListEventsFromByStream(ctx, sqlcgen.ListEventsFromByStreamParams{
+		streamID = id
+		rows, lerr := q.ListEventsFromByStream(ctx, sqlcgen.ListEventsFromByStreamParams{
 			StreamID: streamID,
 			Sequence: since,
 		})
-		if err != nil {
-			return fmt.Errorf("list events for %q from %d: %w", session, since, err)
+		if lerr != nil {
+			return fmt.Errorf("list events for %q from %d: %w", session, since, lerr)
 		}
 		for _, row := range rows {
-			ev, err := eventFromRow(row, session)
-			if err != nil {
-				return err
+			ev, eerr := eventFromRow(row, session)
+			if eerr != nil {
+				return eerr
 			}
 			evs = append(evs, ev)
 			seqs = append(seqs, row.Sequence)
 		}
 		return nil
 	})
-	if err != nil {
-		return nil, nil, err
-	}
-	return evs, seqs, nil
+	return evs, seqs, streamID, err
 }
 
 // ListEventsFromStreamID returns every event of the given stream id at or

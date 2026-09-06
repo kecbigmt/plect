@@ -64,7 +64,7 @@ func fakeBus(t *testing.T) *httptest.Server {
 		w.(http.Flusher).Flush()
 		// keepalive comment, then one event with a body that spans lines.
 		_, _ = w.Write([]byte(": ping\n\n"))
-		_, _ = w.Write([]byte("id: 128\ndata: {\"id\":\"E1\",\"session_name\":\"o/r-1\",\"type\":\"claude.reply\",\"source\":\"claude\",\"summary\":\"hi there\"}\n\n"))
+		_, _ = w.Write([]byte("id: 01GEN000:128\ndata: {\"id\":\"E1\",\"session_name\":\"o/r-1\",\"type\":\"claude.reply\",\"source\":\"claude\",\"summary\":\"hi there\"}\n\n"))
 		w.(http.Flusher).Flush()
 	})
 	return httptest.NewServer(mux)
@@ -115,13 +115,14 @@ func TestEventsStream_RelaysRenderedRows(t *testing.T) {
 	if !sawPing {
 		t.Error("keepalive comment was not forwarded to the browser")
 	}
-	// The bus's raw "id: 128" is re-encoded as an opaque v2 cursor, never a bare integer.
+	// The bus's raw "id: 01GEN000:128" is re-encoded as an opaque v2 cursor,
+	// carrying the bus frame's own stream id, never a bare integer.
 	cur, err := event.DecodeCursor(gotID)
 	if err != nil {
 		t.Fatalf("resume id %q did not decode as an opaque cursor: %v", gotID, err)
 	}
-	if cur.V != event.CursorVersion || cur.Off != 128 || cur.Ord != event.OrderAsc {
-		t.Errorf("resume cursor = %+v, want V=%d Off=128 Ord=asc", cur, event.CursorVersion)
+	if cur.V != event.CursorVersion || cur.Off != 128 || cur.Ord != event.OrderAsc || cur.StreamID != "01GEN000" {
+		t.Errorf("resume cursor = %+v, want V=%d Off=128 Ord=asc StreamID=01GEN000", cur, event.CursorVersion)
 	}
 	if !sawRow {
 		t.Error("event was not rendered as a timeline row")

@@ -67,7 +67,7 @@ func (s *Server) handleSessionEventsStream(w http.ResponseWriter, r *http.Reques
 		gen, since = g, seq
 	}
 
-	resp, err := s.openBusStream(ctx, s.busClient(), session, since)
+	resp, err := s.openBusStream(ctx, s.busClient(), session, gen, since)
 	if err != nil {
 		http.Error(w, "event bus unavailable", http.StatusBadGateway)
 		return
@@ -80,33 +80,23 @@ func (s *Server) handleSessionEventsStream(w http.ResponseWriter, r *http.Reques
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	known := gen
-	// Re-resolved on every call rather than cached: a destroy + same-name
-	// recreate mints a new stream mid-connection, and a cursor still
-	// carrying the superseded id would validate against the wrong
-	// incarnation on the browser's next reconnect.
-	resolveGen := func() string {
-		if g, _, gerr := s.svc.EventStreamResume(session, ""); gerr == nil {
-			known = g
-		}
-		return known
-	}
-
 	// Relay until the bus stream ends or the browser disconnects (ctx cancel).
 	// Either way the browser's EventSource reconnects on its own, resuming from
 	// the last id we emitted.
-	_ = s.relayBusBody(resp.Body, w, flusher, resolveGen)
+	_ = s.relayBusBody(resp.Body, w, flusher)
 }
 
 // openBusStream opens one bus SSE connection. A fresh connect (since==0) asks
-// for the recent tail; a reconnect resumes from its sequence. It returns the
-// response only on a 200, so the caller can map a failure to a 502 before
+// for the recent tail; a reconnect resumes from its (stream, sequence) pair —
+// the bus's own resume token, so a rotation mid-connection is the bus's
+// concern to drain correctly, not something this relay re-derives. It returns
+// the response only on a 200, so the caller can map a failure to a 502 before
 // committing the stream's own 200.
-func (s *Server) openBusStream(ctx context.Context, c *event.Client, session string, since int64) (*http.Response, error) {
+func (s *Server) openBusStream(ctx context.Context, c *event.Client, session, gen string, since int64) (*http.Response, error) {
 	q := url.Values{}
 	q.Set("session", session)
 	if since > 0 {
-		q.Set("since", strconv.FormatInt(since, 10))
+		q.Set("since", gen+":"+strconv.FormatInt(since, 10))
 	} else {
 		q.Set("tail", strconv.Itoa(streamTailLimit))
 	}
@@ -116,7 +106,7 @@ func (s *Server) openBusStream(ctx context.Context, c *event.Client, session str
 	}
 	req.Header.Set("Accept", "text/event-stream")
 	if since > 0 {
-		req.Header.Set("Last-Event-ID", strconv.FormatInt(since, 10))
+		req.Header.Set("Last-Event-ID", gen+":"+strconv.FormatInt(since, 10))
 	}
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
@@ -136,11 +126,16 @@ func (s *Server) openBusStream(ctx context.Context, c *event.Client, session str
 // frame into a timeline <li> and forwarding the bus's comment lines verbatim
 // (": connected" / ": ping") so an idle browser connection stays warm. It
 // returns when the bus stream ends, the context is cancelled, or a browser write
-// fails. resolveGen re-encodes each frame's raw bus sequence as an opaque cursor.
-func (s *Server) relayBusBody(body io.Reader, w io.Writer, flusher http.Flusher, resolveGen func() string) error {
+// fails. Each bus frame's id carries "<streamID>:<seq>" (the bus's own resume
+// token, already stream-scoped), which is re-encoded verbatim as the browser's
+// opaque cursor rather than re-derived from separately polled "current" state —
+// state that could already have moved past the stream this particular frame
+// belongs to.
+func (s *Server) relayBusBody(body io.Reader, w io.Writer, flusher http.Flusher) error {
 	sc := bufio.NewScanner(body)
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	var dataLines []string
+	var lastStreamID string
 	var lastSeq int64
 	for sc.Scan() {
 		line := sc.Text()
@@ -151,7 +146,7 @@ func (s *Server) relayBusBody(body io.Reader, w io.Writer, flusher http.Flusher,
 			}
 			var ev event.Event
 			if json.Unmarshal([]byte(strings.Join(dataLines, "\n")), &ev) == nil {
-				cursor := event.Cursor{V: event.CursorVersion, Off: lastSeq, Ord: event.OrderAsc, StreamID: resolveGen()}.Encode()
+				cursor := event.Cursor{V: event.CursorVersion, Off: lastSeq, Ord: event.OrderAsc, StreamID: lastStreamID}.Encode()
 				if err := writeEventFrame(w, cursor, s.renderEventRow(ev)); err != nil {
 					return err
 				}
@@ -164,7 +159,7 @@ func (s *Server) relayBusBody(body io.Reader, w io.Writer, flusher http.Flusher,
 			}
 			flusher.Flush()
 		case strings.HasPrefix(line, "id:"):
-			lastSeq, _ = strconv.ParseInt(strings.TrimSpace(line[3:]), 10, 64)
+			lastStreamID, lastSeq, _ = event.ParseResumeToken(strings.TrimSpace(line[3:]))
 		case strings.HasPrefix(line, "data:"):
 			dataLines = append(dataLines, strings.TrimPrefix(line[len("data:"):], " "))
 		}

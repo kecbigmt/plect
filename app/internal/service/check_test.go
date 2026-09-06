@@ -2,9 +2,8 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -1051,26 +1050,16 @@ revision = { type = "string", mutable = true }
 	}}, []nodeFixture{{id: "initial", uses: "work"}})
 }
 
-// blockEventsDir makes every eventlog.Append against store fail
-// deterministically, to exercise CheckSession's publish-failure retry
-// contract. Each call site builds a fresh eventlog.Store over store.Dir()
-// (service/event.go's own convention), so stripping write permission from
-// the shared store.db forces that fresh open to fail — while store's own
-// state.Store connection, already established before this runs (via
-// seedSession's writes), keeps working, since Unix permission checks apply
-// at open(2), not to an already-open descriptor.
+// blockEventsDir arms a one-shot failure for store's next eventlog.Append, to
+// exercise CheckSession's publish-failure retry contract. eventlog.Store
+// shares one long-lived database connection per path, so an already-open
+// connection is unaffected by an external permission or content change, and
+// SQLite's single writer lock spans the whole database file (blocking
+// state.Store's unrelated writes too) — eventlog.FailNextAppend is the only
+// way left to fail one Append deterministically without either problem.
 func blockEventsDir(t *testing.T, store *state.Store) {
 	t.Helper()
-	if err := os.Chmod(filepath.Join(store.Dir(), "store.db"), 0o444); err != nil {
-		t.Fatalf("blockEventsDir: %v", err)
-	}
-}
-
-func unblockEventsDir(t *testing.T, store *state.Store) {
-	t.Helper()
-	if err := os.Chmod(filepath.Join(store.Dir(), "store.db"), 0o644); err != nil {
-		t.Fatalf("unblockEventsDir: %v", err)
-	}
+	eventlog.FailNextAppend(store.Dir(), errors.New("simulated publish failure"))
 }
 
 // A publish failure must leave the tick marker unadvanced (no heartbeat
@@ -1097,7 +1086,6 @@ func TestTickSession_PublishFailureLeavesMarkerUnadvancedForRetry(t *testing.T) 
 		t.Fatalf("done_when state = %+v, want no marker persisted on publish failure", check)
 	}
 
-	unblockEventsDir(t, store)
 	result, err := TickSession(cfg, store, TickParams{SessionName: "owner/repo-1", Trigger: TickTriggerHeartbeat})
 	if err != nil {
 		t.Fatalf("retry TickSession: %v", err)
@@ -1140,7 +1128,6 @@ func TestTickSession_SatisfiedPublishFailureAllowsRetry(t *testing.T) {
 		t.Fatalf("done_when state = %+v, want not marked satisfied after a failed push", check)
 	}
 
-	unblockEventsDir(t, store)
 	result, err := TickSession(cfg, store, TickParams{SessionName: "owner/repo-1"})
 	if err != nil {
 		t.Fatalf("retry TickSession: %v", err)
