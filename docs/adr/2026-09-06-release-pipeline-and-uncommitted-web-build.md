@@ -292,12 +292,14 @@ pkgs.stdenvNoCC.mkDerivation {
 
 The downstream flake removes its `plect` source input, `plectSrc` special
 argument, `vendorHash`, `overrideModAttrs`, and Plecture's `checkFlags`. It
-also removes the three stale plugin `subPackages` entries and the leftover
-`github-watcher` user unit that points at an old Nix store path. The
-[downstream module](https://github.com/kecbigmt/devbox/blob/main/nixos/modules/plect.nix)
-states that `plect-bus` supervises catalog-declared services, so the PR does
-not replace that unit. The downstream catalog configuration and lock remain
-because they pin and build the enabled plugins on the host.
+also removes the three stale plugin `subPackages` entries. A running
+`github-watcher` from an old Nix store path is an in-memory leftover from a
+previous host generation, so the migration performs the one-time host cleanup
+`systemctl --user stop github-watcher.service`; it removes no repository unit.
+The [downstream actionlog configuration](https://github.com/kecbigmt/devbox/blob/main/nixos/modules/actionlogd.nix)
+states that `plect-bus` supervises catalog-declared services. The downstream
+catalog configuration and lock remain because they pin and build the enabled
+plugins on the host.
 
 Plecture source integration tests continue to run in Plecture pull-request CI
 and must pass before the tagged commit is released. The downstream repository
