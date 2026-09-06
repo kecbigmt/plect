@@ -373,8 +373,8 @@ returning failure.
 | Option | Layer | Assessment |
 |---|---|---|
 | Do not build this | prompt | Viable only after verify-before-skip covers the common repair path, but still leaves no explicit operator command for replacing a suspect runtime while preserving session work. |
-| Keep one `--force-recreate` flag | core | Rejected. One flag cannot distinguish a safe runtime rebuild from discarding session-scoped work. |
-| Replace it with a scoped recreate mode | core | Recommended. The CLI names the lifecycle scope the operator intends to discard. |
+| Keep `--force-recreate` and add an explicit session-state discard flag | core | Recommended. The existing flag retains its Docker Compose meaning, while the additive flag names the destructive boundary. |
+| Replace it with a scoped recreate mode | core | Rejected. `run` and `all` expose Plecture's internal scope vocabulary, and `all` does not tell callers what it discards. |
 
 #### Recommendation
 
@@ -382,31 +382,52 @@ Plain `plect up` is the safe repair operation: it verifies produced nodes
 before skipping and rebuilds only nodes whose liveness check failed and their
 dependents.
 
-The boolean `--force-recreate` is retired and replaced by an explicit scoped
-mode:
+`--force-recreate` retains the Docker Compose meaning: it recreates the
+disposable runtime while retaining the durable session surface. An explicit
+additive flag discards that durable surface only when the operator asks for it:
 
 ```bash
-plect up <session-or-resource> --recreate=run
-plect up <session-or-resource> --recreate=all
+plect up <session-or-resource> --force-recreate
+plect up <session-or-resource> --force-recreate --discard-session-state
 ```
 
-`--recreate=run` cleans and forgets only run-scoped workflow nodes and runtime
-observation state, then runs setup. It preserves session-scoped nodes,
-conversation state, session inputs, dynamic task instances, done_when state,
-and the event log.
+`--force-recreate` cleans run-scoped workflow nodes, forgets their production
+records so their setup actions do not receive `.Prev`, and then runs setup.
+It preserves session-scoped workflow nodes, the workspace provider and its
+outputs, conversation and message state, session inputs, dynamic task
+instances and their judge state, runtime observation state, and the event log.
+It is the explicit operation for replacing a wedged-but-alive runtime or
+starting an agent with a fresh runtime conversation.
 
-`--recreate=all` cleans and forgets session-scoped and run-scoped workflow
-nodes, dynamic task instances, health state, channel health state, tick
-backoff, and runtime observation state while preserving the session identity,
-resource mapping, parent relation, inputs, and event log. Operators use
-`plect destroy` when they intend to remove the session rather than rebuild it.
+`plect down` followed by `plect up` is different: it cleans run-scoped nodes
+but retains their records and therefore permits setup to receive `.Prev` when
+the runtime is brought back. It is the ordinary side-effect-preserving repair
+operation, not a forced fresh runtime.
+
+`--discard-session-state` is valid only with `--force-recreate`. It cleans and
+forgets both workflow-node scopes; unconditionally cleans and reruns the
+workspace provider; and clears the workspace provider outputs, `Branch`,
+`WorkspaceDirPath`, `Conversation`, `Message`, dynamic task instances, health
+state, channel health state, tick backoff, and runtime observation state. It
+preserves the session identity, resource mapping, parent relation, inputs, and
+event log. This is the last-resort recovery path for a lost worktree or other
+session-scoped failure; it deliberately remains outside the liveness
+verification model in decision 1.
+
+Plain `up` repairs only a liveness-failed node and its dependents in place, so
+it does not emit `plect.workflow_population.up`. Either forced-recreate form
+first makes the member run down and then produces it again, so a
+population-produced session emits `plect.workflow_population.up` for that real
+down-to-up transition.
 
 This is a core decision. Prompt aliases cannot make the destructive boundary
 visible to API callers, MCP callers, or scripts. Plugins do not own the
 session task map. Config should not carry one-off operator intent.
 
-There is no compatibility shim: scripts and documentation using
-`--force-recreate` migrate once to `--recreate=run` or `--recreate=all`.
+This changes the old flag's destructive behavior without adding a compatibility
+path. Callers that relied on `--force-recreate` to discard session-scoped work
+must add `--discard-session-state`; callers that only need a fresh runtime keep
+using `--force-recreate`.
 
 ### 6. Population-produced sessions receive node-result events directly
 
@@ -490,9 +511,10 @@ outputs. Core cannot safely clean up what it cannot identify, so plugin
 selftests for launch effects should cover timeout cleanup as behavior tests
 when those implementations land. This ADR does not add a standing CI check.
 
-Retiring `--force-recreate` is a breaking CLI change. The one-time migration
-is a script and documentation sweep from `--force-recreate` to the appropriate
-scoped `--recreate` value. There is no compatibility alias.
+Narrowing `--force-recreate` is a breaking CLI change. The one-time migration
+adds `--discard-session-state` to callers that relied on it to discard
+session-scoped work; callers that only need a fresh runtime keep the existing
+flag. There is no compatibility alias for the old destructive behavior.
 
 This decision does not implement the described changes. Follow-up
 implementation issues carry the code, tests, migrations, and schema updates
@@ -548,8 +570,12 @@ Rejected. A failed or missing current-plan node is a core health fact.
 Letting workflows redefine it would put two authorities behind the health
 report and force dispatchers to re-learn each workflow's private meaning.
 
-### Keep `--force-recreate` and add safer flags beside it
+### Replace `--force-recreate` with scoped recreate modes
 
-Rejected. The existing name does not say what state is discarded. Keeping it
-would preserve the footgun and make scripts choose among overlapping flags.
-A single scoped flag names the destructive boundary directly.
+Rejected. `--force-recreate` has a familiar Docker Compose meaning: recreate
+the disposable runtime while retaining durable state. Replacing it with
+`--recreate=run|all` makes callers learn Plecture's internal scope vocabulary,
+and `all` conceals the same destructive boundary the replacement was intended
+to expose. Keeping the established flag for runtime recreation and requiring
+the additive `--discard-session-state` flag for session-scoped destruction
+keeps both operations legible.
