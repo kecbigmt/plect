@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -111,8 +112,17 @@ type effectHarness struct {
 	// rather than polling signal 0 (which a zombie still answers).
 	liveProcess int
 	liveCmd     *exec.Cmd
-	scrub       []struct{ from, to string }
-	expand      []struct{ from, to string }
+	// workerProcess/workerCmd is a second, independent live process for an
+	// effect whose launched thing is not the interactive endpoint's own root
+	// process (e.g. a headless worker started as a plain child rather than
+	// exec'd into the pane). Kept separate from liveProcess/liveCmd so a
+	// scenario can assert this one died while the endpoint's own root
+	// process — liveProcess — stayed alive, proving a kill-on-failure path
+	// terminated the right process.
+	workerProcess int
+	workerCmd     *exec.Cmd
+	scrub         []struct{ from, to string }
+	expand        []struct{ from, to string }
 }
 
 func recordShippedEffects(t *testing.T, source string, scenarios map[string][]effectScenario) string {
@@ -239,6 +249,25 @@ func (h *effectHarness) startLiveProcess(t *testing.T) {
 	}
 }
 
+// startWorkerProcess is startLiveProcess's counterpart for a launched thing
+// distinct from the endpoint's own root process — see effectHarness's
+// workerProcess field. A scenario that never reads PLECT_EFFECT_WORKER_PID
+// simply leaves this process idle until the test's own cleanup reaps it.
+func (h *effectHarness) startWorkerProcess(t *testing.T) {
+	t.Helper()
+	cmd := exec.Command("sleep", "600")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+	})
+	h.workerProcess = cmd.Process.Pid
+	h.workerCmd = cmd
+	t.Setenv("PLECT_EFFECT_WORKER_PID", strconv.Itoa(h.workerProcess))
+}
+
 // effectSpyAnswer lets each plugin say how its own executables answer, as
 // shell source run after the call is recorded. It is source rather than fixed
 // output because one executable answers differently per verb, and a script
@@ -317,6 +346,7 @@ func copyDirOver(t *testing.T, from, to string) {
 func (h *effectHarness) runScenario(t *testing.T, b *strings.Builder, def config.TaskDefinition, id, label string, scenario effectScenario) {
 	t.Helper()
 	h.startLiveProcess(t)
+	h.startWorkerProcess(t)
 	t.Setenv("PLECT_EFFECT_CAPTURE", scenario.Capture)
 	for _, file := range scenario.Files {
 		path := filepath.Join(h.homeDir, file.Path)
@@ -331,10 +361,6 @@ func (h *effectHarness) runScenario(t *testing.T, b *strings.Builder, def config
 	if err != nil {
 		t.Fatalf("ResolveDefinition(%s): %v", id, err)
 	}
-	// A node input is a literal here rather than a projection of another
-	// node's outputs: this record is one effect's own contract, so the
-	// scenario states the values it is set up with directly.
-	resolved.Inputs = literalValues(scenario.Inputs)
 	session := h.sessionVars()
 	tasks := map[string]*contract.TaskState{}
 	if len(scenario.Prev) > 0 {
@@ -346,27 +372,66 @@ func (h *effectHarness) runScenario(t *testing.T, b *strings.Builder, def config
 	}
 
 	self := asAnyMap(scenario.Self)
+	// The scenario's own "current" inputs: RetryInputs replaces Inputs once
+	// the retry attempt below has run, so any hook after "setup" in the list
+	// (health.alive, cleanup, ...) sees the inputs the produced instance
+	// actually carries.
+	currentInputs := scenario.Inputs
 	for _, hook := range scenario.hooks(def) {
-		if err := os.Remove(h.argvLog); err != nil && !os.IsNotExist(err) {
-			t.Fatal(err)
+		if hook == "setup" && len(scenario.RetryInputs) > 0 {
+			// RetryInputs splits "setup" into two runs against the same
+			// sandbox and live processes: a first attempt (expected to fail
+			// and, for a kill-on-failure scenario, take the worker process
+			// with it) and a second, freshly-launched attempt that proves
+			// the failure left nothing behind for a retry to collide with.
+			self = h.runOneHook(t, b, def, "setup", "", resolved, id, label, session, tasks, self, scenario.Inputs, scenario.Artifacts)
+			if scenario.ExpectWorkerProcessDead {
+				h.assertWorkerProcessDead(t)
+				h.assertPaneProcessAlive(t)
+			}
+			h.startWorkerProcess(t)
+			currentInputs = scenario.RetryInputs
+			self = h.runOneHook(t, b, def, "setup", " (retry)", resolved, id, label, session, tasks, self, currentInputs, scenario.Artifacts)
+			continue
 		}
-		fmt.Fprintf(b, "== %s / %s\n", label, hook)
-		outcome := h.runHook(t, hook, def, resolved, session, tasks, self, scenario.Inputs)
-		for i, call := range recordedCalls(t, h.argvLog, h.mounted.Dir) {
-			fmt.Fprintf(b, "call[%d]: %s\n", i, h.scrubbed(call))
-		}
-		fmt.Fprintf(b, "%s\n", h.scrubbed(outcome))
-		if state := tasks[id]; state != nil && state.Status == contract.TaskStatusProduced {
-			self = state.Outputs
-		}
-		if hook == "setup" {
-			h.writeArtifacts(t, b, scenario.Artifacts, self)
-		}
-		b.WriteString("\n")
+		self = h.runOneHook(t, b, def, hook, "", resolved, id, label, session, tasks, self, currentInputs, scenario.Artifacts)
 	}
 	if scenario.ExpectLiveProcessDead {
 		h.assertLiveProcessDead(t)
 	}
+	if scenario.ExpectWorkerProcessDead && len(scenario.RetryInputs) == 0 {
+		h.assertWorkerProcessDead(t)
+		h.assertPaneProcessAlive(t)
+	}
+}
+
+// runOneHook runs a single named hook, recording its calls and outcome (plus
+// any setup artifacts) into b, and returns the outputs a produced setup left
+// for a later hook's Self. suffix distinguishes a retried "setup" run's
+// section from its first attempt in the transcript.
+func (h *effectHarness) runOneHook(t *testing.T, b *strings.Builder, def config.TaskDefinition, hook, suffix string, resolved Resolved, id, label string, session SessionVars, tasks map[string]*contract.TaskState, self map[string]any, inputs map[string]string, artifacts []effectScenarioArtifact) map[string]any {
+	t.Helper()
+	// A node input is a literal here rather than a projection of another
+	// node's outputs: this record is one effect's own contract, so the
+	// scenario states the values it is set up with directly.
+	resolved.Inputs = literalValues(inputs)
+	if err := os.Remove(h.argvLog); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	fmt.Fprintf(b, "== %s / %s%s\n", label, hook, suffix)
+	outcome := h.runHook(t, hook, def, resolved, session, tasks, self, inputs)
+	for i, call := range recordedCalls(t, h.argvLog, h.mounted.Dir) {
+		fmt.Fprintf(b, "call[%d]: %s\n", i, h.scrubbed(call))
+	}
+	fmt.Fprintf(b, "%s\n", h.scrubbed(outcome))
+	if state := tasks[id]; state != nil && state.Status == contract.TaskStatusProduced {
+		self = state.Outputs
+	}
+	if hook == "setup" {
+		h.writeArtifacts(t, b, artifacts, self)
+	}
+	b.WriteString("\n")
+	return self
 }
 
 // assertLiveProcessDead waits for the sandbox's live process to be reaped,
@@ -387,6 +452,35 @@ func (h *effectHarness) assertLiveProcessDead(t *testing.T) {
 		t.Error("scenario declares expect_live_process_dead, but the sandbox's live process is still running")
 		_ = h.liveCmd.Process.Kill()
 		<-done
+	}
+}
+
+// assertWorkerProcessDead is assertLiveProcessDead's counterpart for the
+// worker process (see effectHarness.workerProcess).
+func (h *effectHarness) assertWorkerProcessDead(t *testing.T) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		_ = h.workerCmd.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Error("scenario declares expect_worker_process_dead, but the sandbox's worker process is still running")
+		_ = h.workerCmd.Process.Kill()
+		<-done
+	}
+}
+
+// assertPaneProcessAlive is assertWorkerProcessDead's complement: the whole
+// point of tracking a separate worker process is to prove a kill-on-failure
+// path took the worker and left the endpoint's own root process alone, so a
+// scenario that asserts the worker died also asserts this one didn't.
+func (h *effectHarness) assertPaneProcessAlive(t *testing.T) {
+	t.Helper()
+	if err := h.liveCmd.Process.Signal(syscall.Signal(0)); err != nil {
+		t.Errorf("expected the endpoint's own root process to survive a worker-only kill, but it is gone: %v", err)
 	}
 }
 
@@ -569,7 +663,8 @@ func (h *effectHarness) scrubbed(s string) string {
 	for _, rule := range h.scrub {
 		s = strings.ReplaceAll(s, rule.from, rule.to)
 	}
-	return strings.ReplaceAll(s, strconv.Itoa(h.liveProcess), "<pid>")
+	s = strings.ReplaceAll(s, strconv.Itoa(h.liveProcess), "<pid>")
+	return strings.ReplaceAll(s, strconv.Itoa(h.workerProcess), "<pid>")
 }
 
 func (h *effectHarness) expanded(s string) string {

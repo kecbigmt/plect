@@ -20,6 +20,12 @@ profile_name="${3:?profile_name required}"
 
 mkdir -p "$queue_dir" "$state_dir/log"
 
+# A bash script's own pid is not recoverable from its process name (comm is
+# the interpreter's, "bash", regardless of the script file executed), so this
+# is the only way the owning task's setup can identify — and later
+# terminate — this specific worker instance.
+printf '%s' "$$" > "$state_dir/worker.pid"
+
 # CODEX_MODEL / CODEX_MODEL_REASONING_EFFORT (set by tasks/exec_runtime.toml's
 # setup from the model/effort inputs) map onto codex's own `-m` / `-c
 # model_reasoning_effort=` flags — empty means codex's config default, not a

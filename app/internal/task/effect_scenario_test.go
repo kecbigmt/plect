@@ -52,6 +52,22 @@ type effectScenario struct {
 	// or cleanup path be verified by a real process's death rather than by
 	// trusting that a recorded call did what it claims.
 	ExpectLiveProcessDead bool `toml:"expect_live_process_dead"`
+	// ExpectWorkerProcessDead is ExpectLiveProcessDead's counterpart for an
+	// effect whose launched thing is not the interactive endpoint's own root
+	// process: the harness starts a second, independent live process for
+	// this variant (see effectHarness.workerProcess) and asserts that one
+	// dies, while the endpoint's own root process — the value `{ terminal =
+	// "pid" }` resolves to — is asserted still alive. This is what proves a
+	// kill-on-failure path terminated the right process rather than the
+	// endpoint hosting it.
+	ExpectWorkerProcessDead bool `toml:"expect_worker_process_dead"`
+	// RetryInputs, when set, runs setup a second time against the same
+	// sandbox and live processes this variant started, with these inputs
+	// instead of Inputs. This is what lets a scenario prove a retry
+	// succeeds against exactly the state a first, failed attempt left
+	// behind — not merely a later, independently-started scenario that
+	// happens to share on-disk paths.
+	RetryInputs map[string]string `toml:"retry_inputs"`
 }
 
 type effectScenarioFile struct {

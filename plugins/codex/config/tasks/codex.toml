@@ -102,8 +102,7 @@ touch "$MARKER"
 # launch_timeout, not a fixed bound: a cold pane can spend several seconds
 # loading its shell environment before the codex command even runs, and
 # both detection waits below share this one knob rather than exposing two.
-LAUNCH_TIMEOUT="${launch_timeout:-120s}"
-TIMEOUT_SECONDS="${LAUNCH_TIMEOUT%s}"
+TIMEOUT_SECONDS="${launch_timeout%s}"
 ATTEMPTS=$((TIMEOUT_SECONDS * 2))
 
 # No `exec`: Codex runs as a child of the pane shell, so exiting Codex
@@ -227,7 +226,7 @@ model           = { from = "inputs.model", optional = true }
 effort          = { from = "inputs.effort", optional = true }
 launch_env      = { from = "inputs.launch_env", optional = true }
 path_prepend    = { from = "inputs.path_prepend", optional = true }
-launch_timeout  = { from = "inputs.launch_timeout", optional = true }
+launch_timeout  = { from = "inputs.launch_timeout", default = "120s" }
 prev_session_id = { from = "prev.session_id", optional = true }
 activity_bin    = { bin = "codex-agent-activity" }
 capture         = { terminal = "capture" }
@@ -295,9 +294,8 @@ path_prepend = { type = "string", pattern = "^[A-Za-z0-9_./:-]*$" }
 # launch_timeout: restricted to digits-plus-"s" so the setup script can strip
 # the suffix and use the result directly in shell arithmetic — no separate
 # duration parser needed, and no non-numeric value can reach $(( )). The
-# schema default documents the same "120s" the setup script's own
-# `${launch_timeout:-120s}` fallback applies; the language runtime does not
-# fill in JSON-schema defaults itself.
+# effective default of 120s is applied by this effect's own setup.bind
+# (`default = "120s"` on the launch_timeout binding), not by this key.
 launch_timeout = { type = "string", pattern = "^[1-9][0-9]*s$", default = "120s" }
 
 [codex.outputs_schema]

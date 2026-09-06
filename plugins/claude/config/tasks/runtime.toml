@@ -184,8 +184,7 @@ sh -c "$send_keys" terminal-send-keys Enter
 # a network volume, even though claude itself did come up. A warm pane still
 # clears in a couple of iterations, so a longer default only costs time on
 # the failure path.
-LAUNCH_TIMEOUT="${launch_timeout:-120s}"
-LAUNCH_TIMEOUT_SECONDS="${LAUNCH_TIMEOUT%s}"
+LAUNCH_TIMEOUT_SECONDS="${launch_timeout%s}"
 ATTEMPTS=$((LAUNCH_TIMEOUT_SECONDS * 2))
 
 PREV_PID="${prev_pid-}"
@@ -205,7 +204,7 @@ while [ "$i" -lt "$ATTEMPTS" ]; do
   sh -c "$send_keys" terminal-send-keys Enter
 done
 if [ -z "$PID" ]; then
-  echo "claude not detected within $LAUNCH_TIMEOUT for session_id $SID (prev_pid=$PREV_PID)" >&2
+  echo "claude not detected within $launch_timeout for session_id $SID (prev_pid=$PREV_PID)" >&2
   # A launch that typed its command but never registered a session file can
   # still be visibly alive in the pane (the banner-clearing Enters above
   # reach a real claude prompt, just not one that ever wrote to
@@ -251,7 +250,7 @@ effort              = { from = "inputs.effort", optional = true }
 launch_env          = { from = "inputs.launch_env", optional = true }
 mcp_servers         = { from = "inputs.mcp_servers", optional = true }
 path_prepend        = { from = "inputs.path_prepend", optional = true }
-launch_timeout      = { from = "inputs.launch_timeout", optional = true }
+launch_timeout      = { from = "inputs.launch_timeout", default = "120s" }
 activity_bin        = { bin = "claude-agent-activity" }
 mcp_servers_bin     = { bin = "claude-mcp-servers" }
 channel_server_bin  = { bin = "channel-server" }
@@ -372,9 +371,8 @@ path_prepend = { type = "string", pattern = "^[A-Za-z0-9_./:-]*$" }
 # launch_timeout: restricted to digits-plus-"s" so the setup script can strip
 # the suffix and use the result directly in shell arithmetic — no separate
 # duration parser needed, and no non-numeric value can reach $(( )). The
-# schema default documents the same "120s" the setup script's own
-# `${launch_timeout:-120s}` fallback applies; the language runtime does not
-# fill in JSON-schema defaults itself.
+# effective default of 120s is applied by this effect's own setup.bind
+# (`default = "120s"` on the launch_timeout binding), not by this key.
 launch_timeout = { type = "string", pattern = "^[1-9][0-9]*s$", default = "120s" }
 
 [runtime.outputs_schema]

@@ -1,11 +1,16 @@
 #!/usr/bin/env sh
 # Records the launch line, then stands in for the headless worker it starts:
-# the worker signals readiness by creating a file under the state directory
-# it was handed, and the launch waits for exactly that. A scenario exercising
-# a worker that never comes up carries PLECT_TEST_NEVER_READY in its
-# launch_env, which this stand-in honors by withholding that file instead.
+# the worker writes its own pid to worker.pid and then creates ready under
+# the state directory it was handed, and the launch waits for both. A
+# scenario exercising a worker that starts but never signals readiness
+# carries PLECT_TEST_NEVER_READY in its launch_env, which this stand-in
+# honors by writing worker.pid (a real, killable process) while withholding
+# ready.
 plect-effect-record terminal-send_text "$@"
-case "$1" in *PLECT_TEST_NEVER_READY*) exit 0 ;; esac
 state_dir=$(printf '%s' "$1" | sed -n "s/.*codex-exec-worker '[^']*' '\([^']*\)'.*/\1/p")
-[ -n "$state_dir" ] && mkdir -p "$state_dir" && : > "$state_dir/ready"
+[ -n "$state_dir" ] || exit 0
+mkdir -p "$state_dir"
+printf '%s' "$PLECT_EFFECT_WORKER_PID" > "$state_dir/worker.pid"
+case "$1" in *PLECT_TEST_NEVER_READY*) exit 0 ;; esac
+: > "$state_dir/ready"
 true

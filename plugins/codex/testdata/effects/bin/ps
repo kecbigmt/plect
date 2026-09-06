@@ -1,6 +1,5 @@
 #!/usr/bin/env sh
-# The pane's child reports itself as the headless worker, which matches both
-# the interactive codex effect's "codex|codex-*" pattern and exec_runtime's
-# "codex-exec*" pattern, so this one stand-in serves both effects' searches.
+# The pane's child reports itself as the agent CLI, which is what the launch
+# is looking for.
 plect-effect-record ps "$@"
-printf '%s\n' "codex-exec-worker"
+printf '%s\n' "codex"
