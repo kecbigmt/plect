@@ -19,9 +19,6 @@ export interface SidebarProps {
   scrollTopRef: { current: number };
 }
 
-// The session tree's own data source: fetches the list once here so both
-// the search box and SessionTree (pure rendering over an already-fetched
-// list — see src/lib/sessionTree.ts) share one load/error/empty story.
 export function Sidebar({
   selectedName,
   expandedNames,

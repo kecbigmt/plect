@@ -28,7 +28,9 @@ export function AppShell({ bootstrap }: { bootstrap: BootstrapInfo }) {
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [expandedNames, setExpandedNames] = useState<ReadonlySet<string>>(new Set());
   const [query, setQuery] = useState("");
-  // A ref, not state, for the same reason — see Sidebar.tsx's own comment.
+  // A ref, not state: it must survive Sidebar's remounts just like the
+  // state above, but a scroll position update has no reason to re-render
+  // AppShell the way a selection or expansion change does.
   const sidebarScrollTopRef = useRef(0);
   // Same query key as Sidebar's own useSessionList() call, so this shares
   // its cache rather than issuing a second fetch; only used here to compute

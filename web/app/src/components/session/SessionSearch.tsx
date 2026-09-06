@@ -2,9 +2,6 @@ import { SearchIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
-// Only owns the input value: src/lib/sessionTree.ts's matchesSessionQuery
-// and visibleTreeRows do the actual matching and ancestor retention against
-// whatever this reports.
 export function SessionSearch({
   value,
   onChange,

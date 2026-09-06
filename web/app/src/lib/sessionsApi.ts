@@ -1,6 +1,3 @@
-// Thin wrapper over the generated @plecture/web-api contract: this file owns
-// the fetch calls and error mapping; src/lib/useSessions.ts owns the
-// TanStack Query wiring, mirroring bootstrap.ts / useBootstrap.ts's split.
 import { createPlectureWebApiClient } from "@plecture/web-api/client";
 import type { components } from "@plecture/web-api/generated/typescript/schema";
 

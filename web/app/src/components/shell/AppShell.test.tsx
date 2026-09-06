@@ -223,7 +223,6 @@ describe("AppShell sidebar scroll position", () => {
     const firstRegion = await screen.findByRole("region", { name: /session list/i });
     fireEvent.scroll(firstRegion, { target: { scrollTop: 175 } });
 
-    // Closing the Sheet unmounts Sidebar entirely.
     await user.click(screen.getByRole("button", { name: /close/i }));
     expect(screen.queryByRole("region", { name: /session list/i })).not.toBeInTheDocument();
 
@@ -240,8 +239,6 @@ describe("AppShell sidebar scroll position", () => {
     const wideRegion = await screen.findByRole("region", { name: /session list/i });
     fireEvent.scroll(wideRegion, { target: { scrollTop: 60 } });
 
-    // A resize/orientation change swaps the persistent aside for the
-    // narrow-layout Sheet — a full unmount of the wide Sidebar instance.
     // The media-query listener fires outside of an event handler, so the
     // resulting state update needs an explicit act() to flush before the
     // next assertion (unlike a user-event click, which wraps this itself).
