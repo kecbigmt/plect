@@ -48,6 +48,13 @@ func EventPublish(cfg *config.Config, store *state.Store, identifier string, p E
 		source = event.SourceCLI
 	}
 	direction, meta := normalizePublishDirection(name, p.Direction, p.Metadata)
+	if direction == "" {
+		// The persistence boundary rejects an empty direction outright;
+		// default here rather than there so a plain `plect event publish`
+		// with no --direction and no ambient session (the common case for
+		// an existing task instruction) keeps working unchanged.
+		direction = event.Internal
+	}
 	stored, _, _, err := eventlog.NewStore(store.Dir()).Append(event.Event{
 		SessionName: name,
 		Type:        p.Type,
@@ -135,7 +142,7 @@ func EventPage(cfg *config.Config, store *state.Store, identifier string, p Even
 		order = event.OrderAsc
 	}
 	log := eventlog.NewStore(store.Dir())
-	gen, gerr := log.Gen(name)
+	gen, gerr := log.StreamID(name)
 	if gerr != nil {
 		return EventPageResult{}, &Error{Code: ErrExecutionFailed, Message: gerr.Error()}
 	}
@@ -169,7 +176,7 @@ func EventPage(cfg *config.Config, store *state.Store, identifier string, p Even
 	// A forward cursor only makes sense once the log exists (gen != ""); without
 	// it there is nothing to resume against and a "" cursor signals "no page".
 	if gen != "" {
-		res.NextCursor = event.Cursor{V: event.CursorVersion, Off: next, Ord: event.OrderAsc, Gen: gen}.Encode()
+		res.NextCursor = event.Cursor{V: event.CursorVersion, Off: next, Ord: event.OrderAsc, StreamID: gen}.Encode()
 	}
 	return res, nil
 }
@@ -181,7 +188,7 @@ func EventStreamResume(cfg *config.Config, store *state.Store, identifier, curso
 	if err != nil {
 		return "", 0, err
 	}
-	gen, gerr := eventlog.NewStore(store.Dir()).Gen(name)
+	gen, gerr := eventlog.NewStore(store.Dir()).StreamID(name)
 	if gerr != nil {
 		return "", 0, &Error{Code: ErrExecutionFailed, Message: gerr.Error()}
 	}

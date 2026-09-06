@@ -242,7 +242,7 @@ func TestEventPageRejectsStaleGenerationCursor(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Forge a cursor with a generation the log never had.
-	stale := event.Cursor{V: event.CursorVersion, Off: 0, Ord: event.OrderAsc, Gen: "01JXNEVER"}.Encode()
+	stale := event.Cursor{V: event.CursorVersion, Off: 0, Ord: event.OrderAsc, StreamID: "01JXNEVER"}.Encode()
 	_, err := EventPage(nil, store, session, EventPageParams{Cursor: stale})
 	var svcErr *Error
 	if !errors.As(err, &svcErr) || svcErr.Code != ErrInvalidInput {
@@ -258,7 +258,7 @@ func TestEventPageRejectsOldVersionCursor(t *testing.T) {
 	if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote}); err != nil {
 		t.Fatal(err)
 	}
-	old := event.Cursor{V: event.CursorVersion - 1, Off: 0, Ord: event.OrderAsc, Gen: "01JXNEVER"}.Encode()
+	old := event.Cursor{V: event.CursorVersion - 1, Off: 0, Ord: event.OrderAsc, StreamID: "01JXNEVER"}.Encode()
 	_, err := EventPage(nil, store, session, EventPageParams{Cursor: old})
 	var svcErr *Error
 	if !errors.As(err, &svcErr) || svcErr.Code != ErrInvalidInput {
@@ -324,7 +324,7 @@ func TestEventStreamResumeRejectsStaleGenerationCursor(t *testing.T) {
 	if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote}); err != nil {
 		t.Fatal(err)
 	}
-	stale := event.Cursor{V: event.CursorVersion, Off: 0, Ord: event.OrderAsc, Gen: "01JXNEVER"}.Encode()
+	stale := event.Cursor{V: event.CursorVersion, Off: 0, Ord: event.OrderAsc, StreamID: "01JXNEVER"}.Encode()
 	_, _, err := EventStreamResume(nil, store, session, stale)
 	var svcErr *Error
 	if !errors.As(err, &svcErr) || svcErr.Code != ErrInvalidInput {
@@ -338,7 +338,7 @@ func TestEventStreamResumeRejectsOldVersionCursor(t *testing.T) {
 	if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote}); err != nil {
 		t.Fatal(err)
 	}
-	old := event.Cursor{V: event.CursorVersion - 1, Off: 0, Ord: event.OrderAsc, Gen: "01JXNEVER"}.Encode()
+	old := event.Cursor{V: event.CursorVersion - 1, Off: 0, Ord: event.OrderAsc, StreamID: "01JXNEVER"}.Encode()
 	_, _, err := EventStreamResume(nil, store, session, old)
 	var svcErr *Error
 	if !errors.As(err, &svcErr) || svcErr.Code != ErrInvalidInput {

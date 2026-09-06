@@ -450,7 +450,7 @@ func TestEvaluateSessionActions_ReturnedSnapshotIsImmuneToALaterStoreMutation(t 
 	if err != nil {
 		t.Fatalf("evaluateSessionActions: %v", err)
 	}
-	snapshot := sessionGeneration(session)
+	snapshot := session.CreatedAt
 
 	if err := store.Update("work1", func(s *domain.Session) error {
 		s.CreatedAt = s.CreatedAt.Add(time.Hour)
@@ -459,10 +459,10 @@ func TestEvaluateSessionActions_ReturnedSnapshotIsImmuneToALaterStoreMutation(t 
 		t.Fatalf("store.Update: %v", err)
 	}
 
-	if got := sessionGeneration(session); got != snapshot {
-		t.Fatalf("sessionGeneration(session) = %q after an unrelated store mutation, want %q unchanged", got, snapshot)
+	if got := session.CreatedAt; !got.Equal(snapshot) {
+		t.Fatalf("session.CreatedAt = %v after an unrelated store mutation, want %v unchanged", got, snapshot)
 	}
-	if live := sessionGeneration(store.Get("work1")); live == snapshot {
-		t.Fatal("test setup did not actually change the live session's generation")
+	if live := store.Get("work1").CreatedAt; live.Equal(snapshot) {
+		t.Fatal("test setup did not actually change the live session's CreatedAt")
 	}
 }

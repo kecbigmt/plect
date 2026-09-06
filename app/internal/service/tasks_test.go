@@ -809,7 +809,7 @@ func TestUp_ForceRecreateResetsRuntimeWithoutPrev(t *testing.T) {
 	if err != nil {
 		t.Fatalf("append event: %v", err)
 	}
-	if err := logStore.CommitCursor(sessionName, "consumer", next); err != nil {
+	if err := logStore.CommitCursor(sessionName, "dispatcher", next); err != nil {
 		t.Fatalf("commit cursor: %v", err)
 	}
 
@@ -862,7 +862,7 @@ func TestUp_ForceRecreateResetsRuntimeWithoutPrev(t *testing.T) {
 	if len(evs) == 0 || evs[0].Type != event.TypeUserEmit {
 		t.Fatalf("event log not preserved: %+v", evs)
 	}
-	cursor, err := logStore.ReadCursor(sessionName, "consumer")
+	cursor, err := logStore.ReadCursor(sessionName, "dispatcher")
 	if err != nil {
 		t.Fatalf("read cursor: %v", err)
 	}
@@ -961,7 +961,7 @@ func TestUp_ForceRecreateCleanupFailurePreservesInspectableState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("append event: %v", err)
 	}
-	if err := logStore.CommitCursor(sessionName, "consumer", next); err != nil {
+	if err := logStore.CommitCursor(sessionName, "dispatcher", next); err != nil {
 		t.Fatalf("commit cursor: %v", err)
 	}
 
@@ -1005,7 +1005,7 @@ func TestUp_ForceRecreateCleanupFailurePreservesInspectableState(t *testing.T) {
 	if channel == nil || channel.Status != contract.TaskStatusCleaned || channel.Outputs["thread"] != "old-thread" {
 		t.Fatalf("channel task = %+v, want later cleanup result persisted", channel)
 	}
-	cursor, err := logStore.ReadCursor(sessionName, "consumer")
+	cursor, err := logStore.ReadCursor(sessionName, "dispatcher")
 	if err != nil {
 		t.Fatalf("read cursor: %v", err)
 	}
@@ -1090,7 +1090,7 @@ func TestUp_ForceRecreateProviderSetupFailurePersistsInspectableState(t *testing
 	if err != nil {
 		t.Fatalf("append event: %v", err)
 	}
-	if err := logStore.CommitCursor(sessionName, "consumer", next); err != nil {
+	if err := logStore.CommitCursor(sessionName, "dispatcher", next); err != nil {
 		t.Fatalf("commit cursor: %v", err)
 	}
 
@@ -1129,7 +1129,7 @@ func TestUp_ForceRecreateProviderSetupFailurePersistsInspectableState(t *testing
 	if fileExists(oldWorkdirPath) {
 		t.Fatalf("old workdir %q still exists", oldWorkdirPath)
 	}
-	cursor, err := logStore.ReadCursor(sessionName, "consumer")
+	cursor, err := logStore.ReadCursor(sessionName, "dispatcher")
 	if err != nil {
 		t.Fatalf("read cursor: %v", err)
 	}
@@ -1392,7 +1392,7 @@ func TestUp_ForceRecreateFailureStagesPersistInspectableState(t *testing.T) {
 			if err != nil {
 				t.Fatalf("append event: %v", err)
 			}
-			if err := logStore.CommitCursor(sessionName, "consumer", next); err != nil {
+			if err := logStore.CommitCursor(sessionName, "dispatcher", next); err != nil {
 				t.Fatalf("commit cursor: %v", err)
 			}
 
@@ -1436,7 +1436,7 @@ func TestUp_ForceRecreateFailureStagesPersistInspectableState(t *testing.T) {
 					t.Fatalf("task %q = %+v, want absent", taskName, st)
 				}
 			}
-			cursor, err := logStore.ReadCursor(sessionName, "consumer")
+			cursor, err := logStore.ReadCursor(sessionName, "dispatcher")
 			if err != nil {
 				t.Fatalf("read cursor: %v", err)
 			}

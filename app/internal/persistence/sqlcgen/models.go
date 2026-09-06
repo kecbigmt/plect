@@ -10,7 +10,7 @@ import (
 
 type Event struct {
 	EventID      string
-	SessionName  string
+	StreamID     string
 	Sequence     int64
 	RecordedAt   string
 	Type         string
@@ -19,24 +19,17 @@ type Event struct {
 	Summary      string
 	Body         string
 	MetadataJson string
-	DeliveryMode string
 }
 
-type EventConsumerPosition struct {
-	SessionName  string
-	ConsumerName string
+type EventCursor struct {
+	StreamID     string
+	CursorName   string
 	NextSequence int64
 }
 
 type EventStream struct {
+	ID          string
 	SessionName string
-	Generation  string
-}
-
-type EventWatermark struct {
-	SessionName   string
-	WatermarkName string
-	NextSequence  int64
 }
 
 type NodeInstance struct {

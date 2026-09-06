@@ -54,7 +54,7 @@ type sessionDispatcher struct {
 
 func (d *sessionDispatcher) run(ctx context.Context) {
 	SeedCursor(d.log, d.session)
-	startGen, _ := d.log.Gen(d.session)
+	startGen, _ := d.log.StreamID(d.session)
 	// Re-drain on a wake from the shared per-session reader instead of polling on
 	// our own timer, so the session keeps a single follow loop. The fallback
 	// ticker re-drains defensively if a wake was ever missed.
@@ -123,7 +123,7 @@ func SeedCursor(log *eventlog.Store, session string) {
 // event at a time so the at-least-once replay window after a crash is a single
 // event, not a batch.
 func (d *sessionDispatcher) drain(ctx context.Context, s *domain.Session, startGen *string) {
-	if g, _ := d.log.Gen(d.session); *startGen != "" && g != *startGen {
+	if g, _ := d.log.StreamID(d.session); *startGen != "" && g != *startGen {
 		// Log rotated/compacted: the byte cursor is meaningless, re-read from head.
 		if err := d.log.CommitCursor(d.session, dispatcherConsumer, 0); err != nil {
 			slog.Default().Warn("dispatcher: reset cursor after log rotation failed", "session", d.session, "error", err)

@@ -68,14 +68,34 @@ func newTestReactor(t *testing.T, tc config.TickConfig) (*sessionReactor, *state
 	return r, st, log
 }
 
+// startReactor starts r.run in the background and blocks until it has
+// seeded its cursor and registered its Watch (both happen before run()'s
+// first blocking call), so callers need no fixed post-start sleep — SQLite's
+// first-touch migration cost varies, unlike the old file-backed store's
+// near-instant seed.
 func startReactor(t *testing.T, r *sessionReactor) func() {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { r.run(ctx); close(done) }()
+	waitForCursorSeed(t, r.log, r.session)
 	return func() {
 		cancel()
 		<-done
+	}
+}
+
+// waitForCursorSeed polls until run()'s seedCursor has committed the
+// reactor's durable cursor, replacing a fixed sleep sized for the old
+// file-backed event log (SQLite's first-touch migration cost varies).
+func waitForCursorSeed(t *testing.T, log *eventlog.Store, session string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for !log.HasCursor(session, reactorConsumer) {
+		if time.Now().After(deadline) {
+			t.Fatal("reactor never seeded its cursor")
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
@@ -107,7 +127,6 @@ func TestSessionReactor_TicksOnDeclaredPattern(t *testing.T) {
 	r, st, log := newTestReactor(t, config.TickConfig{On: []string{"resource.*"}})
 	stop := startReactor(t, r)
 	defer stop()
-	time.Sleep(50 * time.Millisecond) // let run() seed, Watch, and reach its select
 
 	floor := time.Now()
 	log.Append(event.Event{SessionName: "o/r-1", Type: "resource.updated"})
@@ -120,7 +139,6 @@ func TestSessionReactor_UndeclaredWorkflowDoesNotReactiveTick(t *testing.T) {
 	r, st, log := newTestReactor(t, config.TickConfig{})
 	stop := startReactor(t, r)
 	defer stop()
-	time.Sleep(50 * time.Millisecond)
 
 	floor := time.Now()
 	log.Append(event.Event{SessionName: "o/r-1", Type: "resource.updated"})
@@ -149,7 +167,6 @@ func TestSessionReactor_SelfEmittedEventsNeverTrigger(t *testing.T) {
 			r, st, log := newTestReactor(t, config.TickConfig{On: []string{"*"}})
 			stop := startReactor(t, r)
 			defer stop()
-			time.Sleep(50 * time.Millisecond)
 
 			floor := time.Now()
 			ev := fixture
@@ -169,7 +186,6 @@ func TestSessionReactor_GenuineUserEmitStillTriggersWhenDeclared(t *testing.T) {
 	r, st, log := newTestReactor(t, config.TickConfig{On: []string{"user.emit"}})
 	stop := startReactor(t, r)
 	defer stop()
-	time.Sleep(50 * time.Millisecond)
 
 	floor := time.Now()
 	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeUserEmit, Source: event.SourceCLI})
@@ -183,7 +199,6 @@ func TestSessionReactor_JudgeRecordedAlwaysTriggers(t *testing.T) {
 	r, st, log := newTestReactor(t, config.TickConfig{})
 	stop := startReactor(t, r)
 	defer stop()
-	time.Sleep(50 * time.Millisecond)
 
 	floor := time.Now()
 	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeJudgeRecorded})
@@ -811,20 +826,21 @@ func TestSessionReactor_QuietTickBackoffResetsOnInbound_WithoutForcedElapse(t *t
 // reset it — backoff bookkeeping previously lived only in checkHeartbeat, so
 // drain-triggered ticks skipped it entirely.
 func TestSessionReactor_DrainTriggeredInboundTickResetsBackoff(t *testing.T) {
-	const heartbeat = 20 * time.Millisecond
+	const heartbeat = 200 * time.Millisecond
 	r, st, log := newTestReactor(t, config.TickConfig{
 		On:        []string{"resource.*"},
 		Heartbeat: config.Duration{Duration: heartbeat},
 	})
 	r.tickFn = service.TickSession
-	stop := startReactor(t, r)
-	defer stop()
-	time.Sleep(50 * time.Millisecond) // let run() seed, Watch, and reach its select
 
-	// Seed a grown backoff and a recent LastTickAt, as if several quiet heartbeat
-	// sweeps already happened — the heartbeat sweep alone would not fire again
-	// for a long while.
-	floor := time.Now()
+	// Seed a grown backoff and a recent LastTickAt before the reactor ever
+	// starts, as if several quiet heartbeat sweeps already happened — the
+	// heartbeat sweep alone would not fire again for a long while. Seeding
+	// first (rather than after starting) also gives run()'s own immediate
+	// heartbeat check a non-zero LastTickAt to see, so it takes the
+	// interval-gated branch and skips its unconditional first-tick path;
+	// otherwise that tick's own updateBackoff races this seed and can
+	// commit after it, clobbering ConsecutiveUnchanged back up.
 	if err := st.Update("o/r-1", func(s *domain.Session) error {
 		s.LastTickAt = time.Now()
 		s.TickBackoff = &contract.TickBackoff{ConsecutiveUnchanged: 5}
@@ -832,6 +848,11 @@ func TestSessionReactor_DrainTriggeredInboundTickResetsBackoff(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+
+	stop := startReactor(t, r)
+	defer stop()
+
+	floor := time.Now()
 
 	// A declared-pattern event that direction normalization guarantees is
 	// Inbound for an externally-originated publish triggers a reactive tick
@@ -862,7 +883,6 @@ func TestSessionReactor_ChannelErrorNeverTriggers(t *testing.T) {
 	r, st, log := newTestReactor(t, config.TickConfig{On: []string{"*"}})
 	stop := startReactor(t, r)
 	defer stop()
-	time.Sleep(50 * time.Millisecond)
 
 	floor := time.Now()
 	log.Append(event.Event{

@@ -41,14 +41,14 @@ func NormalizeOrder(s string) (Order, error) {
 // construct or interpret it — they pass a prior page's next_cursor back
 // verbatim. It is a keyset position (a per-stream sequence number) wrapped
 // with the context needed to detect misuse: the order it was issued for and
-// the stream generation it came from. A raw sequence number has neither, so a
-// stale or cross-order cursor would silently point at the wrong record; the
-// wrapping lets the server reject it instead.
+// the stream it came from. A raw sequence number has neither, so a stale or
+// cross-order cursor would silently point at the wrong record; the wrapping
+// lets the server reject it instead.
 type Cursor struct {
-	V   int    `json:"v"`   // format version; must equal CursorVersion
-	Off int64  `json:"off"` // exclusive per-stream sequence number (keyset position)
-	Ord Order  `json:"ord"` // order this cursor was issued for
-	Gen string `json:"gen"` // stream generation id at issue time
+	V        int    `json:"v"`         // format version; must equal CursorVersion
+	Off      int64  `json:"off"`       // exclusive per-stream sequence number (keyset position)
+	Ord      Order  `json:"ord"`       // order this cursor was issued for
+	StreamID string `json:"stream_id"` // event stream id at issue time
 }
 
 // Encode renders the cursor as an opaque base64url(JSON) token.
@@ -70,17 +70,18 @@ func DecodeCursor(token string) (Cursor, error) {
 	return c, nil
 }
 
-// Validate reports whether c may be used for a request in order ord against a
-// log whose current generation is gen. A version or generation mismatch means
-// the cursor predates a format change or a log rotation/compaction and must be
-// discarded (restart from the beginning). An order mismatch means the caller
-// asked for a different direction than the cursor was issued for.
-func (c Cursor) Validate(ord Order, gen string) error {
+// Validate reports whether c may be used for a request in order ord against
+// the stream identified by streamID. A version or stream-id mismatch means
+// the cursor predates a format change or was issued for a session that has
+// since been recreated under the same name, and must be discarded (restart
+// from the beginning). An order mismatch means the caller asked for a
+// different direction than the cursor was issued for.
+func (c Cursor) Validate(ord Order, streamID string) error {
 	if c.V != CursorVersion {
 		return fmt.Errorf("cursor expired (version %d, want %d); restart from the beginning", c.V, CursorVersion)
 	}
-	if c.Gen != gen {
-		return fmt.Errorf("cursor expired (stale log generation); restart from the beginning")
+	if c.StreamID != streamID {
+		return fmt.Errorf("cursor expired (stale event stream); restart from the beginning")
 	}
 	if c.Ord != ord {
 		return fmt.Errorf("cursor was issued for order %q but request asks for %q", c.Ord, ord)

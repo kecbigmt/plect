@@ -143,11 +143,9 @@ func (s *Store) ReadTombstone(session string) (data []byte, ok bool, err error) 
 
 // SwapChainAttempt atomically compares-and-sets a plect.chain.attempt
 // cap-refusal streak marker (see service.chainAttemptFingerprint), scoped by
-// generation (a session's CreatedAt) so a session destroyed and recreated
-// under the same name never inherits — or, via some stale in-flight tick
-// still racing the destroy, resurrects — its predecessor's marker: the two
-// generations never share a key, regardless of how the destroy and any
-// leftover tick against the old generation interleave. previous is the value
+// a caller-supplied identity token (service.chainAttemptStreamID) so two
+// incarnations sharing that token never share a key, regardless of how a
+// destroy and any leftover tick racing it interleave. previous is the value
 // from just before this call, for RevertChainAttempt.
 func (s *Store) SwapChainAttempt(session, instance, chainID, generation, newFingerprint string) (previous string, won bool, err error) {
 	key := chainAttemptKey(instance, chainID, generation)
@@ -346,20 +344,22 @@ func (s *Store) TailOffset(session string, f event.Filter, n int) (int64, error)
 	return ring[0], nil // sequence of the n-th-from-last matching record
 }
 
-// Gen returns the log's generation id, or "" if none yet (no event appended, or no consumer position ever committed). The id is assigned
-// once when the log is first created and is stable across appends; it changes
-// only if the log is rotated or compacted, which lets a stale opaque cursor be
-// detected instead of silently resolving to a shifted record.
-func (s *Store) Gen(session string) (string, error) {
+// StreamID returns the stream's id, or "" if none yet (no event appended, or
+// no consumer position ever committed). The id is assigned once when the
+// stream is first created and is stable for that session name; it changes
+// only if the session is later destroyed and recreated under the same name,
+// which lets a stale opaque cursor be detected instead of silently resolving
+// to a shifted record.
+func (s *Store) StreamID(session string) (string, error) {
 	db, err := s.dbHandle()
 	if err != nil {
 		return "", err
 	}
-	gen, err := db.EventStreamGeneration(context.Background(), session)
+	id, err := db.EventStreamID(context.Background(), session)
 	if err != nil {
-		return "", fmt.Errorf("eventlog: gen: %w", err)
+		return "", fmt.Errorf("eventlog: stream id: %w", err)
 	}
-	return gen, nil
+	return id, nil
 }
 
 // Follow delivers events from `since`, then polls for new ones until ctx ends.
@@ -467,7 +467,7 @@ func (s *Store) HasCursor(session, consumer string) bool {
 	}
 	// Treat a read error other than not-found as "exists" so a transient error
 	// doesn't trigger an unwanted re-seed (which would re-read the log tail).
-	has, err := db.HasEventConsumerPosition(context.Background(), session, consumer)
+	has, err := db.HasEventCursor(context.Background(), session, consumer)
 	if err != nil {
 		return true
 	}
@@ -480,7 +480,7 @@ func (s *Store) ReadCursor(session, consumer string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	pos, err := db.EventConsumerPosition(context.Background(), session, consumer)
+	pos, err := db.EventCursor(context.Background(), session, consumer)
 	if err != nil {
 		return 0, fmt.Errorf("eventlog: read cursor: %w", err)
 	}
@@ -493,7 +493,7 @@ func (s *Store) CommitCursor(session, consumer string, seq int64) error {
 	if err != nil {
 		return err
 	}
-	if err := db.SetEventConsumerPosition(context.Background(), session, consumer, seq); err != nil {
+	if err := db.SetEventCursor(context.Background(), session, consumer, seq); err != nil {
 		return fmt.Errorf("eventlog: commit cursor: %w", err)
 	}
 	return nil

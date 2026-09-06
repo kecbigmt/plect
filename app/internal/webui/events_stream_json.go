@@ -73,7 +73,7 @@ func relayBusBodyJSON(body io.Reader, w io.Writer, flusher http.Flusher, resolve
 			}
 			var ev event.Event
 			if json.Unmarshal([]byte(strings.Join(dataLines, "\n")), &ev) == nil {
-				cursor := event.Cursor{V: event.CursorVersion, Off: lastOffset, Ord: event.OrderAsc, Gen: resolveGen()}.Encode()
+				cursor := event.Cursor{V: event.CursorVersion, Off: lastOffset, Ord: event.OrderAsc, StreamID: resolveGen()}.Encode()
 				payload, merr := json.Marshal(webapi.EventFromDomain(ev))
 				if merr == nil {
 					if err := writeEventFrame(w, cursor, string(payload)); err != nil {

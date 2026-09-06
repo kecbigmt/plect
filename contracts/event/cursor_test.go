@@ -23,7 +23,7 @@ func TestNormalizeOrder(t *testing.T) {
 }
 
 func TestCursorEncodeDecodeRoundTrip(t *testing.T) {
-	c := Cursor{V: CursorVersion, Off: 8192, Ord: OrderAsc, Gen: "01JXGEN"}
+	c := Cursor{V: CursorVersion, Off: 8192, Ord: OrderAsc, StreamID: "01JXGEN"}
 	got, err := DecodeCursor(c.Encode())
 	if err != nil {
 		t.Fatalf("decode: %v", err)
@@ -47,26 +47,26 @@ func TestDecodeCursorRejectsGarbage(t *testing.T) {
 }
 
 func TestCursorValidate(t *testing.T) {
-	const gen = "01JXGEN"
-	base := Cursor{V: CursorVersion, Off: 100, Ord: OrderAsc, Gen: gen}
+	const streamID = "01JXGEN"
+	base := Cursor{V: CursorVersion, Off: 100, Ord: OrderAsc, StreamID: streamID}
 
-	if err := base.Validate(OrderAsc, gen); err != nil {
+	if err := base.Validate(OrderAsc, streamID); err != nil {
 		t.Fatalf("matching cursor should validate: %v", err)
 	}
 
 	// order mismatch: an asc cursor used for a desc request.
-	if err := base.Validate(OrderDesc, gen); err == nil {
+	if err := base.Validate(OrderDesc, streamID); err == nil {
 		t.Fatalf("expected order-mismatch error")
 	}
 
-	// generation mismatch: log rotated/compacted under the cursor.
+	// stream mismatch: the session was recreated under the cursor.
 	if err := base.Validate(OrderAsc, "01JXOTHER"); err == nil {
-		t.Fatalf("expected stale-generation error")
+		t.Fatalf("expected stale-stream error")
 	}
 
 	// version mismatch: token predates a format change.
-	old := Cursor{V: CursorVersion - 1, Off: 100, Ord: OrderAsc, Gen: gen}
-	if err := old.Validate(OrderAsc, gen); err == nil {
+	old := Cursor{V: CursorVersion - 1, Off: 100, Ord: OrderAsc, StreamID: streamID}
+	if err := old.Validate(OrderAsc, streamID); err == nil {
 		t.Fatalf("expected version-mismatch error")
 	}
 }

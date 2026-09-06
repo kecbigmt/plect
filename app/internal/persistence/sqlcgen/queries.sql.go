@@ -94,33 +94,33 @@ func (q *Queries) DeleteUpReservation(ctx context.Context, childSessionName stri
 	return err
 }
 
-const getEventConsumerPosition = `-- name: GetEventConsumerPosition :one
-SELECT next_sequence FROM event_consumer_positions WHERE session_name = ? AND consumer_name = ?
+const getEventCursor = `-- name: GetEventCursor :one
+SELECT next_sequence FROM event_cursors WHERE stream_id = ? AND cursor_name = ?
 `
 
-type GetEventConsumerPositionParams struct {
-	SessionName  string
-	ConsumerName string
+type GetEventCursorParams struct {
+	StreamID   string
+	CursorName string
 }
 
-func (q *Queries) GetEventConsumerPosition(ctx context.Context, arg GetEventConsumerPositionParams) (int64, error) {
-	row := q.db.QueryRowContext(ctx, getEventConsumerPosition, arg.SessionName, arg.ConsumerName)
+func (q *Queries) GetEventCursor(ctx context.Context, arg GetEventCursorParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, getEventCursor, arg.StreamID, arg.CursorName)
 	var next_sequence int64
 	err := row.Scan(&next_sequence)
 	return next_sequence, err
 }
 
-const getEventStreamGeneration = `-- name: GetEventStreamGeneration :one
+const getEventStreamIDBySession = `-- name: GetEventStreamIDBySession :one
 
-SELECT generation FROM event_streams WHERE session_name = ?
+SELECT id FROM event_streams WHERE session_name = ?
 `
 
 // Events
-func (q *Queries) GetEventStreamGeneration(ctx context.Context, sessionName string) (string, error) {
-	row := q.db.QueryRowContext(ctx, getEventStreamGeneration, sessionName)
-	var generation string
-	err := row.Scan(&generation)
-	return generation, err
+func (q *Queries) GetEventStreamIDBySession(ctx context.Context, sessionName string) (string, error) {
+	row := q.db.QueryRowContext(ctx, getEventStreamIDBySession, sessionName)
+	var id string
+	err := row.Scan(&id)
+	return id, err
 }
 
 const getPopulation = `-- name: GetPopulation :one
@@ -168,30 +168,30 @@ func (q *Queries) GetSession(ctx context.Context, name string) (Session, error) 
 	return i, err
 }
 
-const hasEventConsumerPosition = `-- name: HasEventConsumerPosition :one
-SELECT COUNT(*) FROM event_consumer_positions WHERE session_name = ? AND consumer_name = ?
+const hasEventCursor = `-- name: HasEventCursor :one
+SELECT COUNT(*) FROM event_cursors WHERE stream_id = ? AND cursor_name = ?
 `
 
-type HasEventConsumerPositionParams struct {
-	SessionName  string
-	ConsumerName string
+type HasEventCursorParams struct {
+	StreamID   string
+	CursorName string
 }
 
-func (q *Queries) HasEventConsumerPosition(ctx context.Context, arg HasEventConsumerPositionParams) (int64, error) {
-	row := q.db.QueryRowContext(ctx, hasEventConsumerPosition, arg.SessionName, arg.ConsumerName)
+func (q *Queries) HasEventCursor(ctx context.Context, arg HasEventCursorParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, hasEventCursor, arg.StreamID, arg.CursorName)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
 }
 
 const insertEvent = `-- name: InsertEvent :exec
-INSERT INTO events (event_id, session_name, sequence, recorded_at, type, source, direction, summary, body, metadata_json, delivery_mode)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO events (event_id, stream_id, sequence, recorded_at, type, source, direction, summary, body, metadata_json)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertEventParams struct {
 	EventID      string
-	SessionName  string
+	StreamID     string
 	Sequence     int64
 	RecordedAt   string
 	Type         string
@@ -200,13 +200,12 @@ type InsertEventParams struct {
 	Summary      string
 	Body         string
 	MetadataJson string
-	DeliveryMode string
 }
 
 func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) error {
 	_, err := q.db.ExecContext(ctx, insertEvent,
 		arg.EventID,
-		arg.SessionName,
+		arg.StreamID,
 		arg.Sequence,
 		arg.RecordedAt,
 		arg.Type,
@@ -215,22 +214,21 @@ func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) error 
 		arg.Summary,
 		arg.Body,
 		arg.MetadataJson,
-		arg.DeliveryMode,
 	)
 	return err
 }
 
 const insertEventStream = `-- name: InsertEventStream :exec
-INSERT INTO event_streams (session_name, generation) VALUES (?, ?) ON CONFLICT(session_name) DO NOTHING
+INSERT INTO event_streams (id, session_name) VALUES (?, ?)
 `
 
 type InsertEventStreamParams struct {
+	ID          string
 	SessionName string
-	Generation  string
 }
 
 func (q *Queries) InsertEventStream(ctx context.Context, arg InsertEventStreamParams) error {
-	_, err := q.db.ExecContext(ctx, insertEventStream, arg.SessionName, arg.Generation)
+	_, err := q.db.ExecContext(ctx, insertEventStream, arg.ID, arg.SessionName)
 	return err
 }
 
@@ -439,28 +437,39 @@ func (q *Queries) ListEventStreamSessions(ctx context.Context) ([]string, error)
 	return items, nil
 }
 
-const listEventsFrom = `-- name: ListEventsFrom :many
-SELECT event_id, session_name, sequence, recorded_at, type, source, direction, summary, body, metadata_json, delivery_mode
-FROM events WHERE session_name = ? AND sequence >= ? ORDER BY sequence
+const listEventsFromByStream = `-- name: ListEventsFromByStream :many
+SELECT event_id, sequence, recorded_at, type, source, direction, summary, body, metadata_json
+FROM events WHERE stream_id = ? AND sequence >= ? ORDER BY sequence
 `
 
-type ListEventsFromParams struct {
-	SessionName string
-	Sequence    int64
+type ListEventsFromByStreamParams struct {
+	StreamID string
+	Sequence int64
 }
 
-func (q *Queries) ListEventsFrom(ctx context.Context, arg ListEventsFromParams) ([]Event, error) {
-	rows, err := q.db.QueryContext(ctx, listEventsFrom, arg.SessionName, arg.Sequence)
+type ListEventsFromByStreamRow struct {
+	EventID      string
+	Sequence     int64
+	RecordedAt   string
+	Type         string
+	Source       string
+	Direction    string
+	Summary      string
+	Body         string
+	MetadataJson string
+}
+
+func (q *Queries) ListEventsFromByStream(ctx context.Context, arg ListEventsFromByStreamParams) ([]ListEventsFromByStreamRow, error) {
+	rows, err := q.db.QueryContext(ctx, listEventsFromByStream, arg.StreamID, arg.Sequence)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Event
+	var items []ListEventsFromByStreamRow
 	for rows.Next() {
-		var i Event
+		var i ListEventsFromByStreamRow
 		if err := rows.Scan(
 			&i.EventID,
-			&i.SessionName,
 			&i.Sequence,
 			&i.RecordedAt,
 			&i.Type,
@@ -469,7 +478,6 @@ func (q *Queries) ListEventsFrom(ctx context.Context, arg ListEventsFromParams) 
 			&i.Summary,
 			&i.Body,
 			&i.MetadataJson,
-			&i.DeliveryMode,
 		); err != nil {
 			return nil, err
 		}
@@ -837,11 +845,11 @@ func (q *Queries) ListUpReservations(ctx context.Context) ([]UpReservation, erro
 }
 
 const nextEventSequence = `-- name: NextEventSequence :one
-SELECT COALESCE(MAX(sequence), 0) + 1 FROM events WHERE session_name = ?
+SELECT COALESCE(MAX(sequence), 0) + 1 FROM events WHERE stream_id = ?
 `
 
-func (q *Queries) NextEventSequence(ctx context.Context, sessionName string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, nextEventSequence, sessionName)
+func (q *Queries) NextEventSequence(ctx context.Context, streamID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, nextEventSequence, streamID)
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
@@ -858,19 +866,19 @@ func (q *Queries) SessionParent(ctx context.Context, name string) (sql.NullStrin
 	return parent_session_name, err
 }
 
-const upsertEventConsumerPosition = `-- name: UpsertEventConsumerPosition :exec
-INSERT INTO event_consumer_positions (session_name, consumer_name, next_sequence) VALUES (?, ?, ?)
-ON CONFLICT(session_name, consumer_name) DO UPDATE SET next_sequence = excluded.next_sequence
+const upsertEventCursor = `-- name: UpsertEventCursor :exec
+INSERT INTO event_cursors (stream_id, cursor_name, next_sequence) VALUES (?, ?, ?)
+ON CONFLICT(stream_id, cursor_name) DO UPDATE SET next_sequence = excluded.next_sequence
 `
 
-type UpsertEventConsumerPositionParams struct {
-	SessionName  string
-	ConsumerName string
+type UpsertEventCursorParams struct {
+	StreamID     string
+	CursorName   string
 	NextSequence int64
 }
 
-func (q *Queries) UpsertEventConsumerPosition(ctx context.Context, arg UpsertEventConsumerPositionParams) error {
-	_, err := q.db.ExecContext(ctx, upsertEventConsumerPosition, arg.SessionName, arg.ConsumerName, arg.NextSequence)
+func (q *Queries) UpsertEventCursor(ctx context.Context, arg UpsertEventCursorParams) error {
+	_, err := q.db.ExecContext(ctx, upsertEventCursor, arg.StreamID, arg.CursorName, arg.NextSequence)
 	return err
 }
 

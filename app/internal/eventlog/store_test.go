@@ -486,14 +486,14 @@ func TestGen(t *testing.T) {
 	const session = "owner/repo-9"
 
 	// No log yet → no generation, no error.
-	if g, err := s.Gen(session); err != nil || g != "" {
+	if g, err := s.StreamID(session); err != nil || g != "" {
 		t.Fatalf("gen of empty log = %q (err=%v), want empty", g, err)
 	}
 
 	if _, _, _, err := s.Append(event.Event{SessionName: session, Type: "a"}); err != nil {
 		t.Fatal(err)
 	}
-	g1, err := s.Gen(session)
+	g1, err := s.StreamID(session)
 	if err != nil || g1 == "" {
 		t.Fatalf("gen after first append = %q (err=%v), want non-empty", g1, err)
 	}
@@ -502,7 +502,7 @@ func TestGen(t *testing.T) {
 	if _, _, _, err := s.Append(event.Event{SessionName: session, Type: "b"}); err != nil {
 		t.Fatal(err)
 	}
-	g2, err := s.Gen(session)
+	g2, err := s.StreamID(session)
 	if err != nil || g2 != g1 {
 		t.Fatalf("gen changed across appends: %q → %q", g1, g2)
 	}
@@ -525,7 +525,7 @@ func summaryAt(evs []event.Event, i int) string {
 
 func TestCursorRoundTrip(t *testing.T) {
 	s := NewStore(t.TempDir())
-	const session, consumer = "o/r-1", "claude"
+	const session, consumer = "o/r-1", "dispatcher"
 	if off, err := s.ReadCursor(session, consumer); err != nil || off != 0 {
 		t.Fatalf("missing cursor should be 0: off=%d err=%v", off, err)
 	}

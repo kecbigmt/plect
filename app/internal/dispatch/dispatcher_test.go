@@ -79,7 +79,6 @@ func TestDispatcher_RunDeliversOnWake(t *testing.T) {
 	sock, recv := startFakeSocket(t)
 	d, _, _ := runTestDispatcher(t, log, sock)
 	startDispatcher(t, d)
-	time.Sleep(50 * time.Millisecond) // let run() seed, Watch, and reach its select
 
 	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Body: "go"})
 	if typ := recvType(t, recv); typ != event.TypeInstruction {
@@ -95,7 +94,6 @@ func TestDispatcher_RunDeliversBurstViaCoalescedWakes(t *testing.T) {
 	sock, recv := startFakeSocket(t)
 	d, _, _ := runTestDispatcher(t, log, sock)
 	startDispatcher(t, d)
-	time.Sleep(50 * time.Millisecond)
 
 	const n = 20
 	for range n {
@@ -117,7 +115,6 @@ func TestDispatcher_RunReplaysAfterRestart(t *testing.T) {
 	d1, st, hub := runTestDispatcher(t, log, sock)
 
 	stop1 := startDispatcher(t, d1)
-	time.Sleep(50 * time.Millisecond)
 	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Body: "first"})
 	recvType(t, recv) // delivered + cursor committed
 	stop1()
@@ -132,6 +129,10 @@ func TestDispatcher_RunReplaysAfterRestart(t *testing.T) {
 	}
 }
 
+// startDispatcher starts d.run in the background and blocks until it has
+// seeded its cursor (past SeedCursor and into its Watch/select loop) before
+// returning, so callers need no fixed post-start sleep — SQLite's first-touch
+// migration cost varies, unlike the old file-backed store's near-instant seed.
 func startDispatcher(t *testing.T, d *sessionDispatcher) func() {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -152,6 +153,14 @@ func startDispatcher(t *testing.T, d *sessionDispatcher) func() {
 		})
 	}
 	t.Cleanup(stop)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for !d.log.HasCursor(d.session, dispatcherConsumer) {
+		if time.Now().After(deadline) {
+			t.Fatal("dispatcher never seeded its cursor")
+		}
+		time.Sleep(time.Millisecond)
+	}
 	return stop
 }
 
@@ -228,7 +237,7 @@ func runtimeDispatcher(t *testing.T, session string, log *eventlog.Store, socket
 }
 
 func drainOnce(d *sessionDispatcher, s *domain.Session) {
-	gen, _ := d.log.Gen(d.session)
+	gen, _ := d.log.StreamID(d.session)
 	d.drain(context.Background(), s, &gen)
 }
 
@@ -507,7 +516,7 @@ func TestDispatcher_CancelMidEventLeavesCursorForReplay(t *testing.T) {
 	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction})
 
 	ctx, cancel := context.WithCancel(context.Background())
-	gen, _ := log.Gen("o/r-1")
+	gen, _ := log.StreamID("o/r-1")
 	done := make(chan struct{})
 	go func() { d.drain(ctx, s, &gen); close(done) }()
 	time.Sleep(100 * time.Millisecond)

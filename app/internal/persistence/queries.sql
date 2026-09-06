@@ -177,32 +177,32 @@ DELETE FROM up_reservations WHERE child_session_name = ?;
 
 -- Events
 
--- name: GetEventStreamGeneration :one
-SELECT generation FROM event_streams WHERE session_name = ?;
+-- name: GetEventStreamIDBySession :one
+SELECT id FROM event_streams WHERE session_name = ?;
 
 -- name: InsertEventStream :exec
-INSERT INTO event_streams (session_name, generation) VALUES (?, ?) ON CONFLICT(session_name) DO NOTHING;
+INSERT INTO event_streams (id, session_name) VALUES (?, ?);
 
 -- name: ListEventStreamSessions :many
 SELECT session_name FROM event_streams ORDER BY session_name;
 
 -- name: NextEventSequence :one
-SELECT COALESCE(MAX(sequence), 0) + 1 FROM events WHERE session_name = ?;
+SELECT COALESCE(MAX(sequence), 0) + 1 FROM events WHERE stream_id = ?;
 
 -- name: InsertEvent :exec
-INSERT INTO events (event_id, session_name, sequence, recorded_at, type, source, direction, summary, body, metadata_json, delivery_mode)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO events (event_id, stream_id, sequence, recorded_at, type, source, direction, summary, body, metadata_json)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
--- name: ListEventsFrom :many
-SELECT event_id, session_name, sequence, recorded_at, type, source, direction, summary, body, metadata_json, delivery_mode
-FROM events WHERE session_name = ? AND sequence >= ? ORDER BY sequence;
+-- name: ListEventsFromByStream :many
+SELECT event_id, sequence, recorded_at, type, source, direction, summary, body, metadata_json
+FROM events WHERE stream_id = ? AND sequence >= ? ORDER BY sequence;
 
--- name: HasEventConsumerPosition :one
-SELECT COUNT(*) FROM event_consumer_positions WHERE session_name = ? AND consumer_name = ?;
+-- name: HasEventCursor :one
+SELECT COUNT(*) FROM event_cursors WHERE stream_id = ? AND cursor_name = ?;
 
--- name: GetEventConsumerPosition :one
-SELECT next_sequence FROM event_consumer_positions WHERE session_name = ? AND consumer_name = ?;
+-- name: GetEventCursor :one
+SELECT next_sequence FROM event_cursors WHERE stream_id = ? AND cursor_name = ?;
 
--- name: UpsertEventConsumerPosition :exec
-INSERT INTO event_consumer_positions (session_name, consumer_name, next_sequence) VALUES (?, ?, ?)
-ON CONFLICT(session_name, consumer_name) DO UPDATE SET next_sequence = excluded.next_sequence;
+-- name: UpsertEventCursor :exec
+INSERT INTO event_cursors (stream_id, cursor_name, next_sequence) VALUES (?, ?, ?)
+ON CONFLICT(stream_id, cursor_name) DO UPDATE SET next_sequence = excluded.next_sequence;

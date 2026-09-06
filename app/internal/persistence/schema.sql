@@ -200,41 +200,43 @@ CREATE TABLE up_reservations (
     CHECK ((parent_session_name IS NOT NULL) != (virtual_root = 1))
 );
 
--- No foreign key to sessions: a destroyed session's event history survives it.
+-- id is minted once, at stream creation, and never changes for that
+-- session name; event.Cursor's v2 stream_id is this value, so a stale
+-- cursor is detected the same way a session recreated under the same name
+-- would be. No foreign key to sessions: a destroyed session's event
+-- history survives it.
 CREATE TABLE event_streams (
-    session_name TEXT PRIMARY KEY,
-    generation TEXT NOT NULL
+    id TEXT PRIMARY KEY,
+    session_name TEXT NOT NULL
 );
+
+CREATE UNIQUE INDEX event_streams_session_name ON event_streams(session_name);
 
 CREATE TABLE events (
     event_id TEXT PRIMARY KEY,
-    session_name TEXT NOT NULL REFERENCES event_streams(session_name),
+    stream_id TEXT NOT NULL REFERENCES event_streams(id),
     sequence INTEGER NOT NULL CHECK (sequence > 0),
     recorded_at TEXT NOT NULL,
     type TEXT NOT NULL,
     source TEXT NOT NULL,
-    direction TEXT NOT NULL,
+    direction TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound', 'internal')),
     summary TEXT NOT NULL,
     body TEXT NOT NULL DEFAULT '',
-    metadata_json TEXT NOT NULL,
-    delivery_mode TEXT NOT NULL
+    metadata_json TEXT NOT NULL
 );
 
-CREATE UNIQUE INDEX events_session_name_sequence ON events(session_name, sequence);
-CREATE INDEX events_stream_id_idx ON events(session_name, event_id);
+CREATE UNIQUE INDEX events_stream_id_sequence ON events(stream_id, sequence);
+CREATE INDEX events_stream_id_event_id_idx ON events(stream_id, event_id);
 
--- next_sequence is exclusive (event.Cursor.Off); unlike events.sequence, 0 is valid.
-CREATE TABLE event_consumer_positions (
-    session_name TEXT NOT NULL REFERENCES event_streams(session_name),
-    consumer_name TEXT NOT NULL,
+-- One reader-position table for every named cursor over a stream. dispatcher
+-- and reactor are delivery commitments (at-least-once, preserved by a later
+-- import); heartbeat_inbound is an observation high-water mark with no
+-- delivery meaning (may be reset to the tail). next_sequence is exclusive
+-- (event.Cursor.Off); unlike events.sequence, 0 is valid (nothing consumed
+-- yet). ON DELETE CASCADE: a cursor has no meaning once its stream is gone.
+CREATE TABLE event_cursors (
+    stream_id TEXT NOT NULL REFERENCES event_streams(id) ON DELETE CASCADE,
+    cursor_name TEXT NOT NULL CHECK (cursor_name IN ('dispatcher', 'reactor', 'heartbeat_inbound')),
     next_sequence INTEGER NOT NULL CHECK (next_sequence >= 0),
-    PRIMARY KEY (session_name, consumer_name)
-);
-
--- Reserved for a later importer; no producer or consumer writes/reads it yet.
-CREATE TABLE event_watermarks (
-    session_name TEXT NOT NULL REFERENCES event_streams(session_name),
-    watermark_name TEXT NOT NULL,
-    next_sequence INTEGER NOT NULL CHECK (next_sequence >= 0),
-    PRIMARY KEY (session_name, watermark_name)
+    PRIMARY KEY (stream_id, cursor_name)
 );

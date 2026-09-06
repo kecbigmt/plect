@@ -102,7 +102,7 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 // same contract as service.EventPage / the CLI): asc paginates forward from the
 // head (or ?cursor) and returns next_cursor; desc returns the most recent page
 // and does not paginate in v1. A cursor is validated against the requested order
-// and the log's current generation, so a stale or cross-order token is rejected
+// and the log's current stream id, so a stale or cross-order token is rejected
 // rather than silently resolving to the wrong record. The opaque event.Cursor
 // token is decoded here into the underlying sequence; the live stream
 // (handleStream) exposes that raw sequence directly instead, since it is an
@@ -119,7 +119,7 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	gen, err := s.store.Gen(session)
+	streamID, err := s.store.StreamID(session)
 	if err != nil {
 		http.Error(w, "list failed", http.StatusInternalServerError) // avoid leaking FS paths
 		return
@@ -133,7 +133,7 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, derr.Error(), http.StatusBadRequest)
 			return
 		}
-		if verr := cur.Validate(order, gen); verr != nil {
+		if verr := cur.Validate(order, streamID); verr != nil {
 			http.Error(w, verr.Error(), http.StatusBadRequest)
 			return
 		}
@@ -162,11 +162,11 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 	if evs == nil {
 		evs = []event.Event{}
 	}
-	// A forward cursor only makes sense once the log exists (gen != ""); without
-	// it there is nothing to resume against, so next_cursor stays empty.
+	// A forward cursor only makes sense once the log exists (streamID != "");
+	// without it there is nothing to resume against, so next_cursor stays empty.
 	nextCursor := ""
-	if gen != "" {
-		nextCursor = event.Cursor{V: event.CursorVersion, Off: next, Ord: event.OrderAsc, Gen: gen}.Encode()
+	if streamID != "" {
+		nextCursor = event.Cursor{V: event.CursorVersion, Off: next, Ord: event.OrderAsc, StreamID: streamID}.Encode()
 	}
 	writeJSON(w, map[string]any{"events": evs, "next_cursor": nextCursor})
 }

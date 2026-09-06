@@ -3,10 +3,13 @@ package webui
 import (
 	"bufio"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -130,10 +133,18 @@ func TestEventsStream_RawIntegerLastEventIDFallsBackToFreshConnect(t *testing.T)
 	bus := fakeBus(t)
 	defer bus.Close()
 
+	// resolveGen's own later call (cursor="") races the initial validation
+	// call on fakeService's shared gotResumeCursor field, so this test tracks
+	// every call itself instead, under its own lock.
+	var mu sync.Mutex
+	var gotCursors []string
 	svc := &fakeService{
 		// Stands in for service.EventStreamResume: rejects anything that
 		// isn't a decodable cursor, exactly as event.DecodeCursor would.
 		resumeFn: func(_, cursor string) (string, int64, error) {
+			mu.Lock()
+			gotCursors = append(gotCursors, cursor)
+			mu.Unlock()
 			if cursor == "" {
 				return "gen1", 0, nil
 			}
@@ -158,9 +169,12 @@ func TestEventsStream_RawIntegerLastEventIDFallsBackToFreshConnect(t *testing.T)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (fresh connect, not an error)", resp.StatusCode)
 	}
+	io.Copy(io.Discard, resp.Body) // wait out the relay goroutine before inspecting gotCursors
 	// Rejected as an invalid cursor, so the handler fell through to since=0.
-	if svc.gotResumeCursor != "128" {
-		t.Fatalf("gotResumeCursor = %q, want the raw Last-Event-ID passed through for validation", svc.gotResumeCursor)
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Contains(gotCursors, "128") {
+		t.Fatalf("gotCursors = %v, want the raw Last-Event-ID (128) passed through for validation", gotCursors)
 	}
 }
 

@@ -146,7 +146,7 @@ func (s *Server) relayBusBody(body io.Reader, w io.Writer, flusher http.Flusher,
 			}
 			var ev event.Event
 			if json.Unmarshal([]byte(strings.Join(dataLines, "\n")), &ev) == nil {
-				cursor := event.Cursor{V: event.CursorVersion, Off: lastSeq, Ord: event.OrderAsc, Gen: resolveGen()}.Encode()
+				cursor := event.Cursor{V: event.CursorVersion, Off: lastSeq, Ord: event.OrderAsc, StreamID: resolveGen()}.Encode()
 				if err := writeEventFrame(w, cursor, s.renderEventRow(ev)); err != nil {
 					return err
 				}

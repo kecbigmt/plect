@@ -76,10 +76,9 @@ nothing beyond its columns serializes to `"{}"`.
 | `population_members` | `(workflow, name, resource_id)` primary key and `populations(workflow, name)` foreign key; nullable `session_name` | item, generation, timestamps, flags, `decision_kind`/`decision_reason`, blockers | `PopulationState.Members` |
 | `up_reservations` | `child_session_name` primary key; nullable `parent_session_name`, `virtual_root`, `pid`, `reserved_at` | none | `state.json` `up_reservations` |
 | `pending_deliveries` | `(session_name, resource_id, operation)` primary key; `operation` is subscribe or unsubscribe | none | `pending_delivery.json` |
-| `event_streams` | `session_name` primary key; `generation` | none | each event directory and its `.gen` file |
-| `events` | `event_id` primary key; `(session_name, sequence)` unique and references `event_streams` | type, source, direction, summary, body, metadata, delivery mode, and recorded time | each `log.jsonl` record |
-| `event_consumer_positions` | `(session_name, consumer_name)` primary key and stream foreign key; `next_sequence` | none | `.cursor.<consumer>` |
-| `event_watermarks` | `(session_name, watermark_name)` primary key and stream foreign key; `next_sequence` | none | `TickBackoff.LastLogPosition` |
+| `event_streams` | `id` (ULID) primary key; `session_name` unique | none | each event directory and its `.gen` file |
+| `events` | `event_id` primary key; `(stream_id, sequence)` unique and references `event_streams(id)` | type, source, direction, summary, body, metadata, delivery mode, and recorded time | each `log.jsonl` record |
+| `event_cursors` | `(stream_id, cursor_name)` primary key and stream foreign key (`ON DELETE CASCADE`); `cursor_name` CHECK IN `dispatcher`/`reactor`/`heartbeat_inbound`; `next_sequence` | none | `.cursor.<consumer>`, `TickBackoff.LastLogPosition` |
 | `session_tombstones` | `session_name` primary key; `destroyed_at` | tombstone session snapshot | `tombstone.json` |
 
 `population_members.session_name` is a recorded fact, not an enforced foreign
@@ -168,11 +167,20 @@ session may be deleted without deleting its event stream or tombstone, so
 
 `events.sequence` is a positive, per-stream append position. It is not an
 event identity and it is not a timestamp. A write transaction creates an
-`event_streams` row when needed, assigns its generation, allocates the next
-sequence, and inserts the event. The unique stream/sequence constraint gives
-each log a total append order even when separate processes append concurrently.
-Event IDs remain the global deduplication identity and the key used for merged
-subtree ordering.
+`event_streams` row when needed — minting its `id` (a ULID) once, at that
+moment, never reassigned afterward — allocates the next sequence, and inserts
+the event. The unique stream/sequence constraint gives each log a total
+append order even when separate processes append concurrently. Event IDs
+remain the global deduplication identity and the key used for merged subtree
+ordering.
+
+Vocabulary: a *cursor* is the opaque encoded token (`event.Cursor`) handed to
+a client; a *position* is the stored plain-integer `next_sequence` a server
+holds on its behalf. `event_cursors` holds three named positions per stream:
+`dispatcher` and `reactor` are delivery commitments (at-least-once — a later
+importer must preserve them exactly), and `heartbeat_inbound` is an
+observation high-water mark with no delivery meaning (an importer may reset
+it to the tail instead).
 
 The database does not contain plugin-owned configuration or plugin-private
 state. In particular, plugin catalog and lock files remain configuration, and
@@ -209,13 +217,15 @@ CREATE INDEX sessions_alias_idx ON sessions(alias);
 CREATE INDEX sessions_parent_idx ON sessions(parent_session_name);
 
 CREATE TABLE event_streams (
-    session_name TEXT PRIMARY KEY,
-    generation TEXT NOT NULL
+    id TEXT PRIMARY KEY,
+    session_name TEXT NOT NULL
 );
+
+CREATE UNIQUE INDEX event_streams_session_name ON event_streams(session_name);
 
 CREATE TABLE events (
     event_id TEXT PRIMARY KEY,
-    session_name TEXT NOT NULL REFERENCES event_streams(session_name),
+    stream_id TEXT NOT NULL REFERENCES event_streams(id),
     sequence INTEGER NOT NULL CHECK (sequence > 0),
     recorded_at TEXT NOT NULL,
     type TEXT NOT NULL,
@@ -224,46 +234,26 @@ CREATE TABLE events (
     summary TEXT NOT NULL,
     body TEXT NOT NULL DEFAULT '',
     metadata_json TEXT NOT NULL,
-    delivery_mode TEXT NOT NULL,
-    UNIQUE (session_name, sequence)
+    delivery_mode TEXT NOT NULL
 );
 
-CREATE INDEX events_stream_sequence_idx ON events(session_name, sequence);
-CREATE INDEX events_stream_id_idx ON events(session_name, event_id);
+CREATE UNIQUE INDEX events_stream_id_sequence ON events(stream_id, sequence);
+CREATE INDEX events_stream_id_event_id_idx ON events(stream_id, event_id);
+
+CREATE TABLE event_cursors (
+    stream_id TEXT NOT NULL REFERENCES event_streams(id) ON DELETE CASCADE,
+    cursor_name TEXT NOT NULL CHECK (cursor_name IN ('dispatcher', 'reactor', 'heartbeat_inbound')),
+    next_sequence INTEGER NOT NULL CHECK (next_sequence >= 0),
+    PRIMARY KEY (stream_id, cursor_name)
+);
 ```
 
 The migration history begins with a transaction-only goose migration. Goose
 records the migration version in its ledger in the same transaction as the
 schema changes; migration files do not use a `NO TRANSACTION` directive.
-
-```sql
--- +goose Up
-CREATE TABLE event_streams (
-    session_name TEXT PRIMARY KEY,
-    generation TEXT NOT NULL
-);
-
-CREATE TABLE events (
-    event_id TEXT PRIMARY KEY,
-    session_name TEXT NOT NULL REFERENCES event_streams(session_name),
-    sequence INTEGER NOT NULL CHECK (sequence > 0),
-    recorded_at TEXT NOT NULL,
-    type TEXT NOT NULL,
-    source TEXT NOT NULL,
-    direction TEXT NOT NULL,
-    summary TEXT NOT NULL,
-    body TEXT NOT NULL DEFAULT '',
-    metadata_json TEXT NOT NULL,
-    delivery_mode TEXT NOT NULL,
-    UNIQUE (session_name, sequence)
-);
-
-CREATE INDEX events_stream_sequence_idx ON events(session_name, sequence);
-
--- +goose Down
-DROP TABLE events;
-DROP TABLE event_streams;
-```
+Migrations are Atlas-generated from `schema.sql` (see
+`app/internal/persistence/doc.go`), so their exact SQL text — quoting,
+per-index `CREATE` statements — is authoritative over any excerpt here.
 
 The append query obtains the next sequence inside the caller's write
 transaction. The persistence append method creates a stream row first and
@@ -274,11 +264,11 @@ calculates a position outside the transaction.
 -- name: NextEventSequence :one
 SELECT COALESCE(MAX(sequence), 0) + 1
 FROM events
-WHERE session_name = ?;
+WHERE stream_id = ?;
 
 -- name: InsertEvent :exec
 INSERT INTO events (
-    event_id, session_name, sequence, recorded_at, type, source, direction,
+    event_id, stream_id, sequence, recorded_at, type, source, direction,
     summary, body, metadata_json, delivery_mode
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 ```

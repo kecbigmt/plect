@@ -21,7 +21,7 @@ import (
 // reactorConsumer is this consumer's durable cursor name — distinct from
 // dispatch's "dispatcher" cursor so the two followers advance independently
 // over the same log.
-const reactorConsumer = "tick-reactor"
+const reactorConsumer = "reactor"
 
 // fallbackDrain re-drains even if a wake was missed/coalesced, mirroring
 // dispatch's fallback ticker: correctness rests on the durable cursor, so
@@ -85,7 +85,7 @@ type sessionReactor struct {
 
 func (r *sessionReactor) run(ctx context.Context) {
 	seedCursor(r.log, r.session)
-	startGen, _ := r.log.Gen(r.session)
+	startGen, _ := r.log.StreamID(r.session)
 	wake := r.hub.Watch(r.session)
 	defer wake.Close()
 	fallback := time.NewTicker(fallbackDrain)
@@ -176,7 +176,7 @@ func seedCursor(log *eventlog.Store, session string) {
 // owns this session's follow loop) and rapid bursts coalesce into one tick,
 // exactly as verification-gate.md's serialization/debounce rule requires.
 func (r *sessionReactor) drain(ctx context.Context, startGen *string) {
-	if g, _ := r.log.Gen(r.session); *startGen != "" && g != *startGen {
+	if g, _ := r.log.StreamID(r.session); *startGen != "" && g != *startGen {
 		if err := r.log.CommitCursor(r.session, reactorConsumer, 0); err != nil {
 			slog.Default().Warn("reactor: reset cursor after log rotation failed", "session", r.session, "error", err)
 		}

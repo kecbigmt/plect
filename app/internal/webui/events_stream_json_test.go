@@ -166,8 +166,8 @@ func TestEventsStreamJSON_ResolvesGenerationEstablishedByTheFirstLiveEvent(t *te
 	if err != nil {
 		t.Fatalf("decode cursor: %v", err)
 	}
-	if decoded.Gen != "01REAL000" {
-		t.Errorf("frame cursor generation = %q, want the generation established by the first event, not the empty one seen at connect time", decoded.Gen)
+	if decoded.StreamID != "01REAL000" {
+		t.Errorf("frame cursor stream id = %q, want the id established by the first event, not the empty one seen at connect time", decoded.StreamID)
 	}
 }
 

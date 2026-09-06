@@ -102,7 +102,6 @@ func TestSessionReactor_ReactiveTickReachesDoneWhenConsequence(t *testing.T) {
 	}
 	stop := startReactor(t, r)
 	defer stop()
-	time.Sleep(50 * time.Millisecond)
 
 	log.Append(event.Event{SessionName: "o/r-1", Type: "resource.updated"})
 
@@ -178,7 +177,6 @@ func TestSessionReactor_UnchangedUnmetStateAnnouncesOnce(t *testing.T) {
 	}
 	stop := startReactor(t, r)
 	defer stop()
-	time.Sleep(50 * time.Millisecond)
 
 	floor := time.Now()
 	for range 6 {

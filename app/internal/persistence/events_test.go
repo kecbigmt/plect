@@ -46,16 +46,15 @@ func TestAppendEvent_RoundTripsEveryField(t *testing.T) {
 	when := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
 
 	want := event.Event{
-		ID:           "01JXAMPLE",
-		SessionName:  session,
-		Time:         when,
-		Type:         "widget.message",
-		Source:       "widget",
-		Direction:    event.Inbound,
-		Summary:      "hello",
-		Body:         "hello body",
-		Metadata:     map[string]string{"k": "v"},
-		DeliveryMode: event.DeliveryModePush,
+		ID:          "01JXAMPLE",
+		SessionName: session,
+		Time:        when,
+		Type:        "widget.message",
+		Source:      "widget",
+		Direction:   event.Inbound,
+		Summary:     "hello",
+		Body:        "hello body",
+		Metadata:    map[string]string{"k": "v"},
 	}
 	if _, err := db.AppendEvent(ctx, want); err != nil {
 		t.Fatalf("append: %v", err)
@@ -74,7 +73,7 @@ func TestAppendEvent_RoundTripsEveryField(t *testing.T) {
 	ev := got[0]
 	if ev.ID != want.ID || ev.SessionName != want.SessionName || !ev.Time.Equal(want.Time) ||
 		ev.Type != want.Type || ev.Source != want.Source || ev.Direction != want.Direction ||
-		ev.Summary != want.Summary || ev.Body != want.Body || ev.DeliveryMode != want.DeliveryMode {
+		ev.Summary != want.Summary || ev.Body != want.Body {
 		t.Fatalf("round-tripped event = %+v, want %+v", ev, want)
 	}
 	if ev.Metadata["k"] != "v" {
@@ -87,7 +86,7 @@ func TestAppendEvent_EmptyMetadataRoundTripsAsNil(t *testing.T) {
 	ctx := context.Background()
 	const session = "s1"
 
-	if _, err := db.AppendEvent(ctx, event.Event{ID: "e1", SessionName: session, Time: time.Now().UTC(), Type: "a", Source: "test"}); err != nil {
+	if _, err := db.AppendEvent(ctx, event.Event{ID: "e1", SessionName: session, Time: time.Now().UTC(), Type: "a", Source: "test", Direction: event.Internal}); err != nil {
 		t.Fatalf("append: %v", err)
 	}
 	got, _, err := db.ListEventsFrom(ctx, session, 0)
@@ -99,13 +98,42 @@ func TestAppendEvent_EmptyMetadataRoundTripsAsNil(t *testing.T) {
 	}
 }
 
+func TestAppendEvent_RejectsEmptyDirection(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+
+	if _, err := db.AppendEvent(ctx, event.Event{ID: "e1", SessionName: "s1", Time: time.Now().UTC(), Type: "a"}); err == nil {
+		t.Fatal("append with empty direction succeeded, want error")
+	}
+}
+
+func TestAppendEvent_DeliveryModeIsNotPersisted(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+	const session = "s1"
+
+	if _, err := db.AppendEvent(ctx, event.Event{
+		ID: "e1", SessionName: session, Time: time.Now().UTC(), Type: "a",
+		Direction: event.Internal, DeliveryMode: event.DeliveryModePush,
+	}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	got, _, err := db.ListEventsFrom(ctx, session, 0)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(got) != 1 || got[0].DeliveryMode != "" {
+		t.Fatalf("delivery mode = %q, want zero value on read", got[0].DeliveryMode)
+	}
+}
+
 func TestListEventsFrom_ResumesAfterAGivenSequence(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
 	const session = "s1"
 
 	for i := range 3 {
-		if _, err := db.AppendEvent(ctx, event.Event{ID: string(rune('a' + i)), SessionName: session, Time: time.Now().UTC(), Type: "t"}); err != nil {
+		if _, err := db.AppendEvent(ctx, event.Event{ID: string(rune('a' + i)), SessionName: session, Time: time.Now().UTC(), Type: "t", Direction: event.Internal}); err != nil {
 			t.Fatalf("append %d: %v", i, err)
 		}
 	}
@@ -129,73 +157,73 @@ func TestListEventsFrom_MissingStreamIsEmptyNotError(t *testing.T) {
 	}
 }
 
-func TestEventStreamGeneration_EmptyUntilFirstTouchThenStable(t *testing.T) {
+func TestEventStreamID_EmptyUntilFirstTouchThenStable(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
 	const session = "s9"
 
-	gen, err := db.EventStreamGeneration(ctx, session)
+	gen, err := db.EventStreamID(ctx, session)
 	if err != nil || gen != "" {
 		t.Fatalf("gen before any touch = %q (err=%v), want empty", gen, err)
 	}
 
-	if _, err := db.AppendEvent(ctx, event.Event{ID: "e1", SessionName: session, Time: time.Now().UTC(), Type: "a"}); err != nil {
+	if _, err := db.AppendEvent(ctx, event.Event{ID: "e1", SessionName: session, Time: time.Now().UTC(), Type: "a", Direction: event.Internal}); err != nil {
 		t.Fatalf("append: %v", err)
 	}
-	g1, err := db.EventStreamGeneration(ctx, session)
+	g1, err := db.EventStreamID(ctx, session)
 	if err != nil || g1 == "" {
 		t.Fatalf("gen after first append = %q (err=%v), want non-empty", g1, err)
 	}
 
-	if _, err := db.AppendEvent(ctx, event.Event{ID: "e2", SessionName: session, Time: time.Now().UTC(), Type: "b"}); err != nil {
+	if _, err := db.AppendEvent(ctx, event.Event{ID: "e2", SessionName: session, Time: time.Now().UTC(), Type: "b", Direction: event.Internal}); err != nil {
 		t.Fatalf("append: %v", err)
 	}
-	g2, err := db.EventStreamGeneration(ctx, session)
+	g2, err := db.EventStreamID(ctx, session)
 	if err != nil || g2 != g1 {
 		t.Fatalf("gen changed across appends: %q -> %q", g1, g2)
 	}
 }
 
-func TestEventConsumerPosition_RoundTripAndHasDistinguishesNeverFromZero(t *testing.T) {
+func TestEventCursor_RoundTripAndHasDistinguishesNeverFromZero(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
-	const session, consumer = "s1", "dispatcher"
+	const session, cursorName = "s1", "dispatcher"
 
-	has, err := db.HasEventConsumerPosition(ctx, session, consumer)
+	has, err := db.HasEventCursor(ctx, session, cursorName)
 	if err != nil || has {
 		t.Fatalf("has before any commit = %v (err=%v), want false", has, err)
 	}
-	pos, err := db.EventConsumerPosition(ctx, session, consumer)
+	pos, err := db.EventCursor(ctx, session, cursorName)
 	if err != nil || pos != 0 {
 		t.Fatalf("position before any commit = %d (err=%v), want 0", pos, err)
 	}
 
-	if err := db.SetEventConsumerPosition(ctx, session, consumer, 0); err != nil {
+	if err := db.SetEventCursor(ctx, session, cursorName, 0); err != nil {
 		t.Fatalf("set 0: %v", err)
 	}
-	has, err = db.HasEventConsumerPosition(ctx, session, consumer)
+	has, err = db.HasEventCursor(ctx, session, cursorName)
 	if err != nil || !has {
 		t.Fatalf("has after committing 0 = %v (err=%v), want true", has, err)
 	}
 
-	if err := db.SetEventConsumerPosition(ctx, session, consumer, 42); err != nil {
+	if err := db.SetEventCursor(ctx, session, cursorName, 42); err != nil {
 		t.Fatalf("set 42: %v", err)
 	}
-	pos, err = db.EventConsumerPosition(ctx, session, consumer)
+	pos, err = db.EventCursor(ctx, session, cursorName)
 	if err != nil || pos != 42 {
 		t.Fatalf("position after set 42 = %d (err=%v), want 42", pos, err)
 	}
 }
 
-func TestSetEventConsumerPosition_CreatesStreamWhenNoEventExistsYet(t *testing.T) {
+func TestSetEventCursor_CreatesStreamWhenNoEventExistsYet(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
-	const session, consumer = "s1", "dispatcher"
+	const session, cursorName = "s1", "dispatcher"
 
-	if err := db.SetEventConsumerPosition(ctx, session, consumer, 0); err != nil {
+	if err := db.SetEventCursor(ctx, session, cursorName, 0); err != nil {
 		t.Fatalf("set: %v", err)
 	}
-	gen, err := db.EventStreamGeneration(ctx, session)
+	gen, err := db.EventStreamID(ctx, session)
 	if err != nil || gen == "" {
 		t.Fatalf("gen after seeding a cursor with no events = %q (err=%v), want non-empty", gen, err)
 	}
