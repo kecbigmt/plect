@@ -492,9 +492,6 @@ func TestUp_ProducesSessionScopedNodeAddedAfterSessionCreation(t *testing.T) {
 	}
 }
 
-// TestUp_VanishedTmuxPaneIsRebuilt regression-tests #368: a produced
-// run-scoped pane whose backing tmux session vanished across a container
-// replacement.
 func TestUp_VanishedTmuxPaneIsRebuilt(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -524,10 +521,6 @@ func TestUp_VanishedTmuxPaneIsRebuilt(t *testing.T) {
 	}
 }
 
-// TestUp_VanishedGuardDirectoryIsRebuilt regression-tests #368: a produced
-// session-scoped guard directory removed by a container replacement, and the
-// run-scoped node reading its output rebuilding against the fresh directory
-// afterward.
 func TestUp_VanishedGuardDirectoryIsRebuilt(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -570,8 +563,6 @@ func TestUp_VanishedGuardDirectoryIsRebuilt(t *testing.T) {
 	}
 }
 
-// TestUp_VanishedSubscriptionIsRebuilt regression-tests #368: a produced
-// run-scoped channel subscription dropped by a container replacement.
 func TestUp_VanishedSubscriptionIsRebuilt(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
