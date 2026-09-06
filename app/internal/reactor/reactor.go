@@ -321,7 +321,7 @@ func (r *sessionReactor) checkHeartbeat(ctx context.Context) {
 	if r.tick.Heartbeat.Duration <= 0 {
 		return
 	}
-s, err := r.state.GetE(r.session)
+	s, err := r.state.GetE(r.session)
 	if err != nil {
 		slog.Default().Warn("reactor: read session state failed; skipping this heartbeat sweep", "session", r.session, "error", err)
 		return
@@ -354,7 +354,7 @@ func (r *sessionReactor) checkHealth(ctx context.Context) {
 	if ctx.Err() != nil {
 		return
 	}
-s, err := r.state.GetE(r.session)
+	s, err := r.state.GetE(r.session)
 	if err != nil {
 		slog.Default().Warn("reactor: read session state failed; skipping this healthcheck sweep", "session", r.session, "error", err)
 		return
@@ -379,7 +379,7 @@ func (r *sessionReactor) checkChannelHealth(ctx context.Context) {
 	if ctx.Err() != nil {
 		return
 	}
-s, err := r.state.GetE(r.session)
+	s, err := r.state.GetE(r.session)
 	if err != nil {
 		slog.Default().Warn("reactor: read session state failed; skipping this channel-health sweep", "session", r.session, "error", err)
 		return

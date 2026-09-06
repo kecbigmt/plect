@@ -457,6 +457,11 @@ func TestStore_DeleteClearsTheSessionsUpReservation(t *testing.T) {
 
 // plantReservation writes a reservation directly, bypassing ReserveUpSlot's
 // own PID/timestamp stamping — for planting a specific PID or backdated time.
+// reservedAtTestLayout mirrors persistence.timeLayout: a fixed nine-
+// fractional-digit width, not time.RFC3339Nano's trailing-zero-trimmed one,
+// since persistence's own parseTime rejects the variable-width form.
+const reservedAtTestLayout = "2006-01-02T15:04:05.000000000Z"
+
 func plantReservation(t *testing.T, store *Store, child string, res UpReservation) {
 	t.Helper()
 	db, err := store.dbHandle()
@@ -467,7 +472,7 @@ func plantReservation(t *testing.T, store *Store, child string, res UpReservatio
 		_, err := tx.ExecContext(context.Background(),
 			`INSERT INTO up_reservations (child_session_name, parent_name, pid, reserved_at) VALUES (?, ?, ?, ?)
 			 ON CONFLICT(child_session_name) DO UPDATE SET parent_name=excluded.parent_name, pid=excluded.pid, reserved_at=excluded.reserved_at`,
-			child, res.Parent, res.PID, res.At.UTC().Format(time.RFC3339Nano))
+			child, res.Parent, res.PID, res.At.UTC().Format(reservedAtTestLayout))
 		return err
 	}); err != nil {
 		t.Fatalf("plantReservation: %v", err)
