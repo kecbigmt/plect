@@ -38,10 +38,7 @@ type fakeService struct {
 	resumeErr       error
 	gotResumeName   string
 	gotResumeCursor string
-	// resumeFn, when set, overrides resumeGen/resumeOffset/resumeErr — lets a
-	// test vary the response across successive calls (e.g. a log's
-	// generation appearing partway through a connection).
-	resumeFn func(name, cursor string) (string, int64, error)
+	resumeFn        func(name, cursor string) (string, int64, error)
 
 	createResult  *service.CreateResult
 	upResult      *service.UpResult

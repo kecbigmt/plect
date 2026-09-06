@@ -308,7 +308,6 @@ func TestEventStreamResumeRejectsStaleGenerationCursor(t *testing.T) {
 	if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote}); err != nil {
 		t.Fatal(err)
 	}
-	// Forge a cursor with a generation the log never had.
 	stale := event.Cursor{V: event.CursorVersion, Off: 0, Ord: event.OrderAsc, Gen: "01JXNEVER"}.Encode()
 	_, _, err := EventStreamResume(nil, store, session, stale)
 	var svcErr *Error

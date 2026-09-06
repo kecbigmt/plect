@@ -174,11 +174,8 @@ func EventPage(cfg *config.Config, store *state.Store, identifier string, p Even
 	return res, nil
 }
 
-// EventStreamResume decodes a live-endpoint resume cursor via EventPage's own
-// cursor-validation path, so a NextCursor from GET /events needs no second
-// format. An empty cursor is a fresh connect (current generation, zero
-// offset); a malformed, wrong-order, or stale-generation one is rejected the
-// same way EventPage rejects one.
+// EventStreamResume validates a resume cursor via EventPage's own check: an
+// offset from one log generation must never be read against another.
 func EventStreamResume(cfg *config.Config, store *state.Store, identifier, cursor string) (gen string, offset int64, err error) {
 	name, err := resolveSessionName(cfg, store, identifier)
 	if err != nil {

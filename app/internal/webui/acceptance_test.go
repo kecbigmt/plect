@@ -538,11 +538,6 @@ func TestAcceptance_ApiV1EventsCursorClosesTheHistoryLiveHandoffGap(t *testing.T
 	}
 }
 
-// Acceptance: proves the live JSON SSE endpoint (events_stream_json.go)
-// completes the same handoff — a client hands GET /api/v1/events's own
-// nextCursor to GET /api/v1/events/stream with no cursor format of its own,
-// and the event published in the race window arrives exactly once through
-// the live channel rather than needing a second history refetch.
 func TestAcceptance_ApiV1EventsStreamResumesFromTheHistoryEndpointsOwnCursor(t *testing.T) {
 	store := state.NewStore(t.TempDir())
 	cfg, err := config.Load()
@@ -629,9 +624,6 @@ func TestAcceptance_ApiV1EventsStreamResumesFromTheHistoryEndpointsOwnCursor(t *
 	}
 }
 
-// sinceFromQuery parses the fake bus's ?since= the same way the real bus
-// does (a plain byte offset), isolated so the handler body above stays a
-// straight-line read of the durable log.
 func sinceFromQuery(r *http.Request) int64 {
 	v := r.URL.Query().Get("since")
 	if v == "" {

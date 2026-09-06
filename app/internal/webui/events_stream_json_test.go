@@ -20,7 +20,6 @@ func TestEventsStreamJSON_RequiresSession(t *testing.T) {
 	}
 }
 
-// An invalid cursor is a 400 before the bus is ever dialed.
 func TestEventsStreamJSON_RejectsInvalidCursor(t *testing.T) {
 	svc := &fakeService{resumeErr: &service.Error{Code: service.ErrInvalidInput, Message: "cursor expired"}}
 	rr := get(t, svc, "/api/v1/events/stream?session=acme/session-x&cursor=garbage")
@@ -32,9 +31,6 @@ func TestEventsStreamJSON_RejectsInvalidCursor(t *testing.T) {
 	}
 }
 
-// fakeBusJSON serves GET /v1/stream with one keepalive comment and one event
-// frame at a known byte offset, so the relay's cursor re-encoding can be
-// checked against a known generation.
 func fakeBusJSON(t *testing.T, wantSince string) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
@@ -84,17 +80,12 @@ func TestEventsStreamJSON_RelaysEventsWithOpaqueResumeCursor(t *testing.T) {
 			sawPing = true
 		case strings.HasPrefix(line, "id: "):
 			id := strings.TrimPrefix(line, "id: ")
-			// The resume id must be the opaque cursor format, not the bus's
-			// raw "128" byte offset — a real cursor decodes back to it.
 			if id == "128" {
 				t.Errorf("resume id = %q, want an opaque cursor, not the bus's raw offset", id)
 			}
 			sawCursorID = true
 		case strings.Contains(line, `"summary":"hi there"`):
 			sawEvent = true
-			// The DTO uses the wire's camelCase sessionName field, matching
-			// webapi.EventFromDomain/webapiv1.Event exactly (see
-			// testdata/event_page.valid.json).
 			if !strings.Contains(line, `"sessionName":"acme/session-x"`) {
 				t.Errorf("frame = %q, want the same field shape as webapiv1.Event", line)
 			}
@@ -130,7 +121,7 @@ func TestEventsStreamJSON_ResumesBusFromDecodedCursor(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body would confirm since= assertion inside fakeBusJSON", resp.StatusCode)
 	}
-	_, _ = bufio.NewReader(resp.Body).ReadString('\n') // drain enough to let the handler run
+	_, _ = bufio.NewReader(resp.Body).ReadString('\n') // waits for the handler to write the first line
 	if svc.gotResumeCursor != "some-opaque-token" {
 		t.Errorf("resume cursor = %q", svc.gotResumeCursor)
 	}
@@ -144,9 +135,9 @@ func TestEventsStreamJSON_ResolvesGenerationEstablishedByTheFirstLiveEvent(t *te
 	svc := &fakeService{resumeFn: func(string, string) (string, int64, error) {
 		calls++
 		if calls == 1 {
-			return "", 0, nil // connect time: the log does not exist yet
+			return "", 0, nil
 		}
-		return "01REAL000", 0, nil // resolveGen's re-check, after the log exists
+		return "01REAL000", 0, nil
 	}}
 	srv := httptest.NewServer(withBus(svc, bus.URL).Routes())
 	defer srv.Close()
@@ -179,8 +170,6 @@ func TestEventsStreamJSON_ResolvesGenerationEstablishedByTheFirstLiveEvent(t *te
 	}
 }
 
-// When the bus is unreachable the proxy returns a 502 before committing the
-// stream's 200, matching the existing HTML relay's behavior.
 func TestEventsStreamJSON_BusUnavailable(t *testing.T) {
 	down := httptest.NewServer(http.NewServeMux())
 	downURL := down.URL

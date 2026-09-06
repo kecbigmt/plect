@@ -75,14 +75,10 @@ func eventPageFromResult(r service.EventPageResult) webapiv1.EventPage {
 	}
 }
 
-// EventFromDomain projects one contracts/event.Event onto the wire's Event,
-// field for field and verbatim — Type and Source stay untyped strings (a
-// producer's own namespace, not this API's to enumerate), and Metadata passes
-// through whatever keys the log actually holds, known or not. This is the
-// entire "unknown event types/metadata survive the projection" contract: pass
-// everything through, invent nothing. Exported so the live SSE relay (webui)
-// emits frames in the identical wire shape as this package's own history
-// endpoint, rather than a second, drifting conversion.
+// EventFromDomain projects contracts/event.Event onto the wire's Event:
+// Type/Source stay unenumerated (a producer's own namespace) and Metadata
+// passes through unknown keys verbatim. Exported so the live SSE relay
+// shares this conversion instead of drifting from a second one.
 func EventFromDomain(ev event.Event) webapiv1.Event {
 	return webapiv1.Event{
 		Id:           ev.ID,

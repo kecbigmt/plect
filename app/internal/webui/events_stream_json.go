@@ -13,10 +13,6 @@ import (
 	"github.com/kecbigmt/plecture/contracts/event"
 )
 
-// handleSessionEventsStreamJSON is hand-written rather than part of the
-// generated @plecture/web-api contract: SSE reconnection/replay semantics
-// stay explicit and separately tested at this boundary (web/api/README.md,
-// docs/design/web-ui-event-history.md).
 func (s *Server) handleSessionEventsStreamJSON(w http.ResponseWriter, r *http.Request) {
 	session := r.URL.Query().Get("session")
 	if session == "" {
@@ -49,9 +45,7 @@ func (s *Server) handleSessionEventsStreamJSON(w http.ResponseWriter, r *http.Re
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	// gen is "" for a session with no log yet; its first Append (possibly
-	// after this connection opens) assigns the real one, so resolveGen
-	// re-checks lazily rather than baking in "" for every frame.
+	// An absent generation must be re-read because the first append creates it.
 	known := gen
 	resolveGen := func() string {
 		if known == "" {

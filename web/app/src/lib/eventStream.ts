@@ -42,10 +42,7 @@ function isAbortError(err: unknown): boolean {
   return err instanceof DOMException && err.name === "AbortError";
 }
 
-// backoffDelayMs computes the full-jitter delay before reconnect attempt N
-// (1-indexed): a random value in [0, min(INITIAL * FACTOR^(N-1), MAX)],
-// spreading simultaneous reconnects (e.g. after a bus restart) rather than
-// having every open pane retry in lockstep.
+// Full jitter prevents every open pane from retrying in lockstep.
 export function backoffDelayMs(attempt: number): number {
   const cap = Math.min(BACKOFF_INITIAL_MS * BACKOFF_FACTOR ** (attempt - 1), BACKOFF_MAX_MS);
   return Math.random() * cap;
@@ -67,14 +64,12 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 
 type ConnectOutcome = { kind: "aborted" } | { kind: "auth-expired" } | { kind: "retry" };
 
-// dispatchFrame parses one SSE data block. A malformed frame is dropped
-// rather than crashing the stream — the same best-effort behavior the Go
-// relay's own JSON unmarshal already has (events_stream_json.go).
+// One malformed upstream frame must not terminate the stream.
 function dispatchFrame(raw: string, onEvent: (event: SessionEvent) => void): void {
   try {
     onEvent(JSON.parse(raw) as SessionEvent);
   } catch {
-    // Dropped: see comment above.
+    // dropped
   }
 }
 
@@ -101,10 +96,6 @@ async function connectOnce(
     return { kind: "retry" };
   }
 
-  // The connection was accepted: reset the reconnect-attempt budget before
-  // reading a single frame, so a long-lived stream's eventual, unrelated
-  // disconnect starts a fresh backoff series rather than inheriting whatever
-  // count a prior blip left behind.
   onConnected();
   handlers.onStateChange("live");
   const reader = response.body.getReader();
@@ -115,11 +106,7 @@ async function connectOnce(
   try {
     while (true) {
       const { done, value } = await reader.read();
-      // Re-checked after every read, not just relied on via fetch's own
-      // AbortSignal wiring: a frame already in flight when the caller
-      // cancels (a session switch) can still resolve after signal.aborted
-      // flips, and dispatching it would let it cross into whatever session
-      // opened next.
+      // A queued read can resolve after abort.
       if (signal.aborted) {
         return { kind: "aborted" };
       }
@@ -132,11 +119,7 @@ async function connectOnce(
       for (const rawLine of lines) {
         const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
         if (line === "") {
-          // A frame's id becomes the resume cursor only once its terminating
-          // blank line arrives — committing it at the "id:" line itself
-          // would advance past an event whose "data:" line never showed up
-          // because the connection dropped mid-frame, permanently skipping
-          // it on reconnect.
+          // Committing before the frame terminator would skip a truncated event.
           if (dataLines.length > 0) {
             dispatchFrame(dataLines.join("\n"), handlers.onEvent);
             dataLines = [];
@@ -148,7 +131,7 @@ async function connectOnce(
           continue;
         }
         if (line.startsWith(":")) {
-          continue; // keepalive comment
+          continue;
         }
         if (line.startsWith("id:")) {
           pendingId = line.slice(3).trim();
@@ -162,11 +145,9 @@ async function connectOnce(
   } catch (err) {
     return isAbortError(err) ? { kind: "aborted" } : { kind: "retry" };
   }
-  return { kind: "retry" }; // the stream ended (server close/bus restart); reconnect from cursor.value
+  return { kind: "retry" };
 }
 
-// initialCursor seeds only the first connection attempt; every reconnect
-// after that resumes from whatever cursor.value last advanced to.
 export function openEventStream(
   sessionName: string,
   initialCursor: string,

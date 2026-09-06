@@ -30,7 +30,7 @@ function cursorOf(input: RequestInfo | URL): string {
 
 describe("backoffDelayMs", () => {
   beforeEach(() => {
-    vi.spyOn(Math, "random").mockReturnValue(1); // full jitter's upper bound, for a deterministic assertion
+    vi.spyOn(Math, "random").mockReturnValue(1);
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -50,7 +50,7 @@ describe("backoffDelayMs", () => {
 describe("openEventStream", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", vi.fn());
-    vi.spyOn(Math, "random").mockReturnValue(0); // minimal (zero) backoff wait, for fast deterministic tests
+    vi.spyOn(Math, "random").mockReturnValue(0);
     vi.useFakeTimers();
   });
   afterEach(() => {
@@ -70,7 +70,7 @@ describe("openEventStream", () => {
       if (seenCursors.length === 1) {
         return Promise.resolve(sseResponse('id: cur-1\ndata: {"id":"E1","summary":"first"}\n\n'));
       }
-      controller.abort(); // stop the test deterministically once the resumed reconnect is observed
+      controller.abort();
       return Promise.reject(new DOMException("aborted", "AbortError"));
     });
 
@@ -95,8 +95,6 @@ describe("openEventStream", () => {
     vi.mocked(fetch).mockImplementation((input) => {
       seenCursors.push(cursorOf(input as RequestInfo | URL));
       if (seenCursors.length === 1) {
-        // The id line arrives, but the connection ends before the frame's
-        // data and terminating blank line ever do.
         return Promise.resolve(sseResponse("id: cur-truncated\n"));
       }
       controller.abort();
@@ -111,7 +109,7 @@ describe("openEventStream", () => {
 
   it("retries rather than throwing when the response body was already read", async () => {
     const response = sseResponse("");
-    await response.text(); // consumes the body, as a shared/reused Response would arrive already consumed
+    await response.text();
     const states: EventStreamState[] = [];
     vi.mocked(fetch).mockResolvedValue(response);
     const controller = new AbortController();
@@ -158,19 +156,14 @@ describe("openEventStream", () => {
     let push!: (text: string) => void;
     const stream = new ReadableStream<Uint8Array>({
       start(streamController) {
-        // Nothing enqueued yet: the reader's first read() stays pending
-        // until the test calls push below, simulating a frame that is
-        // genuinely still in flight over the wire at the moment of abort.
         push = (text) => streamController.enqueue(new TextEncoder().encode(text));
       },
     });
     vi.mocked(fetch).mockResolvedValue(new Response(stream, { status: 200 }));
 
     openEventStream("team/a", "", { onEvent: (e) => events.push(e), onStateChange: () => {} }, controller.signal);
-    await vi.advanceTimersByTimeAsync(0); // let fetch resolve and the reader start awaiting its first read()
+    await vi.advanceTimersByTimeAsync(0);
 
-    // The cancellation (a session switch) happens while a frame is already
-    // in flight — only after that does the delayed frame actually arrive.
     controller.abort();
     push('id: cur-1\ndata: {"id":"E1","summary":"late"}\n\n');
     await vi.advanceTimersByTimeAsync(0);
@@ -184,7 +177,7 @@ describe("openEventStream", () => {
     const controller = new AbortController();
 
     openEventStream("team/a", "", { onEvent: () => {}, onStateChange: (s) => states.push(s) }, controller.signal);
-    await vi.advanceTimersByTimeAsync(0); // let the first (failing) fetch settle, entering backoff
+    await vi.advanceTimersByTimeAsync(0);
     const callsBeforeAbort = vi.mocked(fetch).mock.calls.length;
     controller.abort();
     await vi.advanceTimersByTimeAsync(BACKOFF_MAX_MS * 4);

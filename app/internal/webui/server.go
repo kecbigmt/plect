@@ -101,8 +101,6 @@ type SessionService interface {
 	// through to the same service.EventPage this htmx UI's own timeline
 	// reads never needed cursor-based paging for.
 	EventPage(name string, p service.EventPageParams) (service.EventPageResult, error)
-	// EventStreamResume backs the JSON live SSE endpoint's resume cursor,
-	// unchanged from service.EventStreamResume.
 	EventStreamResume(name, cursor string) (gen string, offset int64, err error)
 	PublishEvent(name string, p service.EventPublishParams) (event.Event, error)
 	Create(service.CreateParams) (*service.CreateResult, error)

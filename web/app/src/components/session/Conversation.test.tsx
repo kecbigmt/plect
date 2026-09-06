@@ -362,8 +362,6 @@ describe("Conversation", () => {
 
     expect(await screen.findByText("first")).toBeInTheDocument();
     expect(await screen.findByText("live-arrived")).toBeInTheDocument();
-    // The stream's own replay-then-follow catch-up re-delivered "first"
-    // (same ID history already showed) — it must not render twice.
     expect(screen.getAllByText("first")).toHaveLength(1);
   });
 
@@ -371,8 +369,6 @@ describe("Conversation", () => {
     let pushLate!: (text: string) => void;
     const teamAStream = new ReadableStream<Uint8Array>({
       start(controller) {
-        // Nothing enqueued yet: team/a's stream stays open (in flight) until
-        // the test pushes a frame explicitly, after the switch to team/b.
         pushLate = (text) => controller.enqueue(new TextEncoder().encode(text));
       },
     });
@@ -416,9 +412,6 @@ describe("Conversation", () => {
     );
     await screen.findByText("first-b");
 
-    // The delayed frame arrives on team/a's (already-cancelled) connection
-    // only now — after the switch — simulating a response that was already
-    // in flight at the moment of cancellation.
     pushLate(
       'id: cur-late\ndata: {"id":"late","sessionName":"team/a","time":"2026-01-01T00:00:03Z","type":"user.note","source":"cli","direction":"internal","summary":"late-arrival"}\n\n',
     );
@@ -465,12 +458,10 @@ describe("Conversation", () => {
         }
         return Promise.resolve(sseResponse(""));
       }
-      return Promise.resolve(jsonResponse({ events: [] })); // both sessions: no nextCursor
+      return Promise.resolve(jsonResponse({ events: [] }));
     });
 
-    // Profiler's onRender fires once per commit, after React has already
-    // painted it — reading the DOM there catches an intermediate committed
-    // render an assertion made only after the switch settles would miss.
+    // A settled-state assertion alone would miss an intermediate commit.
     const commits: string[] = [];
     const onRender = () => commits.push(document.body.textContent ?? "");
     const queryClient = new QueryClient();
@@ -484,11 +475,42 @@ describe("Conversation", () => {
 
     const { rerender } = render(tree("team/a"));
     await screen.findByText("team-a-live");
-    commits.length = 0; // only the commits from the switch onward matter here
+    commits.length = 0;
 
     rerender(tree("team/b"));
     await screen.findByText(/no events recorded/i);
 
     expect(commits.some((textContent) => textContent.includes("team-a-live"))).toBe(false);
+  });
+
+  it("never commits a render showing session A's stale connection banner under newly selected session B", async () => {
+    vi.mocked(fetch).mockImplementation((input) => {
+      const url = requestUrl(input);
+      const session = url.searchParams.get("session");
+      if (url.pathname.endsWith("/events/stream")) {
+        return Promise.resolve(session === "team/a" ? new Response(null, { status: 401 }) : sseResponse(""));
+      }
+      return Promise.resolve(jsonResponse({ events: [] }));
+    });
+
+    const commits: string[] = [];
+    const onRender = () => commits.push(document.body.textContent ?? "");
+    const queryClient = new QueryClient();
+    const tree = (name: string) => (
+      <QueryClientProvider client={queryClient}>
+        <Profiler id="conversation" onRender={onRender}>
+          <Conversation sessionName={name} onSelectSession={vi.fn()} />
+        </Profiler>
+      </QueryClientProvider>
+    );
+
+    const { rerender } = render(tree("team/a"));
+    await screen.findByText(/sign-in expired/i);
+    commits.length = 0;
+
+    rerender(tree("team/b"));
+    await screen.findByText(/no events recorded/i);
+
+    expect(commits.some((textContent) => textContent.includes("Sign-in expired"))).toBe(false);
   });
 });

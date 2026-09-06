@@ -99,9 +99,7 @@ export function Conversation({
   );
 }
 
-// "connecting"/"live"/"reconnecting" render nothing — only a state the
-// reader should act on or wait out gets a banner; "reconnecting" is
-// transient enough that flagging it would just flicker on every brief blip.
+// Hiding transient reconnects avoids flickering a banner on every brief blip.
 function LiveStateBanner({ state }: { state: EventStreamState }) {
   if (state === "auth-expired") {
     return (

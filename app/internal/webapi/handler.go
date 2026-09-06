@@ -152,10 +152,7 @@ func handleSessionEvents(svc SessionReader) http.HandlerFunc {
 	}
 }
 
-// writeValidationError writes a 400 for a request the handler itself rejects
-// before calling the service (a missing/malformed query parameter) — there is
-// no *service.Error to route through ApiError for these, since the service was
-// never called.
+// Handler validation has no *service.Error for ApiError to classify.
 func writeValidationError(w http.ResponseWriter, msg string) {
 	writeJSON(w, http.StatusBadRequest, webapiv1.ValidationError{
 		Category: webapiv1.ValidationErrorCategoryValidation,
