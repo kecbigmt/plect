@@ -4,6 +4,7 @@ package webui
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -15,8 +16,10 @@ import (
 
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/domain"
+	"github.com/kecbigmt/plecture/app/internal/service"
 	"github.com/kecbigmt/plecture/app/internal/state"
 	webapiv1 "github.com/kecbigmt/plecture/app/internal/webapi/generated"
+	"github.com/kecbigmt/plecture/contracts/event"
 )
 
 // mountResolverOnlyWorkspaceProvider registers a minimal global-layer workflow +
@@ -350,5 +353,185 @@ func TestAcceptance_CreateResourceNotAllowed(t *testing.T) {
 	})
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403; body:\n%s", rec.Code, rec.Body.String())
+	}
+}
+
+// Acceptance: the generated JSON contract's event-history endpoint, driven
+// through the real service+eventlog stack, serves seeded events in append
+// order.
+//
+// Given events published to a session's durable log,
+// When GET /api/v1/events?session=<name> is served by the live service,
+// Then the response is an EventPage carrying those events, oldest first.
+func TestAcceptance_ApiV1EventsServesSeededEvents(t *testing.T) {
+	store := state.NewStore(t.TempDir())
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	isolateMachineConfig(cfg)
+	svc := newLiveService(cfg, store)
+	const session = "acceptance/events-1"
+	for _, summary := range []string{"first", "second"} {
+		if _, err := svc.PublishEvent(session, service.EventPublishParams{Type: event.TypeUserNote, Summary: summary}); err != nil {
+			t.Fatalf("seed event %q: %v", summary, err)
+		}
+	}
+
+	rec := get(t, svc, "/api/v1/events?session="+url.QueryEscape(session))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body)
+	}
+	var page webapiv1.EventPage
+	if err := json.NewDecoder(rec.Body).Decode(&page); err != nil {
+		t.Fatalf("decode EventPage: %v", err)
+	}
+	if len(page.Events) != 2 || page.Events[0].Summary != "first" || page.Events[1].Summary != "second" {
+		t.Fatalf("Events = %+v, want [first second] in append order", page.Events)
+	}
+}
+
+// Given a session no event was ever published to,
+// When GET /api/v1/events?session=<name> is served,
+// Then the response is a 200 with an empty page, not a 404 — the event log
+// is independent of session-tree membership (routes/events.tsp documents
+// why), unlike GET /api/v1/sessions/<name>.
+func TestAcceptance_ApiV1EventsUnknownSessionIsEmptyNotAnError(t *testing.T) {
+	store := state.NewStore(t.TempDir())
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	isolateMachineConfig(cfg)
+	svc := newLiveService(cfg, store)
+
+	rec := get(t, svc, "/api/v1/events?session=acceptance/never-created")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (an unknown session reads as an empty log); body: %s", rec.Code, rec.Body)
+	}
+	var page webapiv1.EventPage
+	if err := json.NewDecoder(rec.Body).Decode(&page); err != nil {
+		t.Fatalf("decode EventPage: %v", err)
+	}
+	if len(page.Events) != 0 {
+		t.Errorf("Events = %+v, want empty", page.Events)
+	}
+	if page.NextCursor != nil {
+		t.Errorf("NextCursor = %v, want absent for a session with no log at all", page.NextCursor)
+	}
+}
+
+// Acceptance: an omitted limit must still bound the read against the real
+// eventlog store, not just the package-level unit tests' fake —
+// event.Filter/eventlog.List treat Limit<=0 as "unlimited", so this proves
+// app/internal/webapi's own enforced default actually reaches it.
+//
+// Given a session with more events than the endpoint's default page size,
+// When GET /api/v1/events?session=<name> is served with no limit,
+// Then the response contains exactly that default page size, not every
+// event in the log, and a resume cursor for the events left unread.
+func TestAcceptance_ApiV1EventsOmittedLimitIsBoundedNotTheWholeLog(t *testing.T) {
+	store := state.NewStore(t.TempDir())
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	isolateMachineConfig(cfg)
+	svc := newLiveService(cfg, store)
+	const session = "acceptance/events-bounded"
+	// One more than app/internal/webapi's own defaultEventPageLimit (100): a
+	// page bounded at 100 must leave at least one event unread.
+	const seeded = 101
+	const wantDefaultLimit = 100
+	for i := range seeded {
+		if _, err := svc.PublishEvent(session, service.EventPublishParams{
+			Type: event.TypeUserNote, Summary: fmt.Sprintf("event-%d", i),
+		}); err != nil {
+			t.Fatalf("seed event %d: %v", i, err)
+		}
+	}
+
+	rec := get(t, svc, "/api/v1/events?session="+url.QueryEscape(session))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body)
+	}
+	var page webapiv1.EventPage
+	if err := json.NewDecoder(rec.Body).Decode(&page); err != nil {
+		t.Fatalf("decode EventPage: %v", err)
+	}
+	if len(page.Events) != wantDefaultLimit {
+		t.Fatalf("Events = %d, want exactly the enforced default page size %d (log has %d)", len(page.Events), wantDefaultLimit, seeded)
+	}
+	if page.NextCursor == nil {
+		t.Error("NextCursor = nil, want a resume cursor since more events remain unread")
+	}
+}
+
+// Acceptance: proves the history/live handoff protocol
+// (docs/design/web-ui-event-history.md) — an ascending nextCursor is a
+// forward position in an append-only log, not a snapshot bound to the moment
+// it was issued. An event published after a client has already captured a
+// cursor (the exact race between "fetch history" and "open the live
+// subscription") is still returned the next time that same cursor is used,
+// so the handoff cannot silently lose it, and no atomic snapshot cursor is
+// assumed anywhere in this proof.
+//
+// Given a session with two events already recorded and a client that has
+// fetched the first page's nextCursor,
+// When a third event is published (simulating one arriving in the gap
+// before the client's live subscription would have started) and the client
+// then refetches with that same cursor,
+// Then the response contains exactly the event published after the cursor
+// was issued.
+func TestAcceptance_ApiV1EventsCursorClosesTheHistoryLiveHandoffGap(t *testing.T) {
+	store := state.NewStore(t.TempDir())
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	isolateMachineConfig(cfg)
+	svc := newLiveService(cfg, store)
+	const session = "acceptance/events-race"
+
+	publish := func(summary string) {
+		t.Helper()
+		if _, err := svc.PublishEvent(session, service.EventPublishParams{Type: event.TypeUserNote, Summary: summary}); err != nil {
+			t.Fatalf("publish %q: %v", summary, err)
+		}
+	}
+	publish("first")
+	publish("second")
+
+	// The client's initial history fetch, as it would happen just before
+	// opening a live subscription.
+	firstRec := get(t, svc, "/api/v1/events?session="+url.QueryEscape(session)+"&limit=2")
+	if firstRec.Code != http.StatusOK {
+		t.Fatalf("first page status = %d, want 200; body: %s", firstRec.Code, firstRec.Body)
+	}
+	var firstPage webapiv1.EventPage
+	if err := json.NewDecoder(firstRec.Body).Decode(&firstPage); err != nil {
+		t.Fatalf("decode first page: %v", err)
+	}
+	if len(firstPage.Events) != 2 || firstPage.NextCursor == nil {
+		t.Fatalf("first page = %+v, want 2 events and a cursor", firstPage)
+	}
+	cursor := *firstPage.NextCursor
+
+	// The race: an event arrives after the cursor was captured but before the
+	// client's live subscription would have started following the log.
+	publish("third-arrived-during-the-gap")
+
+	// The client's own recovery path: refetch with the cursor it already has,
+	// not a new snapshot read.
+	secondRec := get(t, svc, "/api/v1/events?session="+url.QueryEscape(session)+"&cursor="+url.QueryEscape(cursor))
+	if secondRec.Code != http.StatusOK {
+		t.Fatalf("second page status = %d, want 200; body: %s", secondRec.Code, secondRec.Body)
+	}
+	var secondPage webapiv1.EventPage
+	if err := json.NewDecoder(secondRec.Body).Decode(&secondPage); err != nil {
+		t.Fatalf("decode second page: %v", err)
+	}
+	if len(secondPage.Events) != 1 || secondPage.Events[0].Summary != "third-arrived-during-the-gap" {
+		t.Fatalf("second page = %+v, want exactly the event published after the cursor was issued", secondPage.Events)
 	}
 }

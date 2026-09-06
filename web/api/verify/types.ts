@@ -8,6 +8,8 @@ type SessionDetail = components["schemas"]["SessionDetail"];
 type SessionListResponse = components["schemas"]["SessionListResponse"];
 type NotFoundError = components["schemas"]["NotFoundError"];
 type ConflictError = components["schemas"]["ConflictError"];
+type Event = components["schemas"]["Event"];
+type EventPage = components["schemas"]["EventPage"];
 
 // Valid: every required field present, several optional fields absent.
 const validDetail: SessionDetail = {
@@ -72,10 +74,45 @@ const invalidExplicitNull: SessionDetail = {
   branch: null,
 };
 
+// Valid: `type`/`source` are plain strings, so a value no producer constant
+// declares is not a type error — this contract does not enumerate them.
+const eventWithUnknownType: Event = {
+  id: "01JXAMPLE0000000000000020",
+  sessionName: "team/parent",
+  time: "2026-09-06T00:00:00Z",
+  type: "acme.custom_provider.widget_moved",
+  source: "acme-provider",
+  direction: "inbound",
+  summary: "widget moved",
+  // Passed through verbatim, including a key no schema field promotes —
+  // origin_session distinguishes this record's emitter from its own
+  // sessionName (the receiver) purely by convention, not by a typed field.
+  metadata: { origin_session: "team/child", widget_id: "w-42" },
+};
+
+// Invalid: `direction` is a fixed enum (unlike `type`/`source`) — an
+// unrecognized value must be rejected at compile time.
+const invalidDirection: Event = {
+  id: "01JXAMPLE0000000000000021",
+  sessionName: "team/workspace-a",
+  time: "2026-09-06T00:00:00Z",
+  type: "user.note",
+  source: "cli",
+  // @ts-expect-error - "sideways" is not an EventDirection member
+  direction: "sideways",
+  summary: "",
+};
+
+// Valid: the page envelope, nextCursor absent (a descending or exhausted page).
+const validEventPage: EventPage = {
+  events: [eventWithUnknownType],
+};
+
 // Referenced so `tsc --noEmit` treats every declaration above as used
 // rather than reporting an unrelated "declared but never read" diagnostic
 // that would mask the @ts-expect-error checks this file exists for.
-export const fixtures = { validDetail, validList, validConflict };
+export const fixtures = { validDetail, validList, validConflict, validEventPage };
 void invalidDetail;
 void invalidNotFound;
 void invalidExplicitNull;
+void invalidDirection;

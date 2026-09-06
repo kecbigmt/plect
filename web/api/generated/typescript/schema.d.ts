@@ -4,6 +4,50 @@
  */
 
 export interface paths {
+    "/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description One page of a session's durable event history —
+         *     `app/internal/service/event.go`'s `EventPage`, unchanged. `session` rides
+         *     as a query value (not a path segment): session names contain `/`, and
+         *     this contract has no need to reserve a literal path segment (`events`)
+         *     that could collide with one.
+         *
+         *     Unlike `GET /sessions/{name}`, an unknown session is not a 404: the event
+         *     log is independent of session-tree membership (a destroyed session keeps
+         *     its log), so a session that was never created simply has an empty
+         *     log — a 200 with an empty `events` array and no `nextCursor`, the same
+         *     "missing is empty, not an error" answer the CLI's own event commands
+         *     already give.
+         *
+         *     `order` defaults to `asc` (oldest first): it paginates forward from the
+         *     log's head, or from `cursor` (a prior page's `nextCursor`, opaque — never
+         *     constructed or inspected by a client), and returns a `nextCursor`
+         *     whenever the log exists, independent of whether that particular page had
+         *     any matching events. `desc` (newest first) returns only the single most
+         *     recent page bounded by `limit` and never a `nextCursor`, matching
+         *     `EventPage`'s v1 contract exactly — no backward pagination is promised.
+         *
+         *     A `cursor` from a mismatched `order`, or one issued against a log
+         *     generation that no longer exists (the log rotated), is rejected as
+         *     invalid input rather than silently resolved against the wrong position —
+         *     the client's only recovery is to drop it and restart from the beginning
+         *     (equivalently, refetch with no `cursor`).
+         */
+        get: operations["SessionEvents_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/sessions": {
         parameters: {
             query?: never;
@@ -66,6 +110,41 @@ export interface components {
         });
         /** @enum {string} */
         ErrorCategory: "validation" | "not_found" | "conflict" | "execution";
+        Event: {
+            id: string;
+            sessionName: string;
+            /** Format: date-time */
+            time: string;
+            /** @description A free-form dotted topic (e.g. `user.emit`, `lifecycle.created`). Not an enum: producers define their own types, and this API does not enumerate or restrict them. */
+            type: string;
+            /** @description Who produced the event (`plect`, `web`, `cli`, `mcp`, or a provider's own source string). Not an enum for the same reason as `type`. */
+            source: string;
+            direction: components["schemas"]["EventDirection"];
+            summary: string;
+            /** @description Absent and empty are equivalent, as with every optional field on this contract. */
+            body?: string;
+            /**
+             * @description Arbitrary event metadata, passed through verbatim including keys this API
+             *     does not itself interpret — e.g. `origin_session`
+             *     (`contracts/event.MetaOriginSession`), the session that produced a
+             *     notification pushed into a receiving session's own log, which is
+             *     distinct from this record's own `sessionName` (the receiver).
+             */
+            metadata?: {
+                [key: string]: string;
+            };
+            deliveryMode?: components["schemas"]["EventDeliveryMode"];
+        };
+        /** @enum {string} */
+        EventDeliveryMode: "push" | "pull";
+        /** @enum {string} */
+        EventDirection: "inbound" | "outbound" | "internal";
+        /** @enum {string} */
+        EventOrder: "asc" | "desc";
+        EventPage: {
+            events: components["schemas"]["Event"][];
+            nextCursor?: string;
+        };
         ExecutionError: {
             /** @enum {string} */
             category: "execution";
@@ -189,6 +268,58 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    SessionEvents_list: {
+        parameters: {
+            query: {
+                /** @description The exact session name, `/` included, sent unencoded as a query value. */
+                session: string;
+                /** @description A prior page's `nextCursor`. Omitted requests the first page. */
+                cursor?: string;
+                /**
+                 * @description Page size. Omitted or non-positive uses the server's default (100); a
+                 *     value above the server's maximum (1000) is capped rather than
+                 *     rejected. The durable log is unbounded and survives destroy, so this
+                 *     endpoint never returns an unbounded page regardless of what the
+                 *     client asks for.
+                 */
+                limit?: number;
+                order?: components["schemas"]["EventOrder"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The request has succeeded. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventPage"];
+                };
+            };
+            /** @description The server could not understand the request due to invalid syntax. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecutionError"];
+                };
+            };
+        };
+    };
     Sessions_list: {
         parameters: {
             query?: never;

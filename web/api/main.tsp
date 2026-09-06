@@ -3,7 +3,9 @@ import "@typespec/openapi";
 import "@typespec/openapi3";
 import "./models/common.tsp";
 import "./models/session.tsp";
+import "./models/event.tsp";
 import "./routes/sessions.tsp";
+import "./routes/events.tsp";
 
 using Http;
 using OpenAPI;
@@ -11,8 +13,9 @@ using OpenAPI;
 /// Plecture's Web API: JSON read projections of session state for the
 /// browser/desktop UI, over the existing Go service layer, per the
 /// schema-contract decision record under docs/adr/. This is the initial,
-/// version-1 slice — Session list/detail and common errors only; it does not
-/// cover Tasks, Graph, Terminal, or any mutation.
+/// version-1 slice — Session list/detail, bounded per-session event
+/// history, and common errors; it does not cover Tasks, Graph, Terminal, or
+/// any mutation.
 @service(#{ title: "Plecture Web API" })
 @server("/api/v1", "The API is served from the same origin as the Web UI, under a fixed version prefix.")
 @doc("""

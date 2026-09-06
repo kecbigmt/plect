@@ -96,6 +96,11 @@ type SessionService interface {
 	// oldest-first tail): the service-layer desc page is already the
 	// timeline's display order, so handlers must not reverse it.
 	EventsSubtree(root string) ([]event.Event, error)
+	// EventPage satisfies webapi.SessionReader: the generated JSON API's
+	// history endpoint (mounted below at /api/v1/events) is a thin pass-
+	// through to the same service.EventPage this htmx UI's own timeline
+	// reads never needed cursor-based paging for.
+	EventPage(name string, p service.EventPageParams) (service.EventPageResult, error)
 	PublishEvent(name string, p service.EventPublishParams) (event.Event, error)
 	Create(service.CreateParams) (*service.CreateResult, error)
 	Up(service.UpParams) (*service.UpResult, error)
@@ -150,8 +155,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 
 	// The generated-contract JSON API (see the schema-contract ADR under
-	// docs/adr/): Session list/detail and common errors only, at this
-	// slice's fixed version prefix. s.svc already implements
+	// docs/adr/): Session list/detail, bounded event history, and common
+	// errors, at this slice's fixed version prefix. s.svc already implements
 	// webapi.SessionReader. No method restriction here — webapi.Routes owns
 	// its own per-method dispatch (and 404/405 responses) as later tasks
 	// add operations.

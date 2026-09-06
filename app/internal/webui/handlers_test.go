@@ -28,6 +28,11 @@ type fakeService struct {
 	subtreeErr    error
 	gotSubtree    string
 
+	eventPage    service.EventPageResult
+	eventPageErr error
+	gotEventPage *service.EventPageParams
+	gotEventName string
+
 	createResult  *service.CreateResult
 	upResult      *service.UpResult
 	upErr         error
@@ -55,6 +60,12 @@ func (f *fakeService) Events(string) ([]event.Event, error) { return f.events, f
 func (f *fakeService) EventsSubtree(root string) ([]event.Event, error) {
 	f.gotSubtree = root
 	return f.subtreeEvents, f.subtreeErr
+}
+
+func (f *fakeService) EventPage(name string, p service.EventPageParams) (service.EventPageResult, error) {
+	f.gotEventName = name
+	f.gotEventPage = &p
+	return f.eventPage, f.eventPageErr
 }
 
 func (f *fakeService) PublishEvent(name string, p service.EventPublishParams) (event.Event, error) {
