@@ -111,13 +111,19 @@ func TickSession(cfg *config.Config, store *state.Store, params TickParams) (*Ch
 		// spawn in between, which only this per-tick sync — not the event
 		// log — can tell apart from an uninterrupted streak.
 		fingerprint := chainAttemptFingerprint(capRefused, sp.TargetSession)
-		newStreak, syncErr := syncChainAttemptStreak(store, resolvedName, sp.Instance, sp.ChainID, fingerprint)
+		previous, won, syncErr := syncChainAttemptStreak(store, resolvedName, sp.Instance, sp.ChainID, fingerprint)
 		switch {
 		case syncErr != nil:
 			sp.Warnings = append(sp.Warnings, fmt.Sprintf("chain-attempt bookkeeping failed: %v", syncErr))
-		case capRefused && newStreak:
+		case capRefused && won:
+			// The marker already claims this streak; a publish failure must
+			// not leave that claim standing unpublished, so it is reverted
+			// rather than left to silently swallow the event forever.
 			if pubErr := publishChainCapAttempt(cfg, store, resolvedName, sp); pubErr != nil {
 				sp.Warnings = append(sp.Warnings, fmt.Sprintf("chain-attempt event failed: %v", pubErr))
+				if revertErr := revertChainAttemptStreak(store, resolvedName, sp.Instance, sp.ChainID, previous); revertErr != nil {
+					sp.Warnings = append(sp.Warnings, fmt.Sprintf("chain-attempt bookkeeping rollback failed: %v", revertErr))
+				}
 			}
 		}
 		chains = append(chains, sp)

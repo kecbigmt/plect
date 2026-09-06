@@ -157,21 +157,11 @@ type TaskState struct {
 	Observed      *ResourceObservation `json:"observed,omitempty"`
 	DoneWhen      *DoneWhenState       `json:"done_when,omitempty"`
 	ExtraDoneWhen json.RawMessage      `json:"extra_done_when,omitempty"`
-	// ChainAttempts is dedup bookkeeping for the plect.chain.attempt event,
-	// keyed by chain id: the fingerprint of the outcome last reported for
-	// that chain, cleared the moment its evaluation stops matching it. The
-	// event log alone cannot tell an interrupted refusal streak from an
-	// uninterrupted one — it only ever records a refusal, so a
-	// resolved-then-refused-again recurrence looks identical to a
-	// continuing one — so this is the boundary marker instead. It is
-	// TickSession's own bookkeeping, never a chain's evaluated fact: unlike
-	// State, nothing declarative reads it.
-	ChainAttempts map[string]string `json:"chain_attempts,omitempty"`
-	SetupAt       time.Time         `json:"setup_at,omitzero"`
-	FailedAt      time.Time         `json:"failed_at,omitzero"`
-	CleanedAt     time.Time         `json:"cleaned_at,omitzero"`
-	FinalizedAt   time.Time         `json:"finalized_at,omitzero"` // set by `plect task finalize`; instance still awaits `plect task cleanup`
-	Error         string            `json:"error,omitempty"`
+	SetupAt       time.Time            `json:"setup_at,omitzero"`
+	FailedAt      time.Time            `json:"failed_at,omitzero"`
+	CleanedAt     time.Time            `json:"cleaned_at,omitzero"`
+	FinalizedAt   time.Time            `json:"finalized_at,omitzero"` // set by `plect task finalize`; instance still awaits `plect task cleanup`
+	Error         string               `json:"error,omitempty"`
 }
 
 // ResourceObservation is one reading of a task instance's resource: what the

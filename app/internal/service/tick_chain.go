@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/kecbigmt/plecture/app/internal/config"
-	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/eventlog"
 	"github.com/kecbigmt/plecture/app/internal/state"
 	"github.com/kecbigmt/plecture/contracts/event"
@@ -58,10 +57,10 @@ func publishAlreadyActiveChainKick(cfg *config.Config, store *state.Store, workS
 
 const chainAttemptReasonCap = "cap"
 
-// chainAttemptFingerprint is the contract.TaskState.ChainAttempts[chainID]
-// value that marks an ongoing cap-refusal streak; any other outcome —
-// spawned, already-active, or the predicate not holding at all — fingerprints
-// as "", which is what ends a streak.
+// chainAttemptFingerprint is the eventlog.Store.SwapChainAttempt value that
+// marks an ongoing cap-refusal streak; any other outcome — spawned,
+// already-active, or the predicate not holding at all — fingerprints as "",
+// which is what ends a streak.
 func chainAttemptFingerprint(capRefused bool, target string) string {
 	if !capRefused || target == "" {
 		return ""
@@ -69,38 +68,25 @@ func chainAttemptFingerprint(capRefused bool, target string) string {
 	return chainAttemptReasonCap + "|" + target
 }
 
-// syncChainAttemptStreak persists newFingerprint for one instance's chain and
-// reports whether it actually changed. The event log alone cannot tell an
-// interrupted refusal streak from an uninterrupted one — it only ever
-// records a refusal, so a resolved-then-refused-again recurrence looks
-// identical to a continuing one — so TickSession keeps this boundary marker
-// instead, updated for every chain on every tick regardless of outcome.
-func syncChainAttemptStreak(store *state.Store, sessionName, instance, chainID, newFingerprint string) (changed bool, err error) {
-	session := store.Get(sessionName)
-	if session == nil {
-		return false, nil
-	}
-	if st := session.Tasks[instance]; st == nil || st.ChainAttempts[chainID] == newFingerprint {
-		return false, nil
-	}
-	if err := store.Update(sessionName, func(s *domain.Session) error {
-		st := s.Tasks[instance]
-		if st == nil {
-			return nil
-		}
-		if newFingerprint == "" {
-			delete(st.ChainAttempts, chainID)
-			return nil
-		}
-		if st.ChainAttempts == nil {
-			st.ChainAttempts = map[string]string{}
-		}
-		st.ChainAttempts[chainID] = newFingerprint
-		return nil
-	}); err != nil {
-		return false, err
-	}
-	return true, nil
+// syncChainAttemptStreak atomically compares-and-sets the persisted
+// chain-attempt streak marker for one instance's chain, reporting the prior
+// value (for revertChainAttemptStreak) and whether this call is the one that
+// changed it. The event log alone cannot tell an interrupted refusal streak
+// from an uninterrupted one — it only ever records a refusal, so a
+// resolved-then-refused-again recurrence looks identical to a continuing one
+// — so TickSession keeps this boundary marker instead, synced for every
+// chain on every tick regardless of outcome.
+func syncChainAttemptStreak(store *state.Store, sessionName, instance, chainID, newFingerprint string) (previous string, won bool, err error) {
+	return eventlog.NewStore(store.Dir()).SwapChainAttempt(sessionName, instance, chainID, newFingerprint)
+}
+
+// revertChainAttemptStreak restores a chain's streak marker to previous — the
+// compensation for a syncChainAttemptStreak win whose event never actually
+// got published, so the next tick retries the publish instead of the marker
+// permanently claiming an event that was never recorded.
+func revertChainAttemptStreak(store *state.Store, sessionName, instance, chainID, previous string) error {
+	_, _, err := eventlog.NewStore(store.Dir()).SwapChainAttempt(sessionName, instance, chainID, previous)
+	return err
 }
 
 // publishChainCapAttempt appends one plect.chain.attempt event to the ticking

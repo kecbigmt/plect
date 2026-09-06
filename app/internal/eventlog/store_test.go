@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -93,6 +94,70 @@ func TestTombstoneRoundTrip(t *testing.T) {
 	got, _, _ = s.ReadTombstone("o/r-1")
 	if string(got) != string(overwrite) {
 		t.Errorf("ReadTombstone after overwrite = %s, want %s", got, overwrite)
+	}
+}
+
+func TestSwapChainAttempt_ReportsPreviousAndWon(t *testing.T) {
+	s := NewStore(t.TempDir())
+
+	previous, won, err := s.SwapChainAttempt("work1", "work", "review", "cap|target")
+	if err != nil {
+		t.Fatalf("SwapChainAttempt (first): %v", err)
+	}
+	if previous != "" || !won {
+		t.Fatalf("first swap: previous=%q won=%v, want \"\"/true", previous, won)
+	}
+
+	previous, won, err = s.SwapChainAttempt("work1", "work", "review", "cap|target")
+	if err != nil {
+		t.Fatalf("SwapChainAttempt (unchanged): %v", err)
+	}
+	if previous != "cap|target" || won {
+		t.Fatalf("unchanged swap: previous=%q won=%v, want \"cap|target\"/false", previous, won)
+	}
+
+	previous, won, err = s.SwapChainAttempt("work1", "work", "review", "")
+	if err != nil {
+		t.Fatalf("SwapChainAttempt (clear): %v", err)
+	}
+	if previous != "cap|target" || !won {
+		t.Fatalf("clearing swap: previous=%q won=%v, want \"cap|target\"/true", previous, won)
+	}
+}
+
+// A cap refusal's spawn attempt and a background reactor's own tick can race
+// on the same session; SwapChainAttempt's read-compare-write must happen
+// under one lock so at most one of them ever wins the same transition —
+// otherwise both would go on to publish their own plect.chain.attempt event
+// for what is really one refusal.
+func TestSwapChainAttempt_ConcurrentIdenticalSwapsExactlyOneWins(t *testing.T) {
+	s := NewStore(t.TempDir())
+	const n = 20
+
+	var wg sync.WaitGroup
+	won := make([]bool, n)
+	errs := make([]error, n)
+	wg.Add(n)
+	for i := range n {
+		go func(i int) {
+			defer wg.Done()
+			_, w, err := s.SwapChainAttempt("work1", "work", "review", "cap|target")
+			won[i], errs[i] = w, err
+		}(i)
+	}
+	wg.Wait()
+
+	wins := 0
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("SwapChainAttempt[%d]: %v", i, err)
+		}
+		if won[i] {
+			wins++
+		}
+	}
+	if wins != 1 {
+		t.Fatalf("wins = %d, want exactly 1 of %d concurrent identical swaps", wins, n)
 	}
 }
 

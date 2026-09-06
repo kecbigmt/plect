@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/kecbigmt/plecture/app/internal/config"
@@ -300,5 +301,87 @@ func TestTickSession_ChainCapAttemptEventRecordsNewStreakAfterPredicateGoesUnmet
 	}
 	if len(evs2) != 2 {
 		t.Fatalf("chain-attempt events across two refusal streaks separated by a satisfied judge = %d, want 2 (one per streak): %+v", len(evs2), evs2)
+	}
+}
+
+func TestTickSession_ChainCapAttemptEventRetriesAfterPublishFailure(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses the file-mode permission denial this test relies on")
+	}
+	store := testStore(t)
+	// No [done_when] here, deliberately: this instance's own done_when action
+	// would try to publish to the very same "work1" log the test blocks below,
+	// which would fail TickSession outright before the chain loop this test
+	// targets ever runs. The chain's own `when` reads resource.state directly,
+	// so it needs no done_when leaf to fire.
+	cfg := writeWorkflowFixture(t, t.TempDir(), "wf",
+		[]taskFixture{{id: "work", extra: `
+[[chains]]
+id       = "review"
+workflow = "reviewer_wf"
+[chains.when]
+all = [ { check = "resource.state.checks_status", in = ["SUCCESS"] } ]
+`}},
+		[]nodeFixture{{id: "work"}})
+	writeWorkflowFile(t, cfg, "reviewer_wf", "")
+	writeCapWorkflow(t, cfg.BaseDir, "parent_wf", intPtr(1))
+
+	seedSession(t, store, "parent1", "acct", 1, "parent_wf", nil)
+	seedSession(t, store, "sibling", "acct", 2, "", upTasks())
+	setParent(t, store, "sibling", "parent1")
+	seedReviewWork(t, store, "work1", map[string]any{"checks_status": "SUCCESS"})
+	setParent(t, store, "work1", "parent1")
+
+	logDir := filepath.Join(store.Dir(), "events", "work1")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(logDir, "log.jsonl")
+	if err := os.WriteFile(logPath, nil, 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := TickSession(cfg, store, TickParams{SessionName: "work1", SkipRefresh: true})
+	if err != nil {
+		t.Fatalf("TickSession(1): %v", err)
+	}
+	sp, ok := findSpawn(res.Chains, "review")
+	if !ok || !sp.CapRefused {
+		t.Fatalf("expected a cap-refused outcome despite the blocked log, got %+v", sp)
+	}
+	failed := false
+	for _, w := range sp.Warnings {
+		if strings.Contains(w, "chain-attempt event failed") {
+			failed = true
+		}
+	}
+	if !failed {
+		t.Fatalf("expected a chain-attempt event failure warning, got %+v", sp.Warnings)
+	}
+	evs, _, _, err := eventlog.NewStore(store.Dir()).List("work1", 0, event.Filter{Types: []string{event.TypeChainAttempt}})
+	if err != nil {
+		t.Fatalf("List(1): %v", err)
+	}
+	if len(evs) != 0 {
+		t.Fatalf("chain-attempt events while the log was blocked = %d, want 0 (nothing to read back — the write failed)", len(evs))
+	}
+
+	if err := os.Chmod(logPath, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res2, err := TickSession(cfg, store, TickParams{SessionName: "work1", SkipRefresh: true})
+	if err != nil {
+		t.Fatalf("TickSession(2): %v", err)
+	}
+	sp2, ok := findSpawn(res2.Chains, "review")
+	if !ok || !sp2.CapRefused {
+		t.Fatalf("expected a cap-refused outcome, got %+v", sp2)
+	}
+	evs2, _, _, err := eventlog.NewStore(store.Dir()).List("work1", 0, event.Filter{Types: []string{event.TypeChainAttempt}})
+	if err != nil {
+		t.Fatalf("List(2): %v", err)
+	}
+	if len(evs2) != 1 {
+		t.Fatalf("chain-attempt events once the log unblocked = %d, want 1 (the retried publish, not permanently dropped)", len(evs2))
 	}
 }

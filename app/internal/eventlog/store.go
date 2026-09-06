@@ -80,6 +80,9 @@ func (s *Store) logPath(session string) string {
 func (s *Store) tombstonePath(session string) string {
 	return filepath.Join(s.sessionDir(session), "tombstone.json")
 }
+func (s *Store) chainAttemptsPath(session string) string {
+	return filepath.Join(s.sessionDir(session), "chain_attempts.json")
+}
 func (s *Store) lockPath(session string) string { return filepath.Join(s.sessionDir(session), ".lock") }
 func (s *Store) genPath(session string) string  { return filepath.Join(s.sessionDir(session), ".gen") }
 func (s *Store) cursorPath(session, consumer string) string {
@@ -168,6 +171,70 @@ func (s *Store) ReadTombstone(session string) (data []byte, ok bool, err error) 
 		return nil, false, err
 	}
 	return data, true, nil
+}
+
+// SwapChainAttempt atomically compares-and-sets one small durable fact in a
+// session's own directory: the last chain-attempt fingerprint TickSession
+// recorded for one (instance, chainID) pair (see service.chainAttemptFingerprint
+// — a plect.chain.attempt cap-refusal streak marker; empty clears it). The
+// read, compare, and write all happen under the same exclusive per-session
+// lock Append uses, so two callers racing on the same key can never both see
+// their value win: only the first reports won=true, and the second finds the
+// key already at newFingerprint. previous is the value from just before the
+// call, returned so a caller whose side effect (e.g. publishing the event
+// the fingerprint marks) failed after winning can compensate by swapping
+// back to it. This is process-local bookkeeping, deliberately kept out of
+// contracts/state's Session/TaskState — those are the CLI/plugin data
+// contract, cross-module and independently versioned, while this never
+// leaves TickSession's own decision-making.
+func (s *Store) SwapChainAttempt(session, instance, chainID, newFingerprint string) (previous string, won bool, err error) {
+	dir := s.sessionDir(session)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", false, fmt.Errorf("eventlog: mkdir: %w", err)
+	}
+	unlock, err := flock(s.lockPath(session), syscall.LOCK_EX)
+	if err != nil {
+		return "", false, err
+	}
+	defer unlock()
+
+	attempts, err := s.readChainAttemptsLocked(session)
+	if err != nil {
+		return "", false, err
+	}
+	key := instance + "\x00" + chainID
+	previous = attempts[key]
+	if previous == newFingerprint {
+		return previous, false, nil
+	}
+	if newFingerprint == "" {
+		delete(attempts, key)
+	} else {
+		attempts[key] = newFingerprint
+	}
+	data, merr := json.Marshal(attempts)
+	if merr != nil {
+		return previous, false, fmt.Errorf("eventlog: chain attempts: marshal: %w", merr)
+	}
+	if werr := atomicfile.Write(s.chainAttemptsPath(session), data); werr != nil {
+		return previous, false, werr
+	}
+	return previous, true, nil
+}
+
+func (s *Store) readChainAttemptsLocked(session string) (map[string]string, error) {
+	data, err := os.ReadFile(s.chainAttemptsPath(session))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]string{}, nil
+		}
+		return nil, fmt.Errorf("eventlog: chain attempts: read: %w", err)
+	}
+	out := map[string]string{}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("eventlog: chain attempts: unmarshal: %w", err)
+	}
+	return out, nil
 }
 
 // List returns events from byte offset `since` (inclusive) that match f, in
