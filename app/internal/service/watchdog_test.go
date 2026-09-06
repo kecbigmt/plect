@@ -112,9 +112,9 @@ func currentPlanConfig(t *testing.T, paneAlive, agentAlive string) *config.Confi
 }
 
 // TestEvaluateHealth_FailedCurrentPlanNodeIsUnhealthyNamingNodeAndError pins
-// the first acceptance criterion of #424: a produced pane beside a failed
-// agent reads unhealthy naming the agent and its setup error, with run
-// reading up because a run-scoped node did produce.
+// the structural composition rule: a produced pane beside a failed agent
+// reads unhealthy naming the agent and its setup error, with run reading up
+// because a run-scoped node did produce.
 func TestEvaluateHealth_FailedCurrentPlanNodeIsUnhealthyNamingNodeAndError(t *testing.T) {
 	store := testStore(t)
 	cfg := currentPlanConfig(t, "true", "true")
