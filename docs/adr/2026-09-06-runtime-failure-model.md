@@ -48,10 +48,10 @@ incomplete run, and record what happened to each node attempt.
 
 #### Recommendation
 
-`[health].alive` is the executable authority for reusing a produced effect.
-It already observes the effect's own outputs, resolved inputs, session, and
-workspace, and exit zero already means that its owned surface is present. At
-`plect up`, core runs that action for every produced node, including a
+`[health].alive` is the authority for reusing a produced effect. An executable
+action observes the effect's own outputs, resolved inputs, session, and
+workspace, and exit zero means that its owned surface is present. At `plect
+up`, core evaluates that declaration for every produced node, including a
 session-scoped node. A non-zero exit, an unresolved required value, timeout,
 or invalid action configuration means that node cannot be reused.
 
@@ -78,12 +78,21 @@ but never repairs it automatically. Repair occurs only during an explicit
 `plect up`; this avoids making a periodic observation cycle mutate external
 resources or retry a provider action without operator or workflow intent.
 
-`gh_app_guard`, `slack_subscribe`, `gh_guard`, and `worktree` declare
-`[health].alive`. Once their session is up, losing one surfaces through the
-existing health cycle as a `health.unhealthy` escalation to the parent, with the
-failing effect named. The next explicit `plect up` repairs the affected node
-and its dependents, then clears the condition after the rebuilt plan passes
-health; the health cycle only reports and escalates, and never repairs.
+The migration adds `[health].alive` to `gh_app_guard`, `slack_subscribe`, and
+`gh_guard`. Once their session is up, each participates in the same plan health
+evaluation even where its own scope is `session`. Losing one therefore produces
+the ordinary `health.unhealthy` escalation to the nearest live parent, with the
+failing effect named. The next `plect up` observes the failed liveness check,
+reconstructs the affected node and its dependents, and clears the condition
+after the rebuilt plan passes health. A health sweep only reports and
+escalates; it never runs cleanup or setup to repair the effect.
+
+This decision applies only to workflow effects. Workspace providers establish
+the session workspace before the workflow plan exists; they have neither a
+`scope` nor a `[health]` surface, and their setup does not run in the node walk
+described here. Recovering a vanished workspace provider output, including a
+worktree lost across a container replacement, remains follow-up work rather
+than an unspecified extension of this effect rule.
 
 ```toml
 [gh_app_guard]
@@ -118,19 +127,21 @@ dir = { type = "string" }
 `plect up` verifies before it skips a produced workflow node. The walk remains
 dependency ordered:
 
-1. A produced node with `[health].alive` is skipped only when that action
-   succeeds.
-2. A produced node with `reuse = "record"` is skipped from its record.
+1. A produced node with an executable `[health].alive` action is skipped only
+   when that action succeeds.
+2. A produced node with `[health].alive` `type = "noop"` is skipped from its
+   record.
 3. A produced node whose liveness action fails is marked failed with the
    liveness error, then the node and its produced dependents are cleaned in
    reverse dependency order using their stored outputs.
 4. Setup resumes from the first invalidated node in dependency order.
 
-`reuse = "record"` means Plecture deliberately does not ask whether the
-produced entity still persists. It does not mean that the effect has no
-external entity: a Slack thread is record-only because recreating a deleted
-thread would split its conversation. The marker makes the record, rather than
-an existence probe, the skip authority for that effect.
+`[health].alive` `type = "noop"` means Plecture deliberately does not ask
+whether the produced entity still persists. It does not mean that the effect
+has no external entity: Plecture deliberately does not re-observe a Slack
+thread because recreating a deleted thread would split its conversation. A
+no-op action exits zero without observing the surface, so the production record
+remains the skip authority for that effect.
 
 This follows [systemd's `RemainAfterExit=`](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html#RemainAfterExit=),
 where configuration declares that service state is retained after the process
@@ -138,39 +149,40 @@ that established it has exited. Plecture borrows only the explicit declaration
 that it must not infer present external state from a past action; it does not
 adopt systemd's service-state model.
 
-At load time, every setup-bearing effect declares exactly one of
-`[health].alive` and `reuse = "record"`. `reuse` accepts only the string
-`"record"`. On an effect with no `setup`, `reuse` is a load error. These rules
-apply independently to every layer of a nesting chain. A layer's existing
-`[health].alive` composes by AND with the other layers' liveness probes, while
-a `reuse = "record"` layer contributes no probe and does not suppress an inner
-layer's liveness check.
+At load time, every setup-bearing effect declares `[health].alive`. The
+`noop` action variant is legal only under `[health].alive`; it is a load error
+under setup, cleanup, activity, a terminal verb, or a workspace-provider
+action. These rules apply independently to every layer of a nesting chain. A
+`noop` layer passes the liveness AND and does not suppress an inner layer's
+executable liveness check.
 
 ```toml
 [write_instruction]
-kind     = "effect"
-scope    = "session"
-reuse    = "record"
+kind  = "effect"
+scope = "session"
 
 [write_instruction.setup]
 type = "shell"
 script = 'printf %s "$instruction"'
+
+[write_instruction.health.alive]
+type = "noop"
 ```
 
 This is a config, plugin, and core decision:
 
 - Prompt cannot enforce it because a human instruction cannot change
   lifecycle skip semantics.
-- Config declares the existing probe or the record-only exception but cannot
-  decide when to run it.
+- Config declares the liveness action, including an explicit non-observation
+  exception, but cannot decide when to run it.
 - Plugin code owns liveness checks such as testing a socket, process, generated
   wrapper, or subscription registration.
 - Core owns the only safe place to compare the stored production record with
   the liveness result and choose skip, cleanup, or setup.
 
-This does not add a second configuration-language action. A future effect with
-a concrete reuse condition stricter than liveness is the evidence required to
-consider one.
+This adds `noop` only as an `[health].alive` action variant; it does not add a
+second probe. A future effect with a concrete reuse condition stricter than
+liveness is the evidence required to consider one.
 
 ### 2. Complete-plan health and binary run state
 
@@ -194,9 +206,9 @@ Health composes over every current-plan node, not only the produced subset or
 the run-scoped subset. A produced node evaluates its declared `alive` probe in
 the ordinary way. A failed or missing node makes the session `unhealthy`
 directly, with a reason naming the node and its failed dependency or setup
-error. That rule also covers a failed `reuse = "record"` node, which has no
-existence probe to run. Activity continues to compose from produced run-scoped
-instances only.
+error. That rule also covers a failed node whose `[health].alive` action is a
+no-op, which has no external existence probe to run. Activity continues to
+compose from produced run-scoped instances only.
 
 Complete-plan health is evaluated only for a session with at least one produced
 current-plan run-scoped node. A `run = down` session is not unhealthy because
@@ -442,16 +454,20 @@ skip. A stale output no longer remains trusted merely because setup once
 succeeded. The cost is that `up` can run liveness probes before returning; a
 plugin author must keep those probes cheap and bounded.
 
-Effect definitions with setup actions gain an explicit reuse obligation: either
-declare `[health].alive` or declare `reuse = "record"`. This is a breaking
-configuration-language change. The one-time migration is:
+Effect definitions with setup actions gain an explicit liveness declaration.
+This is a breaking configuration-language change. The one-time migration is:
 
 1. For every setup-bearing effect whose entity may safely be recreated, add a
    provider-owned `[health].alive` action that checks its reusable surface.
 2. For effects whose entity Plecture deliberately does not check for
-   persistence, add `reuse = "record"`.
+   persistence, add `[health].alive` with `type = "noop"`.
 3. Run the config-language conformance fixtures and plugin selftests for the
    changed plugins.
+
+The migration does not change workspace providers. They are not workflow
+effects and do not participate in this plan-health or reuse model. Their
+separate recovery semantics need a later decision that specifies a provider
+lifecycle member, when it runs, and how a bound `workspace_dir` is rebuilt.
 
 `plect ls --json` consumers retain the existing binary `run` enum. Health
 reports now name failed or missing completed current-plan nodes. It never
@@ -486,15 +502,17 @@ after owner ratification.
 
 ### Add a separate validity mechanism
 
-Rejected. The shipped catalog has 14 setup-bearing effects. Four already
+Rejected. The shipped catalog has 11 setup-bearing effects. Four already
 declare `alive`: `pane`, `runtime`, `codex`, and `exec_runtime`. The migration
-classifies the other ten without a third case: `gh_app_guard`,
-`slack_subscribe`, `gh_guard`, and `worktree` gain `alive`; `thread_workspace`,
-`codex_initial_prompt`, `claude_initial_prompt`, `slack_thread`, `local_okf`,
-and `goal_bootstrap` declare `reuse = "record"`. No effect has a reuse
+classifies the other seven without a third case: `gh_app_guard`,
+`slack_subscribe`, and `gh_guard` gain executable `alive` actions;
+`codex_initial_prompt`, `claude_initial_prompt`, `slack_thread`, and
+`goal_bootstrap` declare `alive` with `type = "noop"`. No effect has a reuse
 condition stricter than liveness. A `valid` action would therefore duplicate an
 existing liveness probe or be unused, adding a lifecycle member without a
-concrete consumer.
+concrete consumer. Workspace providers such as `worktree`,
+`thread_workspace`, and `local_okf` are outside this inventory because they
+are not effects or workflow nodes.
 
 ### Store liveness as a second durable truth
 
@@ -506,9 +524,9 @@ the lifecycle decision point where reuse is about to happen.
 
 Rejected. A deleted Slack thread must not be recreated automatically because a
 replacement splits the conversation, yet Plecture cannot confirm the old
-thread persists. `reuse = "record"` makes that deliberate non-observation
-visible. Without the marker, a missing probe would silently become an
-unreviewed reuse policy.
+thread persists. `[health].alive` `type = "noop"` makes that deliberate
+non-observation visible. Without the marker, a missing probe would silently
+become an unreviewed reuse policy.
 
 ### Add `degraded` to run state
 
