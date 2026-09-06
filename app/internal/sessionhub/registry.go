@@ -24,11 +24,9 @@ const pollInterval = 500 * time.Millisecond
 const frameBuffer = 256
 
 // Frame is one delivered event with its SSE resume position (the sequence
-// number past the record — the same id-frame cursor the bus has always
-// emitted) and the id of the stream Start/Resume are scoped to: a same-name
-// recreate mints a new stream with its own sequence numbering, so a consumer
-// re-encoding Resume into an opaque cursor needs to know which stream it
-// belongs to, not just assume whichever is current right now.
+// past the record) and the id of the stream Start/Resume are scoped to —
+// needed since a same-name recreate gives a later record a lower sequence
+// than an earlier one from a different stream.
 type Frame struct {
 	Event    event.Event
 	StreamID string
@@ -114,16 +112,10 @@ func (r *reader) run(ctx context.Context) {
 	streamID, cur := r.streamID, r.cursor
 	r.mu.Unlock()
 	for {
-		// A destroy + same-name recreate mints a new stream whose sequence
-		// restarts at 1: streamID/cur (scoped to the superseded stream)
-		// would otherwise either stall forever past the new stream's tail,
-		// or worse, land mid-way through it once its own appends catch up
-		// to the same numbers, silently dropping its early records. Drain
-		// whatever the superseded stream still has — by its own id, since a
-		// session-name read only ever resolves to the current stream — down
-		// to empty before ever reading the new one, so a subscriber open
-		// across the flip sees every record from both, gap-free, without
-		// having to reconnect.
+		// A same-name recreate mints a new stream with its own sequence, so
+		// streamID/cur (scoped to the superseded one) must drain that
+		// stream's own tail by its own id — a session-name read only ever
+		// resolves to the current stream — before ever reading the new one.
 		if id, err := r.store.StreamID(r.session); err == nil && id != "" {
 			if streamID == "" {
 				streamID = id
@@ -156,9 +148,7 @@ func (r *reader) run(ctx context.Context) {
 	}
 }
 
-// broadcast delivers evs (all from streamID) to every frame subscriber and
-// signals every wake subscriber. Called with r.mu unheld; it takes the lock
-// itself.
+// broadcast delivers evs (all from streamID) to every frame subscriber and signals every wake subscriber; takes r.mu itself.
 func (r *reader) broadcast(streamID string, evs []event.Event, offs []int64, next int64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -259,14 +249,9 @@ func (reg *Registry) acquire(session string) *reader {
 			frames:  map[*FrameSub]struct{}{},
 			wakes:   map[*WakeSub]struct{}{},
 		}
-		// Seed streamID before cursor: run()'s own rotation check only fires
-		// once it has a prior streamID to compare against, so if this pair
-		// is read in the other order and a rotation lands between the two
-		// calls, the reader would pair a stale (pre-rotation) cursor with
-		// the new stream's id and never notice — silently dropping that
-		// stream's early records exactly like the bug this file now guards
-		// against. This order's own failure mode (a rotation landing here)
-		// is a harmless duplicate delivery instead.
+		// Seeded before cursor: a rotation landing between these two reads
+		// then yields a harmless duplicate delivery; the other order would
+		// silently drop the superseded stream's tail, the bug this file guards against.
 		if id, err := reg.store.StreamID(session); err == nil {
 			r.streamID = id
 		}
