@@ -118,8 +118,10 @@ call[6]: "terminal-send_keys" "Enter"
 call[7]: "terminal-send_keys" "Enter"
 call[8]: "terminal-send_keys" "Enter"
 call[9]: "pgrep" "-P" "<pid>"
-call[10]: "ps" "-p" "<pid>" "-o" "comm="
+call[10]: "ps" "-o" "ppid=" "-p" "<pid>"
 call[11]: "ps" "-p" "<pid>" "-o" "comm="
+call[12]: "ps" "-o" "ppid=" "-p" "<pid>"
+call[13]: "ps" "-p" "<pid>" "-o" "comm="
 declined: task "runtime" setup: exit status 1
 
 == runtime:launch-timeout-then-retry-succeeds / setup (retry)
@@ -143,6 +145,8 @@ call[6]: "terminal-send_text" "export PLECT_SESSION_NAME=acme/widget-1; claude -
 call[7]: "terminal-send_keys" "Enter"
 call[8]: "jq" "-nc" "--argjson" "pid" "<pid>" "--arg" "sid" "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" "--arg" "sock" "<state>/claude-channel/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.sock" "--arg" "mcp" "<state>/plect-mcp.json" "--arg" "hooks" "<state>/plect-hooks.json" "{pid:$pid, session_id:$sid, socket_path:$sock, mcp_config:$mcp, hooks_settings:$hooks}"
 call[9]: "pgrep" "-P" "<pid>"
-call[10]: "ps" "-p" "<pid>" "-o" "comm="
+call[10]: "ps" "-o" "ppid=" "-p" "<pid>"
 call[11]: "ps" "-p" "<pid>" "-o" "comm="
+call[12]: "ps" "-o" "ppid=" "-p" "<pid>"
+call[13]: "ps" "-p" "<pid>" "-o" "comm="
 declined: task "runtime" setup: exit status 1

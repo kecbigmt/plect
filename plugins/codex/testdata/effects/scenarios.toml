@@ -4,8 +4,8 @@
 # from the pane's own root (PLECT_EFFECT_PID), so a kill-on-failure
 # scenario can prove it left the pane alone.
 
-# A killed child, a surviving pane, and a same-pane retry that produces
-# normally.
+# This proves the timed-out launch's child is killed, the pane survives,
+# and a retry against that same pane succeeds.
 [[codex]]
 name                       = "launch-timeout-then-retry-succeeds"
 inputs                     = { launch_timeout = "1s" }
@@ -20,7 +20,8 @@ hooks                      = ["setup"]
 path    = ".codex/sessions/rollout.jsonl"
 content = '{"type":"session_meta","payload":{"cwd":"WORKSPACE","session_id":"11111111-2222-3333-4444-555555555555"}}'
 
-# Cleanup for a non-timeout failure after start (see bin/jq).
+# This proves cleanup also runs when the final output-construction call
+# fails (see bin/jq), not only on a detection timeout.
 [[codex]]
 name                       = "launch-succeeds-then-output-fails-kills-worker"
 capture                    = "› "
@@ -32,8 +33,8 @@ hooks                      = ["setup"]
 path    = ".codex/sessions/rollout.jsonl"
 content = '{"type":"session_meta","payload":{"cwd":"WORKSPACE","session_id":"11111111-2222-3333-4444-555555555555"}}'
 
-# A killed, real worker survives neither a stuck-but-started launch nor a
-# same-pane retry that produces normally.
+# This proves the timed-out launch's worker is killed, the pane survives,
+# and a retry against that same pane succeeds.
 [[exec_runtime]]
 name                       = "launch-timeout-then-retry-succeeds"
 inputs                     = { launch_env = '{"PLECT_TEST_NEVER_READY":"1"}', launch_timeout = "1s" }
@@ -41,23 +42,24 @@ retry_inputs               = { model = "gpt-5.6-sol", effort = "high", launch_en
 expect_worker_process_dead = true
 hooks                      = ["setup"]
 
-# A pidfile naming the pane's own pid must not be trusted; cleanup must
-# still land on the real worker.
+# This proves a worker.pid naming the pane's own pid is rejected, and
+# cleanup still lands on the real worker.
 [[exec_runtime]]
 name                        = "poisoned-pidfile-kills-real-worker"
 inputs                      = { launch_env = '{"PLECT_TEST_POISON_PID":"1"}', launch_timeout = "1s" }
 expect_worker_process_dead  = true
 hooks                       = ["setup"]
 
-# A worker stuck before it can self-report at all still has a real,
-# killable process under the pane.
+# This proves cleanup still finds the worker when it never wrote
+# worker.pid at all.
 [[exec_runtime]]
 name                        = "no-pid-report-kills-real-worker"
 inputs                      = { launch_env = '{"PLECT_TEST_NO_PID_REPORT":"1"}', launch_timeout = "1s" }
 expect_worker_process_dead  = true
 hooks                       = ["setup"]
 
-# Cleanup for a non-timeout failure after start (see bin/jq).
+# This proves cleanup also runs when the final output-construction call
+# fails (see bin/jq), not only on a detection timeout.
 [[exec_runtime]]
 name                       = "launch-succeeds-then-output-fails-kills-worker"
 fail_output                = true

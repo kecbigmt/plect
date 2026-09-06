@@ -10,8 +10,10 @@ call[7]: "ps" "-p" "<pid>" "-o" "comm="
 call[8]: "find" "<home>/.codex/sessions" "-type" "f" "-newer" "<state>/plect" "-name" "*.jsonl"
 call[9]: "terminal-capture"
 call[10]: "terminal-capture"
-call[11]: "ps" "-p" "<pid>" "-o" "comm="
+call[11]: "ps" "-o" "ppid=" "-p" "<pid>"
 call[12]: "ps" "-p" "<pid>" "-o" "comm="
+call[13]: "ps" "-o" "ppid=" "-p" "<pid>"
+call[14]: "ps" "-p" "<pid>" "-o" "comm="
 declined: task "codex" setup: exit status 1
 
 == codex:launch-timeout-then-retry-succeeds / setup (retry)
@@ -43,8 +45,10 @@ call[9]: "terminal-capture"
 call[10]: "terminal-capture"
 call[11]: "terminal-capture"
 call[12]: "jq" "-nc" "--argjson" "pid" "<pid>" "--arg" "sid" "11111111-2222-3333-4444-555555555555" "--arg" "profile" "<home>/.codex/plect-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.config.toml" "{pid:$pid, session_id:$sid, profile_path:$profile}"
-call[13]: "ps" "-p" "<pid>" "-o" "comm="
+call[13]: "ps" "-o" "ppid=" "-p" "<pid>"
 call[14]: "ps" "-p" "<pid>" "-o" "comm="
+call[15]: "ps" "-o" "ppid=" "-p" "<pid>"
+call[16]: "ps" "-p" "<pid>" "-o" "comm="
 declined: task "codex" setup: exit status 1
 
 == codex_initial_prompt / setup

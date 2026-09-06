@@ -405,8 +405,6 @@ func (h *effectHarness) runScenario(t *testing.T, b *strings.Builder, def config
 	}
 }
 
-// suffix distinguishes a retried "setup" run from its first attempt in
-// the transcript.
 func (h *effectHarness) runOneHook(t *testing.T, b *strings.Builder, def config.TaskDefinition, hook, suffix string, resolved Resolved, id, label string, session SessionVars, tasks map[string]*contract.TaskState, self map[string]any, inputs map[string]string, artifacts []effectScenarioArtifact) map[string]any {
 	t.Helper()
 	// A node input is a literal here rather than a projection of another

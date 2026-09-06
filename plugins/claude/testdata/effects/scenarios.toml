@@ -4,7 +4,6 @@
 # distinct from the pane's own root (PLECT_EFFECT_PID), so a kill-on-failure
 # scenario can prove it left the pane alone.
 
-# A stale record must not block a live one from being accepted.
 [[runtime]]
 name = "resume-stale-record"
 prev = { session_id = "11111111-2222-3333-4444-555555555555", pid = "999999" }
@@ -29,7 +28,6 @@ inputs = { model = "opus", effort = "high", launch_env = '{"PLECT_TEAM_CONTEXT":
 path    = ".claude/sessions/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.json"
 content = '{"sessionId":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","pid":PID}'
 
-# The resolved bin path, not a bare name valid only by PATH coincidence.
 [[runtime.artifacts]]
 output = "mcp_config"
 path   = ""
@@ -38,7 +36,6 @@ path   = ""
 output = "hooks_settings"
 path   = ""
 
-# channel-server-present's absent counterpart.
 [[runtime]]
 name               = "channel-server-absent"
 absent_executables = ["channel-server"]
@@ -55,8 +52,8 @@ path   = ""
 output = "mcp_config"
 path   = ""
 
-# A killed child, a surviving pane, and a same-pane retry that produces
-# normally.
+# This proves the timed-out launch's child is killed, the pane survives,
+# and a retry against that same pane succeeds.
 [[runtime]]
 name                       = "launch-timeout-then-retry-succeeds"
 prev                       = { session_id = "33333333-4444-5555-6666-777777777777" }
@@ -66,7 +63,8 @@ expect_worker_process_dead = true
 # A failed node never reaches health probes in real orchestration.
 hooks                      = ["setup"]
 
-# Cleanup for a non-timeout failure after start (see bin/jq).
+# This proves cleanup also runs when the final output-construction call
+# fails (see bin/jq), not only on a detection timeout.
 [[runtime]]
 name                       = "launch-succeeds-then-output-fails-kills-worker"
 fail_output                = true

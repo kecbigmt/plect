@@ -44,25 +44,27 @@ scope = "run"
 [runtime.setup]
 type   = "shell"
 script = '''
-# Terminates any claude-named child of $PANE_PID, reconfirmed by comm both
-# before TERM and again before the KILL escalation — a child that exited
-# and had its pid reused during the TERM grace period must not carry the
-# escalation to whatever holds that number now. The pane's own root
-# process, and the multiplexer session behind it, are never touched.
+# Terminates each of $PANE_PID's still-owned claude children, reconfirmed
+# by both parentage and comm immediately before TERM and again before the
+# KILL escalation: a child that exited and had its pid reused by an
+# unrelated same-user claude process must not carry the escalation to it.
+# The pane's own root process, and the multiplexer session behind it, are
+# never touched.
 terminate_claude_children() {
+  is_claude_child() {
+    [ "$(ps -o ppid= -p "$1" 2>/dev/null | tr -d '[:space:]')" = "$PANE_PID" ] || return 1
+    case "$(ps -p "$1" -o comm= 2>/dev/null | tr -d '[:space:]')" in claude|claude-*) return 0 ;; esac
+    return 1
+  }
   for CHILD in $(pgrep -P "$PANE_PID" 2>/dev/null); do
-    COMM=$(ps -p "$CHILD" -o comm= 2>/dev/null | tr -d '[:space:]')
-    case "$COMM" in
-      claude|claude-*)
-        kill -TERM "$CHILD" 2>/dev/null
-        for _ in 1 2 3 4 5; do
-          sleep 0.5
-          kill -0 "$CHILD" 2>/dev/null || break
-        done
-        COMM=$(ps -p "$CHILD" -o comm= 2>/dev/null | tr -d '[:space:]')
-        case "$COMM" in claude|claude-*) kill -KILL "$CHILD" 2>/dev/null ;; esac
-        ;;
-    esac
+    if is_claude_child "$CHILD"; then
+      kill -TERM "$CHILD" 2>/dev/null
+      for _ in 1 2 3 4 5; do
+        sleep 0.5
+        kill -0 "$CHILD" 2>/dev/null || break
+      done
+      is_claude_child "$CHILD" && kill -KILL "$CHILD" 2>/dev/null
+    fi
   done
 }
 

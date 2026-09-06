@@ -34,23 +34,24 @@ scope = "run"
 [codex.setup]
 type   = "shell"
 script = '''
-# Terminates $1 if it is a codex process, reconfirmed by comm both before
-# TERM and again before the KILL escalation — a process that exited and
-# had its pid reused during the TERM grace period must not carry the
-# escalation to whatever holds that number now.
+# Terminates $1 if it is still the pane's own codex child, reconfirmed by
+# both parentage and comm immediately before TERM and again before the
+# KILL escalation: a process that exited and had its pid reused by an
+# unrelated same-user codex process must not carry the escalation to it.
 terminate_if_codex() {
-  COMM=$(ps -p "$1" -o comm= 2>/dev/null | tr -d '[:space:]')
-  case "$COMM" in
-    codex|codex-*)
-      kill -TERM "$1" 2>/dev/null
-      for _ in 1 2 3 4 5; do
-        sleep 0.5
-        kill -0 "$1" 2>/dev/null || break
-      done
-      COMM=$(ps -p "$1" -o comm= 2>/dev/null | tr -d '[:space:]')
-      case "$COMM" in codex|codex-*) kill -KILL "$1" 2>/dev/null ;; esac
-      ;;
-  esac
+  is_codex_child() {
+    [ "$(ps -o ppid= -p "$1" 2>/dev/null | tr -d '[:space:]')" = "$PANE_PID" ] || return 1
+    case "$(ps -p "$1" -o comm= 2>/dev/null | tr -d '[:space:]')" in codex|codex-*) return 0 ;; esac
+    return 1
+  }
+  if is_codex_child "$1"; then
+    kill -TERM "$1" 2>/dev/null
+    for _ in 1 2 3 4 5; do
+      sleep 0.5
+      kill -0 "$1" 2>/dev/null || break
+    done
+    is_codex_child "$1" && kill -KILL "$1" 2>/dev/null
+  fi
 }
 
 # agent_activity self-report hooks: UserPromptSubmit/Stop call

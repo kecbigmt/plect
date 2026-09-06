@@ -61,9 +61,8 @@ type effectScenario struct {
 	// and live processes a first attempt (using Inputs) left behind, so a
 	// retry-succeeds claim is checked against that exact state rather than
 	// a separately-started scenario that only shares on-disk paths.
-	RetryInputs map[string]string `toml:"retry_inputs"`
-	// RetryCapture is RetryInputs' counterpart for a Capture-based endpoint.
-	RetryCapture string `toml:"retry_capture"`
+	RetryInputs  map[string]string `toml:"retry_inputs"`
+	RetryCapture string            `toml:"retry_capture"`
 	// FailOutput makes each plugin's own jq stand-in fail the one call that
 	// assembles setup's final output line, once everything else — the
 	// launch, its detection, its readiness — has already succeeded. This is
