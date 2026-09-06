@@ -81,11 +81,11 @@ export function ancestorNames(sessions: SessionSummary[], sessionName: string): 
   while (current && !isPseudoRootParent(current.parentSession)) {
     const parentName = current.parentSession!;
     if (seen.has(parentName)) {
-      break; // defensive cycle guard; well-formed data never round-trips here
+      break;
     }
     const parent = byName.get(parentName);
     if (!parent) {
-      break; // orphan: the declared parent isn't in this list
+      break;
     }
     result.unshift(parentName);
     seen.add(parentName);

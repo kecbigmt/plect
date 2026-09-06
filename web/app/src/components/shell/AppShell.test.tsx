@@ -138,7 +138,7 @@ describe("AppShell session selection", () => {
     vi.mocked(fetch).mockImplementation((input: RequestInfo | URL) => {
       const url = String(input instanceof Request ? input.url : input);
       if (url.includes("/sessions/team%2Fb")) {
-        return new Promise(() => {}); // never resolves, to prove no stale detail leaks in
+        return new Promise(() => {});
       }
       if (url.includes("/sessions/team%2Fa")) {
         return Promise.resolve(
@@ -170,8 +170,6 @@ describe("AppShell session selection", () => {
 
     await user.click(screen.getByRole("treeitem", { name: /^team\/b$/ }));
     expect(screen.getByRole("heading", { name: "team/b" })).toBeInTheDocument();
-    // team/b's own detail request never resolves; the pane must show its own
-    // loading state, not team/a's now-stale detail.
     expect(screen.queryByText("team/a", { selector: "h2" })).not.toBeInTheDocument();
     expect(screen.getByText(/loading/i)).toBeInTheDocument();
   });
@@ -198,9 +196,6 @@ describe("AppShell session selection", () => {
     await user.type(screen.getByRole("searchbox", { name: /search sessions/i }), "config");
     await user.click(await screen.findByRole("treeitem", { name: /release\/config$/ }));
 
-    // Selecting it is what should have durably expanded "release" — clearing
-    // the search now falls back to real expandedNames, not the search's
-    // transient force-expansion.
     await user.clear(screen.getByRole("searchbox", { name: /search sessions/i }));
     expect(screen.getByRole("treeitem", { name: /release\/config$/ })).toBeInTheDocument();
   });

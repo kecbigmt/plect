@@ -74,7 +74,6 @@ describe("DetailPane", () => {
     expect(screen.getByText("stalled")).toBeInTheDocument();
     expect(screen.getByText("Reviewing changes")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "https://example.com/issues/1" })).toBeInTheDocument();
-    // No title was recorded, and none is synthesized from sessionName/workflow/etc.
     expect(screen.queryByText(/^title$/i)).not.toBeInTheDocument();
   });
 
@@ -106,7 +105,7 @@ describe("DetailPane", () => {
     const { rerender, queryClient } = renderDetail("team/a");
     await screen.findByText("team/a");
 
-    vi.mocked(fetch).mockReturnValue(new Promise(() => {})); // team/b never resolves
+    vi.mocked(fetch).mockReturnValue(new Promise(() => {}));
     rerender(
       <QueryClientProvider client={queryClient}>
         <DetailPane sessionName="team/b" />
@@ -140,7 +139,6 @@ describe("DetailPane", () => {
     );
     await screen.findByText("team/b");
 
-    // team/a's request finally resolves, well after the user moved on.
     resolveTeamA(
       jsonResponse({
         sessionName: "team/a",

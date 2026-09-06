@@ -60,8 +60,6 @@ describe("buildSessionForest", () => {
       summary({ sessionName: "team/a/deep/child" }),
     ];
     const forest = buildSessionForest(sessions);
-    // Both are parentless (no parentSession set), so both stay top-level
-    // independent roots despite one name looking like the other's descendant.
     expect(forest.map((n) => n.session.sessionName)).toEqual(["team/a", "team/a/deep/child"]);
   });
 
