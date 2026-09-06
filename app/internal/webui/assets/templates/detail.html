@@ -135,7 +135,7 @@
         {{- if .Chains }}
         <ul role="list" class="mt-1.5 space-y-0.5 text-label text-muted-foreground">
           {{- range .Chains }}
-          <li>chain {{ .ChainID }}: {{ if .AlreadyActive }}already-active {{ .TargetSession }}{{ else if .Fired }}fired{{ else }}blocked:{{ .BlockedReason }}{{ end }}</li>
+          <li>chain {{ .ChainID }}: {{ if .AlreadyActive }}already-active {{ .TargetSession }}{{ else if .Fired }}eligible {{ .TargetSession }}{{ else }}blocked:{{ .BlockedReason }}{{ end }}</li>
           {{- end }}
         </ul>
         {{- end }}

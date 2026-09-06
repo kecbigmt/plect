@@ -308,14 +308,18 @@ func shortRevision(rev string) string {
 
 // statusChainDetailLine renders one chain's evaluation with enough detail to
 // tell an operator whether anything will act automatically, and why not:
-// "already-active (<target>)", "fired (<target>)", or "not-fired" with the
-// blocked reason when one is recorded.
+// "already-active (<target>)", "eligible (<target>)", or "not-fired" with the
+// blocked reason when one is recorded. status never spawns anything — it is
+// a dry-run plan — so "fired" is reserved for a session that actually
+// exists (already-active); a predicate that merely holds, including one a
+// parent's max_up_children cap has been refusing every tick, is eligible
+// until a real tick spawns it.
 func statusChainDetailLine(c service.StatusChain) string {
 	switch {
 	case c.AlreadyActive:
 		return fmt.Sprintf("already-active (%s)", c.TargetSession)
 	case c.Fired:
-		return fmt.Sprintf("fired (%s)", c.TargetSession)
+		return fmt.Sprintf("eligible (%s)", c.TargetSession)
 	}
 	detail := ""
 	switch c.BlockedReason {

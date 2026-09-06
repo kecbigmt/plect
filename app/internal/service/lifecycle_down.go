@@ -29,6 +29,7 @@ func Down(cfg *config.Config, store *state.Store, params DownParams) (*DownResul
 	if err != nil {
 		return nil, err
 	}
+	params.Observer = withNodeResultRecording(store, sessionName, params.Observer)
 	// Running cleanup against an existing session mutates it; clamp it to the
 	// active guard like the other write paths.
 	if guardErr := checkSessionGuard(cfg, sessionName); guardErr != nil {

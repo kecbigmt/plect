@@ -48,6 +48,7 @@ func Destroy(cfg *config.Config, store *state.Store, params DestroyParams) (*Des
 	if err != nil {
 		return nil, err
 	}
+	params.Observer = withNodeResultRecording(store, sessionName, params.Observer)
 	flushPendingDeliveryLogged(cfg, store, sessionName)
 	// Tearing down an existing session is a per-session write; clamp it to the
 	// active guard so a guarded orchestrator can't destroy another owner's
@@ -160,6 +161,10 @@ func Destroy(cfg *config.Config, store *state.Store, params DestroyParams) (*Des
 
 	if err := store.Delete(sessionName); err != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to delete state entry: %v", err)}
+	}
+
+	if err := eventlog.NewStore(store.Dir()).ClearChainAttempts(sessionName); err != nil {
+		result.CleanupWarnings = append(result.CleanupWarnings, fmt.Sprintf("chain-attempt bookkeeping cleanup: %v", err))
 	}
 
 	// After the delete, so unwireDeliveryOnTeardown's fresh read sees the

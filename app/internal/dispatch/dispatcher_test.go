@@ -295,6 +295,71 @@ func TestDispatcher_IncludeFilters(t *testing.T) {
 	}
 }
 
+// TestDispatcher_DeliversNodeResult pins the literal plect.node.result type
+// string against the general include mechanism TestDispatcher_DeliversIncludedEvents
+// already covers with an arbitrary type — a typo in either string would
+// otherwise silently drop every node-result delivery.
+func TestDispatcher_DeliversNodeResult(t *testing.T) {
+	log := eventlog.NewStore(t.TempDir())
+	sock, recv := startFakeSocket(t)
+	d, s := runtimeDispatcher(t, "o/r-1", log, sock, event.TypeNodeResult)
+
+	log.Append(event.Event{
+		SessionName: "o/r-1",
+		Type:        event.TypeNodeResult,
+		Summary:     "agent setup produced",
+		Metadata:    map[string]string{"node": "agent", "effect": "official.example.agent", "scope": "run", "action": event.NodeResultActionSetup, "result": event.NodeResultProduced},
+	})
+	drainOnce(d, s)
+
+	if typ := recvType(t, recv); typ != event.TypeNodeResult {
+		t.Errorf("delivered type = %q", typ)
+	}
+}
+
+// TestDispatcher_NodeResultUnresolvedBindingFailsSafely covers a channel
+// bound to a node that has not produced yet (e.g. a thread node a
+// population member's channel projects but has not set up): channelInputs
+// cannot resolve the binding, so delivery must fail through the ordinary
+// plect.channel.error path rather than panicking, and the node-result event
+// itself is never touched — it is immutable, appended, and already past.
+func TestDispatcher_NodeResultUnresolvedBindingFailsSafely(t *testing.T) {
+	log := eventlog.NewStore(t.TempDir())
+	s := &domain.Session{Name: "o/r-1", Tasks: map[string]*contract.TaskState{}}
+	st := state.NewStore(t.TempDir())
+	if err := st.Put(s); err != nil {
+		t.Fatal(err)
+	}
+	d := &sessionDispatcher{
+		session: "o/r-1",
+		channels: []config.EventChannel{{
+			Name:    "runtime",
+			Uses:    "claude_channel",
+			Inputs:  map[string]*lang.Value{"path": fromValue("nodes.claude.outputs.socket_path")},
+			Include: []string{event.TypeNodeResult},
+		}},
+		defs:   map[string]config.ChannelDefinition{"claude_channel": socketChannel()},
+		log:    log,
+		state:  st,
+		policy: channel.RetryPolicy{MaxAttempts: 2, BaseBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond, Timeout: 200 * time.Millisecond},
+	}
+
+	orig, _, _, _ := log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeNodeResult, Summary: "agent setup produced"})
+	drainOnce(d, s)
+
+	errs, _, _, _ := log.List("o/r-1", 0, event.Filter{Types: []string{event.TypeChannelError}})
+	if len(errs) != 1 {
+		t.Fatalf("want exactly one plect.channel.error, got %d: %+v", len(errs), errs)
+	}
+	if errs[0].Metadata["channel"] != "runtime" || errs[0].Metadata["event_id"] != orig.ID {
+		t.Errorf("channel.error metadata = %+v", errs[0].Metadata)
+	}
+	nodeResults, _, _, _ := log.List("o/r-1", 0, event.Filter{Types: []string{event.TypeNodeResult}})
+	if len(nodeResults) != 1 || nodeResults[0].ID != orig.ID {
+		t.Fatalf("node.result events = %+v, want the original event untouched", nodeResults)
+	}
+}
+
 func TestDispatcher_FinalFailureAppendsChannelError(t *testing.T) {
 	log := eventlog.NewStore(t.TempDir())
 	dead := filepath.Join(t.TempDir(), "absent.sock") // never listened

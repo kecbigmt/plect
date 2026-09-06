@@ -74,7 +74,7 @@ prompt         = { from = "session.inputs.prompt", default = "" }
 [[example_work.event.channel]]
 name    = "runtime"
 uses    = "official.claude.delivery"
-include = ["plect.instruction", "user.emit", "plect.terminal.*"]
+include = ["plect.instruction", "user.emit", "plect.terminal.*", "plect.node.result"]
 
 [example_work.event.channel.inputs]
 path = { from = "nodes.agent.outputs.socket_path" }

@@ -35,7 +35,7 @@ const (
 // publish same-session events that drive the reviewer or work session. Against
 // that same refreshed fact set, it also fires [[chains]].
 func TickSession(cfg *config.Config, store *state.Store, params TickParams) (*CheckResult, error) {
-	resolvedName, computed, chainPlan, err := evaluateSessionActions(cfg, store, params.SessionName, !params.SkipRefresh, params.Trigger)
+	resolvedName, session, computed, chainPlan, err := evaluateSessionActions(cfg, store, params.SessionName, !params.SkipRefresh, params.Trigger)
 	if err != nil {
 		return nil, err
 	}
@@ -64,8 +64,10 @@ func TickSession(cfg *config.Config, store *state.Store, params TickParams) (*Ch
 		}
 	}
 
+	generation := sessionGeneration(session)
 	chains := make([]ChainSpawn, 0, len(chainPlan))
 	for _, sp := range chainPlan {
+		capRefused := false
 		if sp.Fired && !sp.AlreadyActive {
 			up, err := Up(cfg, store, UpParams{
 				Identifier:    sp.Resource,
@@ -79,9 +81,18 @@ func TickSession(cfg *config.Config, store *state.Store, params TickParams) (*Ch
 			// discard the done_when actions already published/persisted above,
 			// nor the other chains' results — it is reported on this entry only,
 			// so the next tick can retry the same (idempotent) fire.
-			if err != nil {
+			switch svcErr, isCapRefusal := asChildCapExceeded(err); {
+			case isCapRefusal:
+				// A cap refusal is not a generic execution failure: the fire
+				// remains eligible and this same entry is retried next tick
+				// once capacity frees, so it is reported as its own typed
+				// outcome rather than folded into "spawn failed:".
+				sp.CapRefused = true
+				capRefused = true
+				sp.Warnings = append(sp.Warnings, svcErr.Message)
+			case err != nil:
 				sp.Warnings = append(sp.Warnings, fmt.Sprintf("spawn failed: %v", err))
-			} else {
+			default:
 				sp.Spawned = true
 				sp.TargetSession = up.SessionName
 			}
@@ -93,6 +104,27 @@ func TickSession(cfg *config.Config, store *state.Store, params TickParams) (*Ch
 				sp.KickDelivered = true
 			} else {
 				sp.KickDebounced = true
+			}
+		}
+		// Every chain syncs its streak marker every tick, fired or not: a
+		// cap-refusal streak can also end by the predicate going unmet (a
+		// judge verdict recorded, say) and holding true again later with no
+		// spawn in between, which only this per-tick sync — not the event
+		// log — can tell apart from an uninterrupted streak.
+		fingerprint := chainAttemptFingerprint(capRefused, sp.TargetSession)
+		previous, won, syncErr := syncChainAttemptStreak(store, resolvedName, sp.Instance, sp.ChainID, generation, fingerprint)
+		switch {
+		case syncErr != nil:
+			sp.Warnings = append(sp.Warnings, fmt.Sprintf("chain-attempt bookkeeping failed: %v", syncErr))
+		case capRefused && won:
+			// The marker already claims this streak; a publish failure must
+			// not leave that claim standing unpublished, so it is reverted
+			// rather than left to silently swallow the event forever.
+			if pubErr := publishChainCapAttempt(cfg, store, resolvedName, sp); pubErr != nil {
+				sp.Warnings = append(sp.Warnings, fmt.Sprintf("chain-attempt event failed: %v", pubErr))
+				if revertErr := revertChainAttemptStreak(store, resolvedName, sp.Instance, sp.ChainID, generation, fingerprint, previous); revertErr != nil {
+					sp.Warnings = append(sp.Warnings, fmt.Sprintf("chain-attempt bookkeeping rollback failed: %v", revertErr))
+				}
 			}
 		}
 		chains = append(chains, sp)
