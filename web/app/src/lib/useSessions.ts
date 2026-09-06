@@ -6,9 +6,13 @@ export function sessionDetailQueryKey(sessionName: string) {
   return ["session", sessionName] as const;
 }
 
+export function sessionListQueryKey() {
+  return ["sessions"] as const;
+}
+
 export function useSessionList() {
   return useQuery({
-    queryKey: ["sessions"],
+    queryKey: sessionListQueryKey(),
     queryFn: fetchSessionList,
     // TanStack Query's default retries + backoff can outlast a test's
     // findBy* timeout before isError ever turns true; matches

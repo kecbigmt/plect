@@ -86,8 +86,11 @@ in this slice: Tasks, Graph, Terminal, Home/Inbox, or any mutation
 [docs/design/web-ui-graph-fields.md](../../docs/design/web-ui-graph-fields.md)
 for how Graph inspection maps to existing state ahead of its own task, and
 [docs/design/web-ui-event-history.md](../../docs/design/web-ui-event-history.md)
-for the event-history read contract and its history/live handoff protocol
-(the live SSE stream itself is a later task).
+for the event-history read contract, the live SSE subscription
+(`GET /api/v1/events/stream`), and the history/live handoff protocol between
+them. The live subscription is a hand-written route beside `GET /events`
+(`app/internal/webui/events_stream_json.go`), not part of this generated
+contract — see "What this PR does not claim" below.
 
 `ApiError`'s four variants (`NotFoundError`, `ValidationError`,
 `ConflictError`, `ExecutionError`) cover every code `service.Error` defines

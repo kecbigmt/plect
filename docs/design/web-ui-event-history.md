@@ -2,11 +2,11 @@
 
 [docs/design/web-ui.md](web-ui.md)'s Conversation section specifies what the
 session timeline shows. This document specifies the read contract behind it
-(`GET /events`, `web/api/routes/events.tsp`) and the protocol a client uses to
-move from a bounded history read to a live subscription
-([the following SSE task](../adr/2026-09-05-web-ui-client-server-boundary.md))
-without losing or duplicating an event that arrives in between. It does not
-define the SSE endpoint itself.
+(`GET /events`, `web/api/routes/events.tsp`), the live subscription that
+continues from it (`GET /api/v1/events/stream`,
+`app/internal/webui/events_stream_json.go`), and the protocol a client uses
+to move from a bounded history read to that subscription without losing or
+duplicating an event that arrives in between.
 
 ## The read contract
 
@@ -44,6 +44,37 @@ issued for a different order, or against a log generation that no longer
 exists (the log rotated), is rejected as invalid input; the client's only
 recovery is to drop it and restart from the beginning.
 
+## The live subscription
+
+`GET /api/v1/events/stream?session=<name>&cursor=` is a Server-Sent Events
+stream: a hand-written route beside `GET /events`, not part of the generated
+`@plecture/web-api` contract (SSE reconnection/replay semantics are explicit
+and separately tested at the HTTP boundary — see `web/api/README.md`). Each
+frame carries one JSON object in the identical shape as the history
+endpoint's own `events[]` item; no custom SSE `event:` name is used, and
+keepalive comments (`: connected`, `: ping`) are forwarded verbatim from the
+bus.
+
+Its resume token — the `cursor` query parameter, and the `id:` on every
+frame — is the same opaque cursor the history endpoint returns as
+`nextCursor`, not a second format: `service.EventStreamResume` decodes and
+validates it exactly like `EventPage` does, so a malformed, wrong-order, or
+stale-generation cursor is rejected as invalid input the same way it already
+is there, before the bus is ever dialed. A connection opened with no cursor
+at all is a fresh connect: it replays a bounded recent tail and follows
+forward, matching the existing Go-templated Web UI's own live relay.
+
+The browser side is a hand-rolled `fetch()` + `ReadableStream` reader
+(`web/app/src/lib/eventStream.ts`), not the native `EventSource`:
+`EventSource` cannot read a response's HTTP status or body on failure, so it
+cannot distinguish an expired session (401) from an unavailable bus (502)
+from a transient network blip, and it offers no way to build a request
+carrying an arbitrary `cursor` query value or to cancel a request whose body
+is already being read. The module owns its own resume cursor and reconnect
+backoff end to end; a caller only sees the events it dispatches and a small
+connection-state signal (connecting, live, reconnecting, unavailable,
+auth-expired).
+
 ## The history/live handoff protocol
 
 A client opens a session's timeline in two steps: fetch a bounded history
@@ -60,10 +91,9 @@ already true of the existing contracts, not a new mechanism:
   including ones that did not exist when the cursor was handed out. A client
   that fetches history in `asc` order and remembers the last page's
   `nextCursor` therefore has an exact resume point for a live subscription:
-  opening the live stream from that same position (once the SSE task defines
-  how a cursor maps to the stream's own resume token) cannot skip an event
-  published in the interval, because the interval is not what the cursor
-  encodes — the log position is.
+  opening the live stream from that same position (the live subscription's
+  `cursor` parameter, above) cannot skip an event published in the interval,
+  because the interval is not what the cursor encodes — the log position is.
 - **Event IDs are globally unique and lexicographically sortable by
   creation time (ULIDs), so overlap is safe to discard.** IDs are not
   guaranteed strictly monotonic across processes — two events recorded by
@@ -87,10 +117,14 @@ client already needs for a stale REST cursor: drop it and refetch — `order:
 desc, limit: N` for "resynchronize the visible window", reconciled against
 already-rendered events by ID, or `order: asc` with no cursor to restart
 history from the beginning. The read contract this document specifies is
-that refetch path; the live task does not need to invent a second one.
+that refetch path; the live subscription invents no second one.
 
 `app/internal/webui/acceptance_test.go`'s
 `TestAcceptance_ApiV1EventsCursorClosesTheHistoryLiveHandoffGap` demonstrates
 the first property against the real service and event-log stack: it fetches
 a page and its cursor, publishes another event (the race), then shows that
 re-querying with the already-issued cursor returns exactly that event.
+`TestAcceptance_ApiV1EventsStreamResumesFromTheHistoryEndpointsOwnCursor`
+demonstrates the same property through the live subscription itself: the
+event published in the race window arrives exactly once, through the stream
+opened with the history endpoint's own `nextCursor`.

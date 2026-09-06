@@ -67,7 +67,7 @@ func detailFromStatus(r *service.StatusResult) webapiv1.SessionDetail {
 func eventPageFromResult(r service.EventPageResult) webapiv1.EventPage {
 	items := make([]webapiv1.Event, len(r.Events))
 	for i, ev := range r.Events {
-		items[i] = eventFromDomain(ev)
+		items[i] = EventFromDomain(ev)
 	}
 	return webapiv1.EventPage{
 		Events:     items,
@@ -75,13 +75,11 @@ func eventPageFromResult(r service.EventPageResult) webapiv1.EventPage {
 	}
 }
 
-// eventFromDomain projects one contracts/event.Event onto the wire's Event,
-// field for field and verbatim — Type and Source stay untyped strings (a
-// producer's own namespace, not this API's to enumerate), and Metadata passes
-// through whatever keys the log actually holds, known or not. This is the
-// entire "unknown event types/metadata survive the projection" contract: pass
-// everything through, invent nothing.
-func eventFromDomain(ev event.Event) webapiv1.Event {
+// EventFromDomain projects contracts/event.Event onto the wire's Event:
+// Type/Source stay unenumerated (a producer's own namespace) and Metadata
+// passes through unknown keys verbatim. Exported so the live SSE relay
+// shares this conversion instead of drifting from a second one.
+func EventFromDomain(ev event.Event) webapiv1.Event {
 	return webapiv1.Event{
 		Id:           ev.ID,
 		SessionName:  ev.SessionName,
