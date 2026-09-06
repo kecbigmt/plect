@@ -94,10 +94,6 @@ func TestDetailFromStatus_MapsRunAndHealthIndependently(t *testing.T) {
 	}
 }
 
-// Every domain.HealthState value, stalled included, must survive the wire
-// conversion under its own name — a session can be up and stalled at once,
-// and this is the one member most likely to be missed since it was added
-// after healthy/unhealthy/undeclared.
 func TestDetailFromStatus_MapsEveryHealthState(t *testing.T) {
 	cases := []struct {
 		domain domain.HealthState
@@ -190,6 +186,9 @@ func TestSummaryFromListEntry_MapsRequiredAndOptionalFields(t *testing.T) {
 	}
 	if got.LastActiveAt == nil || !got.LastActiveAt.Equal(now) {
 		t.Errorf("LastActiveAt = %v, want %v", got.LastActiveAt, now)
+	}
+	if got.ParentSession == nil || *got.ParentSession != entry.ParentSession {
+		t.Errorf("ParentSession = %v, want %s", got.ParentSession, entry.ParentSession)
 	}
 	if got.Tasks == nil || len(*got.Tasks) != 1 || (*got.Tasks)[0].Instance != "initial" {
 		t.Errorf("Tasks = %v, want one entry named initial", got.Tasks)

@@ -167,11 +167,6 @@ func TestAcceptance_ApiV1SessionDetailUnknownNameIs404(t *testing.T) {
 	}
 }
 
-// Acceptance: the generated JSON API's thin adapter preserves the session
-// tree — parent/child/grandchild plus an independent root — end to end
-// through the real state.Store and service.List/Status, not just through the
-// fake SessionReader webapi's and service's own package tests use.
-//
 // Given a root, its child, its grandchild, and an unrelated independent root
 // persisted in a temp state store,
 // When GET /api/v1/sessions and GET /api/v1/sessions/<name> are served by the
@@ -213,15 +208,28 @@ func TestAcceptance_ApiV1SessionsPreserveParentChildGrandchildAndIndependentRoot
 	if err := json.NewDecoder(listRec.Body).Decode(&list); err != nil {
 		t.Fatalf("decode SessionListResponse: %v", err)
 	}
+	wantParents := map[string]*string{
+		"acceptance/root-a":       nil,
+		"acceptance/child-b":      strPtr("acceptance/root-a"),
+		"acceptance/grandchild-c": strPtr("acceptance/child-b"),
+		"acceptance/root-d":       nil,
+	}
 	byName := make(map[string]webapiv1.SessionSummary, len(list.Items))
 	for _, item := range list.Items {
 		byName[item.SessionName] = item
 	}
-	if got := byName["acceptance/root-a"].ParentSession; got != nil {
-		t.Errorf("root-a parentSession = %v, want absent", got)
-	}
-	if got := byName["acceptance/root-d"].ParentSession; got != nil {
-		t.Errorf("independent root-d parentSession = %v, want absent", got)
+	for name, want := range wantParents {
+		item, ok := byName[name]
+		if !ok {
+			t.Errorf("list did not include %s", name)
+			continue
+		}
+		switch {
+		case want == nil && item.ParentSession != nil:
+			t.Errorf("%s list parentSession = %v, want absent", name, *item.ParentSession)
+		case want != nil && (item.ParentSession == nil || *item.ParentSession != *want):
+			t.Errorf("%s list parentSession = %v, want %s", name, item.ParentSession, *want)
+		}
 	}
 
 	detail := func(name string) webapiv1.SessionDetail {
@@ -255,6 +263,8 @@ func TestAcceptance_ApiV1SessionsPreserveParentChildGrandchildAndIndependentRoot
 		t.Errorf("root-d children = %v, want absent", independentRoot.Children)
 	}
 }
+
+func strPtr(s string) *string { return &s }
 
 // Acceptance: the real service stack, driven through the HTTP handler, renders
 // the detail page for a session that exists in state.json.

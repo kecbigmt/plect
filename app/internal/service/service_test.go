@@ -300,10 +300,7 @@ func TestStatus_ProjectsTree(t *testing.T) {
 	}
 }
 
-// A grandchild's ParentSession/Children stay one level deep — Status does not
-// flatten a multi-level tree into the root's Children — and a session with no
-// ParentSession that sits outside the tree entirely remains its own
-// independent root rather than getting swept into it.
+// Status does not flatten a multi-level tree into the root's Children.
 func TestStatus_ProjectsTree_GrandchildAndIndependentRootStayDistinct(t *testing.T) {
 	cfg := &config.Config{}
 	store := testStore(t)
@@ -359,14 +356,9 @@ func TestStatus_ProjectsTree_GrandchildAndIndependentRootStayDistinct(t *testing
 	}
 }
 
-// Two sessions created under a shared "root:<name>" pseudo-parent
-// (domain.ImplicitRootParent's explicit, opt-in form — see
-// resolveParentSession) are an explicit sibling group: List/Status report the
-// same ParentSession string on both, so a reader can derive siblinghood by
-// equality, but the anchor session itself gains no Children entry for
-// them — a pseudo-parent is not a real, selectable parent session. Mirrors
-// state.TestStore_NormalizeSessionTreeTreatsRootPrefixAsPseudoParent one layer
-// up, at the List/Status projection this task's read models are built on.
+// A "root:<name>" pseudo-parent (resolveParentSession's opt-in explicit
+// sibling group) is not a real, selectable session, so it must not gain a
+// Children entry the way a real parent does.
 func TestStatus_ProjectsTree_ExplicitRootGroupSiblings(t *testing.T) {
 	cfg := &config.Config{}
 	store := testStore(t)
@@ -421,12 +413,9 @@ func TestStatus_ProjectsTree_ExplicitRootGroupSiblings(t *testing.T) {
 	}
 }
 
-// A session whose parent is later removed from the store becomes an
-// independent root rather than a dangling reference — state.Store detaches
-// the pointer on delete (state.TestStore_DeleteDetachesSessionTreeLinks), and
-// this proves that detached fact reads back correctly through List/Status,
-// the layer this task's read models sit on: "records with missing parents
-// remain visible" (docs/design/web-ui.md), not hidden or erroring.
+// state.Store detaches a child's ParentSession when the parent is deleted
+// (state.TestStore_DeleteDetachesSessionTreeLinks); this proves that fact
+// also reads back correctly through List/Status.
 func TestStatus_ProjectsTree_OrphanedAfterParentDeleted(t *testing.T) {
 	cfg := &config.Config{}
 	store := testStore(t)
