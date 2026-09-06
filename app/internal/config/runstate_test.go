@@ -46,10 +46,10 @@ func TestConfig_RunScopeUp_NoWorkflowFallsBackToAnyProducedEntry(t *testing.T) {
 			"slack_thread": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced},
 		}, false},
 		{"run-scoped cleaned", map[string]*contract.TaskState{
-			"tmux": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusCleaned},
+			"runtime": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusCleaned},
 		}, false},
 		{"run-scoped produced", map[string]*contract.TaskState{
-			"tmux": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced},
+			"runtime": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced},
 		}, true},
 	}
 	cfg := &Config{}

@@ -144,15 +144,3 @@ func unifiedTeardownList(cfg *config.Config, session *domain.Session, plan *task
 	}
 	return out, nil
 }
-
-func hasLiveRunTask(tasks map[string]*contract.TaskState) bool {
-	for _, e := range tasks {
-		if e == nil {
-			continue
-		}
-		if e.Scope == contract.TaskScopeRun && e.Status == contract.TaskStatusProduced {
-			return true
-		}
-	}
-	return false
-}

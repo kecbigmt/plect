@@ -128,7 +128,7 @@ func TaskSetup(cfg *config.Config, store *state.Store, params TaskSetupParams) (
 	if err != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: err.Error()}
 	}
-	if resolved.Scope == config.TaskScopeRun && !hasLiveRunTask(session.Tasks) {
+	if resolved.Scope == config.TaskScopeRun && !cfg.RunScopeUp(session) {
 		return nil, &Error{Code: ErrInvalidInput, Message: fmt.Sprintf("task %q is run-scoped but the session's run scope is not up; run `plect up %s` first", params.TaskID, resolvedName)}
 	}
 
