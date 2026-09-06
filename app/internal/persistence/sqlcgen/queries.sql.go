@@ -491,36 +491,21 @@ func (q *Queries) ListSessionsByAlias(ctx context.Context, alias sql.NullString)
 
 const listTaskDoneWhenJudgesForSession = `-- name: ListTaskDoneWhenJudgesForSession :many
 SELECT j.task_instance_id, j.leaf_id, j.action, j.reason, j.revision,
-       j.judge_session, j.judge_workflow, j.relation, j.created_at,
-       t.session_name AS target_session, t.instance_name AS target_instance
+       j.judge_session, j.judge_workflow, j.relation, j.created_at
 FROM task_done_when_judges j
 JOIN task_instances t ON t.id = j.task_instance_id
 WHERE t.session_name = ?
 `
 
-type ListTaskDoneWhenJudgesForSessionRow struct {
-	TaskInstanceID string
-	LeafID         string
-	Action         string
-	Reason         string
-	Revision       string
-	JudgeSession   string
-	JudgeWorkflow  sql.NullString
-	Relation       string
-	CreatedAt      string
-	TargetSession  string
-	TargetInstance string
-}
-
-func (q *Queries) ListTaskDoneWhenJudgesForSession(ctx context.Context, sessionName string) ([]ListTaskDoneWhenJudgesForSessionRow, error) {
+func (q *Queries) ListTaskDoneWhenJudgesForSession(ctx context.Context, sessionName string) ([]TaskDoneWhenJudge, error) {
 	rows, err := q.db.QueryContext(ctx, listTaskDoneWhenJudgesForSession, sessionName)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListTaskDoneWhenJudgesForSessionRow
+	var items []TaskDoneWhenJudge
 	for rows.Next() {
-		var i ListTaskDoneWhenJudgesForSessionRow
+		var i TaskDoneWhenJudge
 		if err := rows.Scan(
 			&i.TaskInstanceID,
 			&i.LeafID,
@@ -531,8 +516,6 @@ func (q *Queries) ListTaskDoneWhenJudgesForSession(ctx context.Context, sessionN
 			&i.JudgeWorkflow,
 			&i.Relation,
 			&i.CreatedAt,
-			&i.TargetSession,
-			&i.TargetInstance,
 		); err != nil {
 			return nil, err
 		}

@@ -29,30 +29,30 @@ type Message struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// DoneWhenJudge is the reviewer-owned verdict for one done_when judge leaf.
+// DoneWhenJudge is the judge-owned verdict for one done_when judge leaf.
 // Revision is an opaque workspace provider value; plect only compares it for
 // exact equality with the instance's current revision output.
 //
-// The record is self-contained: TargetSession / Instance name the work it
-// judges, and ReviewerWorkflow / Relation stamp the reviewer's workflow and the
-// reviewer→target tree relation *as computed at record time*. Stamping rather
-// than re-deriving means the verdict still reads correctly after the reviewer
-// session is destroyed or the tree is restructured. Relation is the fact the
-// verdict was made under; which relations a leaf accepts is a separate policy.
+// The judged session/instance is not part of the record: it is always the
+// task instance the record is stored under, so a caller derives it from that
+// context instead of reading a duplicated field here. JudgeWorkflow /
+// Relation stamp the judge's workflow and the judge→target tree relation *as
+// computed at record time*. Stamping rather than re-deriving means the
+// verdict still reads correctly after the judge session is destroyed or the
+// tree is restructured. Relation is the fact the verdict was made under;
+// which relations a leaf accepts is a separate policy.
 type DoneWhenJudge struct {
-	LeafID           string    `json:"leaf_id"`
-	Action           string    `json:"action"` // "approve" | "request_changes"
-	Reason           string    `json:"reason"` // reviewer evidence
-	Revision         string    `json:"revision"`
-	TargetSession    string    `json:"target_session,omitempty"`
-	Instance         string    `json:"instance,omitempty"`
-	ReviewerSession  string    `json:"reviewer_session,omitempty"`
-	ReviewerWorkflow string    `json:"reviewer_workflow,omitempty"`
-	Relation         string    `json:"relation,omitempty"`
-	CreatedAt        time.Time `json:"created_at,omitzero"`
+	LeafID        string    `json:"leaf_id"`
+	Action        string    `json:"action"` // "approve" | "request_changes"
+	Reason        string    `json:"reason"` // judge evidence
+	Revision      string    `json:"revision"`
+	JudgeSession  string    `json:"judge_session,omitempty"`
+	JudgeWorkflow string    `json:"judge_workflow,omitempty"`
+	Relation      string    `json:"relation,omitempty"`
+	CreatedAt     time.Time `json:"created_at,omitzero"`
 }
 
-// DoneWhenState is reviewer/checker-owned completion state for one task instance's
+// DoneWhenState is judge/checker-owned completion state for one task instance's
 // done_when. It is separate from observed outputs so status/display can read
 // completion state without causing dispatch, rollback, or shell-out work.
 type DoneWhenState struct {

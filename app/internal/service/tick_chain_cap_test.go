@@ -261,11 +261,11 @@ func TestTickSession_ChainCapAttemptEventRecordsNewStreakAfterPredicateGoesUnmet
 		st := s.Tasks["work"]
 		st.DoneWhen.Judges = map[string]*contract.DoneWhenJudge{
 			"ac-met": {
-				LeafID:          "ac-met",
-				Action:          task.JudgeActionApprove,
-				Revision:        "sha1",
-				ReviewerSession: "some-reviewer",
-				Relation:        string(domain.RelationSibling),
+				LeafID:       "ac-met",
+				Action:       task.JudgeActionApprove,
+				Revision:     "sha1",
+				JudgeSession: "some-reviewer",
+				Relation:     string(domain.RelationSibling),
 			},
 		}
 		return nil

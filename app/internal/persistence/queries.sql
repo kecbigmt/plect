@@ -126,8 +126,7 @@ DELETE FROM task_done_when_judges WHERE task_instance_id = ?;
 
 -- name: ListTaskDoneWhenJudgesForSession :many
 SELECT j.task_instance_id, j.leaf_id, j.action, j.reason, j.revision,
-       j.judge_session, j.judge_workflow, j.relation, j.created_at,
-       t.session_name AS target_session, t.instance_name AS target_instance
+       j.judge_session, j.judge_workflow, j.relation, j.created_at
 FROM task_done_when_judges j
 JOIN task_instances t ON t.id = j.task_instance_id
 WHERE t.session_name = ?;

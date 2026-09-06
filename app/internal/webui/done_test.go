@@ -25,7 +25,7 @@ func sampleTasks() []service.TaskInstanceView {
 					Reason:          "awaiting reviewer",
 					Revision:        "abc123",
 					CurrentRevision: "def456",
-					ReviewerSession: "owner/repo-9",
+					JudgeSession:    "owner/repo-9",
 					PendingReason:   "no reviewer verdict yet",
 				},
 			},
@@ -110,7 +110,7 @@ func TestDoneLeaf_Check(t *testing.T) {
 }
 
 // done-leaf (judge): surfaces the gate's blocker — action/reason, a stale-revision
-// note, the reviewer session, and the pending reason.
+// note, the judge session, and the pending reason.
 func TestDoneLeaf_Judge(t *testing.T) {
 	out := exec(t, "done-leaf", sampleTasks()[0].DoneWhen.Leaves[1])
 	for _, want := range []string{

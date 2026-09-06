@@ -37,12 +37,12 @@ func TestRecordJudge_PersistsReviewerInput(t *testing.T) {
 	})
 
 	result, err := RecordJudge(cfg, store, JudgeParams{
-		SessionName:     "owner/repo-1",
-		Instance:        "initial",
-		LeafID:          "ac-met",
-		Action:          "approve",
-		Reason:          "AC verified in test",
-		ReviewerSession: "owner/repo-1+review",
+		SessionName:  "owner/repo-1",
+		Instance:     "initial",
+		LeafID:       "ac-met",
+		Action:       "approve",
+		Reason:       "AC verified in test",
+		JudgeSession: "owner/repo-1+review",
 	})
 	if err != nil {
 		t.Fatalf("RecordJudge: %v", err)
@@ -56,11 +56,11 @@ func TestRecordJudge_PersistsReviewerInput(t *testing.T) {
 	if got == nil {
 		t.Fatal("missing persisted judge")
 	}
-	if got.Action != "approve" || got.Reason != "AC verified in test" || got.ReviewerSession != "owner/repo-1+review" {
+	if got.Action != "approve" || got.Reason != "AC verified in test" || got.JudgeSession != "owner/repo-1+review" {
 		t.Fatalf("judge = %+v", got)
 	}
-	if got.TargetSession != "owner/repo-1" || got.Instance != "initial" || got.Revision != "sha1" {
-		t.Fatalf("judge target/instance/revision = %+v", got)
+	if got.Revision != "sha1" {
+		t.Fatalf("judge revision = %+v", got)
 	}
 }
 
@@ -87,12 +87,12 @@ func TestRecordJudge_AppendsJudgeRecordedEvent(t *testing.T) {
 	})
 
 	if _, err := RecordJudge(cfg, store, JudgeParams{
-		SessionName:     work,
-		Instance:        "initial",
-		LeafID:          "ac-met",
-		Action:          "approve",
-		Reason:          "AC verified in test",
-		ReviewerSession: reviewer,
+		SessionName:  work,
+		Instance:     "initial",
+		LeafID:       "ac-met",
+		Action:       "approve",
+		Reason:       "AC verified in test",
+		JudgeSession: reviewer,
 	}); err != nil {
 		t.Fatalf("RecordJudge: %v", err)
 	}
@@ -110,13 +110,13 @@ func TestRecordJudge_AppendsJudgeRecordedEvent(t *testing.T) {
 		t.Fatalf("event body = %q, want recorded judge reason", got.Body)
 	}
 	wantMeta := map[string]string{
-		"instance":          "initial",
-		"leaf_id":           "ac-met",
-		"action":            "approve",
-		"revision":          "sha1",
-		"reviewer_session":  reviewer,
-		"reviewer_workflow": "",
-		"relation":          string(domain.RelationUnrelated),
+		"instance":       "initial",
+		"leaf_id":        "ac-met",
+		"action":         "approve",
+		"revision":       "sha1",
+		"judge_session":  reviewer,
+		"judge_workflow": "",
+		"relation":       string(domain.RelationUnrelated),
 	}
 	for key, want := range wantMeta {
 		if got.Metadata[key] != want {
@@ -159,12 +159,12 @@ func TestRecordJudge_StampsRelationAndWorkflow(t *testing.T) {
 	setParent(t, store, reviewer, "owner/repo-orchestrator")
 
 	if _, err := RecordJudge(cfg, store, JudgeParams{
-		SessionName:     work,
-		Instance:        "initial",
-		LeafID:          "ac-met",
-		Action:          "approve",
-		Reason:          "AC verified",
-		ReviewerSession: reviewer,
+		SessionName:  work,
+		Instance:     "initial",
+		LeafID:       "ac-met",
+		Action:       "approve",
+		Reason:       "AC verified",
+		JudgeSession: reviewer,
 	}); err != nil {
 		t.Fatalf("RecordJudge: %v", err)
 	}
@@ -173,8 +173,8 @@ func TestRecordJudge_StampsRelationAndWorkflow(t *testing.T) {
 	if got.Relation != string(domain.RelationSibling) {
 		t.Fatalf("relation = %q, want sibling", got.Relation)
 	}
-	if got.ReviewerWorkflow != "codex" {
-		t.Fatalf("reviewer_workflow = %q, want codex", got.ReviewerWorkflow)
+	if got.JudgeWorkflow != "codex" {
+		t.Fatalf("judge_workflow = %q, want codex", got.JudgeWorkflow)
 	}
 }
 
@@ -190,15 +190,15 @@ func TestJudgeInputs_DerivesRelationForLegacyRecords(t *testing.T) {
 		reviewer: {Name: reviewer, ParentSession: parent, Workflow: "codex"},
 	}
 	legacy := map[string]*contract.DoneWhenJudge{
-		"ac-met": {LeafID: "ac-met", Action: "approve", Revision: "sha1", ReviewerSession: reviewer},
+		"ac-met": {LeafID: "ac-met", Action: "approve", Revision: "sha1", JudgeSession: reviewer},
 	}
 
 	got := judgeInputs(legacy, work, sessions)["ac-met"]
 	if got.Relation != string(domain.RelationSibling) {
 		t.Fatalf("derived relation = %q, want sibling", got.Relation)
 	}
-	if got.ReviewerWorkflow != "codex" {
-		t.Fatalf("derived reviewer_workflow = %q, want codex", got.ReviewerWorkflow)
+	if got.JudgeWorkflow != "codex" {
+		t.Fatalf("derived judge_workflow = %q, want codex", got.JudgeWorkflow)
 	}
 }
 
@@ -216,18 +216,18 @@ func TestJudgeInputs_NewRecordHonorsStampedEmptyWorkflow(t *testing.T) {
 	}
 	rec := map[string]*contract.DoneWhenJudge{
 		"ac-met": {
-			LeafID:           "ac-met",
-			Action:           "approve",
-			Revision:         "sha1",
-			ReviewerSession:  reviewer,
-			Relation:         string(domain.RelationSibling),
-			ReviewerWorkflow: "", // stamped empty at record time
+			LeafID:        "ac-met",
+			Action:        "approve",
+			Revision:      "sha1",
+			JudgeSession:  reviewer,
+			Relation:      string(domain.RelationSibling),
+			JudgeWorkflow: "", // stamped empty at record time
 		},
 	}
 
 	got := judgeInputs(rec, work, sessions)["ac-met"]
-	if got.ReviewerWorkflow != "" {
-		t.Fatalf("reviewer_workflow = %q, want empty (record-time fact, not re-derived)", got.ReviewerWorkflow)
+	if got.JudgeWorkflow != "" {
+		t.Fatalf("judge_workflow = %q, want empty (record-time fact, not re-derived)", got.JudgeWorkflow)
 	}
 	if got.Relation != string(domain.RelationSibling) {
 		t.Fatalf("relation = %q, want sibling (stamped)", got.Relation)
@@ -242,19 +242,19 @@ func TestRecordJudge_RequiresRevision(t *testing.T) {
 	})
 
 	_, err := RecordJudge(cfg, store, JudgeParams{
-		SessionName:     "owner/repo-1",
-		Instance:        "initial",
-		LeafID:          "ac-met",
-		Action:          "approve",
-		Reason:          "AC verified",
-		ReviewerSession: "review",
+		SessionName:  "owner/repo-1",
+		Instance:     "initial",
+		LeafID:       "ac-met",
+		Action:       "approve",
+		Reason:       "AC verified",
+		JudgeSession: "review",
 	})
 	if err == nil {
 		t.Fatal("expected missing revision error")
 	}
 }
 
-func TestRecordJudge_RequiresReviewerSession(t *testing.T) {
+func TestRecordJudge_RequiresJudgeSession(t *testing.T) {
 	t.Setenv("PLECT_SESSION_NAME", "")
 	store := testStore(t)
 	cfg := &config.Config{WorkspaceDirsRoot: t.TempDir()}
@@ -302,12 +302,12 @@ func TestRecordJudge_RejectsSelfReview(t *testing.T) {
 	})
 
 	_, err := RecordJudge(cfg, store, JudgeParams{
-		SessionName:     work,
-		Instance:        "initial",
-		LeafID:          "ac-met",
-		Action:          "approve",
-		Reason:          "I reviewed my own work",
-		ReviewerSession: work,
+		SessionName:  work,
+		Instance:     "initial",
+		LeafID:       "ac-met",
+		Action:       "approve",
+		Reason:       "I reviewed my own work",
+		JudgeSession: work,
 	})
 	if err == nil || !strings.Contains(err.Error(), "self-review") {
 		t.Fatalf("self-review RecordJudge err = %v, want self-review rejection", err)
@@ -387,12 +387,12 @@ func seedJudgeWork(t *testing.T, store *state.Store, work, judgeLeaf string) {
 func recordApproval(t *testing.T, cfg *config.Config, store *state.Store, work, reviewer string) {
 	t.Helper()
 	if _, err := RecordJudge(cfg, store, JudgeParams{
-		SessionName:     work,
-		Instance:        "initial",
-		LeafID:          "ac-met",
-		Action:          "approve",
-		Reason:          "AC verified",
-		ReviewerSession: reviewer,
+		SessionName:  work,
+		Instance:     "initial",
+		LeafID:       "ac-met",
+		Action:       "approve",
+		Reason:       "AC verified",
+		JudgeSession: reviewer,
 	}); err != nil {
 		t.Fatalf("RecordJudge: %v", err)
 	}
@@ -703,12 +703,12 @@ func TestTickSession_EscalatesWhenJudgeKeepsRequestingChanges(t *testing.T) {
 		t.Fatalf("first TickSession: %v", err)
 	}
 	if _, err := RecordJudge(cfg, store, JudgeParams{
-		SessionName:     "owner/repo-1",
-		Instance:        "initial",
-		LeafID:          "ac-met",
-		Action:          "request_changes",
-		Reason:          "acceptance criterion still missing",
-		ReviewerSession: "owner/repo-1+review",
+		SessionName:  "owner/repo-1",
+		Instance:     "initial",
+		LeafID:       "ac-met",
+		Action:       "request_changes",
+		Reason:       "acceptance criterion still missing",
+		JudgeSession: "owner/repo-1+review",
 	}); err != nil {
 		t.Fatalf("RecordJudge: %v", err)
 	}
@@ -823,12 +823,12 @@ func TestTickScenario_RequestChangesStaleThenApproved(t *testing.T) {
 	}
 
 	if _, err := RecordJudge(cfg, store, JudgeParams{
-		SessionName:     "owner/repo-1",
-		Instance:        "initial",
-		LeafID:          "ac-met",
-		Action:          "request_changes",
-		Reason:          "missing acceptance criterion",
-		ReviewerSession: "owner/repo-1+review",
+		SessionName:  "owner/repo-1",
+		Instance:     "initial",
+		LeafID:       "ac-met",
+		Action:       "request_changes",
+		Reason:       "missing acceptance criterion",
+		JudgeSession: "owner/repo-1+review",
 	}); err != nil {
 		t.Fatalf("record request_changes: %v", err)
 	}
@@ -858,12 +858,12 @@ func TestTickScenario_RequestChangesStaleThenApproved(t *testing.T) {
 	}
 
 	if _, err := RecordJudge(cfg, store, JudgeParams{
-		SessionName:     "owner/repo-1",
-		Instance:        "initial",
-		LeafID:          "ac-met",
-		Action:          "approve",
-		Reason:          "acceptance criterion now covered",
-		ReviewerSession: "owner/repo-1+review2",
+		SessionName:  "owner/repo-1",
+		Instance:     "initial",
+		LeafID:       "ac-met",
+		Action:       "approve",
+		Reason:       "acceptance criterion now covered",
+		JudgeSession: "owner/repo-1+review2",
 	}); err != nil {
 		t.Fatalf("record approve: %v", err)
 	}

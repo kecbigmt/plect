@@ -83,7 +83,7 @@ var tickTool = mcp.NewTool("plect_tick",
 )
 
 var judgeApproveTool = mcp.NewTool("plect_judge_approve",
-	mcp.WithDescription("Record an approve action for one done_when judge leaf (verification gate). Records against the instance revision so a later revision reopens the gate. Provenance-constrained judges require reviewer_session to match the ambient reviewer pane."),
+	mcp.WithDescription("Record an approve action for one done_when judge leaf (verification gate). Records against the instance revision so a later revision reopens the gate. Provenance-constrained judges require judge_session to match the ambient judge pane."),
 	mcp.WithString("session",
 		mcp.Required(),
 		mcp.Description("Resource identifier, or session name being reviewed"),
@@ -103,13 +103,13 @@ var judgeApproveTool = mcp.NewTool("plect_judge_approve",
 	mcp.WithString("revision",
 		mcp.Description("Opaque revision reviewed (defaults to the instance revision output)"),
 	),
-	mcp.WithString("reviewer_session",
-		mcp.Description("Reviewer session name (defaults to PLECT_SESSION_NAME; provenance-constrained judges require it to match the ambient reviewer pane)"),
+	mcp.WithString("judge_session",
+		mcp.Description("Judge session name (defaults to PLECT_SESSION_NAME; provenance-constrained judges require it to match the ambient judge pane)"),
 	),
 )
 
 var judgeRequestChangesTool = mcp.NewTool("plect_judge_request_changes",
-	mcp.WithDescription("Record a request-changes action for one done_when judge leaf (verification gate). Holds the gate unsatisfied until a new revision is approved. Provenance-constrained judges require reviewer_session to match the ambient reviewer pane."),
+	mcp.WithDescription("Record a request-changes action for one done_when judge leaf (verification gate). Holds the gate unsatisfied until a new revision is approved. Provenance-constrained judges require judge_session to match the ambient judge pane."),
 	mcp.WithString("session",
 		mcp.Required(),
 		mcp.Description("Resource identifier, or session name being reviewed"),
@@ -129,8 +129,8 @@ var judgeRequestChangesTool = mcp.NewTool("plect_judge_request_changes",
 	mcp.WithString("revision",
 		mcp.Description("Opaque revision reviewed (defaults to the instance revision output)"),
 	),
-	mcp.WithString("reviewer_session",
-		mcp.Description("Reviewer session name (defaults to PLECT_SESSION_NAME; provenance-constrained judges require it to match the ambient reviewer pane)"),
+	mcp.WithString("judge_session",
+		mcp.Description("Judge session name (defaults to PLECT_SESSION_NAME; provenance-constrained judges require it to match the ambient judge pane)"),
 	),
 )
 
@@ -314,26 +314,26 @@ func recordJudge(request mcp.CallToolRequest, action string) (*mcp.CallToolResul
 		return errorResult(err), nil
 	}
 	result, err := service.RecordJudge(cfg, state.NewStore(""), service.JudgeParams{
-		SessionName:     session,
-		Instance:        instance,
-		LeafID:          judgeID,
-		Action:          action,
-		Reason:          request.GetString("reason", ""),
-		Revision:        request.GetString("revision", ""),
-		ReviewerSession: request.GetString("reviewer_session", ""),
+		SessionName:  session,
+		Instance:     instance,
+		LeafID:       judgeID,
+		Action:       action,
+		Reason:       request.GetString("reason", ""),
+		Revision:     request.GetString("revision", ""),
+		JudgeSession: request.GetString("judge_session", ""),
 	})
 	if err != nil {
 		return errorResult(err), nil
 	}
 
 	return jsonResult(map[string]any{
-		"ok":               true,
-		"session_name":     result.SessionName,
-		"instance":         result.Instance,
-		"leaf_id":          result.LeafID,
-		"action":           result.Action,
-		"revision":         result.Revision,
-		"reviewer_session": result.ReviewerSession,
+		"ok":            true,
+		"session_name":  result.SessionName,
+		"instance":      result.Instance,
+		"leaf_id":       result.LeafID,
+		"action":        result.Action,
+		"revision":      result.Revision,
+		"judge_session": result.JudgeSession,
 	})
 }
 

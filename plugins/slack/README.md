@@ -101,10 +101,10 @@ concern.
 `root_text` from a PR title, URL, and head sha, then wires `slack_thread`
 outputs into the `slack` channel bound with `include =
 ["plect.judge.recorded"]`. Its conclusion event is the `plect.judge.recorded`
-event that plect appends when a reviewer records a done_when judge verdict;
-the body is the recorded judge reason, so the Slack reply text is exactly the
-conclusion the reviewer recorded, and metadata carries `instance`, `leaf_id`,
-`action`, `revision`, `reviewer_session`, `reviewer_workflow`, and
+event that plect appends when a judge records a done_when verdict; the body
+is the recorded judge reason, so the Slack reply text is exactly the
+conclusion the judge recorded, and metadata carries `instance`, `leaf_id`,
+`action`, `revision`, `judge_session`, `judge_workflow`, and
 `relation`. The posted text is the event body, falling back to the summary
 only for legacy events without a body; progress, heartbeats, terminal events,
 and GitHub watcher events do not match that binding.

@@ -512,12 +512,12 @@ func TestRecordJudge_TaskDocumentInstance(t *testing.T) {
 		t.Fatalf("TaskSetup: %v", err)
 	}
 	result, err := RecordJudge(cfg, store, JudgeParams{
-		SessionName:     "org/repo-1",
-		Instance:        setup.Instance,
-		LeafID:          "ac-met",
-		Action:          task.JudgeActionApprove,
-		Reason:          "looks right",
-		ReviewerSession: "org/repo-2",
+		SessionName:  "org/repo-1",
+		Instance:     setup.Instance,
+		LeafID:       "ac-met",
+		Action:       task.JudgeActionApprove,
+		Reason:       "looks right",
+		JudgeSession: "org/repo-2",
 	})
 	if err != nil {
 		t.Fatalf("RecordJudge: %v", err)
@@ -547,7 +547,7 @@ func TestRecordJudge_TaskDocumentRejectsAnUndeclaredLeaf(t *testing.T) {
 	}
 	_, err = RecordJudge(cfg, store, JudgeParams{
 		SessionName: "org/repo-1", Instance: setup.Instance, LeafID: "no-such-leaf",
-		Action: task.JudgeActionApprove, Reason: "r", ReviewerSession: "org/repo-2",
+		Action: task.JudgeActionApprove, Reason: "r", JudgeSession: "org/repo-2",
 	})
 	if err == nil {
 		t.Fatal("expected a judge id the document does not declare to be rejected")
@@ -698,7 +698,7 @@ func TestRecordJudge_InstanceWithNoGateRejectsEveryLeaf(t *testing.T) {
 	}
 	_, err = RecordJudge(cfg, store, JudgeParams{
 		SessionName: "org/repo-1", Instance: setup.Instance, LeafID: "ac-met",
-		Action: task.JudgeActionApprove, Reason: "r", ReviewerSession: "org/repo-2",
+		Action: task.JudgeActionApprove, Reason: "r", JudgeSession: "org/repo-2",
 	})
 	if err == nil {
 		t.Fatal("expected a verdict against an instance with no completion predicate to be rejected")

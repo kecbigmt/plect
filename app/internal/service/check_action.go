@@ -202,8 +202,8 @@ func checkFingerprint(result task.DoneWhenResult) string {
 			leaf.Action,
 			leaf.Revision,
 			leaf.CurrentRevision,
-			leaf.ReviewerSession,
-			leaf.ReviewerWorkflow,
+			leaf.JudgeSession,
+			leaf.JudgeWorkflow,
 			leaf.Relation,
 			leaf.Reason,
 			leaf.PendingReason,
@@ -238,21 +238,21 @@ func pendingJudgeItems(result task.DoneWhenResult) []CheckUnmetItem {
 
 func checkUnmetItem(leaf task.DoneLeafResult) CheckUnmetItem {
 	return CheckUnmetItem{
-		Kind:             leaf.Kind,
-		Expr:             leaf.Expr,
-		Status:           leaf.Status,
-		ID:               leaf.ID,
-		Output:           leaf.Output,
-		Value:            leaf.Value,
-		Observed:         leaf.Observed,
-		Action:           leaf.Action,
-		Reason:           leaf.Reason,
-		PendingReason:    leaf.PendingReason,
-		Revision:         leaf.Revision,
-		CurrentRevision:  leaf.CurrentRevision,
-		ReviewerSession:  leaf.ReviewerSession,
-		ReviewerWorkflow: leaf.ReviewerWorkflow,
-		Relation:         leaf.Relation,
+		Kind:            leaf.Kind,
+		Expr:            leaf.Expr,
+		Status:          leaf.Status,
+		ID:              leaf.ID,
+		Output:          leaf.Output,
+		Value:           leaf.Value,
+		Observed:        leaf.Observed,
+		Action:          leaf.Action,
+		Reason:          leaf.Reason,
+		PendingReason:   leaf.PendingReason,
+		Revision:        leaf.Revision,
+		CurrentRevision: leaf.CurrentRevision,
+		JudgeSession:    leaf.JudgeSession,
+		JudgeWorkflow:   leaf.JudgeWorkflow,
+		Relation:        leaf.Relation,
 	}
 }
 
@@ -330,11 +330,11 @@ func unmetItemBulletList(items []CheckUnmetItem) string {
 			if item.Action != "" {
 				details = append(details, "action="+item.Action)
 			}
-			if item.ReviewerSession != "" {
-				details = append(details, "reviewer="+item.ReviewerSession)
+			if item.JudgeSession != "" {
+				details = append(details, "judge="+item.JudgeSession)
 			}
-			if item.ReviewerWorkflow != "" {
-				details = append(details, "reviewer_workflow="+item.ReviewerWorkflow)
+			if item.JudgeWorkflow != "" {
+				details = append(details, "judge_workflow="+item.JudgeWorkflow)
 			}
 			if item.Relation != "" {
 				details = append(details, "relation="+item.Relation)

@@ -144,7 +144,7 @@ func TestEvaluateTaskDoneWhen_Judges(t *testing.T) {
 			WorkSession:     "work",
 			CurrentRevision: "sha1",
 			Judges: map[string]Judge{
-				"ac-met": {Action: JudgeActionApprove, Revision: "sha1", ReviewerSession: "review", Relation: "sibling", Reason: "tests pass"},
+				"ac-met": {Action: JudgeActionApprove, Revision: "sha1", JudgeSession: "review", Relation: "sibling", Reason: "tests pass"},
 			},
 		})
 		if got.Overall != DoneSatisfied {
@@ -157,7 +157,7 @@ func TestEvaluateTaskDoneWhen_Judges(t *testing.T) {
 			WorkSession:     "work",
 			CurrentRevision: "sha1",
 			Judges: map[string]Judge{
-				"ac-met": {Action: JudgeActionRequestChanges, Revision: "sha1", ReviewerSession: "review", Relation: "sibling", Reason: "missing AC"},
+				"ac-met": {Action: JudgeActionRequestChanges, Revision: "sha1", JudgeSession: "review", Relation: "sibling", Reason: "missing AC"},
 			},
 		})
 		if got.Overall != DoneUnsatisfied || got.Leaves[0].Reason != "missing AC" {
@@ -170,7 +170,7 @@ func TestEvaluateTaskDoneWhen_Judges(t *testing.T) {
 			WorkSession:     "work",
 			CurrentRevision: "sha2",
 			Judges: map[string]Judge{
-				"ac-met": {Action: JudgeActionApprove, Revision: "sha1", ReviewerSession: "review", Relation: "sibling"},
+				"ac-met": {Action: JudgeActionApprove, Revision: "sha1", JudgeSession: "review", Relation: "sibling"},
 			},
 		})
 		if got.Overall != DonePending || got.Leaves[0].PendingReason != "stale_judge" {
@@ -183,7 +183,7 @@ func TestEvaluateTaskDoneWhen_Judges(t *testing.T) {
 			WorkSession:     "work",
 			CurrentRevision: "sha1",
 			Judges: map[string]Judge{
-				"ac-met": {Action: JudgeActionApprove, Revision: "sha1", ReviewerSession: "work"},
+				"ac-met": {Action: JudgeActionApprove, Revision: "sha1", JudgeSession: "work"},
 			},
 		})
 		if got.Overall != DonePending || got.Leaves[0].PendingReason != "self_review" {
@@ -209,7 +209,7 @@ func TestEvaluateTaskDoneWhen_Judges(t *testing.T) {
 			WorkSession:     "work",
 			CurrentRevision: "sha1",
 			Judges: map[string]Judge{
-				"ac-met": {Action: JudgeActionApprove, Revision: "sha1", ReviewerSession: "orchestrator", Relation: "parent"},
+				"ac-met": {Action: JudgeActionApprove, Revision: "sha1", JudgeSession: "orchestrator", Relation: "parent"},
 			},
 		})
 		if got.Overall != DoneSatisfied {
@@ -222,7 +222,7 @@ func TestEvaluateTaskDoneWhen_Judges(t *testing.T) {
 			WorkSession:     "work",
 			CurrentRevision: "sha1",
 			Judges: map[string]Judge{
-				"ac-met": {Action: JudgeActionApprove, Revision: "sha1", ReviewerSession: "work+child", Relation: "child"},
+				"ac-met": {Action: JudgeActionApprove, Revision: "sha1", JudgeSession: "work+child", Relation: "child"},
 			},
 		})
 		if got.Overall != DonePending || got.Leaves[0].PendingReason != "relation_not_accepted" {
@@ -236,7 +236,7 @@ func TestEvaluateTaskDoneWhen_Judges(t *testing.T) {
 			WorkSession:     "work",
 			CurrentRevision: "sha1",
 			Judges: map[string]Judge{
-				"ac-met": {Action: JudgeActionApprove, Revision: "sha1", ReviewerSession: "work+child", Relation: "child"},
+				"ac-met": {Action: JudgeActionApprove, Revision: "sha1", JudgeSession: "work+child", Relation: "child"},
 			},
 		})
 		if got.Overall != DoneSatisfied {
@@ -250,7 +250,7 @@ func TestEvaluateTaskDoneWhen_Judges(t *testing.T) {
 			WorkSession:     "work",
 			CurrentRevision: "sha1",
 			Judges: map[string]Judge{
-				"ac-met": {Action: JudgeActionApprove, Revision: "sha1", ReviewerSession: "review", Relation: "sibling"},
+				"ac-met": {Action: JudgeActionApprove, Revision: "sha1", JudgeSession: "review", Relation: "sibling"},
 			},
 		})
 		if got.Overall != DonePending || got.Leaves[0].PendingReason != "relation_not_accepted" {

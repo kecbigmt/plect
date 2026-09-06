@@ -110,12 +110,12 @@ func ObserveResource(def config.ResourceDef, resourceID string, branch string, w
 // "goal-as-task" D4: the completion record cites judge id, reason, and the
 // revision it was recorded against).
 type FinalizeJudgeEvidence struct {
-	ID               string `json:"id"`
-	Reason           string `json:"reason,omitempty"`
-	Revision         string `json:"revision,omitempty"`
-	ReviewerSession  string `json:"reviewer_session,omitempty"`
-	ReviewerWorkflow string `json:"reviewer_workflow,omitempty"`
-	Relation         string `json:"relation,omitempty"`
+	ID            string `json:"id"`
+	Reason        string `json:"reason,omitempty"`
+	Revision      string `json:"revision,omitempty"`
+	JudgeSession  string `json:"judge_session,omitempty"`
+	JudgeWorkflow string `json:"judge_workflow,omitempty"`
+	Relation      string `json:"relation,omitempty"`
 }
 
 // FinalizeResourceParams is the evidence and identity supplied to a resource

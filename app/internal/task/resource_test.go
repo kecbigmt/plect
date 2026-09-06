@@ -297,7 +297,7 @@ stdin = { json = { from = "judges" } }
 		SessionName: "kec/_orchestrator",
 		Revision:    "sha256:abc",
 		Judges: []FinalizeJudgeEvidence{
-			{ID: "goal-met", Reason: "checklist complete", Revision: "sha256:abc", ReviewerSession: "kec/_orchestrator+review"},
+			{ID: "goal-met", Reason: "checklist complete", Revision: "sha256:abc", JudgeSession: "kec/_orchestrator+review"},
 		},
 	})
 	if err != nil {
@@ -316,7 +316,7 @@ stdin = { json = { from = "judges" } }
 		"session=kec/_orchestrator",
 		"revision=sha256:abc",
 		`"id":"goal-met"`,
-		`"reviewer_session":"kec/_orchestrator+review"`,
+		`"judge_session":"kec/_orchestrator+review"`,
 	} {
 		if !strings.Contains(data, want) {
 			t.Errorf("finalize output = %q, want it to contain %q", data, want)
