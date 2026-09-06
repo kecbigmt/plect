@@ -71,9 +71,10 @@ plect judge approve <session> <instance> <judge-id> --reason "<reason>" \
 MCP tool call (`plect_judge_approve` / `plect_judge_request_changes`):
 
 ```json
-{"session": "...", "instance": "...", "judge_id": "...", "reason": "...",
- "judge_session": "..."}            // was "reviewer_session"
+{"session": "...", "instance": "...", "judge_id": "...", "reason": "...", "judge_session": "..."}
 ```
+
+(the `judge_session` key was named `reviewer_session`)
 
 A channel binding or dashboard that reads the `plect.judge.recorded` event's
 metadata by key takes the same rewrite:
