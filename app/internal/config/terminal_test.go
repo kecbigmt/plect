@@ -74,6 +74,9 @@ scope = "run"
 type   = "shell"
 script = "echo '{}'"
 
+[pane.health.alive]
+type = "noop"
+
 [pane.terminal.attach]
 type    = "exec"
 command = "tmux"
@@ -123,6 +126,9 @@ scope = "run"
 [pane.setup]
 type   = "shell"
 script = "echo '{}'"
+
+[pane.health.alive]
+type = "noop"
 
 [pane.terminal.sendtext]
 type   = "shell"

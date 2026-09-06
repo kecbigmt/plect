@@ -110,6 +110,12 @@ capture   = { terminal = "capture" }
 send_text = { terminal = "send_text" }
 send_keys = { terminal = "send_keys" }
 
+# "sent" records that a prompt was submitted, not a surface this effect owns —
+# the terminal it typed into is the multiplexer effect's own liveness to
+# check, and re-checking submission here would just re-run the setup script.
+[claude_initial_prompt.health.alive]
+type = "noop"
+
 [claude_initial_prompt.inputs_schema]
 type                 = "object"
 additionalProperties = false

@@ -52,6 +52,9 @@ type = "exec"
 bin  = "agent-runtime"
 args = ["launch"]
 
+[team_runtime.health.alive]
+type = "noop"
+
 [team_runtime.outputs.bind]
 mcp_server_names = { expr = "inputs.mcp_servers.map(s, s.name).join(',')" }
 

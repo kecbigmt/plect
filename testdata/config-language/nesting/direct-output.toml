@@ -12,6 +12,9 @@ dir=$(mktemp -d)
 printf '{"guard_dir":"%s"}\n' "$dir"
 '''
 
+[guarded_runtime.health.alive]
+type = "noop"
+
 [guarded_runtime.locals_schema]
 type     = "object"
 required = ["guard_dir"]

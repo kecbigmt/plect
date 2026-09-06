@@ -35,6 +35,9 @@ scope = "run"
 [tmux.setup]
 type   = "shell"
 script = "echo '{}'"
+
+[tmux.health.alive]
+type = "noop"
 `)
 	writeWorkflowShowFixtureFile(t, filepath.Join(globalDir, "workspaces", "broken.toml"), `
 [broken]

@@ -103,6 +103,9 @@ scope = "run"
 [runtime.setup]
 type   = "shell"
 script = "echo ` + script + `"
+
+[runtime.health.alive]
+type = "noop"
 `
 	}
 	cfg := twoAddressablePlugins(t, filepath.Join("tasks", "runtime.toml"), effect("a"), effect("b"))

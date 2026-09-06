@@ -132,8 +132,12 @@ func (p Probe) context(session SessionVars) RenderContext {
 
 // RunAliveProbe runs one liveness probe. A non-zero exit or a resolution
 // failure is returned as an error carrying stderr; nil means the execution
-// surface is present.
+// surface is present. A noop action runs nothing and always reports nil: it
+// is a declared non-observation, not a check that happens to pass.
 func RunAliveProbe(goCtx context.Context, p Probe, session SessionVars) error {
+	if p.Action.Type == lang.ActionNoop {
+		return nil
+	}
 	ctx := p.context(session)
 	resolved, err := resolveEffect(p.Action, healthRoots(ctx), ctx, p.From, nil)
 	if err != nil {

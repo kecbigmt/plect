@@ -32,6 +32,13 @@ jq -nc --arg dir "$DIR" '{dir:$dir}'
 [gh_guard.setup.bind]
 guard_bin = { bin = "gh-guard" }
 
+[gh_guard.health.alive]
+type   = "shell"
+script = 'test -x "$dir/gh"'
+
+[gh_guard.health.alive.bind]
+dir = { from = "self.outputs.dir" }
+
 [gh_guard.cleanup]
 type   = "shell"
 script = '[ -n "${dir-}" ] && rm -rf "$dir"; true'

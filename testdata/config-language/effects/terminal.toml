@@ -11,6 +11,13 @@ script = 'printf %s "$session_name"'
 [pane.setup.bind]
 session_name = { from = "session.name" }
 
+[pane.health.alive]
+type   = "shell"
+script = 'tmux has-session -t "$session_name"'
+
+[pane.health.alive.bind]
+session_name = { from = "self.outputs.session_name" }
+
 [pane.terminal.attach]
 type   = "shell"
 script = 'tmux attach -t "$session_name"'

@@ -295,6 +295,9 @@ scope = "session"
 [noop.setup]
 type   = "shell"
 script = "echo '{}'"
+
+[noop.health.alive]
+type = "noop"
 `)
 	writeFile(t, filepath.Join(base, "workflows", "notify.toml"), `[notify]
 kind               = "workflow"

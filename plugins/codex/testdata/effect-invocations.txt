@@ -31,6 +31,9 @@ call[2]: "terminal-send_keys" "Enter"
 call[3]: "terminal-capture"
 outputs: {"sent":"true"}
 
+== codex_initial_prompt / health.alive
+alive
+
 == exec_runtime / setup
 call[0]: "codex-agent-activity" "reset" "acme/widget-1"
 call[1]: "uuidgen"

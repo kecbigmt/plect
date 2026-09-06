@@ -28,17 +28,20 @@ type Eval struct {
 	Terminal func(verb string) (string, error)
 }
 
-// Execution is the process one action runs. Both variants land here, so a
-// caller that only has to start the process does not have to know which
-// variant it came from.
+// Execution is the process one action runs. Both process-bearing variants —
+// exec and shell — land here, so a caller that only has to start the
+// process does not have to know which one it came from. A noop action never
+// reaches this: it runs no process, so it never produces an Execution.
 type Execution struct {
 	Argv  []string
 	Stdin []byte
 }
 
-// Run resolves either action variant. dir is the private run directory the
-// binding transport writes into, and is untouched by an exec action — a
-// caller that knows it is running an exec action may pass "".
+// Run resolves either process-bearing action variant, exec or shell; a noop
+// action has no process to resolve and is never passed here. dir is the
+// private run directory the binding transport writes into, and is untouched
+// by an exec action — a caller that knows it is running an exec action may
+// pass "".
 func (e Eval) Run(dir string, a *Action, operands []string) (*Execution, error) {
 	if a.Type == ActionShell {
 		return e.Shell(dir, a, operands)

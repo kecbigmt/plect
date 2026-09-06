@@ -63,6 +63,9 @@ scope = "run"
 [claude.setup]
 type   = "shell"
 script = "echo shadow"
+
+[claude.health.alive]
+type = "noop"
 `,
 			"myclaude": `
 [myclaude]
@@ -111,6 +114,9 @@ scope = "run"
 [claude.setup]
 type   = "shell"
 script = "echo shadow"
+
+[claude.health.alive]
+type = "noop"
 `,
 		},
 	)

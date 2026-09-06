@@ -9,6 +9,9 @@ type = "exec"
 bin  = "github-issue-pr"
 args = ["render-instruction"]
 
+[render.health.alive]
+type = "noop"
+
 [[render.outputs]]
 produces             = ["resource_kind", "checks_status"]
 from_resource_status = true

@@ -8,3 +8,6 @@ kind = "effect"
 type = "exec"
 bin  = "okf-goal-absent"
 args = ["task", "bootstrap"]
+
+[bootstrap.health.alive]
+type = "noop"

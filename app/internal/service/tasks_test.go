@@ -1484,6 +1484,11 @@ func writeTaskFixture(t *testing.T, cfg *config.Config, fixture taskFixture) {
 		}
 		b.WriteString(shellFixtureAction(fixture.id, hook.name, hook.script))
 	}
+	if fixture.setup != "" {
+		// Every setup-bearing effect must declare [health.alive]; this fixture
+		// is not about liveness, so it gets the noop filler.
+		fmt.Fprintf(&b, "\n[%s.health.alive]\ntype = \"noop\"\n", fixture.id)
+	}
 	b.WriteString(tables)
 	if err := os.WriteFile(filepath.Join(cfg.BaseDir, "tasks", fixture.id+".toml"), []byte(b.String()), 0o644); err != nil {
 		t.Fatal(err)

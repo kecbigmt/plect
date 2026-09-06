@@ -10,6 +10,9 @@ type = "exec"
 bin  = "github-issue-pr"
 args = ["render-instruction"]
 
+[render.health.alive]
+type = "noop"
+
 [render.outputs.bind]
 checks_status = { from = "resource.state.checks_status" }
 

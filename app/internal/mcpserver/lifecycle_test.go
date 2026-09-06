@@ -39,6 +39,9 @@ script = "echo '{}'"
 type   = "shell"
 script = "true"
 
+[noop.health.alive]
+type = "noop"
+
 [noop.terminal.attach]
 type   = "shell"
 script = "true"

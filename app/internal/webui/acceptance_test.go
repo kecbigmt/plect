@@ -128,6 +128,10 @@ func TestAcceptance_ApiV1SessionDetailServesSeededSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Session detail assembly loads task declarations, so this has to answer
+	// only for what the test itself declares — not whatever catalog happens
+	// to be installed on the machine the suite runs on.
+	isolateMachineConfig(cfg)
 	svc := newLiveService(cfg, store)
 	rec := get(t, svc, "/api/v1/sessions/acceptance/web-2")
 

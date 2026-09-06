@@ -9,3 +9,6 @@ scope = "session"
 type    = "exec"
 bin     = "gh-guard"
 args    = ["install", "--mode", "deny-write"]
+
+[guard.health.alive]
+type = "noop"

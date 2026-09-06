@@ -5,6 +5,9 @@ call[2]: "terminal-send_keys" "Enter"
 call[3]: "terminal-capture"
 outputs: {"sent":"true"}
 
+== claude_initial_prompt / health.alive
+alive
+
 == runtime:resume-stale-record / setup
 call[0]: "mktemp" "<state>/plect-mcp.XXXXXX"
 call[1]: "claude-mcp-servers"

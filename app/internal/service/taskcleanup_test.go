@@ -578,6 +578,9 @@ scope = "session"
 type   = "shell"
 script = "echo '{}'"
 
+[runner.health.alive]
+type = "noop"
+
 [runner.cleanup]
 type   = "shell"
 script = "touch `+marker+`"

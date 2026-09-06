@@ -5,8 +5,10 @@ import (
 	"strings"
 )
 
-// Action is one lifecycle execution, in either of the language's two
-// variants. Exactly one variant's fields are populated, named by Type.
+// Action is one lifecycle execution: exec or shell everywhere, plus a third
+// variant, noop, legal only where ParseAliveAction is the parser
+// ([health.alive]). Exactly one variant's fields are populated, named by
+// Type; noop populates none of them.
 type Action struct {
 	Type string
 
@@ -19,12 +21,15 @@ type Action struct {
 	Bind   map[string]*Value
 }
 
-// The two action variants. A runtime consumer reads Type to decide whether
-// it has to prepare the binding transport's private run directory, which an
-// exec action needs no part of.
+// The action variants. A runtime consumer reads Type to decide whether it
+// has to prepare the binding transport's private run directory, which an
+// exec action needs no part of. ActionNoop is a third variant that ParseAction
+// itself never recognizes: it exists only through ParseAliveAction, the one
+// site where a load rule (not the shared parser) decides it is legal.
 const (
 	ActionExec  = "exec"
 	ActionShell = "shell"
+	ActionNoop  = "noop"
 )
 
 var (
@@ -55,6 +60,33 @@ func ParseAction(raw any, pos Position) (*Action, error) {
 		return nil, newDiag(CodeActionTypeUnknown, LayerStructural, childPos(pos, "type"),
 			fmt.Sprintf("an action's type is exec or shell, not %v", typeVal))
 	}
+}
+
+// ParseAliveAction reads a `[health.alive]` liveness probe, the one position
+// admitting noop alongside exec and shell. Every other action-bearing field
+// parses through ParseAction, which does not recognize noop at all, so a
+// noop misplaced anywhere else is reported the same way any other unknown
+// type is: there is no second rule to state for "wrong place", only the
+// ordinary vocabulary check applied at a site that never widened its
+// vocabulary.
+func ParseAliveAction(raw any, pos Position) (*Action, error) {
+	if tbl, ok := raw.(map[string]any); ok {
+		if kind, _ := tbl["type"].(string); kind == ActionNoop {
+			return parseNoopAction(tbl, pos)
+		}
+	}
+	return ParseAction(raw, pos)
+}
+
+// parseNoopAction reads a no-op action: it declares nothing beyond its type,
+// runs nothing, and exits zero. It stands for a deliberate non-observation —
+// RemainAfterExit=, not "no liveness condition exists" — so it carries no
+// script or executable to decide never to run.
+func parseNoopAction(tbl map[string]any, pos Position) (*Action, error) {
+	if err := rejectUnknownFields(tbl, pos, "type"); err != nil {
+		return nil, err
+	}
+	return &Action{Type: ActionNoop}, nil
 }
 
 func parseExecAction(tbl map[string]any, pos Position) (*Action, error) {
@@ -201,6 +233,9 @@ func (a *Action) values() []*Value {
 func (a *Action) Source() string {
 	if a == nil {
 		return ""
+	}
+	if a.Type == ActionNoop {
+		return "noop"
 	}
 	if a.Type == ActionShell {
 		line, _, _ := strings.Cut(strings.TrimSpace(a.Script), "\n")

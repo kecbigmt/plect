@@ -58,6 +58,7 @@ const (
 	CodeFirstObserveFailed            Code = "PLECTURE-CFG-FIRST-OBSERVE-FAILED"
 	CodeBinUnknown                    Code = "PLECTURE-CFG-BIN-UNKNOWN"
 	CodeTerminalUnavailable           Code = "PLECTURE-CFG-TERMINAL-UNAVAILABLE"
+	CodeHealthAliveRequired           Code = "PLECTURE-CFG-HEALTH-ALIVE-REQUIRED"
 	CodeNestingCycle                  Code = "PLECTURE-CFG-NESTING-CYCLE"
 	CodeNestingOutputMutable          Code = "PLECTURE-CFG-NESTING-OUTPUT-MUTABLE"
 	CodeNestingProjectionMismatch     Code = "PLECTURE-CFG-NESTING-PROJECTION-MISMATCH"
@@ -117,6 +118,7 @@ var codeLayers = map[Code][]Layer{
 	CodeFirstObserveFailed:            {LayerInstantiation},
 	CodeBinUnknown:                    {LayerSemantic},
 	CodeTerminalUnavailable:           {LayerSemantic},
+	CodeHealthAliveRequired:           {LayerStructural},
 	CodeNestingCycle:                  {LayerSemantic},
 	CodeNestingOutputMutable:          {LayerSemantic},
 	CodeNestingProjectionMismatch:     {LayerSemantic},
@@ -152,6 +154,7 @@ func Codes() []Code {
 		CodeTaskInstructionFileMissing, CodeTaskInstructionFileCrossLayer, CodeTaskInstructionControlFlow,
 		CodeFromRoot, CodeFromPath,
 		CodeResourceObserverMismatch, CodeFirstObserveFailed, CodeBinUnknown, CodeTerminalUnavailable,
+		CodeHealthAliveRequired,
 		CodeNestingCycle, CodeNestingOutputMutable, CodeNestingProjectionMismatch,
 		CodeExtendsInheritedField, CodeExtendsCycle, CodeExtendsJudgeIDDuplicate,
 		CodeExtendsChainIDDuplicate, CodeExtendsDefaultRedeclared, CodeExtendsSchemaType,
