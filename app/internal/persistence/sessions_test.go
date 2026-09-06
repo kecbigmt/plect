@@ -317,7 +317,7 @@ func TestPutSession_WithDoneWhenAndJudgesRoundTrips(t *testing.T) {
 		Name: "reviewed", CreatedAt: now, UpdatedAt: now,
 		Tasks: map[string]*contract.TaskState{
 			"impl": {
-				Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced,
+				Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, Dynamic: true, TaskID: "impl-work",
 				DoneWhen: &contract.DoneWhenState{
 					HeartbeatTicks:  3,
 					LastFingerprint: "abc123",
@@ -364,6 +364,42 @@ func TestPutSession_WithDoneWhenAndJudgesRoundTrips(t *testing.T) {
 	}
 }
 
+// TestPutSession_WorkflowNodeDoneWhenRoundTripsAsEmbeddedJSON proves a
+// static workflow node's (Dynamic == false) DoneWhen survives round-trip
+// even though it is never split into the relational done_when tables
+// (those attach only to dynamic task_instances rows): it stays embedded in
+// workflow_nodes.record_json instead.
+func TestPutSession_WorkflowNodeDoneWhenRoundTripsAsEmbeddedJSON(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	session := &domain.Session{
+		Name: "s1", CreatedAt: now, UpdatedAt: now,
+		Tasks: map[string]*contract.TaskState{
+			"@workflow": {
+				Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced,
+				DoneWhen: &contract.DoneWhenState{LastFingerprint: "wf-fingerprint"},
+			},
+		},
+	}
+	if err := db.PutSession(ctx, session); err != nil {
+		t.Fatalf("PutSession: %v", err)
+	}
+
+	got, err := db.GetSession(ctx, "s1")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	task := got.Tasks["@workflow"]
+	if task == nil || task.Dynamic {
+		t.Fatalf("task = %+v, want a static (non-dynamic) workflow node", task)
+	}
+	if task.DoneWhen == nil || task.DoneWhen.LastFingerprint != "wf-fingerprint" {
+		t.Fatalf("DoneWhen = %+v, want it preserved via embedded JSON", task.DoneWhen)
+	}
+}
+
 func TestPutSession_ReplacesTasksRatherThanAccumulating(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
@@ -391,5 +427,58 @@ func TestPutSession_ReplacesTasksRatherThanAccumulating(t *testing.T) {
 	}
 	if _, ok := got.Tasks["b"]; !ok {
 		t.Errorf("task %q missing after Put", "b")
+	}
+}
+
+// TestPutSession_DynamicInstanceCleanupThenSetupYieldsFreshDoneWhenHistory
+// proves a dynamic instance's id is minted fresh on every write: a cleanup
+// (dropping the instance) followed by a new setup under the same
+// instance_name must not resurrect the retired instance's done_when/judge
+// history, since a real cleanup+setup pair goes through two separate
+// PutSession/UpdateSession calls, not one.
+func TestPutSession_DynamicInstanceCleanupThenSetupYieldsFreshDoneWhenHistory(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	seed := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Tasks: map[string]*contract.TaskState{
+		"initial": {
+			Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, Dynamic: true, TaskID: "work", Name: "initial",
+			DoneWhen: &contract.DoneWhenState{
+				LastFingerprint: "old",
+				Judges: map[string]*contract.DoneWhenJudge{
+					"leaf-a": {LeafID: "leaf-a", Action: "approve", CreatedAt: now},
+				},
+			},
+		},
+	}}
+	if err := db.PutSession(ctx, seed); err != nil {
+		t.Fatalf("PutSession (seed): %v", err)
+	}
+
+	// Cleanup: the instance is dropped entirely.
+	cleaned := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now}
+	if err := db.PutSession(ctx, cleaned); err != nil {
+		t.Fatalf("PutSession (cleanup): %v", err)
+	}
+
+	// Setup: a new instance under the same instance_name, with no done_when yet.
+	recreated := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Tasks: map[string]*contract.TaskState{
+		"initial": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, Dynamic: true, TaskID: "work", Name: "initial"},
+	}}
+	if err := db.PutSession(ctx, recreated); err != nil {
+		t.Fatalf("PutSession (recreate): %v", err)
+	}
+
+	got, err := db.GetSession(ctx, "s1")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	task := got.Tasks["initial"]
+	if task == nil {
+		t.Fatal("recreated instance missing")
+	}
+	if task.DoneWhen != nil {
+		t.Fatalf("DoneWhen = %+v, want nil (the retired instance's done_when/judge history must not resurface on a same-named recreate)", task.DoneWhen)
 	}
 }

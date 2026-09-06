@@ -71,18 +71,22 @@ func recordDeliveryFailure(st *state.Store, session, channelName string, cause e
 // fixed. The cheap Get check avoids a session persist on the path where
 // nothing needs clearing, the overwhelming majority of validations.
 func recordValidationSuccess(st *state.Store, session string) {
-	if s := st.Get(session); s == nil || s.ChannelValidationHealth == nil || s.ChannelValidationHealth.ConsecutiveFailures == 0 {
+	s, err := st.GetE(session)
+	if err != nil {
+		slog.Default().Warn("dispatcher: read session state failed; skipping this channel validation success", "session", session, "error", err)
 		return
 	}
-	err := st.Update(session, func(s *domain.Session) error {
+	if s == nil || s.ChannelValidationHealth == nil || s.ChannelValidationHealth.ConsecutiveFailures == 0 {
+		return
+	}
+	if err := st.Update(session, func(s *domain.Session) error {
 		if s.ChannelValidationHealth == nil || s.ChannelValidationHealth.ConsecutiveFailures == 0 {
 			return nil
 		}
 		s.ChannelValidationHealth = nil
 		s.UpdatedAt = time.Now()
 		return nil
-	})
-	if err != nil {
+	}); err != nil {
 		slog.Default().Warn("dispatcher: clear channel validation failure failed", "session", session, "error", err)
 	}
 }
@@ -90,18 +94,22 @@ func recordValidationSuccess(st *state.Store, session string) {
 // recordDeliverySuccess clears an open delivery streak; see
 // recordValidationSuccess (mirrored for Session.ChannelDeliveryHealth).
 func recordDeliverySuccess(st *state.Store, session string) {
-	if s := st.Get(session); s == nil || s.ChannelDeliveryHealth == nil || s.ChannelDeliveryHealth.ConsecutiveFailures == 0 {
+	s, err := st.GetE(session)
+	if err != nil {
+		slog.Default().Warn("dispatcher: read session state failed; skipping this channel delivery success", "session", session, "error", err)
 		return
 	}
-	err := st.Update(session, func(s *domain.Session) error {
+	if s == nil || s.ChannelDeliveryHealth == nil || s.ChannelDeliveryHealth.ConsecutiveFailures == 0 {
+		return
+	}
+	if err := st.Update(session, func(s *domain.Session) error {
 		if s.ChannelDeliveryHealth == nil || s.ChannelDeliveryHealth.ConsecutiveFailures == 0 {
 			return nil
 		}
 		s.ChannelDeliveryHealth = nil
 		s.UpdatedAt = time.Now()
 		return nil
-	})
-	if err != nil {
+	}); err != nil {
 		slog.Default().Warn("dispatcher: clear channel delivery failure failed", "session", session, "error", err)
 	}
 }

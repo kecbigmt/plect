@@ -125,7 +125,12 @@ func (sup *Supervisor) checkDeadman(ctx context.Context) {
 	}
 	cfg := sup.cfg()
 	now := time.Now()
-	for name, s := range sup.state.All() {
+	sessions, err := sup.state.AllE()
+	if err != nil {
+		sup.logger.Warn("reactor: read session state failed; skipping this deadman sweep", "error", err)
+		return
+	}
+	for name, s := range sessions {
 		if !hasRunScopeUp(s.Tasks) {
 			continue
 		}
@@ -163,7 +168,14 @@ func resolveTickConfig(cfg *config.Config, s *domain.Session) (config.TickConfig
 }
 
 func (sup *Supervisor) reconcile(ctx context.Context, active map[string]context.CancelFunc, wg *sync.WaitGroup) {
-	sessions := sup.state.All()
+	sessions, err := sup.state.AllE()
+	if err != nil {
+		// An unreadable store must never read as "every session is gone":
+		// the loop below would then cancel every currently-running reactor.
+		// Skip this cycle entirely and retry on the next poll instead.
+		sup.logger.Error("reactor: read session state failed; skipping this reconcile pass", "error", err)
+		return
+	}
 	for name, s := range sessions {
 		if _, running := active[name]; running || !hasRunScopeUp(s.Tasks) {
 			continue

@@ -144,7 +144,10 @@ func TestCapacityCandidatesRequireExplicitIdleAndUseOldestActivity(t *testing.T)
 	addCapacityMember(t, def, store, logStore, "older", "urn:case:older", base, base.Add(time.Minute))
 	addCapacityMember(t, def, store, logStore, "never-reported", "urn:case:never", base, time.Time{})
 
-	candidates := coordinator.idleCandidates()
+	candidates, err := coordinator.idleCandidates()
+	if err != nil {
+		t.Fatalf("idleCandidates: %v", err)
+	}
 	if len(candidates) != 2 || candidates[0].session != "older" || candidates[1].session != "newer" {
 		t.Fatalf("candidates = %+v, want explicitly idle members oldest first", candidates)
 	}
@@ -162,7 +165,11 @@ func TestCapacityCandidateIdleEvidenceIsInvalidatedByInboundEvent(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	if candidates := coordinator.idleCandidates(); len(candidates) != 0 {
+	candidates, err := coordinator.idleCandidates()
+	if err != nil {
+		t.Fatalf("idleCandidates: %v", err)
+	}
+	if len(candidates) != 0 {
 		t.Fatalf("candidates = %+v, want inbound activity to invalidate earlier idle evidence", candidates)
 	}
 }
@@ -173,7 +180,11 @@ func TestCapacityCandidatesExcludeAutoDownFalse(t *testing.T) {
 	coordinator.setDefinitions([]Definition{def})
 	addCapacityMember(t, def, store, logStore, "member", "urn:case:member", base, base.Add(time.Minute))
 
-	if candidates := coordinator.idleCandidates(); len(candidates) != 0 {
+	candidates, err := coordinator.idleCandidates()
+	if err != nil {
+		t.Fatalf("idleCandidates: %v", err)
+	}
+	if len(candidates) != 0 {
 		t.Fatalf("candidates = %+v, want auto_down=false excluded", candidates)
 	}
 }

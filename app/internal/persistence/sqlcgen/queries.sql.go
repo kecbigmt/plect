@@ -57,6 +57,15 @@ func (q *Queries) DeleteUpReservation(ctx context.Context, childSessionName stri
 	return err
 }
 
+const deleteWorkflowNodesForSession = `-- name: DeleteWorkflowNodesForSession :exec
+DELETE FROM workflow_nodes WHERE session_name = ?
+`
+
+func (q *Queries) DeleteWorkflowNodesForSession(ctx context.Context, sessionName string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkflowNodesForSession, sessionName)
+	return err
+}
+
 const getPopulation = `-- name: GetPopulation :one
 
 SELECT population_key, workflow, name FROM populations WHERE population_key = ?
@@ -128,8 +137,8 @@ type InsertPopulationMemberParams struct {
 	AcceptedAt       string
 	LastAppearance   string
 	LastInbound      string
-	Tombstoned       int64
-	PendingUp        int64
+	Tombstoned       bool
+	PendingUp        bool
 	LastDecision     string
 	ItemJson         string
 	LastBlockersJson string
@@ -153,18 +162,53 @@ func (q *Queries) InsertPopulationMember(ctx context.Context, arg InsertPopulati
 	return err
 }
 
-const insertTaskDoneWhen = `-- name: InsertTaskDoneWhen :exec
+const insertTaskDoneWhenJudge = `-- name: InsertTaskDoneWhenJudge :exec
 
-INSERT INTO task_done_when (
-    session_name, instance_name, heartbeat_ticks, heartbeat_escalations,
-    last_action, last_fingerprint, last_reason, last_unsatisfied_json,
-    last_body, escalated_at, escalate_reason
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO task_done_when_judges (
+    task_instance_id, leaf_id, action, reason, revision,
+    judge_session, judge_workflow, relation, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
-type InsertTaskDoneWhenParams struct {
-	SessionName          string
-	InstanceName         string
+type InsertTaskDoneWhenJudgeParams struct {
+	TaskInstanceID string
+	LeafID         string
+	Action         string
+	Reason         string
+	Revision       string
+	JudgeSession   string
+	JudgeWorkflow  string
+	Relation       string
+	CreatedAt      string
+}
+
+// Task done_when judges
+func (q *Queries) InsertTaskDoneWhenJudge(ctx context.Context, arg InsertTaskDoneWhenJudgeParams) error {
+	_, err := q.db.ExecContext(ctx, insertTaskDoneWhenJudge,
+		arg.TaskInstanceID,
+		arg.LeafID,
+		arg.Action,
+		arg.Reason,
+		arg.Revision,
+		arg.JudgeSession,
+		arg.JudgeWorkflow,
+		arg.Relation,
+		arg.CreatedAt,
+	)
+	return err
+}
+
+const insertTaskDoneWhenState = `-- name: InsertTaskDoneWhenState :exec
+
+INSERT INTO task_done_when_states (
+    task_instance_id, heartbeat_ticks, heartbeat_escalations,
+    last_action, last_fingerprint, last_reason, last_unsatisfied_json,
+    last_body, escalated_at, escalate_reason
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type InsertTaskDoneWhenStateParams struct {
+	TaskInstanceID       string
 	HeartbeatTicks       int64
 	HeartbeatEscalations int64
 	LastAction           string
@@ -176,11 +220,10 @@ type InsertTaskDoneWhenParams struct {
 	EscalateReason       string
 }
 
-// Task done_when
-func (q *Queries) InsertTaskDoneWhen(ctx context.Context, arg InsertTaskDoneWhenParams) error {
-	_, err := q.db.ExecContext(ctx, insertTaskDoneWhen,
-		arg.SessionName,
-		arg.InstanceName,
+// Task done_when states
+func (q *Queries) InsertTaskDoneWhenState(ctx context.Context, arg InsertTaskDoneWhenStateParams) error {
+	_, err := q.db.ExecContext(ctx, insertTaskDoneWhenState,
+		arg.TaskInstanceID,
 		arg.HeartbeatTicks,
 		arg.HeartbeatEscalations,
 		arg.LastAction,
@@ -194,82 +237,68 @@ func (q *Queries) InsertTaskDoneWhen(ctx context.Context, arg InsertTaskDoneWhen
 	return err
 }
 
-const insertTaskDoneWhenJudge = `-- name: InsertTaskDoneWhenJudge :exec
-
-INSERT INTO task_done_when_judges (
-    session_name, instance_name, leaf_id, action, reason, revision,
-    target_session, target_instance, reviewer_session, reviewer_workflow,
-    relation, created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-`
-
-type InsertTaskDoneWhenJudgeParams struct {
-	SessionName      string
-	InstanceName     string
-	LeafID           string
-	Action           string
-	Reason           string
-	Revision         string
-	TargetSession    string
-	TargetInstance   string
-	ReviewerSession  string
-	ReviewerWorkflow string
-	Relation         string
-	CreatedAt        string
-}
-
-// Task done_when judges
-func (q *Queries) InsertTaskDoneWhenJudge(ctx context.Context, arg InsertTaskDoneWhenJudgeParams) error {
-	_, err := q.db.ExecContext(ctx, insertTaskDoneWhenJudge,
-		arg.SessionName,
-		arg.InstanceName,
-		arg.LeafID,
-		arg.Action,
-		arg.Reason,
-		arg.Revision,
-		arg.TargetSession,
-		arg.TargetInstance,
-		arg.ReviewerSession,
-		arg.ReviewerWorkflow,
-		arg.Relation,
-		arg.CreatedAt,
-	)
-	return err
-}
-
 const insertTaskInstance = `-- name: InsertTaskInstance :exec
 
 INSERT INTO task_instances (
-    session_name, instance_name, task_id, scope, status, sequence, dynamic,
+    id, session_name, instance_name, task_id, scope, status, sequence,
     resource, named_instance, record_json
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertTaskInstanceParams struct {
+	ID            string
 	SessionName   string
 	InstanceName  string
 	TaskID        string
 	Scope         string
 	Status        string
 	Sequence      int64
-	Dynamic       int64
 	Resource      string
 	NamedInstance string
 	RecordJson    string
 }
 
-// Task instances
+// Task instances (dynamic; Session.Tasks entries with Dynamic == true)
 func (q *Queries) InsertTaskInstance(ctx context.Context, arg InsertTaskInstanceParams) error {
 	_, err := q.db.ExecContext(ctx, insertTaskInstance,
+		arg.ID,
 		arg.SessionName,
 		arg.InstanceName,
 		arg.TaskID,
 		arg.Scope,
 		arg.Status,
 		arg.Sequence,
-		arg.Dynamic,
 		arg.Resource,
 		arg.NamedInstance,
+		arg.RecordJson,
+	)
+	return err
+}
+
+const insertWorkflowNode = `-- name: InsertWorkflowNode :exec
+
+INSERT INTO workflow_nodes (
+    session_name, node_id, scope, status, sequence, record_json
+) VALUES (?, ?, ?, ?, ?, ?)
+`
+
+type InsertWorkflowNodeParams struct {
+	SessionName string
+	NodeID      string
+	Scope       string
+	Status      string
+	Sequence    int64
+	RecordJson  string
+}
+
+// Workflow nodes (static; Session.Tasks entries with Dynamic == false)
+func (q *Queries) InsertWorkflowNode(ctx context.Context, arg InsertWorkflowNodeParams) error {
+	_, err := q.db.ExecContext(ctx, insertWorkflowNode,
+		arg.SessionName,
+		arg.NodeID,
+		arg.Scope,
+		arg.Status,
+		arg.Sequence,
 		arg.RecordJson,
 	)
 	return err
@@ -425,25 +454,84 @@ func (q *Queries) ListSessionsByAlias(ctx context.Context, alias string) ([]Sess
 	return items, nil
 }
 
-const listTaskDoneWhen = `-- name: ListTaskDoneWhen :many
-SELECT session_name, instance_name, heartbeat_ticks, heartbeat_escalations,
-       last_action, last_fingerprint, last_reason, last_unsatisfied_json,
-       last_body, escalated_at, escalate_reason
-FROM task_done_when WHERE session_name = ?
+const listTaskDoneWhenJudgesForSession = `-- name: ListTaskDoneWhenJudgesForSession :many
+SELECT j.task_instance_id, j.leaf_id, j.action, j.reason, j.revision,
+       j.judge_session, j.judge_workflow, j.relation, j.created_at,
+       t.session_name AS target_session, t.instance_name AS target_instance
+FROM task_done_when_judges j
+JOIN task_instances t ON t.id = j.task_instance_id
+WHERE t.session_name = ?
 `
 
-func (q *Queries) ListTaskDoneWhen(ctx context.Context, sessionName string) ([]TaskDoneWhen, error) {
-	rows, err := q.db.QueryContext(ctx, listTaskDoneWhen, sessionName)
+type ListTaskDoneWhenJudgesForSessionRow struct {
+	TaskInstanceID string
+	LeafID         string
+	Action         string
+	Reason         string
+	Revision       string
+	JudgeSession   string
+	JudgeWorkflow  string
+	Relation       string
+	CreatedAt      string
+	TargetSession  string
+	TargetInstance string
+}
+
+func (q *Queries) ListTaskDoneWhenJudgesForSession(ctx context.Context, sessionName string) ([]ListTaskDoneWhenJudgesForSessionRow, error) {
+	rows, err := q.db.QueryContext(ctx, listTaskDoneWhenJudgesForSession, sessionName)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []TaskDoneWhen
+	var items []ListTaskDoneWhenJudgesForSessionRow
 	for rows.Next() {
-		var i TaskDoneWhen
+		var i ListTaskDoneWhenJudgesForSessionRow
 		if err := rows.Scan(
-			&i.SessionName,
-			&i.InstanceName,
+			&i.TaskInstanceID,
+			&i.LeafID,
+			&i.Action,
+			&i.Reason,
+			&i.Revision,
+			&i.JudgeSession,
+			&i.JudgeWorkflow,
+			&i.Relation,
+			&i.CreatedAt,
+			&i.TargetSession,
+			&i.TargetInstance,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTaskDoneWhenStatesForSession = `-- name: ListTaskDoneWhenStatesForSession :many
+SELECT s.task_instance_id, s.heartbeat_ticks, s.heartbeat_escalations,
+       s.last_action, s.last_fingerprint, s.last_reason, s.last_unsatisfied_json,
+       s.last_body, s.escalated_at, s.escalate_reason
+FROM task_done_when_states s
+JOIN task_instances t ON t.id = s.task_instance_id
+WHERE t.session_name = ?
+`
+
+func (q *Queries) ListTaskDoneWhenStatesForSession(ctx context.Context, sessionName string) ([]TaskDoneWhenState, error) {
+	rows, err := q.db.QueryContext(ctx, listTaskDoneWhenStatesForSession, sessionName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TaskDoneWhenState
+	for rows.Next() {
+		var i TaskDoneWhenState
+		if err := rows.Scan(
+			&i.TaskInstanceID,
 			&i.HeartbeatTicks,
 			&i.HeartbeatEscalations,
 			&i.LastAction,
@@ -467,51 +555,8 @@ func (q *Queries) ListTaskDoneWhen(ctx context.Context, sessionName string) ([]T
 	return items, nil
 }
 
-const listTaskDoneWhenJudges = `-- name: ListTaskDoneWhenJudges :many
-SELECT session_name, instance_name, leaf_id, action, reason, revision,
-       target_session, target_instance, reviewer_session, reviewer_workflow,
-       relation, created_at
-FROM task_done_when_judges WHERE session_name = ?
-`
-
-func (q *Queries) ListTaskDoneWhenJudges(ctx context.Context, sessionName string) ([]TaskDoneWhenJudge, error) {
-	rows, err := q.db.QueryContext(ctx, listTaskDoneWhenJudges, sessionName)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []TaskDoneWhenJudge
-	for rows.Next() {
-		var i TaskDoneWhenJudge
-		if err := rows.Scan(
-			&i.SessionName,
-			&i.InstanceName,
-			&i.LeafID,
-			&i.Action,
-			&i.Reason,
-			&i.Revision,
-			&i.TargetSession,
-			&i.TargetInstance,
-			&i.ReviewerSession,
-			&i.ReviewerWorkflow,
-			&i.Relation,
-			&i.CreatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listTaskInstances = `-- name: ListTaskInstances :many
-SELECT session_name, instance_name, task_id, scope, status, sequence, dynamic,
+SELECT id, session_name, instance_name, task_id, scope, status, sequence,
        resource, named_instance, record_json
 FROM task_instances WHERE session_name = ? ORDER BY instance_name
 `
@@ -526,13 +571,13 @@ func (q *Queries) ListTaskInstances(ctx context.Context, sessionName string) ([]
 	for rows.Next() {
 		var i TaskInstance
 		if err := rows.Scan(
+			&i.ID,
 			&i.SessionName,
 			&i.InstanceName,
 			&i.TaskID,
 			&i.Scope,
 			&i.Status,
 			&i.Sequence,
-			&i.Dynamic,
 			&i.Resource,
 			&i.NamedInstance,
 			&i.RecordJson,
@@ -570,6 +615,41 @@ func (q *Queries) ListUpReservations(ctx context.Context) ([]UpReservation, erro
 			&i.ParentName,
 			&i.Pid,
 			&i.ReservedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listWorkflowNodes = `-- name: ListWorkflowNodes :many
+SELECT session_name, node_id, scope, status, sequence, record_json
+FROM workflow_nodes WHERE session_name = ? ORDER BY node_id
+`
+
+func (q *Queries) ListWorkflowNodes(ctx context.Context, sessionName string) ([]WorkflowNode, error) {
+	rows, err := q.db.QueryContext(ctx, listWorkflowNodes, sessionName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []WorkflowNode
+	for rows.Next() {
+		var i WorkflowNode
+		if err := rows.Scan(
+			&i.SessionName,
+			&i.NodeID,
+			&i.Scope,
+			&i.Status,
+			&i.Sequence,
+			&i.RecordJson,
 		); err != nil {
 			return nil, err
 		}

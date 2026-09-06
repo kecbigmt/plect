@@ -44,9 +44,10 @@ JSON in the record that owns them.
 | Table | Key and relational columns | JSON or scalar payload | Source |
 | --- | --- | --- | --- |
 | `sessions` | `name` primary key; nullable `parent_session_name` and `root_session_name`, each referencing `sessions(name)`; `resource_id`, `alias`, `workflow`, `workspace_dir_path`, `created_at`, `updated_at` | conversation, message, inputs, health, channel-health, tick state, and other session fields | `state.json` `sessions` entries |
-| `task_instances` | `(session_name, instance_name)` primary key; session foreign key; `task_id`, `scope`, `status`, `sequence`, `dynamic`, `resource`, `named_instance` | inputs, outputs, state, observed value, layers, lifecycle timestamps, error, and extra completion data | `state.json` `sessions.*.tasks` |
-| `task_done_when` | `(session_name, instance_name)` primary key and task foreign key | counters, fingerprints, reason/body, escalation data | `TaskState.DoneWhen` |
-| `task_done_when_judges` | `(session_name, instance_name, leaf_id)` primary key and task foreign key; reviewer and target names remain stored facts | action, reason, revision, workflow/relation facts, and creation time | `DoneWhenState.Judges` |
+| `workflow_nodes` | `(session_name, node_id)` primary key; session foreign key; `scope`, `status`, `sequence` | task id, inputs, outputs, state, observed value, layers, lifecycle timestamps, error, done_when (rare, not relationally queried), and extra completion data | `state.json` `sessions.*.tasks` entries with `dynamic` unset |
+| `task_instances` | `id` (ULID, minted fresh on every insert) primary key; `(session_name, instance_name)` unique; session foreign key; `task_id`, `scope`, `status`, `sequence`, `resource`, `named_instance` | inputs, outputs, state, observed value, layers, lifecycle timestamps, error, and extra completion data | `state.json` `sessions.*.tasks` entries with `dynamic: true` |
+| `task_done_when_states` | `task_instance_id` primary key and foreign key | counters, fingerprints, reason/body, escalation data | `TaskState.DoneWhen` (dynamic instances only) |
+| `task_done_when_judges` | `(task_instance_id, leaf_id)` primary key and task-instance foreign key; `judge_session`/`judge_workflow` remain stored facts | action, reason, revision, relation, and creation time | `DoneWhenState.Judges` (dynamic instances only) |
 | `populations` | `population_key` primary key; `workflow`, `name` | none | `state.json` `populations` map key and value |
 | `population_members` | `(population_key, resource_id)` primary key; nullable `session_name` | item, generation, timestamps, flags, decision, blockers | `PopulationState.Members` |
 | `up_reservations` | `child_session_name` primary key; `parent_name`, `pid`, `reserved_at` | none | `state.json` `up_reservations` |
@@ -60,6 +61,28 @@ JSON in the record that owns them.
 `population_members.session_name` is a recorded fact, not an enforced foreign
 key: admission can record a member's intended session name before that
 session's own row exists.
+
+`Session.Tasks` splits across `workflow_nodes` and `task_instances` by
+whether the entry is a static workflow-DAG node (including the `@workflow`
+pseudo-node) or a dynamic instance created at runtime via
+`plect task setup`; the persistence layer reads both and composes the one
+`Tasks` map the domain type and every core call site still see, deriving
+`Dynamic` from which table a record came from rather than storing it.
+`task_instances.id` is a ULID minted fresh on every insert, never reused
+across a delete-and-reinsert, so a cleanup followed by a new setup under the
+same `instance_name` is a distinct row with its own `task_done_when_states`/
+`task_done_when_judges` history. Those two tables key off
+`task_instances.id` and exist only for dynamic instances; a static workflow
+node's `done_when` (declaring one is rare, and no shipped workflow node
+relies on it) stays embedded in `workflow_nodes.record_json` instead of
+being split out.
+
+`task_done_when_judges` does not store the judged session/instance: the
+owning `task_instances` row's own `(session_name, instance_name)` is always
+the judged side (the one write path that records a verdict always stores it
+on the same session/instance it names as the target), so
+`DoneWhenJudge.TargetSession`/`Instance` are derived from that join at read
+time rather than duplicated as columns.
 
 `sessions` represents a real parent with `parent_session_name` and a
 session-local pseudo-root with `root_session_name`; a check constraint permits
@@ -195,8 +218,8 @@ upgrade.
 
 | Existing callback or append path | SQLite transaction | Behavioral contract |
 | --- | --- | --- |
-| `Put` | Upsert the session row, replace its task and completion rows, replace its population reference fields, and normalize the parent relation in one write transaction. | Preserves one durable checkpoint for the supplied session; it no longer rewrites unrelated sessions. |
-| `Update` | Read the named session and its task/completion rows, run the in-process callback, then write that session's changed rows in one write transaction. | Preserves read-modify-write atomicity and the missing-session error. The callback remains local and must not perform external work. |
+| `Put` | Upsert the session row, replace its `workflow_nodes`/`task_instances` rows (routed by `Dynamic`, each dynamic instance re-minting its `id`) and their completion rows, replace its population reference fields, and normalize the parent relation in one write transaction. | Preserves one durable checkpoint for the supplied session; it no longer rewrites unrelated sessions. |
+| `Update` | Read the named session and its workflow-node/task-instance/completion rows, run the in-process callback, then write that session's changed rows in one write transaction. | Preserves read-modify-write atomicity and the missing-session error. The callback remains local and must not perform external work. |
 | `UpdatePopulation` | Read or create one population and its members, run the callback, then replace that population's members in one write transaction. | Preserves an atomic population snapshot without serializing unrelated sessions. |
 | `ReserveUpSlot` | Delete reservations whose recorded PID is no longer live, read the parent’s active children and reservations, enforce the cap, and insert the child reservation in one write transaction. | Preserves the live-holder rule and the rejection for an already-reserved child. |
 | `ReleaseUpSlot` | Delete the named reservation in one write transaction. | Remains idempotent and best-effort at its existing call sites. |

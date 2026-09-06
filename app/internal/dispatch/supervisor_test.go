@@ -109,6 +109,88 @@ include     = ["plect.instruction"]
 	}
 }
 
+// TestSupervisor_ReconcileDoesNotCancelActiveDispatchersWhenStoreUnreadable
+// mirrors reactor.Supervisor's identical fix: reconcile's second loop
+// cancels any active dispatcher whose session is absent from AllE's
+// result, so a swallowed read error returning an empty map would
+// previously cancel every dispatcher currently running.
+func TestSupervisor_ReconcileDoesNotCancelActiveDispatchersWhenStoreUnreadable(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	globalDir := filepath.Join(tmpHome, ".config", "plect")
+	if err := os.MkdirAll(globalDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("schema_version = 2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(globalDir, "channels", "claude_channel.toml"), `
+[claude_channel]
+kind = "channel"
+type = "unix_socket"
+path = { from = "inputs.path" }
+body = { json = { from = "event" } }
+
+[claude_channel.input_schema]
+path = { type = "string", required = true }
+`)
+	writeFile(t, filepath.Join(globalDir, "workflows", "coding.toml"), `
+[coding]
+kind = "workflow"
+[[coding.event.channel]]
+name        = "runtime"
+uses        = "claude_channel"
+inputs.path = { from = "nodes.claude.outputs.socket_path" }
+include     = ["plect.instruction"]
+`)
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stateStore := state.NewStore(t.TempDir())
+	sock, _ := startFakeSocket(t)
+	if err := stateStore.Put(&domain.Session{
+		Name: "o/r-1", Workflow: "coding", WorkspaceDirPath: t.TempDir(),
+		Tasks: map[string]*contract.TaskState{
+			"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Outputs: map[string]any{"socket_path": sock}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	log := eventlog.NewStore(t.TempDir())
+	hub := sessionhub.NewRegistry(log)
+	defer hub.Close()
+	sup := NewSupervisor(func() *config.Config { return cfg }, stateStore, log, hub)
+	ctx := t.Context()
+	active := map[string]context.CancelFunc{}
+	skip := map[string]bool{}
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	defer func() {
+		for _, c := range active {
+			c()
+		}
+	}()
+
+	sup.reconcile(ctx, active, skip, &wg)
+	if _, ok := active["o/r-1"]; !ok {
+		t.Fatal("dispatcher not started for an up session")
+	}
+
+	// Swap in a store whose database file is unreadable, simulating the
+	// store becoming unreadable mid-flight.
+	brokenDir := t.TempDir()
+	writeFile(t, filepath.Join(brokenDir, "store.db"), "not a database")
+	sup.state = state.NewStore(brokenDir)
+
+	sup.reconcile(ctx, active, skip, &wg)
+	if _, ok := active["o/r-1"]; !ok {
+		t.Fatal("reconcile cancelled an active dispatcher when the store became unreadable, treating an error as \"destroyed\"")
+	}
+}
+
 // TestSupervisor_ValidationFailureRecordsChannelErrorAndStreak pins the
 // validation half of the channel-failure fix: a channel that fails to
 // validate (not just one that fails to deliver) must also become

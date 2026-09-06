@@ -496,6 +496,54 @@ func TestSupervisor_StartsAndStopsWithRunScope(t *testing.T) {
 	}
 }
 
+// TestSupervisor_ReconcileDoesNotCancelActiveReactorsWhenStoreUnreadable
+// proves the fix for a real hazard: reconcile's second loop cancels any
+// active reactor whose session is absent from AllE's result, so a swallowed
+// read error returning an empty map would previously cancel every reactor
+// currently running, not just the ones truly destroyed.
+func TestSupervisor_ReconcileDoesNotCancelActiveReactorsWhenStoreUnreadable(t *testing.T) {
+	cfg := &config.Config{}
+	st := state.NewStore(t.TempDir())
+	if err := st.Put(&domain.Session{
+		Name: "o/r-1",
+		Tasks: map[string]*contract.TaskState{
+			"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	log := eventlog.NewStore(t.TempDir())
+	hub := sessionhub.NewRegistry(log)
+	defer hub.Close()
+	sup := NewSupervisor(func() *config.Config { return cfg }, st, log, hub)
+	ctx := t.Context()
+	active := map[string]context.CancelFunc{}
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	defer func() {
+		for _, c := range active {
+			c()
+		}
+	}()
+
+	sup.reconcile(ctx, active, &wg)
+	if _, ok := active["o/r-1"]; !ok {
+		t.Fatal("reactor not started for an up session")
+	}
+
+	// Swap in a store whose database file is unreadable, simulating the
+	// store becoming unreadable mid-flight.
+	brokenDir := t.TempDir()
+	writeFile(t, filepath.Join(brokenDir, "store.db"), "not a database")
+	sup.state = state.NewStore(brokenDir)
+
+	sup.reconcile(ctx, active, &wg)
+	if _, ok := active["o/r-1"]; !ok {
+		t.Fatal("reconcile cancelled an active reactor when the store became unreadable, treating an error as \"destroyed\"")
+	}
+}
+
 // TestSupervisor_ResolvesTickConfigFromPluginMountedAfterConstruction mirrors
 // dispatch.Supervisor's identical fix: a `[tick]` declaration that exists
 // only in a plugin-only workflow (no global copy) must resolve once the

@@ -12,20 +12,30 @@ import (
 )
 
 // Population returns one population's durable state, or (nil, nil) if key
-// has never been recorded.
+// has never been recorded. The population row and its members are read
+// inside one transaction, so a concurrent UpdatePopulation can never be
+// interleaved into a single logical value that never existed as such.
 func (db *DB) Population(ctx context.Context, key string) (*domain.PopulationState, error) {
-	row, err := sqlcgen.New(db.read).GetPopulation(ctx, key)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil
+	var population *domain.PopulationState
+	err := db.WithReadTx(ctx, func(tx *sql.Tx) error {
+		row, err := sqlcgen.New(tx).GetPopulation(ctx, key)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil
+			}
+			return fmt.Errorf("get population %q: %w", key, err)
 		}
-		return nil, fmt.Errorf("get population %q: %w", key, err)
-	}
-	members, err := loadPopulationMembers(ctx, db.read, key)
+		members, err := loadPopulationMembers(ctx, tx, key)
+		if err != nil {
+			return err
+		}
+		population = &domain.PopulationState{Workflow: row.Workflow, Name: row.Name, Members: members}
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	return &domain.PopulationState{Workflow: row.Workflow, Name: row.Name, Members: members}, nil
+	return population, nil
 }
 
 // UpdatePopulation reads or creates one population and its members, runs fn
@@ -123,8 +133,8 @@ func populationMemberFromRow(row sqlcgen.PopulationMember) (*domain.PopulationMe
 		AcceptedAt:     acceptedAt,
 		LastAppearance: lastAppearance,
 		LastInbound:    lastInbound,
-		Tombstoned:     row.Tombstoned != 0,
-		PendingUp:      row.PendingUp != 0,
+		Tombstoned:     row.Tombstoned,
+		PendingUp:      row.PendingUp,
 		LastDecision:   row.LastDecision,
 		LastBlockers:   blockers,
 	}, nil
@@ -139,13 +149,6 @@ func insertPopulationMemberTx(ctx context.Context, q *sqlcgen.Queries, key, reso
 	if err != nil {
 		return fmt.Errorf("marshal population member %q blockers: %w", resource, err)
 	}
-	var tombstoned, pendingUp int64
-	if member.Tombstoned {
-		tombstoned = 1
-	}
-	if member.PendingUp {
-		pendingUp = 1
-	}
 	if err := q.InsertPopulationMember(ctx, sqlcgen.InsertPopulationMemberParams{
 		PopulationKey:    key,
 		ResourceID:       resource,
@@ -154,8 +157,8 @@ func insertPopulationMemberTx(ctx context.Context, q *sqlcgen.Queries, key, reso
 		AcceptedAt:       formatTime(member.AcceptedAt),
 		LastAppearance:   formatTime(member.LastAppearance),
 		LastInbound:      formatTime(member.LastInbound),
-		Tombstoned:       tombstoned,
-		PendingUp:        pendingUp,
+		Tombstoned:       member.Tombstoned,
+		PendingUp:        member.PendingUp,
 		LastDecision:     member.LastDecision,
 		ItemJson:         string(itemJSON),
 		LastBlockersJson: string(blockersJSON),

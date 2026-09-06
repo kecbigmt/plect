@@ -23,66 +23,90 @@ func (db *DB) PutSession(ctx context.Context, s *domain.Session) error {
 }
 
 // GetSession returns a session by name, or (nil, nil) if it does not exist.
+// The base row and its children/tasks are read inside one transaction, so a
+// concurrent Put or Update can never be interleaved into a single logical
+// session value that never existed as such.
 func (db *DB) GetSession(ctx context.Context, name string) (*domain.Session, error) {
-	row, err := sqlcgen.New(db.read).GetSession(ctx, name)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil
+	var s *domain.Session
+	err := db.WithReadTx(ctx, func(tx *sql.Tx) error {
+		row, err := sqlcgen.New(tx).GetSession(ctx, name)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil
+			}
+			return fmt.Errorf("get session %q: %w", name, err)
 		}
-		return nil, fmt.Errorf("get session %q: %w", name, err)
-	}
-	s, err := sessionFromRow(row)
+		parsed, err := sessionFromRow(row)
+		if err != nil {
+			return err
+		}
+		if err := db.loadSessionExtras(ctx, tx, parsed); err != nil {
+			return err
+		}
+		s = parsed
+		return nil
+	})
 	if err != nil {
-		return nil, err
-	}
-	if err := db.loadSessionExtras(ctx, db.read, s); err != nil {
 		return nil, err
 	}
 	return s, nil
 }
 
-// AllSessions returns every session, keyed by name.
+// AllSessions returns every session, keyed by name, as of one consistent
+// snapshot (see GetSession).
 func (db *DB) AllSessions(ctx context.Context) (map[string]*domain.Session, error) {
-	rows, err := sqlcgen.New(db.read).ListSessions(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list sessions: %w", err)
-	}
-	result := make(map[string]*domain.Session, len(rows))
-	for _, row := range rows {
-		s, err := sessionFromRow(row)
+	result := make(map[string]*domain.Session)
+	err := db.WithReadTx(ctx, func(tx *sql.Tx) error {
+		rows, err := sqlcgen.New(tx).ListSessions(ctx)
 		if err != nil {
-			return nil, err
+			return fmt.Errorf("list sessions: %w", err)
 		}
-		if err := db.loadSessionExtras(ctx, db.read, s); err != nil {
-			return nil, err
+		for _, row := range rows {
+			s, err := sessionFromRow(row)
+			if err != nil {
+				return err
+			}
+			if err := db.loadSessionExtras(ctx, tx, s); err != nil {
+				return err
+			}
+			result[s.Name] = s
 		}
-		result[s.Name] = s
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return result, nil
 }
 
 // FindSessionsByAlias returns every session whose create-time alias equals
-// alias. An empty alias never matches, since that is the column's own
-// unset-value default and matching it would surface every alias-less
-// session as a hit.
+// alias, as of one consistent snapshot (see GetSession). An empty alias
+// never matches, since that is the column's own unset-value default and
+// matching it would surface every alias-less session as a hit.
 func (db *DB) FindSessionsByAlias(ctx context.Context, alias string) ([]*domain.Session, error) {
 	if alias == "" {
 		return nil, nil
 	}
-	rows, err := sqlcgen.New(db.read).ListSessionsByAlias(ctx, alias)
-	if err != nil {
-		return nil, fmt.Errorf("find sessions by alias %q: %w", alias, err)
-	}
 	var result []*domain.Session
-	for _, row := range rows {
-		s, err := sessionFromRow(row)
+	err := db.WithReadTx(ctx, func(tx *sql.Tx) error {
+		rows, err := sqlcgen.New(tx).ListSessionsByAlias(ctx, alias)
 		if err != nil {
-			return nil, err
+			return fmt.Errorf("find sessions by alias %q: %w", alias, err)
 		}
-		if err := db.loadSessionExtras(ctx, db.read, s); err != nil {
-			return nil, err
+		for _, row := range rows {
+			s, err := sessionFromRow(row)
+			if err != nil {
+				return err
+			}
+			if err := db.loadSessionExtras(ctx, tx, s); err != nil {
+				return err
+			}
+			result = append(result, s)
 		}
-		result = append(result, s)
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return result, nil
 }

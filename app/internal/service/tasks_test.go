@@ -1682,6 +1682,24 @@ func TestDestroy_BlocksWhenChildrenExist(t *testing.T) {
 	}
 }
 
+// TestDestroy_FailsClosedWhenStoreUnreadable proves Destroy never proceeds
+// past its own children check when the store cannot be read at all —
+// store.Delete unconditionally clears a child's ParentSession, so a
+// swallowed read error returning an empty (so apparently childless) session
+// map would let Destroy silently orphan real children instead of aborting.
+func TestDestroy_FailsClosedWhenStoreUnreadable(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "store.db"), []byte("not a database"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	store := state.NewStore(dir)
+	cfg := &config.Config{}
+
+	if _, err := Destroy(cfg, store, DestroyParams{Identifier: "org/repo-1"}); err == nil {
+		t.Fatal("Destroy over an unreadable store must fail, not silently proceed")
+	}
+}
+
 // TestDestroy_ForceOrphansChildrenWithWarning covers the --force path: the
 // parent is destroyed as before, but the now-orphaned child is called out in
 // CleanupWarnings instead of vanishing silently.

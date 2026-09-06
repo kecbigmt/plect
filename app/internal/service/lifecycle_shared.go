@@ -60,7 +60,17 @@ func resolveParentSession(store *state.Store, sessionName, explicit string) (str
 		return "", nil
 	}
 	if rootTarget, ok := strings.CutPrefix(candidate, "root:"); ok {
-		if rootTarget == "" || store.Get(rootTarget) == nil {
+		if rootTarget == "" {
+			if explicitSet {
+				return "", &Error{Code: ErrInvalidInput, Message: fmt.Sprintf("root parent target %q does not exist", rootTarget)}
+			}
+			return "", nil
+		}
+		target, err := store.GetE(rootTarget)
+		if err != nil {
+			return "", &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("read root parent target %q: %v", rootTarget, err)}
+		}
+		if target == nil {
 			if explicitSet {
 				return "", &Error{Code: ErrInvalidInput, Message: fmt.Sprintf("root parent target %q does not exist", rootTarget)}
 			}
@@ -68,7 +78,11 @@ func resolveParentSession(store *state.Store, sessionName, explicit string) (str
 		}
 		return candidate, nil
 	}
-	if store.Get(candidate) == nil {
+	target, err := store.GetE(candidate)
+	if err != nil {
+		return "", &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("read parent session %q: %v", candidate, err)}
+	}
+	if target == nil {
 		if explicitSet {
 			return "", &Error{Code: ErrInvalidInput, Message: fmt.Sprintf("parent session %q does not exist", candidate)}
 		}

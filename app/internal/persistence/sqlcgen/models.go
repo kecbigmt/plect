@@ -28,8 +28,8 @@ type PopulationMember struct {
 	AcceptedAt       string
 	LastAppearance   string
 	LastInbound      string
-	Tombstoned       int64
-	PendingUp        int64
+	Tombstoned       bool
+	PendingUp        bool
 	LastDecision     string
 	ItemJson         string
 	LastBlockersJson string
@@ -48,9 +48,20 @@ type Session struct {
 	RecordJson        string
 }
 
-type TaskDoneWhen struct {
-	SessionName          string
-	InstanceName         string
+type TaskDoneWhenJudge struct {
+	TaskInstanceID string
+	LeafID         string
+	Action         string
+	Reason         string
+	Revision       string
+	JudgeSession   string
+	JudgeWorkflow  string
+	Relation       string
+	CreatedAt      string
+}
+
+type TaskDoneWhenState struct {
+	TaskInstanceID       string
 	HeartbeatTicks       int64
 	HeartbeatEscalations int64
 	LastAction           string
@@ -62,29 +73,14 @@ type TaskDoneWhen struct {
 	EscalateReason       string
 }
 
-type TaskDoneWhenJudge struct {
-	SessionName      string
-	InstanceName     string
-	LeafID           string
-	Action           string
-	Reason           string
-	Revision         string
-	TargetSession    string
-	TargetInstance   string
-	ReviewerSession  string
-	ReviewerWorkflow string
-	Relation         string
-	CreatedAt        string
-}
-
 type TaskInstance struct {
+	ID            string
 	SessionName   string
 	InstanceName  string
 	TaskID        string
 	Scope         string
 	Status        string
 	Sequence      int64
-	Dynamic       int64
 	Resource      string
 	NamedInstance string
 	RecordJson    string
@@ -95,4 +91,13 @@ type UpReservation struct {
 	ParentName       string
 	Pid              int64
 	ReservedAt       string
+}
+
+type WorkflowNode struct {
+	SessionName string
+	NodeID      string
+	Scope       string
+	Status      string
+	Sequence    int64
+	RecordJson  string
 }

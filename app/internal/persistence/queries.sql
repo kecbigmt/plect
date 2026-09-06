@@ -48,51 +48,68 @@ SELECT parent_session_name FROM sessions WHERE name = ?;
 -- name: CountSessionsNamed :one
 SELECT COUNT(*) FROM sessions WHERE name = ?;
 
--- Task instances
+-- Workflow nodes (static; Session.Tasks entries with Dynamic == false)
+
+-- name: InsertWorkflowNode :exec
+INSERT INTO workflow_nodes (
+    session_name, node_id, scope, status, sequence, record_json
+) VALUES (?, ?, ?, ?, ?, ?);
+
+-- name: ListWorkflowNodes :many
+SELECT session_name, node_id, scope, status, sequence, record_json
+FROM workflow_nodes WHERE session_name = ? ORDER BY node_id;
+
+-- name: DeleteWorkflowNodesForSession :exec
+DELETE FROM workflow_nodes WHERE session_name = ?;
+
+-- Task instances (dynamic; Session.Tasks entries with Dynamic == true)
 
 -- name: InsertTaskInstance :exec
 INSERT INTO task_instances (
-    session_name, instance_name, task_id, scope, status, sequence, dynamic,
+    id, session_name, instance_name, task_id, scope, status, sequence,
     resource, named_instance, record_json
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: ListTaskInstances :many
-SELECT session_name, instance_name, task_id, scope, status, sequence, dynamic,
+SELECT id, session_name, instance_name, task_id, scope, status, sequence,
        resource, named_instance, record_json
 FROM task_instances WHERE session_name = ? ORDER BY instance_name;
 
 -- name: DeleteTaskInstancesForSession :exec
 DELETE FROM task_instances WHERE session_name = ?;
 
--- Task done_when
+-- Task done_when states
 
--- name: InsertTaskDoneWhen :exec
-INSERT INTO task_done_when (
-    session_name, instance_name, heartbeat_ticks, heartbeat_escalations,
+-- name: InsertTaskDoneWhenState :exec
+INSERT INTO task_done_when_states (
+    task_instance_id, heartbeat_ticks, heartbeat_escalations,
     last_action, last_fingerprint, last_reason, last_unsatisfied_json,
     last_body, escalated_at, escalate_reason
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
--- name: ListTaskDoneWhen :many
-SELECT session_name, instance_name, heartbeat_ticks, heartbeat_escalations,
-       last_action, last_fingerprint, last_reason, last_unsatisfied_json,
-       last_body, escalated_at, escalate_reason
-FROM task_done_when WHERE session_name = ?;
+-- name: ListTaskDoneWhenStatesForSession :many
+SELECT s.task_instance_id, s.heartbeat_ticks, s.heartbeat_escalations,
+       s.last_action, s.last_fingerprint, s.last_reason, s.last_unsatisfied_json,
+       s.last_body, s.escalated_at, s.escalate_reason
+FROM task_done_when_states s
+JOIN task_instances t ON t.id = s.task_instance_id
+WHERE t.session_name = ?;
 
 -- Task done_when judges
 
 -- name: InsertTaskDoneWhenJudge :exec
 INSERT INTO task_done_when_judges (
-    session_name, instance_name, leaf_id, action, reason, revision,
-    target_session, target_instance, reviewer_session, reviewer_workflow,
-    relation, created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    task_instance_id, leaf_id, action, reason, revision,
+    judge_session, judge_workflow, relation, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
 
--- name: ListTaskDoneWhenJudges :many
-SELECT session_name, instance_name, leaf_id, action, reason, revision,
-       target_session, target_instance, reviewer_session, reviewer_workflow,
-       relation, created_at
-FROM task_done_when_judges WHERE session_name = ?;
+-- name: ListTaskDoneWhenJudgesForSession :many
+SELECT j.task_instance_id, j.leaf_id, j.action, j.reason, j.revision,
+       j.judge_session, j.judge_workflow, j.relation, j.created_at,
+       t.session_name AS target_session, t.instance_name AS target_instance
+FROM task_done_when_judges j
+JOIN task_instances t ON t.id = j.task_instance_id
+WHERE t.session_name = ?;
 
 -- Populations
 
