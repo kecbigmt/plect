@@ -380,7 +380,7 @@ func buildListEntry(cfg *config.Config, store *state.Store, displayWorkflows map
 // sessionRunState reports the "run" fact: whether a current-plan run-scoped
 // task instance has produced.
 func sessionRunState(cfg *config.Config, s *domain.Session) domain.RunState {
-	if s != nil && runScopeUp(cfg, s) {
+	if s != nil && cfg.RunScopeUp(s) {
 		return domain.RunUp
 	}
 	return domain.RunDown

@@ -284,47 +284,6 @@ func TestPublishTerminalTo_SelfTargetNeverWakesRegardlessOfCallerRequest(t *test
 	}
 }
 
-// TestRunScopeUp exercises the no-workflow fallback: a session that names no
-// workflow at all falls back to any produced run-scoped task-state entry,
-// matching runScopeUp's pre-current-plan behavior.
-func TestRunScopeUp(t *testing.T) {
-	cases := []struct {
-		name  string
-		tasks map[string]*contract.TaskState
-		want  bool
-	}{
-		{"nil tasks", nil, false},
-		{"only session-scoped produced", map[string]*contract.TaskState{
-			"slack_thread": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced},
-		}, false},
-		{"run-scoped cleaned", map[string]*contract.TaskState{
-			"tmux": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusCleaned},
-		}, false},
-		{"run-scoped produced", map[string]*contract.TaskState{
-			"tmux": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced},
-		}, true},
-	}
-	cfg := &config.Config{}
-	for _, c := range cases {
-		s := &domain.Session{Tasks: c.tasks}
-		if got := runScopeUp(cfg, s); got != c.want {
-			t.Errorf("%s: runScopeUp = %v, want %v", c.name, got, c.want)
-		}
-	}
-}
-
-// TestRunScopeUp_StaleProducedNodeAloneIsDown pins the current-plan fix: a
-// task-state entry for a node the frozen workflow no longer declares must
-// not read the session as up on its own.
-func TestRunScopeUp_StaleProducedNodeAloneIsDown(t *testing.T) {
-	cfg := currentPlanConfig(t, "true", "true") // declares only "pane" and "agent"
-	s := &domain.Session{
-		Workflow: "default",
-		Tasks: map[string]*contract.TaskState{
-			"removed_node": {Scope: contract.TaskScopeRun, TaskID: "removed_node", Status: contract.TaskStatusProduced},
-		},
-	}
-	if runScopeUp(cfg, s) {
-		t.Fatal("runScopeUp = true, want false (the only produced entry is for a node the workflow no longer declares)")
-	}
-}
+// RunScopeUp itself moved to the config package (config.Config.RunScopeUp),
+// which every consumer of the run fact — service, reactor, dispatch, and
+// population — now shares; see app/internal/config/runstate_test.go.

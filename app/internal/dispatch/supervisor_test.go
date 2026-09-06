@@ -27,6 +27,19 @@ func writeFile(t *testing.T, path, content string) {
 	}
 }
 
+// writeClaudeRunTask declares the run-scoped effect a "claude" node uses,
+// under root/tasks — RunScopeUp resolves a produced "claude" task-state
+// entry against this declaration to decide the node is current-plan
+// run-scoped.
+func writeClaudeRunTask(t *testing.T, root string) {
+	t.Helper()
+	writeFile(t, filepath.Join(root, "tasks", "claude.toml"), `
+[claude]
+kind  = "effect"
+scope = "run"
+`)
+}
+
 func TestSupervisor_StartsAndStopsWithRunScope(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
@@ -47,9 +60,13 @@ body = { json = { from = "event" } }
 [claude_channel.input_schema]
 path = { type = "string", required = true }
 `)
+	writeClaudeRunTask(t, globalDir)
 	writeFile(t, filepath.Join(globalDir, "workflows", "coding.toml"), `
 [coding]
 kind = "workflow"
+[[coding.nodes]]
+id   = "claude"
+uses = "claude"
 [[coding.event.channel]]
 name        = "runtime"
 uses        = "claude_channel"
@@ -126,10 +143,14 @@ func TestSupervisor_ValidationFailureRecordsChannelErrorAndStreak(t *testing.T) 
 	if err := os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("schema_version = 2\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	writeClaudeRunTask(t, globalDir)
 	// No channels/claude_channel.toml: `uses` below resolves to nothing.
 	writeFile(t, filepath.Join(globalDir, "workflows", "coding.toml"), `
 [coding]
 kind = "workflow"
+[[coding.nodes]]
+id   = "claude"
+uses = "claude"
 [[coding.event.channel]]
 name        = "runtime"
 uses        = "claude_channel"
@@ -202,9 +223,13 @@ func TestSupervisor_ValidationRecoveryOnNextUpClearsStreak(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("schema_version = 2\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	writeClaudeRunTask(t, globalDir)
 	writeFile(t, filepath.Join(globalDir, "workflows", "coding.toml"), `
 [coding]
 kind = "workflow"
+[[coding.nodes]]
+id   = "claude"
+uses = "claude"
 [[coding.event.channel]]
 name        = "runtime"
 uses        = "claude_channel"
@@ -314,9 +339,13 @@ body = { json = { from = "event" } }
 [claude_channel.input_schema]
 path = { type = "string", required = true }
 `)
+	writeClaudeRunTask(t, globalDir)
 	writeFile(t, filepath.Join(globalDir, "workflows", "coding.toml"), `
 [coding]
 kind = "workflow"
+[[coding.nodes]]
+id   = "claude"
+uses = "claude"
 [[coding.event.channel]]
 name        = "runtime"
 uses        = "claude_channel"
@@ -391,9 +420,19 @@ body = { json = { from = "event" } }
 [claude.input_schema]
 path = { type = "string", required = true }
 `)
+	// The effect is declared under a different id than the "claude" channel
+	// above — same bare id across kinds is a load error (PLECTURE-CFG-ID-DUPLICATE).
+	writeFile(t, filepath.Join(pluginDir, "config", "tasks", "claude_runtime.toml"), `
+[claude_runtime]
+kind  = "effect"
+scope = "run"
+`)
 	writeFile(t, filepath.Join(pluginDir, "config", "workflows", "coding.toml"), `
 [coding]
 kind = "workflow"
+[[coding.nodes]]
+id   = "claude"
+uses = "claude_runtime"
 [[coding.event.channel]]
 name        = "runtime"
 uses        = "claude"

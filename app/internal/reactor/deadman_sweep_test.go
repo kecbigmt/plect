@@ -22,15 +22,22 @@ import (
 // (reactor.go:checkHeartbeat).
 func TestSupervisor_CheckDeadmanSweepsOnlyHeartbeatScheduledUpSessions(t *testing.T) {
 	pluginDir := t.TempDir()
+	writeClaudeRunTask(t, filepath.Join(pluginDir, "config"))
 	writeFile(t, filepath.Join(pluginDir, "config", "workflows", "goal.toml"), `
 [goal]
 kind = "workflow"
+[[goal.nodes]]
+id   = "claude"
+uses = "claude"
 [goal.tick]
 heartbeat = "1h"
 `)
 	writeFile(t, filepath.Join(pluginDir, "config", "workflows", "reactive.toml"), `
 [reactive]
 kind = "workflow"
+[[reactive.nodes]]
+id   = "claude"
+uses = "claude"
 [reactive.tick]
 on = ["resource.*"]
 `)
@@ -91,9 +98,13 @@ on = ["resource.*"]
 // ticker loop, because it is a different goroutine entirely.
 func TestSupervisor_DeadmanSweepRunsWithoutWaitingOnPerSessionReactor(t *testing.T) {
 	pluginDir := t.TempDir()
+	writeClaudeRunTask(t, filepath.Join(pluginDir, "config"))
 	writeFile(t, filepath.Join(pluginDir, "config", "workflows", "goal.toml"), `
 [goal]
 kind = "workflow"
+[[goal.nodes]]
+id   = "claude"
+uses = "claude"
 [goal.tick]
 heartbeat = "1h"
 `)

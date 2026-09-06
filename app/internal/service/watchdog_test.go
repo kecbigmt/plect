@@ -109,10 +109,6 @@ func currentPlanConfig(t *testing.T, paneAlive, agentAlive string) *config.Confi
 	}, []nodeFixture{{id: "pane"}, {id: "agent"}})
 }
 
-// TestEvaluateHealth_FailedCurrentPlanNodeIsUnhealthyNamingNodeAndError pins
-// the structural composition rule: a produced pane beside a failed agent
-// reads unhealthy naming the agent and its setup error, with run reading up
-// because a run-scoped node did produce.
 func TestEvaluateHealth_FailedCurrentPlanNodeIsUnhealthyNamingNodeAndError(t *testing.T) {
 	store := testStore(t)
 	cfg := currentPlanConfig(t, "true", "true")
@@ -140,9 +136,6 @@ func TestEvaluateHealth_FailedCurrentPlanNodeIsUnhealthyNamingNodeAndError(t *te
 	}
 }
 
-// TestEvaluateHealth_MissingCurrentPlanNodeIsUnhealthyNamingNode pins a node
-// the workflow declares but that never even attempted setup — no task state
-// entry at all — as unhealthy naming it missing, just like a failed node.
 func TestEvaluateHealth_MissingCurrentPlanNodeIsUnhealthyNamingNode(t *testing.T) {
 	store := testStore(t)
 	cfg := currentPlanConfig(t, "true", "true")
@@ -163,8 +156,6 @@ func TestEvaluateHealth_MissingCurrentPlanNodeIsUnhealthyNamingNode(t *testing.T
 	}
 }
 
-// TestEvaluateHealth_EveryCurrentPlanNodeProducedAndPassingIsHealthy pins the
-// unchanged happy path across more than one current-plan node.
 func TestEvaluateHealth_EveryCurrentPlanNodeProducedAndPassingIsHealthy(t *testing.T) {
 	store := testStore(t)
 	cfg := currentPlanConfig(t, "true", "true")
@@ -182,10 +173,6 @@ func TestEvaluateHealth_EveryCurrentPlanNodeProducedAndPassingIsHealthy(t *testi
 	}
 }
 
-// TestEvaluateHealth_CleanedCurrentPlanNodesAreNotUnhealthyAfterDown pins the
-// gate: after `plect down`, every current-plan node reads cleaned, which is
-// neither failed nor missing, and the session that never produced a
-// run-scoped node in this state reads no verdict at all.
 func TestEvaluateHealth_CleanedCurrentPlanNodesAreNotUnhealthyAfterDown(t *testing.T) {
 	store := testStore(t)
 	// A failing alive command on both nodes proves cleaned nodes are never
@@ -212,10 +199,6 @@ func TestEvaluateHealth_CleanedCurrentPlanNodesAreNotUnhealthyAfterDown(t *testi
 	}
 }
 
-// TestEvaluateHealth_NoProducedRunScopedNodeAfterAbortedFirstUpIsNotUnhealthy
-// pins the gate's other edge: a session whose very first current-plan node
-// failed, with nothing ever produced, has no health verdict and the
-// healthcheck cycle raises no escalation for it.
 func TestEvaluateHealth_NoProducedRunScopedNodeAfterAbortedFirstUpIsNotUnhealthy(t *testing.T) {
 	store := testStore(t)
 	cfg := currentPlanConfig(t, "true", "true")
@@ -241,9 +224,6 @@ func TestEvaluateHealth_NoProducedRunScopedNodeAfterAbortedFirstUpIsNotUnhealthy
 	}
 }
 
-// TestEvaluateHealth_StaleTaskEntryContributesNothing pins the stale-node
-// rule: a task entry whose node the workflow no longer declares is invisible
-// to health, even though its own alive probe would fail if it were evaluated.
 func TestEvaluateHealth_StaleTaskEntryContributesNothing(t *testing.T) {
 	store := testStore(t)
 	cfg := writeWorkflowFixture(t, t.TempDir(), "default", []taskFixture{
@@ -264,11 +244,6 @@ func TestEvaluateHealth_StaleTaskEntryContributesNothing(t *testing.T) {
 	}
 }
 
-// TestEvaluateHealth_StaleProducedNodeAloneReadsDownWithNoVerdict pins the
-// gate itself against staleness: a session whose only produced run-scoped
-// task-state entry is for a node the workflow no longer declares must read
-// run down, not up — and, since nothing current-plan is produced, the
-// current plan's own missing node must not read unhealthy either.
 func TestEvaluateHealth_StaleProducedNodeAloneReadsDownWithNoVerdict(t *testing.T) {
 	store := testStore(t)
 	cfg := currentPlanConfig(t, "true", "true") // declares only "pane" and "agent"
@@ -295,10 +270,8 @@ func TestEvaluateHealth_StaleProducedNodeAloneReadsDownWithNoVerdict(t *testing.
 	}
 }
 
-// TestEvaluateHealth_FailedSessionScopedNodeDoesNotAffectRunScopedHealthReport
-// pins the structural composition's scope: it covers the current-plan
-// run-scoped node set only. A failed session-scoped node blocks
-// create/repair elsewhere, but is out of scope for this report.
+// A failed session-scoped node already blocks create/repair elsewhere, which
+// is why this report does not also need to cover it.
 func TestEvaluateHealth_FailedSessionScopedNodeDoesNotAffectRunScopedHealthReport(t *testing.T) {
 	store := testStore(t)
 	cfg := writeWorkflowFixture(t, t.TempDir(), "default", []taskFixture{
@@ -319,10 +292,6 @@ func TestEvaluateHealth_FailedSessionScopedNodeDoesNotAffectRunScopedHealthRepor
 	}
 }
 
-// TestEvaluateHealth_UnresolvableWorkflowReturnsError pins the per-session
-// plan-resolution-failure rule: a session naming a workflow that no longer
-// exists must fail this session's own evaluation rather than silently
-// reading as healthy.
 func TestEvaluateHealth_UnresolvableWorkflowReturnsError(t *testing.T) {
 	store := testStore(t)
 	cfg := currentPlanConfig(t, "true", "true") // only declares workflow "default"

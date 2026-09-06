@@ -66,9 +66,10 @@ func (sup *Supervisor) Run(ctx context.Context) {
 }
 
 func (sup *Supervisor) reconcile(ctx context.Context, active map[string]context.CancelFunc, skip map[string]bool, wg *sync.WaitGroup) {
+	cfg := sup.cfg()
 	sessions := sup.state.All()
 	for name, s := range sessions {
-		if _, running := active[name]; running || skip[name] || !hasRunScopeUp(s.Tasks) {
+		if _, running := active[name]; running || skip[name] || !cfg.RunScopeUp(s) {
 			continue
 		}
 		d, noChannels := sup.buildDispatcher(name, s)
@@ -83,7 +84,7 @@ func (sup *Supervisor) reconcile(ctx context.Context, active map[string]context.
 		wg.Go(func() { d.run(dctx) })
 	}
 	for name, cancel := range active {
-		if s, ok := sessions[name]; !ok || !hasRunScopeUp(s.Tasks) {
+		if s, ok := sessions[name]; !ok || !cfg.RunScopeUp(s) {
 			cancel()
 			delete(active, name)
 		}
@@ -133,6 +134,7 @@ func (sup *Supervisor) buildDispatcher(name string, s *domain.Session) (*session
 	terminal := resolveTerminalOwner(sup.logger, cfg, s, wf)
 	return &sessionDispatcher{
 		session:  name,
+		cfg:      cfg,
 		channels: wf.Event.Channel,
 		defs:     defs,
 		log:      sup.log,

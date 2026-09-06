@@ -138,7 +138,7 @@ func EvaluateHealth(cfg *config.Config, store *state.Store, name string) (Health
 	// fine), a session naming a workflow that no longer exists must surface
 	// as an error here so one broken workflow reports as one session's
 	// health-evaluation failure rather than a falsely healthy verdict.
-	wf, wfErr := resolveSessionWorkflow(cfg, s)
+	wf, wfErr := cfg.ResolveSessionWorkflow(s)
 	if wfErr != nil {
 		return HealthReport{}, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("resolve workflow: %v", wfErr)}
 	}
@@ -152,7 +152,11 @@ func EvaluateHealth(cfg *config.Config, store *state.Store, name string) (Health
 		return HealthReport{}, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("resolve terminal binding: %v", err)}
 	}
 	now := time.Now()
-	report := evaluateHealthFor(name, s.Tasks, docs, defs, nodes, sessionVars(cfg, s, plan), healthCfg.StallThreshold.Duration, s.Health, now)
+	// cfg.RunScopeUp is the one shared authority for "is this session's
+	// current plan up" (reactor, dispatch, and population capacity all go
+	// through it too), so the structural gate below defers to it rather than
+	// deriving its own answer.
+	report := evaluateHealthFor(name, cfg.RunScopeUp(s), s.Tasks, docs, defs, nodes, sessionVars(cfg, s, plan), healthCfg.StallThreshold.Duration, s.Health, now)
 	finalizeActivityObservation(&report, s.Health, healthCfg.StallThreshold.Duration, now)
 	persistHealthState(store, name, report, now)
 	return report, nil
@@ -168,27 +172,6 @@ func sessionWorkflowConfig(cfg *config.Config, workflowID, workspaceDirPath stri
 		return nil
 	}
 	return &wf
-}
-
-// resolveSessionWorkflow loads the session's frozen workflow, distinguishing
-// "no workflow declared" (nil, nil — a manually created or legacy session
-// has no current plan to evaluate) from "a workflow is declared but no
-// longer resolves" (an error) — the latter is a per-session plan-resolution
-// failure, e.g. the workflow was renamed or removed after the session froze
-// it.
-func resolveSessionWorkflow(cfg *config.Config, s *domain.Session) (*config.WorkflowFile, error) {
-	if s.Workflow == "" {
-		return nil, nil
-	}
-	workflows, err := cfg.LoadWorkflows(s.WorkspaceDirPath)
-	if err != nil {
-		return nil, err
-	}
-	wf, ok := workflows[s.Workflow]
-	if !ok {
-		return nil, fmt.Errorf("workflow %q not found", s.Workflow)
-	}
-	return &wf, nil
 }
 
 // currentPlanRunScopedNodeIDs returns every run-scoped node the session's
@@ -207,49 +190,6 @@ func currentPlanRunScopedNodeIDs(nodes map[string]string, defs map[string]config
 	}
 	slices.Sort(ids)
 	return ids
-}
-
-// currentPlanRunScopedNodeSet is currentPlanRunScopedNodeIDs' counterpart for
-// a caller that only has the session and cfg on hand (not an already-loaded
-// nodes/defs pair): it resolves the session's frozen workflow itself and
-// returns its declared run-scoped node ids as a set. ok is false when the
-// workflow or its task definitions do not resolve at all, which a caller
-// must tell apart from a legitimately empty node set (ok=true).
-func currentPlanRunScopedNodeSet(cfg *config.Config, s *domain.Session) (set map[string]bool, ok bool) {
-	wf, err := resolveSessionWorkflow(cfg, s)
-	if err != nil || wf == nil {
-		return nil, false
-	}
-	defs, err := cfg.LoadTaskDefinitions(s.WorkspaceDirPath)
-	if err != nil {
-		return nil, false
-	}
-	out := make(map[string]bool, len(wf.Nodes))
-	for _, n := range wf.Nodes {
-		if n.Uses == "" {
-			continue
-		}
-		def, defOK := defs[n.Uses]
-		if !defOK || def.Scope != config.TaskScopeRun {
-			continue
-		}
-		out[n.ID] = true
-	}
-	return out, true
-}
-
-// anyProducedCurrentPlanNode reports whether at least one of the given
-// current-plan node ids has a produced task-state entry whose own recorded
-// scope still says run — the gate that decides whether complete-plan health
-// composition applies at all.
-func anyProducedCurrentPlanNode(tasks map[string]*contract.TaskState, nodeIDs []string) bool {
-	for _, id := range nodeIDs {
-		st := tasks[id]
-		if st != nil && st.Scope == contract.TaskScopeRun && st.Status == contract.TaskStatusProduced {
-			return true
-		}
-	}
-	return false
 }
 
 func healthTerminalPlan(tasks map[string]*contract.TaskState, nodes map[string]string, defs map[string]config.TaskDefinition) (*task.Plan, error) {
@@ -349,8 +289,11 @@ func sessionOwesProgress(tasks map[string]*contract.TaskState, docs map[string]c
 
 // evaluateHealthFor is EvaluateHealth's pure core, taking already-loaded task
 // state/defs instead of fetching them from store/cfg so callers that already
-// hold that data avoid a redundant load.
-func evaluateHealthFor(name string, tasks map[string]*contract.TaskState, docs map[string]config.TaskDocument, defs map[string]config.TaskDefinition, nodes map[string]string, vars task.SessionVars, stallThreshold time.Duration, prev *contract.HealthState, now time.Time) HealthReport {
+// hold that data avoid a redundant load. gateOpen is cfg.RunScopeUp's answer
+// for this session, computed once by the caller: the same shared authority
+// every run-fact consumer defers to, so the structural composition below
+// cannot disagree with it.
+func evaluateHealthFor(name string, gateOpen bool, tasks map[string]*contract.TaskState, docs map[string]config.TaskDocument, defs map[string]config.TaskDefinition, nodes map[string]string, vars task.SessionVars, stallThreshold time.Duration, prev *contract.HealthState, now time.Time) HealthReport {
 	declared := false
 	// The accusation side of a stall is unmet work, and work is what a task
 	// document declares. The probes that can pardon silence are a run-scoped
@@ -366,12 +309,9 @@ func evaluateHealthFor(name string, tasks map[string]*contract.TaskState, docs m
 	// up. Nothing in the current plan is missing yet for a session that never
 	// produced any run-scoped node: an aborted first-node `up`, or a session
 	// that was deliberately brought down, reads as no verdict rather than
-	// unhealthy. The gate is evaluated against the current plan specifically
-	// (not any produced run-scoped task-state entry at all), so a stale
-	// record for a node the workflow no longer declares cannot open it on its
-	// own.
-	currentPlan := currentPlanRunScopedNodeIDs(nodes, defs)
-	if anyProducedCurrentPlanNode(tasks, currentPlan) {
+	// unhealthy.
+	if gateOpen {
+		currentPlan := currentPlanRunScopedNodeIDs(nodes, defs)
 		for _, nodeID := range currentPlan {
 			st := tasks[nodeID]
 			switch {
@@ -511,7 +451,7 @@ func HealthcheckSession(cfg *config.Config, store *state.Store, params Healthche
 	// the gate CheckHeartbeatDeadman already applies internally. An unknown
 	// session still falls through to EvaluateHealth below, which is what
 	// reports ErrSessionNotFound.
-	if before != nil && !runScopeUp(cfg, before) {
+	if before != nil && !cfg.RunScopeUp(before) {
 		return &HealthReport{SessionName: params.SessionName}, nil
 	}
 	var prev *contract.HealthState

@@ -9,7 +9,6 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/eventlog"
 	"github.com/kecbigmt/plecture/app/internal/state"
 	"github.com/kecbigmt/plecture/contracts/event"
-	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
 // terminalScanLimit bounds the reverse scan a dedup check uses against the
@@ -140,7 +139,7 @@ func publishTerminalTo(cfg *config.Config, store *state.Store, origin, target st
 		if err != nil {
 			return "", nil, err
 		}
-		if ts != nil && !runScopeUp(cfg, ts) {
+		if ts != nil && !cfg.RunScopeUp(ts) {
 			if _, uerr := Up(cfg, store, UpParams{Identifier: target}); uerr != nil {
 				wakeErr = fmt.Errorf("wake %q: %w", target, uerr)
 			}
@@ -160,42 +159,4 @@ func hasRecentTerminalEvent(store *state.Store, session, typ, dedupKey string) (
 		}
 	}
 	return false, nil
-}
-
-// runScopeUp reports whether the session's current plan has a produced
-// run-scoped node — the same test the dispatch supervisor uses to decide
-// whether a session's dispatcher (and therefore its socket/runtime-delivery
-// channel) is live. A task-state entry for a node the frozen workflow no
-// longer declares does not count, so a stale record left behind by a
-// workflow edit cannot read a session as up on its own. When the workflow
-// itself does not resolve at all, this falls back to any produced
-// run-scoped task-state entry regardless of node membership, so an
-// unrelated config problem does not read an otherwise-live session as down.
-func runScopeUp(cfg *config.Config, s *domain.Session) bool {
-	if s == nil {
-		return false
-	}
-	current, ok := currentPlanRunScopedNodeSet(cfg, s)
-	if !ok {
-		return anyProducedRunScopedTaskState(s.Tasks)
-	}
-	for id := range current {
-		st := s.Tasks[id]
-		if st != nil && st.Scope == contract.TaskScopeRun && st.Status == contract.TaskStatusProduced {
-			return true
-		}
-	}
-	return false
-}
-
-// anyProducedRunScopedTaskState is runScopeUp's fallback for a session whose
-// workflow does not resolve: any produced run-scoped task-state entry at
-// all, regardless of whether its node is still declared.
-func anyProducedRunScopedTaskState(tasks map[string]*contract.TaskState) bool {
-	for _, e := range tasks {
-		if e != nil && e.Scope == contract.TaskScopeRun && e.Status == contract.TaskStatusProduced {
-			return true
-		}
-	}
-	return false
 }
