@@ -2,6 +2,7 @@ package persistence
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -221,6 +222,73 @@ func TestEnsureCurrent_InterruptedMigrationPreservesEvidenceAndResumesAfterFix(t
 	}
 	if marker != nil {
 		t.Errorf("marker = %+v, want removed after the resumed migration succeeded", marker)
+	}
+}
+
+// Migrate must write the marker as soon as it holds the coordination lock,
+// not after also waiting for the access lock: this test holds accessShared
+// externally so Migrate blocks on accessExclusive, and checks the marker
+// exists (with this process's own PID) while it is still stuck there.
+func TestMigrate_WritesMarkerBeforeWaitingForAccessExclusive(t *testing.T) {
+	ctx := context.Background()
+	path := testDBPath(t)
+
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	db.migrations = migrationFixture(map[string]string{"00001_a.sql": migrationA})
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate (to version 1): %v", err)
+	}
+	db.migrations = migrationFixture(map[string]string{"00001_a.sql": migrationA, "00002_b.sql": migrationBOK})
+
+	gate := newAccessGate(path)
+	unlockAccessShared, err := gate.accessShared()
+	if err != nil {
+		t.Fatalf("accessShared: %v", err)
+	}
+
+	migrateErr := make(chan error, 1)
+	go func() {
+		migrateErr <- db.Migrate(ctx)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	var marker *migrationMarker
+	for time.Now().Before(deadline) {
+		marker, err = readMarker(gate.markerPath)
+		if err != nil {
+			t.Fatalf("readMarker: %v", err)
+		}
+		if marker != nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if marker == nil {
+		t.Fatal("marker was not written while Migrate was still waiting for the access lock")
+	}
+	if marker.Stage != "migrating" {
+		t.Errorf("marker.Stage = %q, want %q", marker.Stage, "migrating")
+	}
+	if marker.PID != os.Getpid() {
+		t.Errorf("marker.PID = %d, want %d", marker.PID, os.Getpid())
+	}
+
+	unlockAccessShared()
+
+	if err := <-migrateErr; err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	current, target, err := db.version(ctx)
+	if err != nil {
+		t.Fatalf("version: %v", err)
+	}
+	if current != target || current != 2 {
+		t.Fatalf("version after Migrate = (%d, %d), want (2, 2)", current, target)
 	}
 }
 

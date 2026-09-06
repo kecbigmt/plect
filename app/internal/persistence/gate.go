@@ -72,17 +72,16 @@ func (g *accessGate) accessShared() (func(), error) {
 	return unlock, nil
 }
 
-// enterShared is the full normal-access protocol every read, write
-// transaction, and even the initial connection Open must go through: it
-// holds the coordination lock shared across the access lock acquisition,
-// bounded by migrationWait, rather than releasing the coordination lock
-// before requesting the access lock. Release-then-acquire would leave a gap
-// between the two calls in which a migrator could take the coordination
-// lock exclusively — recording intent — while this operation is still on
-// its way in, which would defeat the exclusion the coordination lock exists
-// to provide. Once accessShared succeeds, the coordination lock is
-// released; this operation is now the kind accessExclusive itself waits
-// out, per design.
+// enterShared is the full normal-access protocol every read and write
+// transaction goes through: it holds the coordination lock shared across
+// the access lock acquisition, bounded by migrationWait, rather than
+// releasing the coordination lock before requesting the access lock.
+// Release-then-acquire would leave a gap between the two calls in which a
+// migrator could take the coordination lock exclusively — recording
+// intent — while this operation is still on its way in, which would defeat
+// the exclusion the coordination lock exists to provide. Once accessShared
+// succeeds, the coordination lock is released; this operation is now the
+// kind accessExclusive itself waits out, per design.
 func (g *accessGate) enterShared(ctx context.Context) (func(), error) {
 	unlockCoord, err := g.acquireCoordination(ctx, syscall.LOCK_SH)
 	if err != nil {

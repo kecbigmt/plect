@@ -47,6 +47,24 @@ func (db *DB) Migrate(ctx context.Context) error {
 	}
 	defer unlockCoord()
 
+	// Written and fsynced immediately, before accessExclusive below (which
+	// can wait out an in-flight normal access for a while): per design,
+	// intent is recorded the moment this process commits to migrating —
+	// i.e. the moment it holds the coordination lock exclusively — not
+	// once it has also finished waiting for the access lock. Otherwise a
+	// process that times out waiting behind this coordination hold sees no
+	// diagnostic detail, and this process exiting during that wait would
+	// leave no evidence at all.
+	marker := migrationMarker{
+		PID:           os.Getpid(),
+		BinaryVersion: binaryVersion(),
+		StartedAt:     time.Now().UTC(),
+		Stage:         "migrating",
+	}
+	if err := writeMarker(gate.markerPath, marker); err != nil {
+		return err
+	}
+
 	unlockAccess, err := gate.accessExclusive()
 	if err != nil {
 		return err
@@ -58,20 +76,16 @@ func (db *DB) Migrate(ctx context.Context) error {
 		return err
 	}
 	if err := refuseIfNewerThanSupported(current, target); err != nil {
+		if removeErr := removeMarker(gate.markerPath); removeErr != nil {
+			return fmt.Errorf("%w (also failed to remove the marker recorded on intent: %v)", err, removeErr)
+		}
 		return err
 	}
 	if current == target {
-		return nil
-	}
-
-	marker := migrationMarker{
-		PID:           os.Getpid(),
-		BinaryVersion: binaryVersion(),
-		StartedAt:     time.Now().UTC(),
-		Stage:         "migrating",
-	}
-	if err := writeMarker(gate.markerPath, marker); err != nil {
-		return err
+		// Another process already migrated between this one recording
+		// intent and reaching exclusion; nothing to do, so the marker this
+		// process speculatively wrote is removed rather than left behind.
+		return removeMarker(gate.markerPath)
 	}
 
 	if migrateErr := db.migrateLocked(ctx); migrateErr != nil {
@@ -83,8 +97,12 @@ func (db *DB) Migrate(ctx context.Context) error {
 		return fmt.Errorf("persistence: migration failed, pre-migration state and failure evidence preserved at %s: %w", gate.markerPath, migrateErr)
 	}
 
-	if err := os.Remove(gate.markerPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("persistence: remove migration marker after success: %w", err)
+	return removeMarker(gate.markerPath)
+}
+
+func removeMarker(path string) error {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("persistence: remove migration marker: %w", err)
 	}
 	return nil
 }
