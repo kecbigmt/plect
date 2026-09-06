@@ -424,11 +424,16 @@ describe("Conversation", () => {
   });
 
   it("opens the live subscription even when the session's history starts out empty", async () => {
-    let sawStreamCursorParam: string | null = "unset";
+    // Only the first connection attempt matters here — the mock stream ends
+    // after one frame, so the module may have already reconnected (a real
+    // resume, cursor: "cur-1") by the time later assertions run.
+    let firstStreamCursorParam: string | null | undefined;
     vi.mocked(fetch).mockImplementation((input) => {
       const url = requestUrl(input);
       if (url.pathname.endsWith("/events/stream")) {
-        sawStreamCursorParam = url.searchParams.get("cursor");
+        if (firstStreamCursorParam === undefined) {
+          firstStreamCursorParam = url.searchParams.get("cursor");
+        }
         return Promise.resolve(
           sseResponse(
             'id: cur-1\ndata: {"id":"01","sessionName":"team/a","time":"2026-01-01T00:00:01Z","type":"user.note","source":"cli","direction":"internal","summary":"first-live-event"}\n\n',
@@ -441,7 +446,7 @@ describe("Conversation", () => {
     renderConversation("team/a");
 
     expect(await screen.findByText("first-live-event")).toBeInTheDocument();
-    expect(sawStreamCursorParam).toBeNull();
+    expect(firstStreamCursorParam).toBeNull();
   });
 
   it("never commits a render showing a previous session's live event under the newly selected session", async () => {
