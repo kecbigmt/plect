@@ -27,6 +27,12 @@ scope = "run"
 #                  GitHub-specific guard switch of its own. A workflow that
 #                  wants the write guard wires this from the github plugin's
 #                  own gh_guard effect output.
+#   launch_timeout — when set, how long setup waits for the worker to signal
+#                  readiness before giving up, as a plain "<seconds>s" token
+#                  (e.g. "180s"). Default 120s. A cold pane can take well
+#                  over a fixed short window to start the worker even though
+#                  it did come up, so raise this rather than treat a
+#                  live-but-slow launch as a failure.
 #
 # codex_exec starts a headless worker (codex-exec-worker) instead of the
 # interactive Codex TUI, so instruction delivery is a queued `codex exec`/
@@ -111,7 +117,8 @@ sh -c "$send_text" terminal-send-text "${EXPORTS}exec $worker_bin '$QUEUE_DIR' '
 sh -c "$send_keys" terminal-send-keys Enter
 
 PANE_PID=$(sh -c "$terminal_pid" terminal-pid)
-READY_TIMEOUT_SECONDS="${PLECT_CODEX_EXEC_READY_TIMEOUT_SECONDS:-30}"
+LAUNCH_TIMEOUT="${launch_timeout:-120s}"
+READY_TIMEOUT_SECONDS="${LAUNCH_TIMEOUT%s}"
 READY=0
 for _ in $(seq 1 $((READY_TIMEOUT_SECONDS * 2))); do
   sleep 0.5
@@ -120,6 +127,15 @@ for _ in $(seq 1 $((READY_TIMEOUT_SECONDS * 2))); do
 done
 if [ "$READY" -ne 1 ]; then
   echo "codex-exec worker not ready within ${READY_TIMEOUT_SECONDS}s under pane pid $PANE_PID" >&2
+  # The pane PID is the worker PID (it replaced the pane shell via exec), so
+  # a never-ready worker is still a live process a retry's launch would
+  # collide with — it must go before this node fails.
+  kill -TERM "$PANE_PID" 2>/dev/null
+  for _ in 1 2 3 4 5; do
+    sleep 0.5
+    kill -0 "$PANE_PID" 2>/dev/null || break
+  done
+  kill -KILL "$PANE_PID" 2>/dev/null || true
   exit 1
 fi
 
@@ -138,6 +154,7 @@ effort         = { from = "inputs.effort", optional = true }
 launch_env     = { from = "inputs.launch_env", optional = true }
 state_root     = { from = "inputs.state_root", optional = true }
 path_prepend   = { from = "inputs.path_prepend", optional = true }
+launch_timeout = { from = "inputs.launch_timeout", optional = true }
 prev_state_dir = { from = "prev.state_dir", optional = true }
 activity_bin   = { bin = "codex-agent-activity" }
 worker_bin     = { bin = "codex-exec-worker" }
@@ -214,6 +231,10 @@ state_root   = { type = "string", pattern = "^[A-Za-z0-9_./:-]*$" }
 # path_prepend: a plain path charset (no quotes, whitespace, or shell
 # metacharacters), same reasoning as model/effort above.
 path_prepend = { type = "string", pattern = "^[A-Za-z0-9_./:-]*$" }
+# launch_timeout: restricted to digits-plus-"s" so the setup script can strip
+# the suffix and use the result directly in shell arithmetic — no separate
+# duration parser needed, and no non-numeric value can reach $(( )).
+launch_timeout = { type = "string", pattern = "^[1-9][0-9]*s$" }
 
 [exec_runtime.outputs_schema]
 type     = "object"

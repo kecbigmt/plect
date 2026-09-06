@@ -20,6 +20,13 @@ scope = "run"
 #                  GitHub-specific guard switch of its own. A workflow that
 #                  wants the write guard wires this from the github plugin's
 #                  own gh_guard effect output.
+#   launch_timeout — when set, how long each launch-detection wait (the pane
+#                  process appearing, then the TUI clearing its boot banner)
+#                  gives itself before giving up, as a plain "<seconds>s"
+#                  token (e.g. "180s"). Default 120s. A cold pane can take
+#                  well over a fixed short window to start and settle even
+#                  though codex itself did come up, so raise this rather than
+#                  treat a live-but-slow launch as a failure.
 #
 # Codex CLI does not expose a Claude Code-style channel-server transport.
 # This effect therefore only starts the interactive Codex TUI in tmux and
@@ -92,7 +99,11 @@ PATH_PREPEND="${path_prepend-}"
 
 MARKER=$(mktemp)
 touch "$MARKER"
-TIMEOUT_SECONDS="${PLECT_CODEX_STARTUP_TIMEOUT_SECONDS:-60}"
+# launch_timeout, not a fixed bound: a cold pane can spend several seconds
+# loading its shell environment before the codex command even runs, and
+# both detection waits below share this one knob rather than exposing two.
+LAUNCH_TIMEOUT="${launch_timeout:-120s}"
+TIMEOUT_SECONDS="${LAUNCH_TIMEOUT%s}"
 ATTEMPTS=$((TIMEOUT_SECONDS * 2))
 
 # No `exec`: Codex runs as a child of the pane shell, so exiting Codex
@@ -141,6 +152,25 @@ done
 if [ -z "$PID" ]; then
   echo "codex not detected within ${TIMEOUT_SECONDS}s under pane pid $PANE_PID" >&2
   rm -f "$MARKER"
+  # A launch that typed its command but never registered a matching child
+  # can still be visibly alive in the pane (a lost Enter can leave codex
+  # sitting on its own prompt, not the shell's). Leaving that process
+  # running would trap the next `plect up`: its retry types a second launch
+  # line into a pane that already holds a live codex, and the retry fails
+  # the same way.
+  for CHILD in $(pgrep -P "$PANE_PID" 2>/dev/null); do
+    COMM=$(ps -p "$CHILD" -o comm= 2>/dev/null | tr -d '[:space:]')
+    case "$COMM" in
+      codex|codex-*)
+        kill -TERM "$CHILD" 2>/dev/null
+        for _ in 1 2 3 4 5; do
+          sleep 0.5
+          kill -0 "$CHILD" 2>/dev/null || break
+        done
+        kill -KILL "$CHILD" 2>/dev/null || true
+        ;;
+    esac
+  done
   exit 1
 fi
 rm -f "$MARKER"
@@ -152,7 +182,7 @@ rm -f "$MARKER"
 # Wait for the boot banner to clear and the prompt to hold steady across
 # consecutive samples (not a fixed sleep, since MCP boot time varies) before
 # declaring the effect produced.
-READY_TIMEOUT_SECONDS="${PLECT_CODEX_READY_TIMEOUT_SECONDS:-60}"
+READY_TIMEOUT_SECONDS="$TIMEOUT_SECONDS"
 READY_ATTEMPTS=$((READY_TIMEOUT_SECONDS * 2))
 STABLE_STREAK=0
 STABLE_STREAK_REQUIRED=3
@@ -172,6 +202,14 @@ for _ in $(seq 1 "$READY_ATTEMPTS"); do
 done
 if [ "$READY" -ne 1 ]; then
   echo "codex pid $PID detected but TUI not ready (boot banner / busy indicator still present) within ${READY_TIMEOUT_SECONDS}s" >&2
+  # A detected-but-never-ready codex is still a live process a retry's
+  # launch line would collide with, so it must go before this node fails.
+  kill -TERM "$PID" 2>/dev/null
+  for _ in 1 2 3 4 5; do
+    sleep 0.5
+    kill -0 "$PID" 2>/dev/null || break
+  done
+  kill -KILL "$PID" 2>/dev/null || true
   exit 1
 fi
 
@@ -189,6 +227,7 @@ model           = { from = "inputs.model", optional = true }
 effort          = { from = "inputs.effort", optional = true }
 launch_env      = { from = "inputs.launch_env", optional = true }
 path_prepend    = { from = "inputs.path_prepend", optional = true }
+launch_timeout  = { from = "inputs.launch_timeout", optional = true }
 prev_session_id = { from = "prev.session_id", optional = true }
 activity_bin    = { bin = "codex-agent-activity" }
 capture         = { terminal = "capture" }
@@ -253,6 +292,10 @@ launch_env   = { type = "string", pattern = "^[^']*$" }
 # path_prepend: a plain path charset (no quotes, whitespace, or shell
 # metacharacters), same reasoning as model/effort above.
 path_prepend = { type = "string", pattern = "^[A-Za-z0-9_./:-]*$" }
+# launch_timeout: restricted to digits-plus-"s" so the setup script can strip
+# the suffix and use the result directly in shell arithmetic — no separate
+# duration parser needed, and no non-numeric value can reach $(( )).
+launch_timeout = { type = "string", pattern = "^[1-9][0-9]*s$" }
 
 [codex.outputs_schema]
 type     = "object"

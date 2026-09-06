@@ -1,4 +1,4 @@
-== codex / setup
+== codex:launch-succeeds / setup
 call[0]: "codex-agent-activity" "reset" "acme/widget-1"
 call[1]: "uuidgen"
 call[2]: "mktemp"
@@ -13,16 +13,30 @@ call[10]: "terminal-capture"
 call[11]: "terminal-capture"
 outputs: {"pid":<pid>,"profile_path":"<home>/.codex/plect-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.config.toml","session_id":"11111111-2222-3333-4444-555555555555"}
 
-== codex / health.alive
+== codex:launch-succeeds / health.alive
 alive
 
-== codex / health.activity
+== codex:launch-succeeds / health.activity
 call[0]: "codex-agent-activity" "probe" "acme/widget-1"
 activity: fingerprint="spy-turn-1" silence_expected=false
 
-== codex / cleanup
+== codex:launch-succeeds / cleanup
 call[0]: "codex-agent-activity" "reset" "acme/widget-1"
 cleaned
+
+== codex:launch-timeout-kills-pane-child / setup
+call[0]: "codex-agent-activity" "reset" "acme/widget-1"
+call[1]: "uuidgen"
+call[2]: "mktemp"
+call[3]: "terminal-send_text" "export PLECT_SESSION_NAME=acme/widget-1; codex --dangerously-bypass-approvals-and-sandbox --profile plect-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee  "
+call[4]: "terminal-send_keys" "Enter"
+call[5]: "terminal-pid"
+call[6]: "pgrep" "-P" "<pid>"
+call[7]: "ps" "-p" "<pid>" "-o" "comm="
+call[8]: "find" "<home>/.codex/sessions" "-type" "f" "-newer" "<state>/plect" "-name" "*.jsonl"
+call[9]: "terminal-capture"
+call[10]: "terminal-capture"
+declined: task "codex" setup: exit status 1
 
 == codex_initial_prompt / setup
 call[0]: "terminal-capture"
@@ -31,7 +45,7 @@ call[2]: "terminal-send_keys" "Enter"
 call[3]: "terminal-capture"
 outputs: {"sent":"true"}
 
-== exec_runtime / setup
+== exec_runtime:worker-ready / setup
 call[0]: "codex-agent-activity" "reset" "acme/widget-1"
 call[1]: "uuidgen"
 call[2]: "terminal-send_text" "export PLECT_SESSION_NAME=acme/widget-1; export PLECT_AGENT_ACTIVITY_BIN='<plugin>/scripts/codex-agent-activity'; export PLECT_TEAM_CONTEXT='acme'; export PATH=/spy/guard:$PATH; export CODEX_MODEL='gpt-5.6-sol'; export CODEX_MODEL_REASONING_EFFORT='high'; exec <plugin>/scripts/codex-exec-worker '<state>/plect-codex-exec/acme/widget-1/queue' '<state>/plect-codex-exec/acme/widget-1' 'plect-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'"
@@ -39,13 +53,21 @@ call[3]: "terminal-send_keys" "Enter"
 call[4]: "terminal-pid"
 outputs: {"pid":<pid>,"profile_path":"<home>/.codex/plect-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.config.toml","queue_dir":"<state>/plect-codex-exec/acme/widget-1/queue","state_dir":"<state>/plect-codex-exec/acme/widget-1"}
 
-== exec_runtime / health.alive
+== exec_runtime:worker-ready / health.alive
 alive
 
-== exec_runtime / health.activity
+== exec_runtime:worker-ready / health.activity
 call[0]: "codex-agent-activity" "probe" "acme/widget-1" "<state>/plect-codex-exec/acme/widget-1"
 activity: fingerprint="spy-turn-1" silence_expected=false
 
-== exec_runtime / cleanup
+== exec_runtime:worker-ready / cleanup
 call[0]: "codex-agent-activity" "reset" "acme/widget-1"
 cleaned
+
+== exec_runtime:launch-timeout-kills-worker / setup
+call[0]: "codex-agent-activity" "reset" "acme/widget-1"
+call[1]: "uuidgen"
+call[2]: "terminal-send_text" "export PLECT_SESSION_NAME=acme/widget-1; export PLECT_AGENT_ACTIVITY_BIN='<plugin>/scripts/codex-agent-activity'; export PLECT_TEST_NEVER_READY='1'; exec <plugin>/scripts/codex-exec-worker '<state>/plect-codex-exec/acme/widget-1/queue' '<state>/plect-codex-exec/acme/widget-1' 'plect-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'"
+call[3]: "terminal-send_keys" "Enter"
+call[4]: "terminal-pid"
+declined: task "exec_runtime" setup: exit status 1
