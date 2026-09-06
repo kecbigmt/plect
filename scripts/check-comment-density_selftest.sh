@@ -177,18 +177,7 @@ fi
 echo "ok: checker passes a clean diff"
 
 # Scenario 6: a stale/advanced base must not misattribute a pre-existing,
-# PR-untouched file's content as "added". The fork point's shared.go carries
-# a 20-line comment block written long before this change; the stale base
-# (standing in for a moving github.event.pull_request.base.sha) rewrites
-# that same file into something sharing almost no lines with it, unrelated
-# to this PR; this PR's own head forks from the same point and never
-# touches shared.go at all. A plain two-dot diff(stale_base, pr_head) can't
-# tell any of that apart from base's and head's content alone: since almost
-# nothing lines up between base's rewrite and head's untouched original, it
-# would score most of that 20-line block as newly "added" by this PR. The
-# fix (diffing against merge-base(base, head), i.e. the fork point) must
-# see that shared.go is identical between the fork point and head, and
-# skip it.
+# PR-untouched file's content as "added".
 git -C "$fixture" checkout -q -B fork-point "$base_sha"
 git -C "$fixture" clean -qfdx
 {
@@ -233,8 +222,7 @@ fi
 echo "ok: checker ignores a pre-existing untouched file's content despite a stale/advanced base"
 
 # Scenario 7: a comment inside a TypeScript template-literal's ${...}
-# interpolation is executable code, not inert string content, and must
-# still be scored.
+# interpolation must still be scored.
 reset_to_base
 {
   echo "export function render(): string {"
@@ -261,10 +249,8 @@ fi
 echo "ok: checker scores a comment block inside a TypeScript template-literal interpolation"
 
 # Scenario 8: a Go raw string holding literal ${...} text (e.g. an embedded
-# shell script) must stay inert string content -- Go raw strings have no
-# template-interpolation syntax, unlike TypeScript's backtick, and treating
-# the ${...} as executable code would also make the embedded "// comment"
-# in the script text below register as a real Go line comment.
+# shell script) must stay inert -- the fix for scenario 7 must not regress
+# this.
 reset_to_base
 {
   echo "package app"
@@ -285,3 +271,131 @@ if ! run_check "$head_sha" >/tmp/comment-density-selftest-rawstring.log 2>&1; th
   exit 1
 fi
 echo "ok: checker treats a Go raw string's literal \${...} text as inert, not a template interpolation"
+
+# Scenario 9: SQL "--" line comments are scored like any other language's.
+reset_to_base
+{
+  echo "CREATE TABLE t ("
+  for i in $(seq 1 9); do
+    echo "  -- column $i needs an explanation of its own"
+  done
+  echo "  id INTEGER PRIMARY KEY"
+  echo ");"
+} >"$fixture/app/schema.sql"
+head_sha="$(commit_scenario)"
+
+if run_check "$head_sha" >/tmp/comment-density-selftest-sql.log 2>&1; then
+  echo "FAIL: checker missed a SQL comment block" >&2
+  cat /tmp/comment-density-selftest-sql.log >&2
+  exit 1
+fi
+if ! grep -qE 'app/schema\.sql:[0-9]+: block-length 9 > 8' /tmp/comment-density-selftest-sql.log; then
+  echo "FAIL: checker did not name the SQL block-length violation" >&2
+  cat /tmp/comment-density-selftest-sql.log >&2
+  exit 1
+fi
+echo "ok: checker scores a SQL comment block"
+
+# Scenario 10: a TOML multiline string's closing delimiter is non-blank
+# code, not blank -- 5 "#" comments among 35 non-blank lines is 14.3%
+# (pass); miscounting the 5 closing """ lines as blank drops the
+# denominator to 30 and produces a false 16.7% failure.
+reset_to_base
+{
+  for i in $(seq 1 5); do
+    echo "# comment $i explaining a provisional value"
+  done
+  for i in $(seq 1 5); do
+    echo "key_multi_$i = \"\"\""
+    echo "content line $i"
+    echo "\"\"\""
+  done
+  for i in $(seq 1 15); do
+    echo "plain_$i = $i"
+  done
+} >"$fixture/app/config.toml"
+head_sha="$(commit_scenario)"
+
+if ! run_check "$head_sha" >/tmp/comment-density-selftest-toml-multiline.log 2>&1; then
+  echo "FAIL: checker misclassified a TOML multiline-string closing delimiter as blank" >&2
+  cat /tmp/comment-density-selftest-toml-multiline.log >&2
+  exit 1
+fi
+echo "ok: checker counts a TOML multiline-string closing delimiter as non-blank code"
+
+# Scenario 11: a duplicated comment sentence fails regardless of length --
+# issue #458 sets no minimum word count.
+reset_to_base
+{
+  echo "package app"
+  echo
+  echo "// not implemented yet."
+  echo "func A() {}"
+  echo
+  echo "// not implemented yet."
+  echo "func B() {}"
+} >"$fixture/app/short_dup.go"
+head_sha="$(commit_scenario)"
+
+if run_check "$head_sha" >/tmp/comment-density-selftest-shortdup.log 2>&1; then
+  echo "FAIL: checker ignored a short duplicated comment sentence" >&2
+  cat /tmp/comment-density-selftest-shortdup.log >&2
+  exit 1
+fi
+if ! grep -qE 'app/short_dup\.go:3: duplication 2 > 1' /tmp/comment-density-selftest-shortdup.log \
+  || ! grep -qE 'app/short_dup\.go:6: duplication 2 > 1' /tmp/comment-density-selftest-shortdup.log; then
+  echo "FAIL: checker did not name both sites of the short duplicated sentence" >&2
+  cat /tmp/comment-density-selftest-shortdup.log >&2
+  exit 1
+fi
+echo "ok: checker fails a short duplicated comment sentence"
+
+# Scenario 12: a sentence spanning an unmodified line and a modified line
+# must be judged whole, not as the truncated tail starting at the modified
+# line alone -- two unrelated files whose tails coincidentally read the
+# same must not be flagged as a duplicate of each other.
+git -C "$fixture" checkout -q -B truncation-base "$base_sha"
+git -C "$fixture" clean -qfdx
+{
+  echo "package app"
+  echo
+  echo "// Zero means the execution"
+  echo "// surface is old and stale."
+  echo "func A() {}"
+} >"$fixture/app/a.go"
+{
+  echo "package app"
+  echo
+  echo "// Another comment leads into the"
+  echo "// surface is old and different value."
+  echo "func B() {}"
+} >"$fixture/app/b.go"
+git -C "$fixture" add -A
+git -C "$fixture" commit -q -m "truncation base"
+truncation_base_sha="$(git -C "$fixture" rev-parse HEAD)"
+
+{
+  echo "package app"
+  echo
+  echo "// Zero means the execution"
+  echo "// surface is present. It continues elsewhere."
+  echo "func A() {}"
+} >"$fixture/app/a.go"
+{
+  echo "package app"
+  echo
+  echo "// Another comment leads into the"
+  echo "// surface is present. Something else happens."
+  echo "func B() {}"
+} >"$fixture/app/b.go"
+git -C "$fixture" add -A
+git -C "$fixture" commit -q -m "truncation head"
+truncation_head_sha="$(git -C "$fixture" rev-parse HEAD)"
+
+if ! COMMENT_DENSITY_CHECK_ROOT="$fixture" "$checker" "$truncation_base_sha" "$truncation_head_sha" \
+  >/tmp/comment-density-selftest-truncation.log 2>&1; then
+  echo "FAIL: checker matched two sentence tails truncated at the added-line boundary as a duplicate" >&2
+  cat /tmp/comment-density-selftest-truncation.log >&2
+  exit 1
+fi
+echo "ok: checker judges a sentence spanning an unmodified and a modified line as a whole, not a truncated tail"

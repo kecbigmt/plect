@@ -35,7 +35,6 @@ DENSITY_FLOOR_LINES = 30
 DENSITY_LIMIT_PERCENT = 15
 BLOCK_LENGTH_LIMIT = 8
 DUPLICATION_LIMIT = 1
-DUPLICATION_MIN_WORDS = 6
 
 ALLOWED_EXTS = {".go", ".ts", ".tsx", ".sql", ".toml"}
 GO_TS_EXTS = {".go", ".ts", ".tsx"}
@@ -326,10 +325,14 @@ def classify_toml(lines):
                 triple = '"""' if state == MULTI_BASIC else "'''"
                 j = line.find(triple, i)
                 if j == -1:
-                    code_chars += len(line[i:].strip())
+                    code_chars += sum(1 for ch in line[i:] if not ch.isspace())
                     i = n
                 else:
-                    code_chars += len(line[i:j].strip())
+                    # The closing delimiter itself is 3 code characters, not
+                    # part of the content span before it -- a line holding
+                    # only "\"\"\"" would otherwise count zero code_chars and
+                    # be misread as blank.
+                    code_chars += sum(1 for ch in line[i:j] if not ch.isspace()) + 3
                     i = j + 3
                     state = NORMAL
                 continue
@@ -469,44 +472,62 @@ def normalize_sentence(sentence):
     return WHITESPACE_RE.sub(" ", stripped).strip()
 
 
-def collect_comment_groups(path, added, kinds, comment_text):
-    sorted_added = sorted(added)
+def collect_comment_groups(kinds, comment_text):
+    # Grouped over the whole file, not just the added lines: a paragraph
+    # whose first line predates this diff (only its continuation was
+    # touched) must still be split into real sentences, not a tail
+    # fragment starting mid-sentence -- a truncated tail can coincidentally
+    # match an unrelated file's own truncated tail, which is not the
+    # duplicated-rationale shape this check exists to catch.
+    max_line = max(kinds) if kinds else 0
     groups = []
     run_lines = []
     run_texts = []
-    prev = None
-    for ln in sorted_added:
+    for ln in range(1, max_line + 1):
         text = comment_text.get(ln, "")
         if kinds.get(ln) == "comment" and text:
-            if prev is not None and ln - prev == 1 and run_lines:
-                run_lines.append(ln)
-                run_texts.append(text)
-            else:
-                if run_lines:
-                    groups.append((run_lines[0], " ".join(run_texts)))
-                run_lines = [ln]
-                run_texts = [text]
-            prev = ln
-        else:
-            if run_lines:
-                groups.append((run_lines[0], " ".join(run_texts)))
-            run_lines = []
-            run_texts = []
-            prev = ln
-            if text:
-                groups.append((ln, text))
+            run_lines.append(ln)
+            run_texts.append(text)
+            continue
+        if run_lines:
+            groups.append((run_lines, run_texts))
+            run_lines, run_texts = [], []
+        if kinds.get(ln) == "code" and text:
+            groups.append(([ln], [text]))
     if run_lines:
-        groups.append((run_lines[0], " ".join(run_texts)))
+        groups.append((run_lines, run_texts))
     return groups
 
 
 def check_duplication(path, added, kinds, comment_text, sentence_index):
-    for first_line, text in collect_comment_groups(path, added, kinds, comment_text):
-        for fragment in SENTENCE_SPLIT_RE.split(text):
-            normalized = normalize_sentence(fragment)
-            if len(normalized.split()) < DUPLICATION_MIN_WORDS:
+    for lines, texts in collect_comment_groups(kinds, comment_text):
+        joined = " ".join(texts)
+        spans = []
+        cursor = 0
+        for ln, t in zip(lines, texts):
+            start = joined.find(t, cursor)
+            end = start + len(t)
+            spans.append((start, end, ln))
+            cursor = end
+
+        search_from = 0
+        for fragment in SENTENCE_SPLIT_RE.split(joined):
+            if not fragment:
                 continue
-            sentence_index.setdefault(normalized, []).append((path, first_line))
+            frag_start = joined.find(fragment, search_from)
+            frag_end = frag_start + len(fragment)
+            search_from = frag_end
+
+            normalized = normalize_sentence(fragment)
+            if not normalized:
+                continue
+            # Report only if this diff actually touched a line the
+            # sentence spans -- a sentence entirely on pre-existing,
+            # untouched lines is not this PR's rationale to flag.
+            touched = [ln for s, e, ln in spans if e > frag_start and s < frag_end and ln in added]
+            if not touched:
+                continue
+            sentence_index.setdefault(normalized, []).append((path, min(touched)))
 
 
 def main(argv):
