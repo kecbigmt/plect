@@ -65,6 +65,14 @@ func (l *LiveService) EventsSubtree(root string) ([]event.Event, error) {
 	return page.Events, nil
 }
 
+// EventPage returns one page of a single session's event history via opaque
+// cursors — the webapi.SessionReader seam's history read. Unlike Events/
+// EventsSubtree above (both fixed-size tails for the htmx timeline), this
+// supports the JSON API's cursor-based paging unchanged from service.EventPage.
+func (l *LiveService) EventPage(name string, p service.EventPageParams) (service.EventPageResult, error) {
+	return service.EventPage(l.cfg, l.store, name, p)
+}
+
 // PublishEvent appends an event to the session's log. The bus tailer fans the
 // appended event to the live SSE stream, so an open timeline updates without a
 // round-trip from this handler.

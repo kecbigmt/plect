@@ -7,8 +7,8 @@ for the decision this package implements, and
 [docs/design/web-ui.md](../../docs/design/web-ui.md) for the UI this contract
 serves.
 
-This slice covers Session list/detail and common errors only — see
-[Scope](#scope) below.
+This slice covers Session list/detail, bounded per-session event history,
+and common errors only — see [Scope](#scope) below.
 
 `web/` is a pnpm workspace (`web/pnpm-workspace.yaml`) with this package and
 [`web/app`](../app/README.md) — the React Web UI shell — as members, sharing
@@ -79,18 +79,22 @@ package was built on them, per that issue's amendment.
 
 ## Scope
 
-Session list/detail and common errors, matching the parent issue's
-deliverable. Explicitly **not** in this slice: Tasks, Graph, Terminal,
-Home/Inbox, or any mutation (Create/Up/Down/user.emit) — see
+Session list/detail, bounded per-session event history (`GET /events`), and
+common errors, matching the parent issues' deliverables. Explicitly **not**
+in this slice: Tasks, Graph, Terminal, Home/Inbox, or any mutation
+(Create/Up/Down/user.emit) — see
 [docs/design/web-ui-graph-fields.md](../../docs/design/web-ui-graph-fields.md)
-for how Graph inspection maps to existing state ahead of its own task.
+for how Graph inspection maps to existing state ahead of its own task, and
+[docs/design/web-ui-event-history.md](../../docs/design/web-ui-event-history.md)
+for the event-history read contract and its history/live handoff protocol
+(the live SSE stream itself is a later task).
 
 `ApiError`'s four variants (`NotFoundError`, `ValidationError`,
 `ConflictError`, `ExecutionError`) cover every code `service.Error` defines
-today, not only the ones `GET /sessions` and `GET /sessions/{name}` can
-currently return — this is the "common errors" half of the deliverable,
-meant for later Web API operations to reuse rather than reinvent, per
-`app/internal/webapi/errors.go`'s classification table.
+today, not only the ones `GET /sessions`, `GET /sessions/{name}`, and
+`GET /events` can currently return — this is the "common errors" half of the
+deliverable, meant for later Web API operations to reuse rather than
+reinvent, per `app/internal/webapi/errors.go`'s classification table.
 
 ## Specified contract properties
 
@@ -204,6 +208,17 @@ demonstrating and recording an actual result rather than assuming one:
   decodes an actual handler response into a bare `map[string]any` and
   checks which keys are present — proving the wire bytes, not just the Go
   struct's nil pointers, actually omit every unset optional field.
+- **Unknown event types and metadata survive the projection.**
+  `event_page.valid.json` includes an event whose `type`/`source` no
+  producer constant declares and whose `metadata` carries a key
+  (`origin_session`) this API does not itself interpret;
+  `TestRoundTrip_EventPageUnknownTypeAndMetadataSurviveDecode` and
+  `verify/fixtures.mjs` both prove it decodes verbatim rather than being
+  dropped, coerced, or requiring a schema update to add a new event type.
+  `verify/types.ts` additionally proves `type`/`source` are unconstrained
+  strings while `direction` stays a checked enum — see
+  [docs/design/web-ui-event-history.md](../../docs/design/web-ui-event-history.md)
+  for the read contract and handoff protocol this fixture backs.
 - **Transport reality, not just the schema's claim.** `verify/client-transport.mjs`
   and `app/internal/webapi/transport_test.go` (see "Names containing `/`"
   above) exercise the actual committed client and a real HTTP server rather

@@ -66,6 +66,11 @@ request counts are outside the initial scope.
 
 ### Conversation
 
+[Event history and the history/live handoff protocol](web-ui-event-history.md)
+specifies the bounded read contract behind this tab and how a client moves
+from that read to a live subscription without losing or duplicating an
+event.
+
 Render readable utterances around their bodies and other events as compact
 timeline entries. Show recorded type, source, summary, body, and metadata for
 unknown event kinds. Display task, node, and child-session links only when

@@ -1,0 +1,29 @@
+{
+  "events": [
+    {
+      "id": "01JXAMPLE0000000000000010",
+      "sessionName": "team/workspace-a",
+      "time": "2026-09-06T00:00:00Z",
+      "type": "user.note",
+      "source": "cli",
+      "direction": "internal",
+      "summary": "hello",
+      "body": "hello world"
+    },
+    {
+      "id": "01JXAMPLE0000000000000011",
+      "sessionName": "team/parent",
+      "time": "2026-09-06T00:01:00Z",
+      "type": "acme.custom_provider.widget_moved",
+      "source": "acme-provider",
+      "direction": "inbound",
+      "summary": "widget moved",
+      "metadata": {
+        "origin_session": "team/child",
+        "widget_id": "w-42"
+      },
+      "deliveryMode": "push"
+    }
+  ],
+  "nextCursor": "opaque-token"
+}

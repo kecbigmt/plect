@@ -263,7 +263,7 @@ func TestAuth_PostRequiresAuth(t *testing.T) {
 // mounted inside the guarded mux; TestAuth_APIPathGetsJSONNotRedirect only
 // covers /api/v1/bootstrap.
 func TestAuth_APIV1SessionsRequiresAuth(t *testing.T) {
-	for _, path := range []string{"/api/v1/sessions", "/api/v1/sessions/owner/repo-7"} {
+	for _, path := range []string{"/api/v1/sessions", "/api/v1/sessions/owner/repo-7", "/api/v1/events?session=owner/repo-7"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		w := httptest.NewRecorder()
 		authServer().ServeHTTP(w, req)

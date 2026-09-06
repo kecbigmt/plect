@@ -99,6 +99,33 @@ check(
   },
 );
 
+const eventPage = await readFixture("event_page.valid.json");
+check("EventPage carries nextCursor and both events", () => {
+  assert.equal(eventPage.nextCursor, "opaque-token");
+  assert.equal(eventPage.events.length, 2);
+});
+check(
+  "an event's type/source are untyped strings: an unrecognized value survives JSON.parse verbatim",
+  () => {
+    const unknown = eventPage.events[1];
+    assert.equal(unknown.type, "acme.custom_provider.widget_moved");
+    assert.equal(unknown.source, "acme-provider");
+  },
+);
+check(
+  "unknown metadata keys survive verbatim, and origin_session is distinct from the record's own sessionName",
+  () => {
+    const unknown = eventPage.events[1];
+    assert.equal(unknown.sessionName, "team/parent");
+    assert.equal(unknown.metadata.origin_session, "team/child");
+    assert.equal(unknown.metadata.widget_id, "w-42");
+  },
+);
+check("an absent optional field on an event is simply missing, not null", () => {
+  assert.equal("metadata" in eventPage.events[0], false);
+  assert.equal("deliveryMode" in eventPage.events[0], false);
+});
+
 const notFoundError = await readFixture("error_not_found.json");
 const conflictError = await readFixture("error_conflict.json");
 check("ApiError tagged union: category selects the code's own enum", () => {

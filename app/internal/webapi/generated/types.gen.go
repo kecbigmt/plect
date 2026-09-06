@@ -70,6 +70,63 @@ func (e ErrorCategory) Valid() bool {
 	}
 }
 
+// Defines values for EventDeliveryMode.
+const (
+	Pull EventDeliveryMode = "pull"
+	Push EventDeliveryMode = "push"
+)
+
+// Valid indicates whether the value is a known member of the EventDeliveryMode enum.
+func (e EventDeliveryMode) Valid() bool {
+	switch e {
+	case Pull:
+		return true
+	case Push:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EventDirection.
+const (
+	Inbound  EventDirection = "inbound"
+	Internal EventDirection = "internal"
+	Outbound EventDirection = "outbound"
+)
+
+// Valid indicates whether the value is a known member of the EventDirection enum.
+func (e EventDirection) Valid() bool {
+	switch e {
+	case Inbound:
+		return true
+	case Internal:
+		return true
+	case Outbound:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EventOrder.
+const (
+	Asc  EventOrder = "asc"
+	Desc EventOrder = "desc"
+)
+
+// Valid indicates whether the value is a known member of the EventOrder enum.
+func (e EventOrder) Valid() bool {
+	switch e {
+	case Asc:
+		return true
+	case Desc:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ExecutionErrorCategory.
 const (
 	ExecutionErrorCategoryExecution ExecutionErrorCategory = "execution"
@@ -242,6 +299,46 @@ type ConflictErrorCode string
 // ErrorCategory defines model for ErrorCategory.
 type ErrorCategory string
 
+// Event defines model for Event.
+type Event struct {
+	// Body Absent and empty are equivalent, as with every optional field on this contract.
+	Body         *string            `json:"body,omitempty"`
+	DeliveryMode *EventDeliveryMode `json:"deliveryMode,omitempty"`
+	Direction    EventDirection     `json:"direction"`
+	Id           string             `json:"id"`
+
+	// Metadata Arbitrary event metadata, passed through verbatim including keys this API
+	// does not itself interpret — e.g. `origin_session`
+	// (`contracts/event.MetaOriginSession`), the session that produced a
+	// notification pushed into a receiving session's own log, which is
+	// distinct from this record's own `sessionName` (the receiver).
+	Metadata    *map[string]string `json:"metadata,omitempty"`
+	SessionName string             `json:"sessionName"`
+
+	// Source Who produced the event (`plect`, `web`, `cli`, `mcp`, or a provider's own source string). Not an enum for the same reason as `type`.
+	Source  string    `json:"source"`
+	Summary string    `json:"summary"`
+	Time    time.Time `json:"time"`
+
+	// Type A free-form dotted topic (e.g. `user.emit`, `lifecycle.created`). Not an enum: producers define their own types, and this API does not enumerate or restrict them.
+	Type string `json:"type"`
+}
+
+// EventDeliveryMode defines model for EventDeliveryMode.
+type EventDeliveryMode string
+
+// EventDirection defines model for EventDirection.
+type EventDirection string
+
+// EventOrder defines model for EventOrder.
+type EventOrder string
+
+// EventPage defines model for EventPage.
+type EventPage struct {
+	Events     []Event `json:"events"`
+	NextCursor *string `json:"nextCursor,omitempty"`
+}
+
 // ExecutionError defines model for ExecutionError.
 type ExecutionError struct {
 	Category ExecutionErrorCategory `json:"category"`
@@ -380,3 +477,16 @@ type ValidationErrorCategory string
 
 // ValidationErrorCode defines model for ValidationError.Code.
 type ValidationErrorCode string
+
+// SessionEventsListParams defines parameters for SessionEventsList.
+type SessionEventsListParams struct {
+	// Session The exact session name, `/` included, sent unencoded as a query value.
+	Session string `form:"session" json:"session"`
+
+	// Cursor A prior page's `nextCursor`. Omitted requests the first page.
+	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
+
+	// Limit Page size. Omitted or non-positive uses the server's existing default.
+	Limit *int32      `form:"limit,omitempty" json:"limit,omitempty"`
+	Order *EventOrder `form:"order,omitempty" json:"order,omitempty"`
+}

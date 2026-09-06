@@ -172,6 +172,53 @@ func TestRoundTrip_ExplicitNullOptionalFieldsDecodeSameAsAbsent(t *testing.T) {
 	}
 }
 
+// EventPage's Event.type/source are untyped strings (unlike every enum-typed
+// field elsewhere in this contract): a second event carrying a type and
+// source no producer constant declares must still decode into the exact
+// string given, proving the schema places no enum constraint on either field.
+func TestRoundTrip_EventPageUnknownTypeAndMetadataSurviveDecode(t *testing.T) {
+	raw := readTestdata(t, "event_page.valid.json")
+
+	var got webapiv1.EventPage
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.NextCursor == nil || *got.NextCursor != "opaque-token" {
+		t.Errorf("NextCursor = %v, want opaque-token", got.NextCursor)
+	}
+	if len(got.Events) != 2 {
+		t.Fatalf("Events = %+v, want 2", got.Events)
+	}
+
+	known := got.Events[0]
+	if known.Direction != webapiv1.Internal || known.Body == nil || *known.Body != "hello world" {
+		t.Errorf("known event = %+v", known)
+	}
+	if known.Metadata != nil {
+		t.Errorf("Metadata = %v, want nil (absent in fixture)", known.Metadata)
+	}
+	if known.DeliveryMode != nil {
+		t.Errorf("DeliveryMode = %v, want nil (absent in fixture)", known.DeliveryMode)
+	}
+
+	unknown := got.Events[1]
+	if unknown.Type != "acme.custom_provider.widget_moved" {
+		t.Errorf("Type = %q, want the unrecognized type preserved verbatim", unknown.Type)
+	}
+	if unknown.Source != "acme-provider" {
+		t.Errorf("Source = %q, want acme-provider", unknown.Source)
+	}
+	if unknown.Metadata == nil || (*unknown.Metadata)["origin_session"] != "team/child" || (*unknown.Metadata)["widget_id"] != "w-42" {
+		t.Errorf("Metadata = %v, want both keys preserved", unknown.Metadata)
+	}
+	if unknown.SessionName != "team/parent" {
+		t.Errorf("SessionName = %q, want team/parent (the receiver, distinct from metadata's origin_session)", unknown.SessionName)
+	}
+	if unknown.DeliveryMode == nil || *unknown.DeliveryMode != webapiv1.Push {
+		t.Errorf("DeliveryMode = %v, want push", unknown.DeliveryMode)
+	}
+}
+
 // DecodeApiError is the tagged union's read side: given a category it
 // recognizes, it must decode into the matching concrete leaf type with the
 // leaf's own narrower `code` enum populated.

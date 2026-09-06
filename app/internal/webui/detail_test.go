@@ -117,6 +117,9 @@ func (n nameCapture) Status(name string) (*service.StatusResult, error) {
 }
 func (n nameCapture) Events(string) ([]event.Event, error)        { return nil, nil }
 func (n nameCapture) EventsSubtree(string) ([]event.Event, error) { return nil, nil }
+func (n nameCapture) EventPage(string, service.EventPageParams) (service.EventPageResult, error) {
+	return service.EventPageResult{}, nil
+}
 func (n nameCapture) PublishEvent(string, service.EventPublishParams) (event.Event, error) {
 	return event.Event{}, nil
 }

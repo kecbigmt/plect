@@ -6,6 +6,7 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/service"
 	webapiv1 "github.com/kecbigmt/plecture/app/internal/webapi/generated"
+	"github.com/kecbigmt/plecture/contracts/event"
 )
 
 // summaryFromListEntry projects one service.List row onto the wire's
@@ -58,6 +59,59 @@ func detailFromStatus(r *service.StatusResult) webapiv1.SessionDetail {
 		Destroyed:          optionalBool(r.Destroyed),
 		DestroyedAt:        optionalTime(r.DestroyedAt),
 	}
+}
+
+// eventPageFromResult projects service.EventPageResult onto the wire's
+// EventPage. NextCursor is opaque on both sides — this package neither
+// decodes nor reconstructs it, only carries it through as a string.
+func eventPageFromResult(r service.EventPageResult) webapiv1.EventPage {
+	items := make([]webapiv1.Event, len(r.Events))
+	for i, ev := range r.Events {
+		items[i] = eventFromDomain(ev)
+	}
+	return webapiv1.EventPage{
+		Events:     items,
+		NextCursor: optionalString(r.NextCursor),
+	}
+}
+
+// eventFromDomain projects one contracts/event.Event onto the wire's Event,
+// field for field and verbatim — Type and Source stay untyped strings (a
+// producer's own namespace, not this API's to enumerate), and Metadata passes
+// through whatever keys the log actually holds, known or not. This is the
+// entire "unknown event types/metadata survive the projection" contract: pass
+// everything through, invent nothing.
+func eventFromDomain(ev event.Event) webapiv1.Event {
+	return webapiv1.Event{
+		Id:           ev.ID,
+		SessionName:  ev.SessionName,
+		Time:         ev.Time,
+		Type:         ev.Type,
+		Source:       ev.Source,
+		Direction:    webapiv1.EventDirection(ev.Direction),
+		Summary:      ev.Summary,
+		Body:         optionalString(ev.Body),
+		Metadata:     optionalStringMap(ev.Metadata),
+		DeliveryMode: deliveryMode(ev.DeliveryMode),
+	}
+}
+
+// deliveryMode returns nil for the zero DeliveryMode (pull, the default for
+// every ordinary progress event) rather than the empty string: the wire field
+// is optional, and "" is not one of EventDeliveryMode's members.
+func deliveryMode(m event.DeliveryMode) *webapiv1.EventDeliveryMode {
+	if m == "" {
+		return nil
+	}
+	v := webapiv1.EventDeliveryMode(m)
+	return &v
+}
+
+func optionalStringMap(m map[string]string) *map[string]string {
+	if len(m) == 0 {
+		return nil
+	}
+	return &m
 }
 
 func runState(s domain.RunState) webapiv1.SessionRunState {

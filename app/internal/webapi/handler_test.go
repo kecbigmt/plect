@@ -11,6 +11,7 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/service"
 	webapiv1 "github.com/kecbigmt/plecture/app/internal/webapi/generated"
+	"github.com/kecbigmt/plecture/contracts/event"
 )
 
 type fakeReader struct {
@@ -22,6 +23,13 @@ type fakeReader struct {
 	// test can assert on how a slash-containing path was parsed rather than
 	// just on the response.
 	gotName string
+
+	eventPage    service.EventPageResult
+	eventPageErr error
+	// gotEventParams records the params handleSessionEvents actually built,
+	// so a test can assert on how query strings were parsed.
+	gotEventParams *service.EventPageParams
+	gotEventName   string
 }
 
 func (f *fakeReader) List() ([]service.ListEntry, error) { return f.entries, f.listErr }
@@ -29,6 +37,12 @@ func (f *fakeReader) List() ([]service.ListEntry, error) { return f.entries, f.l
 func (f *fakeReader) Status(name string) (*service.StatusResult, error) {
 	f.gotName = name
 	return f.status, f.statusErr
+}
+
+func (f *fakeReader) EventPage(name string, p service.EventPageParams) (service.EventPageResult, error) {
+	f.gotEventName = name
+	f.gotEventParams = &p
+	return f.eventPage, f.eventPageErr
 }
 
 func TestHandleList_ReturnsEveryEntryAsAnEnvelope(t *testing.T) {
@@ -189,6 +203,155 @@ func TestHandleGet_EmptyNameIsRejectedWithoutCallingTheService(t *testing.T) {
 	}
 	if svc.gotName != "" {
 		t.Errorf("service.Status must not be called for an empty name, got %q", svc.gotName)
+	}
+}
+
+func TestHandleSessionEvents_ReturnsThePageAndForwardsParsedParams(t *testing.T) {
+	svc := &fakeReader{eventPage: service.EventPageResult{
+		Events:     []event.Event{{ID: "e1", SessionName: "team/workspace-a", Type: "user.note"}},
+		NextCursor: "opaque-token",
+	}}
+
+	rec := doRequest(t, svc, http.MethodGet, "/events?session=team%2Fworkspace-a&cursor=prior-cursor&limit=25&order=desc")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body)
+	}
+	if svc.gotEventName != "team/workspace-a" {
+		t.Errorf("EventPage called with session %q, want team/workspace-a", svc.gotEventName)
+	}
+	if svc.gotEventParams == nil {
+		t.Fatal("EventPage was not called")
+	}
+	if svc.gotEventParams.Order != event.OrderDesc {
+		t.Errorf("Order = %q, want desc", svc.gotEventParams.Order)
+	}
+	if svc.gotEventParams.Cursor != "prior-cursor" {
+		t.Errorf("Cursor = %q, want prior-cursor", svc.gotEventParams.Cursor)
+	}
+	if svc.gotEventParams.Filter.Limit != 25 {
+		t.Errorf("Limit = %d, want 25", svc.gotEventParams.Filter.Limit)
+	}
+	var got webapiv1.EventPage
+	decodeBody(t, rec, &got)
+	if len(got.Events) != 1 || got.Events[0].Id != "e1" {
+		t.Fatalf("Events = %+v, want one event e1", got.Events)
+	}
+	if got.NextCursor == nil || *got.NextCursor != "opaque-token" {
+		t.Errorf("NextCursor = %v, want opaque-token", got.NextCursor)
+	}
+}
+
+// order defaults to asc when omitted, matching service.EventPage's own
+// documented default.
+func TestHandleSessionEvents_OrderDefaultsToAsc(t *testing.T) {
+	svc := &fakeReader{}
+
+	rec := doRequest(t, svc, http.MethodGet, "/events?session=team/workspace-a")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body)
+	}
+	if svc.gotEventParams == nil || svc.gotEventParams.Order != event.OrderAsc {
+		t.Errorf("Order = %v, want asc", svc.gotEventParams)
+	}
+}
+
+// A missing session is rejected before ever calling the service — the same
+// discipline TestHandleGet_EmptyNameIsRejectedWithoutCallingTheService
+// already applies to GET /sessions/{name}.
+func TestHandleSessionEvents_MissingSessionParamIsRejectedWithoutCallingTheService(t *testing.T) {
+	svc := &fakeReader{}
+
+	rec := doRequest(t, svc, http.MethodGet, "/events")
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", rec.Code, rec.Body)
+	}
+	if svc.gotEventParams != nil {
+		t.Error("EventPage must not be called when session is missing")
+	}
+	var got webapiv1.ValidationError
+	decodeBody(t, rec, &got)
+	if got.Category != webapiv1.ValidationErrorCategoryValidation {
+		t.Errorf("Category = %q, want validation", got.Category)
+	}
+}
+
+func TestHandleSessionEvents_InvalidOrderIsA400ValidationError(t *testing.T) {
+	svc := &fakeReader{}
+
+	rec := doRequest(t, svc, http.MethodGet, "/events?session=team/workspace-a&order=sideways")
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", rec.Code, rec.Body)
+	}
+	if svc.gotEventParams != nil {
+		t.Error("EventPage must not be called for an invalid order")
+	}
+}
+
+func TestHandleSessionEvents_InvalidLimitIsA400ValidationError(t *testing.T) {
+	svc := &fakeReader{}
+
+	rec := doRequest(t, svc, http.MethodGet, "/events?session=team/workspace-a&limit=not-a-number")
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", rec.Code, rec.Body)
+	}
+	if svc.gotEventParams != nil {
+		t.Error("EventPage must not be called for an invalid limit")
+	}
+}
+
+// An unknown session is not a 404: service.EventPage answers a session
+// nothing was ever recorded for with an empty, successful page (its log
+// simply doesn't exist), and this handler passes that straight through — see
+// routes/events.tsp's documented rationale.
+func TestHandleSessionEvents_ServiceEmptyResultIsA200NotA404(t *testing.T) {
+	svc := &fakeReader{eventPage: service.EventPageResult{}}
+
+	rec := doRequest(t, svc, http.MethodGet, "/events?session=team/never-created")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body)
+	}
+	var got webapiv1.EventPage
+	decodeBody(t, rec, &got)
+	if len(got.Events) != 0 {
+		t.Errorf("Events = %+v, want empty", got.Events)
+	}
+	if got.NextCursor != nil {
+		t.Errorf("NextCursor = %v, want absent", got.NextCursor)
+	}
+}
+
+// A cursor rejected by the service (order mismatch, stale generation) is a
+// service-layer *service.Error{Code: ErrInvalidInput}, routed through the
+// same apiError classification every other operation uses — not a special
+// case this handler invents its own response for.
+func TestHandleSessionEvents_ServiceValidationErrorBecomesA400ValidationError(t *testing.T) {
+	svc := &fakeReader{eventPageErr: &service.Error{Code: service.ErrInvalidInput, Message: "cursor expired"}}
+
+	rec := doRequest(t, svc, http.MethodGet, "/events?session=team/workspace-a&cursor=stale-token")
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", rec.Code, rec.Body)
+	}
+	var got webapiv1.ValidationError
+	decodeBody(t, rec, &got)
+	if got.Code != webapiv1.InvalidInput {
+		t.Errorf("Code = %q, want invalid_input", got.Code)
+	}
+}
+
+func TestHandleSessionEvents_ServiceFailureBecomesA500ExecutionError(t *testing.T) {
+	svc := &fakeReader{eventPageErr: &service.Error{Code: service.ErrExecutionFailed, Message: "log unreadable"}}
+
+	rec := doRequest(t, svc, http.MethodGet, "/events?session=team/workspace-a")
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body: %s", rec.Code, rec.Body)
 	}
 }
 
