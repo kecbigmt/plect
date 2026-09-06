@@ -20,7 +20,7 @@ import (
 const capReviewChainFixture = `
 [[chains]]
 id       = "review"
-workflow = "codex"
+workflow = "reviewer_wf"
 [chains.when]
 all = [ { judge_pending = "ac-met" } ]
 `
@@ -67,16 +67,16 @@ func TestTickSession_ChainCapRefusalReportsTypedOutcomeAndEmitsChainAttemptEvent
 	cfg := writeWorkflowFixture(t, t.TempDir(), "wf",
 		[]taskFixture{workTaskWithChain(capReviewChainFixture)},
 		[]nodeFixture{{id: "work"}})
-	writeWorkflowFile(t, cfg, "codex", "")
+	writeWorkflowFile(t, cfg, "reviewer_wf", "")
 	writeCapWorkflow(t, cfg.BaseDir, "parent_wf", intPtr(1))
 
 	seedSession(t, store, "parent1", "acct", 1, "parent_wf", nil)
 	seedSession(t, store, "sibling", "acct", 2, "", upTasks())
 	setParent(t, store, "sibling", "parent1")
-	seedReviewWork(t, store, "owner/repo-1", map[string]any{"checks_status": "SUCCESS", "revision": "sha1"})
-	setParent(t, store, "owner/repo-1", "parent1")
+	seedReviewWork(t, store, "work1", map[string]any{"checks_status": "SUCCESS", "revision": "sha1"})
+	setParent(t, store, "work1", "parent1")
 
-	res, err := TickSession(cfg, store, TickParams{SessionName: "owner/repo-1", SkipRefresh: true})
+	res, err := TickSession(cfg, store, TickParams{SessionName: "work1", SkipRefresh: true})
 	if err != nil {
 		t.Fatalf("TickSession: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestTickSession_ChainCapRefusalReportsTypedOutcomeAndEmitsChainAttemptEvent
 		t.Fatalf("expected the cap error surfaced as a warning, got none")
 	}
 
-	evs, _, _, err := eventlog.NewStore(store.Dir()).List("owner/repo-1", 0, event.Filter{Types: []string{event.TypeChainAttempt}})
+	evs, _, _, err := eventlog.NewStore(store.Dir()).List("work1", 0, event.Filter{Types: []string{event.TypeChainAttempt}})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -109,10 +109,10 @@ func TestTickSession_ChainCapRefusalReportsTypedOutcomeAndEmitsChainAttemptEvent
 	}
 
 	// A second refusal streak on unchanged state records nothing further.
-	if _, err := TickSession(cfg, store, TickParams{SessionName: "owner/repo-1", SkipRefresh: true}); err != nil {
+	if _, err := TickSession(cfg, store, TickParams{SessionName: "work1", SkipRefresh: true}); err != nil {
 		t.Fatalf("TickSession(2): %v", err)
 	}
-	evs2, _, _, err := eventlog.NewStore(store.Dir()).List("owner/repo-1", 0, event.Filter{Types: []string{event.TypeChainAttempt}})
+	evs2, _, _, err := eventlog.NewStore(store.Dir()).List("work1", 0, event.Filter{Types: []string{event.TypeChainAttempt}})
 	if err != nil {
 		t.Fatalf("List(2): %v", err)
 	}
@@ -130,16 +130,16 @@ func TestTickSession_ChainSpawnsOnceCapacityFreesAfterCapRefusal(t *testing.T) {
 	cfg := writeWorkflowFixture(t, t.TempDir(), "wf",
 		[]taskFixture{workTaskWithChain(capReviewChainFixture)},
 		[]nodeFixture{{id: "work"}})
-	writeSpawnableWorkflowFile(t, cfg, "codex", filepath.Join(t.TempDir(), "reviewer-wd"))
+	writeSpawnableWorkflowFile(t, cfg, "reviewer_wf", filepath.Join(t.TempDir(), "reviewer-wd"))
 	writeCapWorkflow(t, cfg.BaseDir, "parent_wf", intPtr(1))
 
 	seedSession(t, store, "parent1", "acct", 1, "parent_wf", nil)
 	seedSession(t, store, "sibling", "acct", 2, "", upTasks())
 	setParent(t, store, "sibling", "parent1")
-	seedReviewWork(t, store, "owner/repo-1", map[string]any{"checks_status": "SUCCESS", "revision": "sha1"})
-	setParent(t, store, "owner/repo-1", "parent1")
+	seedReviewWork(t, store, "work1", map[string]any{"checks_status": "SUCCESS", "revision": "sha1"})
+	setParent(t, store, "work1", "parent1")
 
-	res, err := TickSession(cfg, store, TickParams{SessionName: "owner/repo-1", SkipRefresh: true})
+	res, err := TickSession(cfg, store, TickParams{SessionName: "work1", SkipRefresh: true})
 	if err != nil {
 		t.Fatalf("TickSession: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestTickSession_ChainSpawnsOnceCapacityFreesAfterCapRefusal(t *testing.T) {
 		t.Fatalf("bring sibling down: %v", err)
 	}
 
-	res2, err := TickSession(cfg, store, TickParams{SessionName: "owner/repo-1", SkipRefresh: true})
+	res2, err := TickSession(cfg, store, TickParams{SessionName: "work1", SkipRefresh: true})
 	if err != nil {
 		t.Fatalf("TickSession(2): %v", err)
 	}
