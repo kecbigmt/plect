@@ -225,10 +225,6 @@ func TestEnsureCurrent_InterruptedMigrationPreservesEvidenceAndResumesAfterFix(t
 	}
 }
 
-// Migrate must write the marker as soon as it holds the coordination lock,
-// not after also waiting for the access lock: this test holds accessShared
-// externally so Migrate blocks on accessExclusive, and checks the marker
-// exists (with this process's own PID) while it is still stuck there.
 func TestMigrate_WritesMarkerBeforeWaitingForAccessExclusive(t *testing.T) {
 	ctx := context.Background()
 	path := testDBPath(t)

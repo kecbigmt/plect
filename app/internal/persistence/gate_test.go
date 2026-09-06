@@ -118,9 +118,6 @@ func TestAccessGate_EnterSharedWaitsForCoordinationLockBeforeTakingAccessShared(
 	}
 }
 
-// Forces enterShared to block on accessShared (by holding accessExclusive
-// externally) and, while it is stuck there, probes the coordination lock
-// exclusively from outside; that probe must fail.
 func TestAccessGate_EnterSharedHoldsCoordinationLockUntilAccessSharedIsAcquired(t *testing.T) {
 	path := testDBPath(t)
 	gate := newAccessGate(path)

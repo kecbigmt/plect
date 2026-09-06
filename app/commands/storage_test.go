@@ -46,7 +46,6 @@ func TestStorageMigrate_IsANoOpOnASecondRun(t *testing.T) {
 	}
 }
 
-// Unlike the storage migrate tests above, this runs an unrelated command.
 func TestRootPersistentPreRun_CreatesStoreDBForEveryCommand(t *testing.T) {
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)
