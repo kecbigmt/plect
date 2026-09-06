@@ -17,6 +17,16 @@
 # native_conformance_test.go) read these files directly off disk as the
 # executable specification.
 #
+# web/** (the TypeSpec API contract and the React Web UI shell) and the Go
+# packages that consume their generated output — app/internal/webapi/** and
+# app/internal/webui/** — are production frontend/API paths: they gate the
+# web-api-contract and web-app-build workflow jobs (WEB_CI below), which run
+# pnpm and so stay out of the app/contracts/plugins build-test matrix.
+# docs/design/web-ui/prototype/** is a frozen visual reference, not
+# production source; it falls under the docs-only prose rule below and so
+# never sets WEB_CI, precisely so touching it alone cannot stand in for
+# validating the production paths.
+#
 # The "docs-only, no job needed" list below is a whitelist of locations
 # individually confirmed (by grep, not by extension) to hold prose no Go
 # code reads — docs/** other than docs/language/, the root CLAUDE.md and
@@ -42,6 +52,7 @@ if [ "${FORCE_FULL_RUN:-false}" = true ]; then
   echo "INTEGRATION_TEST=true"
   echo "README_VERIFY=true"
   echo "AFFECTED_PLUGINS=$ALL_PLUGIN_DIRS"
+  echo "WEB_CI=true"
   exit 0
 fi
 
@@ -77,8 +88,11 @@ FULL_RUN_TRIGGER_RE='^\.github/workflows/|^scripts/[^/]+\.sh$'
 DOCS_PROSE_RE='^docs/'
 ROOT_PROSE_RE='^(CLAUDE|AGENTS)\.md$'
 PLUGIN_README_RE='^plugins/[^/]+/README\.md$'
+WEB_RE='^web/'
+WEBAPI_GO_RE='^app/internal/webapi/'
+WEBUI_GO_RE='^app/internal/webui/'
 
-KNOWN_RE="$CONTRACTS_RE|$APP_RE|$CLAUDE_SRC_RE|$GITHUB_SRC_RE|$LEGACY_MIGRATION_RE|$OKF_SRC_RE|$SLACK_SRC_RE|$CLAUDE_CFG_RE|$GITHUB_CFG_RE|$OKF_CFG_RE|$SLACK_CFG_RE|$CODEX_CFG_RE|$TMUX_CFG_RE|$LANG_DOCS_RE|$LANG_TESTDATA_RE|$FULL_RUN_TRIGGER_RE|$README_RE|$DOCS_PROSE_RE|$ROOT_PROSE_RE|$PLUGIN_README_RE"
+KNOWN_RE="$CONTRACTS_RE|$APP_RE|$CLAUDE_SRC_RE|$GITHUB_SRC_RE|$LEGACY_MIGRATION_RE|$OKF_SRC_RE|$SLACK_SRC_RE|$CLAUDE_CFG_RE|$GITHUB_CFG_RE|$OKF_CFG_RE|$SLACK_CFG_RE|$CODEX_CFG_RE|$TMUX_CFG_RE|$LANG_DOCS_RE|$LANG_TESTDATA_RE|$FULL_RUN_TRIGGER_RE|$README_RE|$DOCS_PROSE_RE|$ROOT_PROSE_RE|$PLUGIN_README_RE|$WEB_RE"
 
 unknown=false
 if [ -n "$files" ] && grep -Eqv "$KNOWN_RE" <<< "$files"; then
@@ -144,8 +158,14 @@ if [ "$full_run" = true ] || any_match "$README_RE"; then
   readme_verify=true
 fi
 
+web_ci=false
+if [ "$full_run" = true ] || any_match "$WEB_RE" || any_match "$WEBAPI_GO_RE" || any_match "$WEBUI_GO_RE"; then
+  web_ci=true
+fi
+
 echo "FULL_RUN=$full_run"
 echo "BUILD_TEST_MATRIX=$matrix"
 echo "INTEGRATION_TEST=$integration_test"
 echo "README_VERIFY=$readme_verify"
 echo "AFFECTED_PLUGINS=$affected_plugins"
+echo "WEB_CI=$web_ci"

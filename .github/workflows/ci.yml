@@ -30,6 +30,7 @@ jobs:
       integration_test: ${{ steps.decide.outputs.integration_test }}
       readme_verify: ${{ steps.decide.outputs.readme_verify }}
       affected_plugins: ${{ steps.decide.outputs.affected_plugins }}
+      web_ci: ${{ steps.decide.outputs.web_ci }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -58,15 +59,18 @@ jobs:
           integration_test="$(echo "$out" | sed -n 's/^INTEGRATION_TEST=//p')"
           readme_verify="$(echo "$out" | sed -n 's/^README_VERIFY=//p')"
           affected_plugins="$(echo "$out" | sed -n 's/^AFFECTED_PLUGINS=//p')"
+          web_ci="$(echo "$out" | sed -n 's/^WEB_CI=//p')"
           echo "full_run=$full_run" >> "$GITHUB_OUTPUT"
           echo "build_test_matrix=$matrix" >> "$GITHUB_OUTPUT"
           echo "integration_test=$integration_test" >> "$GITHUB_OUTPUT"
           echo "readme_verify=$readme_verify" >> "$GITHUB_OUTPUT"
           echo "affected_plugins=$affected_plugins" >> "$GITHUB_OUTPUT"
+          echo "web_ci=$web_ci" >> "$GITHUB_OUTPUT"
 
-  # These four jobs are whole-repo invariant checks, not per-module builds,
-  # so they stay unconditional: a docs-only diff still gets exactly this
-  # lint set, and nothing from build-test/integration-test/readme-verify
+  # gofmt, go-install, provider-boundary, comment-references, and
+  # instruction-orphans are whole-repo invariant checks, not per-module
+  # builds, so they stay unconditional: a docs-only diff still gets exactly
+  # this lint set, and nothing from build-test/integration-test/readme-verify
   # below, which the changes job gates instead.
   gofmt:
     name: gofmt
@@ -84,6 +88,25 @@ jobs:
             echo "$unformatted"
             exit 1
           fi
+
+  # app/internal/webui/webapp/embed.go commits the Vite build so go:embed
+  # can see it at compile time — the invariant this job guards is that
+  # building the app module never needs Node, on every PR. The changes
+  # job's per-module map can route around app's own build-test entry (e.g.
+  # a web/app-only change whose rebuilt dist happens to be byte-identical
+  # touches nothing under app/), so this is unconditional, with no Node
+  # ever installed in the job, rather than gated like build-test.
+  go-install:
+    name: go-install
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: go build ./app/... from a fresh checkout, no Node installed
+        run: go build ./...
+        working-directory: app
 
   provider-boundary:
     name: provider-boundary
@@ -142,13 +165,14 @@ jobs:
   # The schema-contract decision record under docs/adr/ requires CI to
   # check schema compilation, reproducible Go/TypeScript generation, and
   # generated-code compilation — this job is that check.
-  # Unconditional like the other whole-repo invariant checks above: the
-  # TypeSpec source lives outside app/ and contracts/, so the changes job's
-  # per-module trigger map has no entry for it, and this job is cheap
-  # enough that gating it on a path filter is not worth the added
-  # complexity in that map.
+  # Gated on WEB_CI (web/api/** or its app/internal/webapi/** consumer) so a
+  # PR touching neither doesn't pay for a pnpm install; a frozen-reference
+  # change under docs/design/web-ui/prototype/** alone leaves WEB_CI false,
+  # so it cannot stand in for validating the production contract.
   web-api-contract:
     name: web-api-contract
+    needs: changes
+    if: needs.changes.outputs.web_ci == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -197,11 +221,14 @@ jobs:
   # build for exactly that reason (go:embed only sees what's present at
   # compile time, and go install has no path to run pnpm build). This job is
   # the reproducibility check for that committed build, mirroring
-  # web-api-contract's own generated-code drift check. Unconditional for the
-  # same reason web-api-contract is: web/ has no entry in the changes job's
-  # trigger map, so any change under it already forces a full run.
+  # web-api-contract's own generated-code drift check. Gated on WEB_CI for
+  # the same reason web-api-contract is: a frozen-reference-only change
+  # under docs/design/web-ui/prototype/** must not stand in for validating
+  # this production build.
   web-app-build:
     name: web-app-build
+    needs: changes
+    if: needs.changes.outputs.web_ci == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -352,6 +379,7 @@ jobs:
     needs:
       - changes
       - gofmt
+      - go-install
       - provider-boundary
       - comment-references
       - instruction-orphans
