@@ -650,8 +650,6 @@ func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, ta
 			} else if invalidateErr := invalidateProducedNode(goCtx, r, ordered, aliveErr, session, tasks, obs); invalidateErr != nil {
 				return invalidateErr
 			}
-			// No continue: r is no longer "produced" after cleanup, so it
-			// falls into the setup path below instead of being skipped.
 		}
 		obs.OnStart(r.Scope, r.NodeID)
 		now := time.Now()

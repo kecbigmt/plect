@@ -55,8 +55,8 @@ func verifyLiveness(goCtx context.Context, r Resolved, session SessionVars, exis
 }
 
 // invalidateProducedNode stamps the liveness error onto r before cleanup
-// runs, so a cleanup failure midway still leaves that reason on disk rather
-// than only in a return value neither `plect status` nor a retry can see.
+// runs, so an observer watching r's own cleanup start can see why it began;
+// RunCleanup itself may then clear or overwrite that Error once it reaches r.
 func invalidateProducedNode(goCtx context.Context, r Resolved, ordered []Resolved, aliveErr error, session SessionVars, tasks map[string]*contract.TaskState, obs Observer) error {
 	if existing := tasks[r.NodeID]; existing != nil {
 		existing.Status = contract.TaskStatusFailed
