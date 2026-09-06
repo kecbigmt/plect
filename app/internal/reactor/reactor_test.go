@@ -71,8 +71,7 @@ func newTestReactor(t *testing.T, tc config.TickConfig) (*sessionReactor, *state
 	return r, st, log
 }
 
-// startReactor starts r.run and blocks until its cursor is seeded and its
-// Watch registered, so callers need no fixed sleep despite SQLite's variable first-touch migration cost.
+// startReactor starts r.run and blocks until its cursor/Watch are seeded, so callers need no fixed sleep despite SQLite's variable first-touch cost.
 func startReactor(t *testing.T, r *sessionReactor) func() {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -445,8 +444,7 @@ func TestSessionReactor_TicksSerializeAndDebounceBursts(t *testing.T) {
 		log.Append(event.Event{SessionName: "o/r-1", Type: "resource.updated", Direction: event.Internal})
 	}
 
-	// Pre-committing to 0 stops seedCursor from seeding past this burst, so the
-	// reactor's first drain() reads all n events in one batch.
+	// Pre-committing to 0 stops seedCursor from seeding past this burst, so the reactor's first drain() reads all n events in one batch.
 	if err := log.CommitCursor("o/r-1", reactorConsumer, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -830,9 +828,7 @@ func TestSessionReactor_DrainTriggeredInboundTickResetsBackoff(t *testing.T) {
 	})
 	r.tickFn = service.TickSession
 
-	// Seeded before start so run()'s own immediate heartbeat check sees a
-	// non-zero LastTickAt and takes the interval-gated branch — seeding after
-	// start would race that tick's own updateBackoff clobbering this value.
+	// Seeded before start so run()'s own immediate heartbeat check sees a non-zero LastTickAt and takes the interval-gated branch, not racing updateBackoff.
 	if err := st.Update("o/r-1", func(s *domain.Session) error {
 		s.LastTickAt = time.Now()
 		s.TickBackoff = &contract.TickBackoff{ConsecutiveUnchanged: 5}
