@@ -18,14 +18,17 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// TestMain unsets PLECT_SESSION_NAME and XDG_CONFIG_HOME before any test
-// runs, so the suite stays hermetic against both this repo's own dev loop
-// (a plect pane sets PLECT_SESSION_NAME) and a runner environment that
-// predefines XDG_CONFIG_HOME (GitHub Actions' ubuntu runners do), rather
-// than depending on the invoking shell being ambient-free. Tests that want
-// to simulate either opt back in with t.Setenv.
+// TestMain unsets PLECT_SESSION_NAME, PLECT_CONFIG_HOME, and XDG_CONFIG_HOME
+// before any test runs, so the suite stays hermetic against this repo's own
+// dev loop (a plect pane sets PLECT_SESSION_NAME) and against a runner or
+// shell environment that predefines either config-home variable — both
+// outrank a test's t.Setenv("HOME", ...) in confighome.Resolve()'s
+// precedence, rather than depending on the invoking shell being
+// ambient-free. Tests that want to simulate any of these opt back in with
+// t.Setenv.
 func TestMain(m *testing.M) {
 	os.Unsetenv("PLECT_SESSION_NAME")
+	os.Unsetenv(confighome.EnvVar)
 	os.Unsetenv(confighome.XDGEnvVar)
 	os.Exit(m.Run())
 }
