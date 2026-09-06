@@ -53,10 +53,7 @@ func TestNewLiveServiceRejectsStateVersionMismatch(t *testing.T) {
 	}
 }
 
-// TestNewLiveService_RefusesADatabaseNewerThanSupported proves
-// persistence.EnsureCurrent runs from NewLiveService, not only from the
-// `plect` CLI's root.go: plect-web has no cobra parent chain of its own, so
-// this is its one entry point for the store.db currency check.
+// plect-web has no cobra parent chain of its own, unlike the `plect` CLI.
 func TestNewLiveService_RefusesADatabaseNewerThanSupported(t *testing.T) {
 	dataHome := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", dataHome)

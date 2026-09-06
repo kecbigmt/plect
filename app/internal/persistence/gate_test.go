@@ -118,15 +118,9 @@ func TestAccessGate_EnterSharedWaitsForCoordinationLockBeforeTakingAccessShared(
 	}
 }
 
-// TestAccessGate_EnterSharedHoldsCoordinationLockUntilAccessSharedIsAcquired
-// is the deterministic regression test for the handoff gap a release-then-
-// acquire enterShared would have: it forces enterShared to block on
-// accessShared (by holding accessExclusive externally) and, while it is
-// stuck there, probes the coordination lock exclusively from outside. That
-// probe must fail — if enterShared had already released its
-// coordination-shared hold before accessShared succeeded, a migrator could
-// acquire the coordination lock and record intent in exactly this window,
-// while this operation is still on its way in.
+// Forces enterShared to block on accessShared (by holding accessExclusive
+// externally) and, while it is stuck there, probes the coordination lock
+// exclusively from outside; that probe must fail.
 func TestAccessGate_EnterSharedHoldsCoordinationLockUntilAccessSharedIsAcquired(t *testing.T) {
 	path := testDBPath(t)
 	gate := newAccessGate(path)

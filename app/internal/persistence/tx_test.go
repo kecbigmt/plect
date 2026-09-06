@@ -3,6 +3,7 @@ package persistence
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -97,6 +98,52 @@ func TestWithImmediateTx_WaitsForMigrationIntentBeforeEnteringCallback(t *testin
 	}
 	if err := <-txErr; err != nil {
 		t.Fatalf("WithImmediateTx: %v", err)
+	}
+}
+
+// An already-open *DB does not itself observe a migration another handle
+// applies after it opened; only a fresh version check would. This proves
+// WithImmediateTx performs that check on every call rather than trusting
+// whatever EnsureCurrent last confirmed.
+func TestWithImmediateTx_RefusesOnceAnotherHandleMigratesPastWhatThisOneSupports(t *testing.T) {
+	ctx := context.Background()
+	path := testDBPath(t)
+	older := migrationFixture(map[string]string{"00001_a.sql": migrationA})
+	newer := migrationFixture(map[string]string{"00001_a.sql": migrationA, "00002_b.sql": migrationBOK})
+
+	oldHandle, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer oldHandle.Close()
+	oldHandle.migrations = older
+	if err := oldHandle.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate (old handle, to version 1): %v", err)
+	}
+
+	newHandle, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer newHandle.Close()
+	newHandle.migrations = newer
+	if err := newHandle.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate (new handle, to version 2): %v", err)
+	}
+
+	entered := false
+	err = oldHandle.WithImmediateTx(ctx, func(tx *sql.Tx) error {
+		entered = true
+		return nil
+	})
+	if err == nil {
+		t.Fatal("WithImmediateTx on a handle whose migrations stop at version 1 unexpectedly succeeded against a version-2 ledger")
+	}
+	if entered {
+		t.Error("WithImmediateTx's callback ran against a ledger version this handle does not support")
+	}
+	if !strings.Contains(err.Error(), "newer than this binary supports") {
+		t.Errorf("error = %q, want it to mention the binary does not support the ledger's version", err)
 	}
 }
 

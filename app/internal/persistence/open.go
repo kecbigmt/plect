@@ -119,7 +119,7 @@ func (db *DB) Close() error {
 // to fn's error rather than replacing it, so a genuine fn error is never
 // masked by a rollback failure.
 func (db *DB) WithImmediateTx(ctx context.Context, fn func(*sql.Tx) error) error {
-	unlock, err := db.gate.enterShared(ctx)
+	unlock, err := db.enterNormalAccess(ctx)
 	if err != nil {
 		return err
 	}

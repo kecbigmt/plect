@@ -224,13 +224,9 @@ func TestEnsureCurrent_InterruptedMigrationPreservesEvidenceAndResumesAfterFix(t
 	}
 }
 
-// TestEnsureCurrent_ConcurrentFreshOpenNeverCollides is the direct
-// regression test for the same first-touch race
-// app/internal/persistence/lock.go's narrow flock (in a sibling PR) closed
-// separately: several processes pinging the same not-yet-existent database
-// file for the first time race on creating its WAL and shared-memory
-// sidecars. Open's own coordination-lock guard (see open.go) is what
-// prevents that here, with no dedicated lock file.
+// Several processes pinging the same not-yet-existent database file for the
+// first time race on creating its WAL and shared-memory sidecars; Open's
+// coordination-lock guard (see open.go) is what prevents that.
 func TestEnsureCurrent_ConcurrentFreshOpenNeverCollides(t *testing.T) {
 	ctx := context.Background()
 	path := testDBPath(t)
@@ -326,10 +322,6 @@ func TestEnsureCurrent_ConcurrentStartupOnlyOneMigratesAndBothSucceed(t *testing
 	}
 }
 
-// TestAccessGate_EnterSharedWaitsForCoordinationLockRatherThanRefusingImmediately
-// proves the general "wait, don't refuse immediately" shape: enterShared
-// blocks while another holder has the coordination lock exclusively and
-// returns only once that holder releases it.
 func TestAccessGate_EnterSharedWaitsForCoordinationLockRatherThanRefusingImmediately(t *testing.T) {
 	path := testDBPath(t)
 	gate := newAccessGate(path)

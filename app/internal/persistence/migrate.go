@@ -139,3 +139,28 @@ func (db *DB) Version(ctx context.Context) (int64, error) {
 	current, _, err := db.version(ctx)
 	return current, err
 }
+
+// enterNormalAccess is what every normal query and write transaction goes
+// through — the access gate's own enterShared, plus a recheck that this
+// handle's migration source still covers the ledger's current version. The
+// gate alone is not enough: a *DB opened while at the latest version can
+// stay open (and keep passing the gate's locking) across a later migration
+// applied by another process entirely, so each access must also confirm
+// its own binary still understands the schema, not just that no migration
+// is currently in flight.
+func (db *DB) enterNormalAccess(ctx context.Context) (func(), error) {
+	unlock, err := db.gate.enterShared(ctx)
+	if err != nil {
+		return nil, err
+	}
+	current, target, err := db.versionLocked(ctx)
+	if err != nil {
+		unlock()
+		return nil, err
+	}
+	if err := refuseIfNewerThanSupported(current, target); err != nil {
+		unlock()
+		return nil, err
+	}
+	return unlock, nil
+}
