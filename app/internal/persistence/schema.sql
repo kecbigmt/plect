@@ -217,11 +217,10 @@ CREATE TABLE events (
     summary TEXT NOT NULL,
     body TEXT NOT NULL DEFAULT '',
     metadata_json TEXT NOT NULL,
-    delivery_mode TEXT NOT NULL,
-    UNIQUE (session_name, sequence)
+    delivery_mode TEXT NOT NULL
 );
 
-CREATE INDEX events_stream_sequence_idx ON events(session_name, sequence);
+CREATE UNIQUE INDEX events_session_name_sequence ON events(session_name, sequence);
 CREATE INDEX events_stream_id_idx ON events(session_name, event_id);
 
 -- next_sequence is exclusive (event.Cursor.Off); unlike events.sequence, 0 is valid.
