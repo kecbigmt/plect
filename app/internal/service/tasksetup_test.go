@@ -385,10 +385,6 @@ func TestTaskSetup_RunScopedAllowedWhenUp(t *testing.T) {
 	}
 }
 
-// TestTaskSetup_RunScopedRejectedWhenOnlyStaleProducedRecord pins the
-// current-plan fix: a produced task-state entry for a node the workflow no
-// longer declares must not authorize a dynamic run-scoped setup while
-// nothing current-plan is actually up.
 func TestTaskSetup_RunScopedRejectedWhenOnlyStaleProducedRecord(t *testing.T) {
 	cfg := writeWorkflowFixture(t, t.TempDir(), "coding",
 		[]taskFixture{{id: "storybook", scope: "run", setup: `echo '{}'`}},
