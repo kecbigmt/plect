@@ -29,13 +29,13 @@ The issue reports this through several concrete failures:
   up transition, so an in-place repair cannot rely on that event to reach a
   session's conversation channel (#394).
 
-The decisions here keep output records as records of production. They add the
-missing authorities that answer whether those records may be reused, whether a
-run is fully usable, and what happened to each node attempt.
+The decisions here keep output records as records of production. They make
+liveness the authority for reusing those records, extend health to name an
+incomplete run, and record what happened to each node attempt.
 
 ## Decision
 
-### 1. Validity probes and verify-before-skip
+### 1. Liveness verification and verify-before-skip
 
 #### Options
 
@@ -43,29 +43,25 @@ run is fully usable, and what happened to each node attempt.
 |---|---|---|
 | Do not build this | prompt | Rejected. Operators can add recovery instructions, but a prompt cannot make `plect up` distinguish reusable outputs from stale outputs. |
 | Require deployments to down then up before every resume | prompt | Rejected. It makes every caller duplicate lifecycle policy and still gives no per-node reason in state or events. |
-| Use existing health probes as the skip authority | core | Rejected. Health answers whether a produced surface is alive and moving; reuse also applies to session-scoped effects and output validity that may not be part of session health. |
-| Add effect validity probes and verify produced nodes before skipping | config, plugin, core | Recommended. Plugins own the executable knowledge of their surfaces, configuration declares the probe, and core owns the lifecycle decision to reuse or rebuild. |
+| Add a second validity probe | config, plugin, core | Rejected. No shipped setup-bearing effect has a reuse condition distinct from liveness, so a second executable surface would be speculative. |
+| Use `[health].alive` as the skip authority | config, plugin, core | Recommended. The existing liveness probe answers whether a produced surface still exists; core runs it at the explicit reuse decision. |
 
 #### Recommendation
 
-An effect with a `setup` action declares a `valid` action unless it has no
-external lifecycle surface to reuse. `valid` is an effect-level lifecycle
-member beside `setup`, `cleanup`, `[health]`, and `[terminal]`. Its roots match
-`cleanup`: `self.outputs.*`, `inputs.*`, `nodes.*`, `workflow.outputs.*`,
-`session.*`, and `workspace.*`. Exit zero means the stored instance can be
-reused. Non-zero exit, an unresolved required value, timeout, or invalid action
-configuration means the instance is invalid.
+`[health].alive` is the executable authority for reusing a produced effect.
+It already observes the effect's own outputs, resolved inputs, session, and
+workspace, and exit zero already means that its owned surface is present. At
+`plect up`, core runs that action for every produced node, including a
+session-scoped node that does not participate in the periodic run health
+composition. A non-zero exit, an unresolved required value, timeout, or invalid
+action configuration means that node cannot be reused.
 
-This follows [Puppet's `onlyif` and `unless` guards](https://help.puppet.com/core/current/Content/PuppetCore/Markdown/exec.htm)
-and [systemd's `ExecCondition`](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html#ExecCondition=):
-an executable predicate decides whether a lifecycle action proceeds. It also
-follows [Kubernetes' separation of readiness from liveness](https://kubernetes.io/docs/concepts/workloads/pods/probes/):
-reuse eligibility and ongoing health answer different questions. Plecture
-borrows the separate, executable pre-action predicate, not an expression
-language, traffic routing, service-start suppression, or an automatic restart
-policy. `valid` runs once at the explicit reuse decision; a failed result
-invalidates the stored production record for convergence rather than becoming a
-health verdict.
+The ordinary health cycle executes probes only for produced run-scoped nodes,
+but it also inspects every current-plan run-scoped task record for failed or
+missing nodes. It reports a liveness or structural failure but never repairs it
+automatically. Repair occurs only during an explicit `plect up`; this avoids
+making a periodic observation cycle mutate external resources or retry a
+provider action without operator or workflow intent.
 
 ```toml
 [gh_app_guard]
@@ -82,11 +78,11 @@ type = "exec"
 bin  = "gh-app-guard"
 args = ["cleanup", "--dir", { from = "self.outputs.dir" }]
 
-[gh_app_guard.valid]
+[gh_app_guard.health.alive]
 type = "shell"
 script = 'test -x "$dir/gh"'
 
-[gh_app_guard.valid.bind]
+[gh_app_guard.health.alive.bind]
 dir = { from = "self.outputs.dir" }
 
 [gh_app_guard.outputs_schema]
@@ -97,44 +93,42 @@ required = ["dir"]
 dir = { type = "string" }
 ```
 
-`plect up` verifies before it skips a produced workflow node. The walk is still
+`plect up` verifies before it skips a produced workflow node. The walk remains
 dependency ordered:
 
-1. A produced node with no declared `valid` action is skipped only when the
-   effect explicitly declares `validity = "record"`.
-2. A produced node whose `valid` action succeeds is skipped.
-3. A produced node whose `valid` action fails is marked failed with the
-   validation error, then the node and its produced dependents are cleaned in
+1. A produced node with `[health].alive` is skipped only when that action
+   succeeds.
+2. A produced node with `reuse = "record"` is skipped from its record.
+3. A produced node whose liveness action fails is marked failed with the
+   liveness error, then the node and its produced dependents are cleaned in
    reverse dependency order using their stored outputs.
 4. Setup resumes from the first invalidated node in dependency order.
 
-`validity = "record"` is a conscious declaration that the production record is
-the whole durable truth. The loader rejects a setup-bearing effect that declares
-neither `valid` nor `validity = "record"`, so missing validity is not silently
-treated as reusable.
+`reuse = "record"` means Plecture deliberately does not ask whether the
+produced entity still persists. It does not mean that the effect has no
+external entity: a Slack thread is record-only because recreating a deleted
+thread would split its conversation. The marker makes the record, rather than
+an existence probe, the skip authority for that effect.
 
-`valid` composes per layer in a nesting chain, as
-[`setup`, `cleanup`, and `[health]` do in task nesting](../design/task-nesting.md).
-Every declared `[valid]` action succeeds for the composed effect only when all
-declared actions succeed; the composition is AND. A layer that declares
-`validity = "record"` contributes a successful record-only verdict, so an outer
-layer may use `validity = "record"` while an inner layer declares `[valid]`;
-that combination is valid and still evaluates the inner action.
-Within a layer's `[valid]`, `self.outputs.*` names that layer's own stored
-outputs, exactly as that layer's `cleanup` action reads them. It does not name
-another layer's outputs or the outermost projected public outputs.
+This follows [systemd's `RemainAfterExit=`](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html#RemainAfterExit=),
+where configuration declares that service state is retained after the process
+that established it has exited. Plecture borrows only the explicit declaration
+that it must not infer present external state from a past action; it does not
+adopt systemd's service-state model.
 
-At load time, an effect with `setup` declares exactly one of `[valid]` and
-`validity = "record"`. `validity` accepts only the string `"record"`. On an
-effect with no `setup`, either `[valid]` or `validity` is a load error. These
-rules apply independently to every layer of a nesting chain; `[valid]` also
-obeys the ordinary action-table validation.
+At load time, every setup-bearing effect declares exactly one of
+`[health].alive` and `reuse = "record"`. `reuse` accepts only the string
+`"record"`. On an effect with no `setup`, `reuse` is a load error. These rules
+apply independently to every layer of a nesting chain. A layer's existing
+`[health].alive` composes by AND with the other layers' liveness probes, while
+a `reuse = "record"` layer contributes no probe and does not suppress an inner
+layer's liveness check.
 
 ```toml
 [write_instruction]
 kind     = "effect"
 scope    = "session"
-validity = "record"
+reuse    = "record"
 
 [write_instruction.setup]
 type = "shell"
@@ -145,63 +139,58 @@ This is a config, plugin, and core decision:
 
 - Prompt cannot enforce it because a human instruction cannot change
   lifecycle skip semantics.
-- Config alone can describe the probe but cannot decide when to run it.
-- Plugin code owns provider-specific checks such as testing a socket, process,
-  generated wrapper, or subscription registration.
+- Config declares the existing probe or the record-only exception but cannot
+  decide when to run it.
+- Plugin code owns liveness checks such as testing a socket, process, generated
+  wrapper, or subscription registration.
 - Core owns the only safe place to compare the stored production record with
-  the declared validity result and choose skip, cleanup, or setup.
+  the liveness result and choose skip, cleanup, or setup.
 
-Validation failure is not a health verdict. It is a lifecycle reuse verdict.
-Health continues to report the state of produced run-scoped effects between
-`up` calls.
+This does not add a second configuration-language action. A future effect with
+a concrete reuse condition stricter than liveness is the evidence required to
+consider one.
 
-### 2. Degraded run state
+### 2. Complete-plan health and binary run state
 
 #### Options
 
 | Option | Layer | Assessment |
 |---|---|---|
 | Do not build this | prompt | Rejected. Dispatchers would keep reconstructing partial failure by comparing task maps against workflow plans. |
-| Fold partial failure into health | core | Rejected. A run can be structurally incomplete even when every declared health probe on the produced prefix passes. |
-| Add `degraded` to the run state reported by `plect ls --json` | core | Recommended. Run state is the lifecycle completeness signal, not a probe signal. |
+| Add `degraded` to the run state | core | Rejected. It changes a binary capacity signal into a tri-state value and makes every current run consumer decide whether `degraded` is up-like. |
+| Compose health over the current plan | core | Recommended. Health can name a failed or missing node, while `run` keeps its capacity meaning. |
 
 #### Recommendation
 
-`domain.RunState` gains `degraded` as a third value. It is derived, not stored:
+`domain.RunState` remains binary and derived from produced run-scoped nodes:
+`up` means that at least one current-plan run-scoped node is produced, and
+`down` means none is. A workflow with no current-plan run-scoped nodes is
+`down`. This keeps `run` as the capacity and cleanup signal consumed by child
+capacity, population presence, and `plect down`.
 
-- `down`: no current-plan run-scoped node is produced.
-- `up`: every current-plan run-scoped node is produced, and no current-plan
-  run-scoped node is failed.
-- `degraded`: at least one current-plan run-scoped node is produced and at
-  least one current-plan run-scoped node is failed or missing.
+Health composes over every current-plan run-scoped node rather than only the
+produced subset. A produced node evaluates its declared `alive` probe in the
+ordinary way. A failed or missing node makes the session `unhealthy` directly,
+with a reason naming the node and its failed dependency or setup error. That
+rule also covers a failed `reuse = "record"` node, which has no existence probe
+to run. Activity continues to compose from produced instances only.
 
-A workflow with no current-plan run-scoped nodes is `down`; `down` wins the
-empty-plan case so the three states remain mutually exclusive.
+A stale task entry for a node no longer in the workflow contributes to neither
+run nor health; stale-node cleanup owns that lifecycle. A failed session-scoped
+node blocks create or repair, but it does not itself change the run-scoped
+health report.
 
-A stale task entry for a node no longer in the workflow does not make the run
-degraded; stale-node cleanup already handles that lifecycle. A failed
-session-scoped node blocks create or repair, but it is not itself a run state.
-
-`plect ls --json` exposes the derived value and a compact reason object. The
-human table prints `degraded` in the RUN column and still prints health for the
-produced run surface, because health and lifecycle completeness are distinct.
+`plect ls --json` keeps its existing binary `run` value and reports the
+incomplete run through `health`; the health report's `Reason` names the failed
+or missing node. The human table likewise reports `up` with `unhealthy` when a
+produced prefix is missing a required run-scoped node.
 
 ```json
 [
   {
     "session_name": "kecbigmt/plecture-371+review_agent",
-    "run": "degraded",
-    "run_reason": {
-      "failed": [
-        {
-          "node": "agent",
-          "status": "failed",
-          "error": "setup: launch timeout after 120s"
-        }
-      ],
-      "missing": ["slack_subscribe"]
-    },
-    "health": "healthy",
+    "run": "up",
+    "health": "unhealthy",
     "display_status": "review",
     "resource_id": "https://github.com/kecbigmt/plecture/issues/371",
     "tracked": true
@@ -214,9 +203,8 @@ state for every workflow because only core has the frozen workflow, current
 plan, persisted task map, and state-listing API in one place. Config cannot
 absorb it without making every workflow restate the same completeness rule.
 
-No state-file migration is required for the recommendation because `degraded`
-is computed from existing task records and the current plan. JSON consumers
-must accept the new `run` enum value in the same release that documents it.
+No state-file migration is required. Health reads the existing task records and
+the current plan, while `run` retains its existing two values.
 
 ### 3. Node-result lifecycle events
 
@@ -231,8 +219,8 @@ must accept the new `run` enum value in the same release that documents it.
 #### Recommendation
 
 Core emits `plect.node.result` to the affected session log whenever a workflow
-node's setup, cleanup, or validity action completes or is skipped after a
-successful validity check. The event is internal, sourced from `plect`, and
+node's setup, cleanup, or liveness verification completes or is skipped after
+a successful liveness check. The event is internal, sourced from `plect`, and
 deduplicated only by the event log's ordinary append identity; repeated
 attempts are separate facts.
 
@@ -347,7 +335,8 @@ returning failure.
 #### Recommendation
 
 Plain `plect up` is the safe repair operation: it verifies produced nodes
-before skipping and rebuilds only invalid nodes and their dependents.
+before skipping and rebuilds only nodes whose liveness check failed and their
+dependents.
 
 The boolean `--force-recreate` is retired and replaced by an explicit scoped
 mode:
@@ -394,8 +383,8 @@ transition. A workflow channel that includes `plect.node.result` receives those
 events whenever its input bindings can be resolved.
 
 The population evaluator continues to emit `plect.workflow_population.up` only
-for a genuine transition into run `up`. In-place verification, skipped valid
-nodes, invalid-node repair, and failed repair are expressed by
+for a genuine transition into run `up`. In-place liveness verification,
+skipped nodes, liveness-triggered repair, and failed repair are expressed by
 `plect.node.result`.
 
 ```toml
@@ -418,31 +407,25 @@ transition, and a prompt cannot deliver events into a workflow channel.
 
 `plect up` becomes a convergence operation rather than a produced-record
 skip. A stale output no longer remains trusted merely because setup once
-succeeded. The cost is that `up` can run validity probes before returning; a
+succeeded. The cost is that `up` can run liveness probes before returning; a
 plugin author must keep those probes cheap and bounded.
 
-Effect definitions with setup actions gain an explicit validity obligation:
-either declare `[valid]` or declare `validity = "record"`. This is a breaking
+Effect definitions with setup actions gain an explicit reuse obligation: either
+declare `[health].alive` or declare `reuse = "record"`. This is a breaking
 configuration-language change. The one-time migration is:
 
-1. For every setup-bearing effect, add a provider-owned `[valid]` action that
-   checks the reusable surface or outputs.
-2. For effects whose production record is the whole truth, add
-   `validity = "record"`.
+1. For every setup-bearing effect whose entity may safely be recreated, add a
+   provider-owned `[health].alive` action that checks its reusable surface.
+2. For effects whose entity Plecture deliberately does not check for
+   persistence, add `reuse = "record"`.
 3. Run the config-language conformance fixtures and plugin selftests for the
    changed plugins.
 
-`plect ls --json` consumers must accept `"run": "degraded"` and may read
-`run_reason` for the failing or missing nodes. No durable state rewrite is
-required because the value is derived from the current workflow plan and
-existing task records.
-
-`run_reason` is present whenever current-plan entries are failed or missing,
-including when the resulting `run` is `down`; it is absent only when neither
-set has entries. A list or status operation whose current plan cannot be built
-fails with the plan-resolution error rather than assigning that session a
-derived `run` value. Without a current plan, neither `down`, `up`, nor
-`degraded` is authoritative.
+`plect ls --json` consumers retain the existing binary `run` enum. Health
+reports now name failed or missing current-plan run nodes. A session whose plan
+cannot be resolved retains its derived run state from task records and reports
+the plan-resolution error as health evaluation failure for that session; one
+broken workflow does not prevent other sessions from being listed.
 
 Node-result events make setup progress and failure visible to session
 channels, event subscribers, and population-produced sessions without changing
@@ -465,52 +448,47 @@ after owner ratification.
 
 ## Alternatives considered
 
-### Make health the only validity mechanism
+### Add a separate validity mechanism
 
-Rejected. Health and validity answer different questions. Health asks whether
-a produced run surface is alive and moving during observation. Validity asks
-whether stored outputs may be reused during lifecycle convergence. A
-session-scoped credential wrapper, a registration record, and a run-scoped
-socket can all need validity checks even when they are not useful health
-signals.
+Rejected. The shipped setup-bearing effects do not demonstrate a reuse
+condition stricter than liveness. A second probe would duplicate existing
+`[health].alive` actions for run-scoped surfaces and add a new lifecycle member
+without a concrete consumer. Session-scoped effects use the same probe at
+`plect up` without joining periodic run health.
 
-### Store validity as a second durable truth
+### Store liveness as a second durable truth
 
-Rejected. Persisting a validity result would create another stale latch. The
-only durable truth remains the production record; validity is re-evaluated at
+Rejected. Persisting a liveness result would create another stale latch. The
+only durable truth remains the production record; liveness is re-evaluated at
 the lifecycle decision point where reuse is about to happen.
 
-### Use one syntax for validity
+### Treat every effect record as reusable
 
-Rejected. `[valid]` is an executable action with the ordinary action-table
-shape, while `validity = "record"` is a closed declaration that no action is
-needed because that layer's record is authoritative. Treating them as two
-forms of one table would make an action table carry a non-action marker, and a
-marker inside `[valid]` would hide the distinction between a probe that runs
-and a layer that has none. The two keys therefore express two different
-sources of the same reuse verdict; the exclusive load rule makes that choice
-unambiguous.
+Rejected. A deleted Slack thread must not be recreated automatically because a
+replacement splits the conversation, yet Plecture cannot confirm the old
+thread persists. `reuse = "record"` makes that deliberate non-observation
+visible. Without the marker, a missing probe would silently become an
+unreviewed reuse policy.
 
-### Treat any failed node as `down`
+### Add `degraded` to run state
 
-Rejected. `down` means no run-scoped surface is produced. A partial run with a
-live pane and a failed runtime is not down; it is degraded. Collapsing it to
-`down` would hide the produced side effects that cleanup and inspection still
-need to see.
+Rejected. `run` already answers the binary capacity question: whether a
+run-scoped surface is produced. A partial run remains `up`, and complete-plan
+health makes it `unhealthy` with the missing or failed node named. This keeps
+one meaning for `run` across child capacity, population presence, and cleanup.
 
 ### Emit only one run-level failure event
 
 Rejected. A run-level event would help humans notice failure, but it would not
-identify every node action, distinguish skipped-valid nodes from repaired
-nodes, or let a workflow channel render progress as the DAG advances. The
-node is the lifecycle unit, so the event is node-scoped.
+identify every node action, distinguish liveness-verified skips from repaired
+nodes, or let a workflow channel render progress as the DAG advances. The node
+is the lifecycle unit, so the event is node-scoped.
 
-### Let workflows declare custom degraded rules
+### Let workflows declare custom incomplete-health rules
 
-Rejected. Degraded is a structural lifecycle fact: the current plan is not
-fully produced. Letting workflows redefine it would put two authorities behind
-one `run` value and force dispatchers to re-learn each workflow's private
-meaning.
+Rejected. A failed or missing current-plan run node is a core health fact.
+Letting workflows redefine it would put two authorities behind the health
+report and force dispatchers to re-learn each workflow's private meaning.
 
 ### Keep `--force-recreate` and add safer flags beside it
 
