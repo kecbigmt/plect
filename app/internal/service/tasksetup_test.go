@@ -387,7 +387,7 @@ func TestTaskSetup_AppendsExtraDoneWhen(t *testing.T) {
 	res, err := TaskSetup(cfg, store, TaskSetupParams{
 		TaskID:            "work",
 		SessionName:       "o/r-1",
-		ExtraDoneWhenJSON: `{"all":[{"judge":"Codex review approved","id":"codex-review","reviewer_workflow":"codex","reject_self":true}]}`,
+		ExtraDoneWhenJSON: `{"all":[{"judge":"Codex review approved","id":"codex-review","judge_workflow":"codex","reject_self":true}]}`,
 	})
 	if err != nil {
 		t.Fatalf("TaskSetup: %v", err)

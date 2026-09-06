@@ -104,21 +104,21 @@ type CheckResult struct {
 }
 
 type CheckUnmetItem struct {
-	Kind             string          `json:"kind"`
-	Expr             string          `json:"expr"`
-	Status           task.DoneStatus `json:"status"`
-	ID               string          `json:"id,omitempty"`
-	Output           string          `json:"output,omitempty"`
-	Value            string          `json:"value,omitempty"`
-	Observed         bool            `json:"observed,omitempty"`
-	Action           string          `json:"action,omitempty"`
-	Reason           string          `json:"reason,omitempty"`
-	PendingReason    string          `json:"pending_reason,omitempty"`
-	Revision         string          `json:"revision,omitempty"`
-	CurrentRevision  string          `json:"current_revision,omitempty"`
-	ReviewerSession  string          `json:"reviewer_session,omitempty"`
-	ReviewerWorkflow string          `json:"reviewer_workflow,omitempty"`
-	Relation         string          `json:"relation,omitempty"`
+	Kind            string          `json:"kind"`
+	Expr            string          `json:"expr"`
+	Status          task.DoneStatus `json:"status"`
+	ID              string          `json:"id,omitempty"`
+	Output          string          `json:"output,omitempty"`
+	Value           string          `json:"value,omitempty"`
+	Observed        bool            `json:"observed,omitempty"`
+	Action          string          `json:"action,omitempty"`
+	Reason          string          `json:"reason,omitempty"`
+	PendingReason   string          `json:"pending_reason,omitempty"`
+	Revision        string          `json:"revision,omitempty"`
+	CurrentRevision string          `json:"current_revision,omitempty"`
+	JudgeSession    string          `json:"judge_session,omitempty"`
+	JudgeWorkflow   string          `json:"judge_workflow,omitempty"`
+	Relation        string          `json:"relation,omitempty"`
 }
 
 // computedAction bundles one instance's done_when evaluation with the

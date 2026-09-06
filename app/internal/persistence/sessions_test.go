@@ -328,8 +328,8 @@ func TestPutSession_WithDoneWhenAndJudgesRoundTrips(t *testing.T) {
 					Judges: map[string]*contract.DoneWhenJudge{
 						"leaf-a": {
 							LeafID: "leaf-a", Action: "approve", Reason: "looks good",
-							Revision: "sha1", TargetSession: "reviewed", Instance: "impl",
-							ReviewerSession: "reviewer1", ReviewerWorkflow: "coding-agent",
+							Revision:     "sha1",
+							JudgeSession: "reviewer1", JudgeWorkflow: "coding-agent",
 							Relation: "sibling", CreatedAt: now,
 						},
 					},
@@ -359,7 +359,7 @@ func TestPutSession_WithDoneWhenAndJudgesRoundTrips(t *testing.T) {
 	if judge == nil {
 		t.Fatal("judge leaf-a missing")
 	}
-	if judge.Action != "approve" || judge.ReviewerSession != "reviewer1" || judge.Instance != "impl" {
+	if judge.Action != "approve" || judge.JudgeSession != "reviewer1" {
 		t.Errorf("judge = %+v", judge)
 	}
 	if !judge.CreatedAt.Equal(now) {

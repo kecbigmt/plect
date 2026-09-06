@@ -398,11 +398,13 @@ func recordLifecycle(store *state.Store, sessionName, phase, summary string) {
 }
 
 // recordJudgeRecorded appends the plect.judge.recorded builtin trigger to the
-// *target* session's own log (not the reviewer's) — RecordJudge already
-// resolved judge.TargetSession as sessionName. The tick reactor always ticks
-// on this event regardless of any `[tick]` declaration; best-effort like
-// recordLifecycle.
-func recordJudgeRecorded(store *state.Store, sessionName string, judge *contract.DoneWhenJudge) {
+// *target* session's own log (not the judge's) — RecordJudge already resolved
+// the judged session as sessionName, and instance names the task instance the
+// verdict was recorded against (the contract's DoneWhenJudge carries neither,
+// since both are always the caller's own context rather than a duplicated
+// record field). The tick reactor always ticks on this event regardless of
+// any `[tick]` declaration; best-effort like recordLifecycle.
+func recordJudgeRecorded(store *state.Store, sessionName, instance string, judge *contract.DoneWhenJudge) {
 	if sessionName == "" || judge == nil {
 		return
 	}
@@ -411,16 +413,16 @@ func recordJudgeRecorded(store *state.Store, sessionName string, judge *contract
 		Type:        event.TypeJudgeRecorded,
 		Source:      event.SourcePlect,
 		Direction:   event.Internal,
-		Summary:     fmt.Sprintf("judge %s recorded (%s) by %s", judge.LeafID, judge.Action, judge.ReviewerSession),
+		Summary:     fmt.Sprintf("judge %s recorded (%s) by %s", judge.LeafID, judge.Action, judge.JudgeSession),
 		Body:        judge.Reason,
 		Metadata: map[string]string{
-			"instance":          judge.Instance,
-			"leaf_id":           judge.LeafID,
-			"action":            judge.Action,
-			"revision":          judge.Revision,
-			"reviewer_session":  judge.ReviewerSession,
-			"reviewer_workflow": judge.ReviewerWorkflow,
-			"relation":          judge.Relation,
+			"instance":       instance,
+			"leaf_id":        judge.LeafID,
+			"action":         judge.Action,
+			"revision":       judge.Revision,
+			"judge_session":  judge.JudgeSession,
+			"judge_workflow": judge.JudgeWorkflow,
+			"relation":       judge.Relation,
 		},
 	})
 }

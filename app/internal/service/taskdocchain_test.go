@@ -132,7 +132,7 @@ func TestCheckSession_TaskDocumentChainBlockedWhileItsTriggerIsUnmet(t *testing.
 
 	if _, err := RecordJudge(cfg, store, JudgeParams{
 		SessionName: "org/repo-1", Instance: instance, LeafID: "goal-met",
-		Action: task.JudgeActionApprove, Reason: "done", ReviewerSession: "org/repo-2",
+		Action: task.JudgeActionApprove, Reason: "done", JudgeSession: "org/repo-2",
 	}); err != nil {
 		t.Fatalf("RecordJudge: %v", err)
 	}

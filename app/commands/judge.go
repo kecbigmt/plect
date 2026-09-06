@@ -12,9 +12,9 @@ import (
 )
 
 var (
-	judgeReason          string
-	judgeRevision        string
-	judgeReviewerSession string
+	judgeReason   string
+	judgeRevision string
+	judgeSession  string
 )
 
 var judgeCmd = &cobra.Command{
@@ -33,13 +33,13 @@ func newJudgeActionCmd(use, action, short string) *cobra.Command {
 				return err
 			}
 			result, err := service.RecordJudge(cfg, state.NewStore(""), service.JudgeParams{
-				SessionName:     args[0],
-				Instance:        args[1],
-				LeafID:          args[2],
-				Action:          action,
-				Reason:          judgeReason,
-				Revision:        judgeRevision,
-				ReviewerSession: judgeReviewerSession,
+				SessionName:  args[0],
+				Instance:     args[1],
+				LeafID:       args[2],
+				Action:       action,
+				Reason:       judgeReason,
+				Revision:     judgeRevision,
+				JudgeSession: judgeSession,
 			})
 			if err != nil {
 				return err
@@ -56,7 +56,7 @@ func init() {
 	for _, cmd := range []*cobra.Command{approveCmd, requestChangesCmd} {
 		cmd.Flags().StringVar(&judgeReason, "reason", "", "Reason for this judge action")
 		cmd.Flags().StringVar(&judgeRevision, "revision", "", "Opaque revision reviewed (defaults to the instance revision output)")
-		cmd.Flags().StringVar(&judgeReviewerSession, "reviewer-session", "", "Reviewer session name (defaults to $PLECT_SESSION_NAME; provenance-constrained judges require it to match the ambient reviewer pane)")
+		cmd.Flags().StringVar(&judgeSession, "judge-session", "", "Judge session name (defaults to $PLECT_SESSION_NAME; provenance-constrained judges require it to match the ambient judge pane)")
 		cmd.MarkFlagRequired("reason")
 		judgeCmd.AddCommand(cmd)
 	}

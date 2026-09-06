@@ -510,13 +510,13 @@ all = [ { judge_pending = "ac-met" } ]
 	setParent(t, store, "owner/repo-1+review-work", "owner/repo-orch")
 	// Record an approving sibling verdict at the current revision.
 	if _, err := RecordJudge(cfg, store, JudgeParams{
-		SessionName:     "owner/repo-1",
-		Instance:        "work",
-		LeafID:          "ac-met",
-		Action:          "approve",
-		Reason:          "verified",
-		Revision:        "sha1",
-		ReviewerSession: "owner/repo-1+review-work",
+		SessionName:  "owner/repo-1",
+		Instance:     "work",
+		LeafID:       "ac-met",
+		Action:       "approve",
+		Reason:       "verified",
+		Revision:     "sha1",
+		JudgeSession: "owner/repo-1+review-work",
 	}); err != nil {
 		t.Fatalf("RecordJudge: %v", err)
 	}

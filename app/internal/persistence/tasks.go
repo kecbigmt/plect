@@ -246,11 +246,6 @@ func insertDoneWhenTx(ctx context.Context, q *sqlcgen.Queries, taskInstanceID st
 	})
 }
 
-// insertJudgeTx never writes TargetSession/Instance: task_instance_id's own
-// parent row is always the judged session/instance (verified: judge.go's
-// one write site always stores a verdict on the same session/instance it
-// names as TargetSession/Instance), so the persistence boundary derives
-// them from the join instead of duplicating them as columns.
 func insertJudgeTx(ctx context.Context, q *sqlcgen.Queries, taskInstanceID, leafID string, judge *contract.DoneWhenJudge) error {
 	return q.InsertTaskDoneWhenJudge(ctx, sqlcgen.InsertTaskDoneWhenJudgeParams{
 		TaskInstanceID: taskInstanceID,
@@ -258,29 +253,27 @@ func insertJudgeTx(ctx context.Context, q *sqlcgen.Queries, taskInstanceID, leaf
 		Action:         judge.Action,
 		Reason:         judge.Reason,
 		Revision:       judge.Revision,
-		JudgeSession:   judge.ReviewerSession,
-		JudgeWorkflow:  nullString(judge.ReviewerWorkflow),
+		JudgeSession:   judge.JudgeSession,
+		JudgeWorkflow:  nullString(judge.JudgeWorkflow),
 		Relation:       judge.Relation,
 		CreatedAt:      formatTime(judge.CreatedAt),
 	})
 }
 
-func judgeFromRow(r sqlcgen.ListTaskDoneWhenJudgesForSessionRow) (*contract.DoneWhenJudge, error) {
+func judgeFromRow(r sqlcgen.TaskDoneWhenJudge) (*contract.DoneWhenJudge, error) {
 	createdAt, err := parseTime(r.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("parse judge %q/%q created_at: %w", r.TaskInstanceID, r.LeafID, err)
 	}
 	return &contract.DoneWhenJudge{
-		LeafID:           r.LeafID,
-		Action:           r.Action,
-		Reason:           r.Reason,
-		Revision:         r.Revision,
-		TargetSession:    r.TargetSession,
-		Instance:         r.TargetInstance,
-		ReviewerSession:  r.JudgeSession,
-		ReviewerWorkflow: r.JudgeWorkflow.String,
-		Relation:         r.Relation,
-		CreatedAt:        createdAt,
+		LeafID:        r.LeafID,
+		Action:        r.Action,
+		Reason:        r.Reason,
+		Revision:      r.Revision,
+		JudgeSession:  r.JudgeSession,
+		JudgeWorkflow: r.JudgeWorkflow.String,
+		Relation:      r.Relation,
+		CreatedAt:     createdAt,
 	}, nil
 }
 

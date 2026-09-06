@@ -119,12 +119,11 @@ CREATE TABLE task_done_when_states (
 );
 
 -- judge_session is a stored fact (the verdict must still read correctly
--- after the reviewer session is destroyed); judge_workflow is nullable
--- since a reviewer created via the legacy inline-tasks path has none. The
+-- after the judge session is destroyed); judge_workflow is nullable
+-- since a judge created via the legacy inline-tasks path has none. The
 -- judged side is not stored here at all: task_instance_id's own parent row
 -- (session_name, instance_name) is always the judged session/instance, so
--- the persistence boundary derives DoneWhenJudge.TargetSession/Instance
--- from that join rather than duplicating it as columns.
+-- the contract's DoneWhenJudge carries no separate target field for it.
 CREATE TABLE task_done_when_judges (
     task_instance_id TEXT NOT NULL REFERENCES task_instances(id) ON DELETE CASCADE,
     leaf_id TEXT NOT NULL,

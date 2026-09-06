@@ -147,12 +147,12 @@ func judgeEvidenceFromLeaves(leaves []task.DoneLeafResult) []task.FinalizeJudgeE
 			continue
 		}
 		out = append(out, task.FinalizeJudgeEvidence{
-			ID:               leaf.ID,
-			Reason:           leaf.Reason,
-			Revision:         leaf.Revision,
-			ReviewerSession:  leaf.ReviewerSession,
-			ReviewerWorkflow: leaf.ReviewerWorkflow,
-			Relation:         leaf.Relation,
+			ID:            leaf.ID,
+			Reason:        leaf.Reason,
+			Revision:      leaf.Revision,
+			JudgeSession:  leaf.JudgeSession,
+			JudgeWorkflow: leaf.JudgeWorkflow,
+			Relation:      leaf.Relation,
 		})
 	}
 	return out

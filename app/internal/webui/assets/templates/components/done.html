@@ -11,7 +11,7 @@
 {{- /* done-leaf: one done_when leaf. Arg is a task.DoneLeafResult. A check leaf
        shows output=value (? until observed — acquisition and evaluation are
        separate, so an unobserved value reads pending, not failing). A judge leaf
-       shows action / reason / a stale-revision note / reviewer session / pending
+       shows action / reason / a stale-revision note / judge session / pending
        reason, so the gate's blocker is legible without dropping to the CLI. */ -}}
 {{define "done-leaf"}}
 {{- if eq .Kind "check" }}
@@ -30,7 +30,7 @@
     </div>
     {{- if .Reason }}<div class="break-words text-muted-foreground">{{ .Reason }}</div>{{ end }}
     {{- if and .Revision .CurrentRevision (ne .Revision .CurrentRevision) }}<div class="text-muted-foreground">revision <span class="font-mono">{{ .Revision }}</span> ≠ <span class="font-mono">{{ .CurrentRevision }}</span> (stale)</div>{{ end }}
-    {{- if .ReviewerSession }}<div class="break-all text-muted-foreground">reviewer: <span class="font-mono">{{ .ReviewerSession }}</span></div>{{ end }}
+    {{- if .JudgeSession }}<div class="break-all text-muted-foreground">judge: <span class="font-mono">{{ .JudgeSession }}</span></div>{{ end }}
     {{- if .PendingReason }}<div class="break-words text-muted-foreground">pending: {{ .PendingReason }}</div>{{ end }}
   </div>
 </div>

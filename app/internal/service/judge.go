@@ -18,22 +18,22 @@ const outputKeyRevision = "revision"
 const outputKeyMergeableState = "mergeable_state"
 
 type JudgeParams struct {
-	SessionName     string
-	Instance        string
-	LeafID          string
-	Action          string
-	Reason          string
-	Revision        string
-	ReviewerSession string
+	SessionName  string
+	Instance     string
+	LeafID       string
+	Action       string
+	Reason       string
+	Revision     string
+	JudgeSession string
 }
 
 type JudgeResult struct {
-	SessionName     string `json:"session_name"`
-	Instance        string `json:"instance"`
-	LeafID          string `json:"leaf_id"`
-	Action          string `json:"action"`
-	Revision        string `json:"revision"`
-	ReviewerSession string `json:"reviewer_session,omitempty"`
+	SessionName  string `json:"session_name"`
+	Instance     string `json:"instance"`
+	LeafID       string `json:"leaf_id"`
+	Action       string `json:"action"`
+	Revision     string `json:"revision"`
+	JudgeSession string `json:"judge_session,omitempty"`
 }
 
 func RecordJudge(cfg *config.Config, store *state.Store, params JudgeParams) (*JudgeResult, error) {
@@ -71,22 +71,22 @@ func RecordJudge(cfg *config.Config, store *state.Store, params JudgeParams) (*J
 	if revision == "" {
 		return nil, &Error{Code: ErrInvalidInput, Message: fmt.Sprintf("revision is required because nothing has reported a %q for instance %q", outputKeyRevision, params.Instance)}
 	}
-	reviewer := params.ReviewerSession
-	if reviewer == "" {
-		reviewer = os.Getenv("PLECT_SESSION_NAME")
+	judgeSession := params.JudgeSession
+	if judgeSession == "" {
+		judgeSession = os.Getenv("PLECT_SESSION_NAME")
 	}
-	if reviewer == "" {
-		return nil, &Error{Code: ErrInvalidInput, Message: "reviewer session is required: pass --reviewer-session or run inside a reviewer plect session pane"}
+	if judgeSession == "" {
+		return nil, &Error{Code: ErrInvalidInput, Message: "judge session is required: pass --judge-session or run inside a judge plect session pane"}
 	}
 	allSessions, err := store.AllE()
 	if err != nil {
 		return nil, err
 	}
-	reviewerWorkflow := ""
-	if rs := allSessions[reviewer]; rs != nil {
-		reviewerWorkflow = rs.Workflow
+	judgeWorkflow := ""
+	if rs := allSessions[judgeSession]; rs != nil {
+		judgeWorkflow = rs.Workflow
 	}
-	relation := string(domain.RelationFromTarget(allSessions, resolvedName, reviewer))
+	relation := string(domain.RelationFromTarget(allSessions, resolvedName, judgeSession))
 	declarations, err := loadDeclarations(cfg, session)
 	if err != nil {
 		return nil, err
@@ -107,20 +107,18 @@ func RecordJudge(cfg *config.Config, store *state.Store, params JudgeParams) (*J
 	// self-review is structurally rejected regardless of leaf policy: a session
 	// can never satisfy its own judge leaf. Which relations a leaf accepts is a
 	// projection-time policy (relation_not_accepted), not a record-time bar.
-	if reviewer == resolvedName {
+	if judgeSession == resolvedName {
 		return nil, &Error{Code: ErrInvalidInput, Message: "judge rejects self-review: a session cannot satisfy its own judge leaf"}
 	}
 	judge := &contract.DoneWhenJudge{
-		LeafID:           params.LeafID,
-		Action:           params.Action,
-		Reason:           params.Reason,
-		Revision:         revision,
-		TargetSession:    resolvedName,
-		Instance:         params.Instance,
-		ReviewerSession:  reviewer,
-		ReviewerWorkflow: reviewerWorkflow,
-		Relation:         relation,
-		CreatedAt:        time.Now(),
+		LeafID:        params.LeafID,
+		Action:        params.Action,
+		Reason:        params.Reason,
+		Revision:      revision,
+		JudgeSession:  judgeSession,
+		JudgeWorkflow: judgeWorkflow,
+		Relation:      relation,
+		CreatedAt:     time.Now(),
 	}
 
 	if err := store.Update(resolvedName, func(s *domain.Session) error {
@@ -145,15 +143,15 @@ func RecordJudge(cfg *config.Config, store *state.Store, params JudgeParams) (*J
 	// the *target* session even with no `[tick]` declared, because judge is
 	// plect's own concept. Best-effort like recordLifecycle — a failed append
 	// must not unwind the verdict that was already durably recorded above.
-	recordJudgeRecorded(store, resolvedName, judge)
+	recordJudgeRecorded(store, resolvedName, params.Instance, judge)
 
 	return &JudgeResult{
-		SessionName:     resolvedName,
-		Instance:        params.Instance,
-		LeafID:          params.LeafID,
-		Action:          params.Action,
-		Revision:        revision,
-		ReviewerSession: reviewer,
+		SessionName:  resolvedName,
+		Instance:     params.Instance,
+		LeafID:       params.LeafID,
+		Action:       params.Action,
+		Revision:     revision,
+		JudgeSession: judgeSession,
 	}, nil
 }
 
@@ -184,25 +182,25 @@ func judgeInputs(src map[string]*contract.DoneWhenJudge, workSession string, ses
 		// Relation presence marks the record shape: every new record stamps a
 		// non-empty relation (RelationFromTarget never returns empty), so its
 		// stamped fields are record-time facts honored verbatim — including a
-		// legitimately empty reviewer workflow. Only a legacy record (written
+		// legitimately empty judge workflow. Only a legacy record (written
 		// before the fields existed, so no relation) is filled from the live
 		// tree, which would otherwise let a new verdict's projection drift.
 		relation := v.Relation
-		reviewerWorkflow := v.ReviewerWorkflow
+		judgeWorkflow := v.JudgeWorkflow
 		if relation == "" {
-			relation = string(domain.RelationFromTarget(sessions, workSession, v.ReviewerSession))
-			if s := sessions[v.ReviewerSession]; s != nil {
-				reviewerWorkflow = s.Workflow
+			relation = string(domain.RelationFromTarget(sessions, workSession, v.JudgeSession))
+			if s := sessions[v.JudgeSession]; s != nil {
+				judgeWorkflow = s.Workflow
 			}
 		}
 		out[id] = task.Judge{
-			LeafID:           v.LeafID,
-			Action:           v.Action,
-			Reason:           v.Reason,
-			Revision:         v.Revision,
-			ReviewerSession:  v.ReviewerSession,
-			ReviewerWorkflow: reviewerWorkflow,
-			Relation:         relation,
+			LeafID:        v.LeafID,
+			Action:        v.Action,
+			Reason:        v.Reason,
+			Revision:      v.Revision,
+			JudgeSession:  v.JudgeSession,
+			JudgeWorkflow: judgeWorkflow,
+			Relation:      relation,
 		}
 	}
 	return out

@@ -17,7 +17,7 @@ import (
 //   - DoneUnsatisfied — the fact is present and the predicate is false (✗).
 //   - DonePending     — the predicate cannot be evaluated yet: a check leaf
 //     reads a key nothing has reported, an expression reads one, or a judge
-//     leaf has no reviewer action.
+//     leaf has no judge action.
 type DoneStatus string
 
 const (
@@ -31,17 +31,17 @@ const (
 	JudgeActionRequestChanges = "request_changes"
 )
 
-// Judge is the read-only reviewer action consumed by the done_when evaluator.
+// Judge is the read-only judge action consumed by the done_when evaluator.
 // Callers own persistence and convert from their state representation at the
 // boundary.
 type Judge struct {
-	LeafID           string `json:"leaf_id"`
-	Action           string `json:"action"`
-	Reason           string `json:"reason,omitempty"`
-	Revision         string `json:"revision,omitempty"`
-	ReviewerSession  string `json:"reviewer_session,omitempty"`
-	ReviewerWorkflow string `json:"reviewer_workflow,omitempty"`
-	Relation         string `json:"relation,omitempty"`
+	LeafID        string `json:"leaf_id"`
+	Action        string `json:"action"`
+	Reason        string `json:"reason,omitempty"`
+	Revision      string `json:"revision,omitempty"`
+	JudgeSession  string `json:"judge_session,omitempty"`
+	JudgeWorkflow string `json:"judge_workflow,omitempty"`
+	Relation      string `json:"relation,omitempty"`
 }
 
 // DoneWhenEvalContext supplies judge actions and the current opaque revision
@@ -56,21 +56,21 @@ type DoneWhenEvalContext struct {
 // output's last-fetched Value (Observed=false until produced) — acquisition and
 // evaluation are separate, so the value is displayable on its own.
 type DoneLeafResult struct {
-	Kind             string     `json:"kind"` // "check" | "judge"
-	Expr             string     `json:"expr"` // human-readable rendering of the leaf
-	Status           DoneStatus `json:"status"`
-	ID               string     `json:"id,omitempty"`
-	Output           string     `json:"output,omitempty"`
-	Value            string     `json:"value,omitempty"`
-	Observed         bool       `json:"observed,omitempty"`
-	Action           string     `json:"action,omitempty"`
-	Reason           string     `json:"reason,omitempty"`
-	Revision         string     `json:"revision,omitempty"`
-	CurrentRevision  string     `json:"current_revision,omitempty"`
-	ReviewerSession  string     `json:"reviewer_session,omitempty"`
-	ReviewerWorkflow string     `json:"reviewer_workflow,omitempty"`
-	Relation         string     `json:"relation,omitempty"`
-	PendingReason    string     `json:"pending_reason,omitempty"`
+	Kind            string     `json:"kind"` // "check" | "judge"
+	Expr            string     `json:"expr"` // human-readable rendering of the leaf
+	Status          DoneStatus `json:"status"`
+	ID              string     `json:"id,omitempty"`
+	Output          string     `json:"output,omitempty"`
+	Value           string     `json:"value,omitempty"`
+	Observed        bool       `json:"observed,omitempty"`
+	Action          string     `json:"action,omitempty"`
+	Reason          string     `json:"reason,omitempty"`
+	Revision        string     `json:"revision,omitempty"`
+	CurrentRevision string     `json:"current_revision,omitempty"`
+	JudgeSession    string     `json:"judge_session,omitempty"`
+	JudgeWorkflow   string     `json:"judge_workflow,omitempty"`
+	Relation        string     `json:"relation,omitempty"`
+	PendingReason   string     `json:"pending_reason,omitempty"`
 }
 
 // DoneWhenResult is the per-instance evaluation of a task's done_when.
@@ -137,7 +137,7 @@ func EvaluateTaskDoneWhen(dw *config.DoneWhen, state CompletionState) DoneWhenRe
 	return EvaluateTaskDoneWhenWithContext(dw, state, DoneWhenEvalContext{})
 }
 
-// EvaluateTaskDoneWhenWithContext evaluates a done_when with reviewer action
+// EvaluateTaskDoneWhenWithContext evaluates a done_when with judge action
 // context for judge leaves. Evaluation is read-only: stale, missing, or
 // self-review action is pending; current request_changes is unsatisfied.
 func EvaluateTaskDoneWhenWithContext(dw *config.DoneWhen, state CompletionState, ctx DoneWhenEvalContext) DoneWhenResult {
@@ -205,13 +205,13 @@ func evalJudgeLeaf(i int, leaf config.DoneWhenLeaf, ctx DoneWhenEvalContext) Don
 	res.Action = judge.Action
 	res.Reason = judge.Reason
 	res.Revision = judge.Revision
-	res.ReviewerSession = judge.ReviewerSession
-	res.ReviewerWorkflow = judge.ReviewerWorkflow
+	res.JudgeSession = judge.JudgeSession
+	res.JudgeWorkflow = judge.JudgeWorkflow
 	res.Relation = judge.Relation
 	rel := domain.SessionRelation(judge.Relation)
 	// self-review is structurally rejected: a verdict from the work session (or
-	// one with no attributable reviewer) can never satisfy a judge leaf.
-	if judge.ReviewerSession == "" || rel == domain.RelationSelf || (ctx.WorkSession != "" && judge.ReviewerSession == ctx.WorkSession) {
+	// one with no attributable judge) can never satisfy a judge leaf.
+	if judge.JudgeSession == "" || rel == domain.RelationSelf || (ctx.WorkSession != "" && judge.JudgeSession == ctx.WorkSession) {
 		res.PendingReason = "self_review"
 		return res
 	}
