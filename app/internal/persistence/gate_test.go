@@ -1,11 +1,13 @@
 package persistence
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/flocktest"
 )
@@ -65,6 +67,60 @@ func TestAccessGate_AccessExclusiveBlocksAccessShared(t *testing.T) {
 		t.Fatal("a shared access probe failed after accessExclusive was released, want it to succeed")
 	}
 	unlockShared()
+}
+
+// TestAccessGate_EnterSharedWaitsForCoordinationLockBeforeTakingAccessShared
+// is the regression test for the race a review of this package's first
+// version caught: accessShared alone lets a brand new operation race in the
+// instant nothing currently holds it exclusively, regardless of a migrator
+// that has already recorded intent by holding the coordination lock — flock
+// has no notion of a queued exclusive waiter deprioritizing a fresh shared
+// request. enterShared closes that gap by making the coordination probe a
+// mandatory prerequisite of every access-shared acquisition, not something
+// only EnsureCurrent's own outermost caller checks once.
+func TestAccessGate_EnterSharedWaitsForCoordinationLockBeforeTakingAccessShared(t *testing.T) {
+	path := testDBPath(t)
+	gate := newAccessGate(path)
+
+	unlockCoord, ok, err := tryFlockPath(gate.coordinationLockPath, syscall.LOCK_EX)
+	if err != nil {
+		t.Fatalf("tryFlockPath: %v", err)
+	}
+	if !ok {
+		t.Fatal("tryFlockPath did not acquire the uncontended coordination lock")
+	}
+
+	type outcome struct {
+		unlock func()
+		err    error
+	}
+	result := make(chan outcome, 1)
+	go func() {
+		unlock, err := gate.enterShared(context.Background())
+		result <- outcome{unlock, err}
+	}()
+
+	select {
+	case r := <-result:
+		if r.unlock != nil {
+			r.unlock()
+		}
+		t.Fatalf("enterShared returned (err=%v) while a migrator held the coordination lock (recorded intent); a new operation must wait, not race in via accessShared", r.err)
+	case <-time.After(300 * time.Millisecond):
+		// expected: still waiting behind the coordination lock
+	}
+
+	unlockCoord()
+
+	select {
+	case r := <-result:
+		if r.err != nil {
+			t.Fatalf("enterShared errored after the coordination lock cleared: %v", r.err)
+		}
+		r.unlock()
+	case <-time.After(2 * time.Second):
+		t.Fatal("enterShared never proceeded after the coordination lock was released")
+	}
 }
 
 func TestAccessGate_AccessSharedDoesNotBlockAnotherAccessShared(t *testing.T) {

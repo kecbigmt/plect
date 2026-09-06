@@ -56,13 +56,37 @@ func newAccessGate(dbPath string) *accessGate {
 }
 
 // accessShared is held for the duration of one normal query or explicit
-// transaction. It blocks only while a migration holds accessExclusive.
+// transaction. It blocks only while a migration holds accessExclusive. It
+// is unexported: every normal access must go through enterShared instead,
+// which performs the coordination probe first — calling accessShared alone
+// would let a new operation race a migrator that has already recorded
+// intent (announced by holding the coordination lock exclusively) but has
+// not yet reached accessExclusive, because flock grants a new shared
+// request the instant nothing currently holds the lock exclusively,
+// regardless of an exclusive waiter queued behind it.
 func (g *accessGate) accessShared() (func(), error) {
 	unlock, err := flockPath(g.accessLockPath, syscall.LOCK_SH)
 	if err != nil {
 		return nil, fmt.Errorf("persistence: acquire access lock: %w", err)
 	}
 	return unlock, nil
+}
+
+// enterShared is the full normal-access protocol every read, write
+// transaction, and even the initial connection Open must go through: the
+// bounded coordination probe, then the access lock held shared. Once a
+// migrator holds the coordination lock exclusively (recording intent),
+// every new enterShared call waits behind it (or refuses after
+// migrationWait) instead of reaching accessShared at all, which is what
+// stops a new operation from entering after intent is recorded. An
+// operation that already passed the probe and is holding accessShared when
+// intent is recorded is unaffected — accessExclusive waits for it, per
+// design.
+func (g *accessGate) enterShared(ctx context.Context) (func(), error) {
+	if err := g.waitUntilNoMigrationInProgress(ctx); err != nil {
+		return nil, err
+	}
+	return g.accessShared()
 }
 
 // accessExclusive is held for the duration of a migration. It waits for

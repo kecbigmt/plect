@@ -3,6 +3,7 @@ package persistence
 import (
 	"context"
 	"database/sql"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -53,6 +54,55 @@ func TestWithImmediateTx_ReservesWriterLockBeforeFnRunsAnyStatement(t *testing.T
 	}
 	if elapsed < hold/2 {
 		t.Errorf("second WithImmediateTx returned after %s, want it blocked for roughly %s while the first held the writer lock", elapsed, hold)
+	}
+}
+
+// TestWithImmediateTx_WaitsForMigrationIntentBeforeEnteringCallback proves
+// WithImmediateTx goes through enterShared (coordination probe, then the
+// access lock), not accessShared alone: once a migrator has recorded intent
+// by holding the coordination lock exclusively, a fresh WithImmediateTx call
+// must wait behind it rather than racing straight to the access lock and
+// entering its callback.
+func TestWithImmediateTx_WaitsForMigrationIntentBeforeEnteringCallback(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	unlockCoord, ok, err := tryFlockPath(db.gate.coordinationLockPath, syscall.LOCK_EX)
+	if err != nil {
+		t.Fatalf("tryFlockPath: %v", err)
+	}
+	if !ok {
+		t.Fatal("tryFlockPath did not acquire the uncontended coordination lock")
+	}
+
+	entered := make(chan struct{})
+	txErr := make(chan error, 1)
+	go func() {
+		txErr <- db.WithImmediateTx(ctx, func(tx *sql.Tx) error {
+			close(entered)
+			return nil
+		})
+	}()
+
+	select {
+	case <-entered:
+		t.Fatal("WithImmediateTx's callback ran while a migrator held the coordination lock (recorded intent)")
+	case <-time.After(300 * time.Millisecond):
+		// expected: still waiting behind the coordination lock
+	}
+
+	unlockCoord()
+
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("WithImmediateTx never proceeded after the coordination lock was released")
+	}
+	if err := <-txErr; err != nil {
+		t.Fatalf("WithImmediateTx: %v", err)
 	}
 }
 

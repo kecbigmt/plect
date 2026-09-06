@@ -45,28 +45,39 @@ func ensureCurrent(ctx context.Context, path string, migrations fs.FS) (*DB, err
 	}
 
 	gate := newAccessGate(path)
-	if err := gate.waitUntilNoMigrationInProgress(ctx); err != nil {
+
+	// enterShared, not just the coordination probe: Open below (and the
+	// Ping it performs) is itself an interaction with store.db, so it must
+	// happen only once this process holds the access gate like any other
+	// normal operation, not before any lock is taken.
+	unlockShared, err := gate.enterShared(ctx)
+	if err != nil {
 		return nil, err
 	}
 
 	db, err := Open(path)
 	if err != nil {
+		unlockShared()
 		return nil, err
 	}
 	db.migrations = migrations
 
-	current, target, err := db.version(ctx)
+	current, target, err := db.versionLocked(ctx)
 	if err != nil {
+		unlockShared()
 		db.Close()
 		return nil, err
 	}
 	if err := refuseIfNewerThanSupported(current, target); err != nil {
+		unlockShared()
 		db.Close()
 		return nil, err
 	}
 	if current == target {
+		unlockShared()
 		return db, nil
 	}
+	unlockShared()
 
 	if err := db.migrateAsRunner(ctx, gate); err != nil {
 		db.Close()
@@ -83,11 +94,13 @@ func refuseIfNewerThanSupported(current, target int64) error {
 }
 
 // migrateAsRunner is what a process calls once it has found the schema
-// behind and decided it must be the one to bring it current. It owns the
-// coordination lock for the whole attempt, so a second process racing to
-// migrate the same database waits behind this one (see
-// acquireCoordinationExclusive) instead of both applying migrations at
-// once.
+// behind and decided it must be the one to bring it current. It acquires
+// both exclusive locks — coordination first (so a second process racing to
+// migrate waits behind this one instead of both applying migrations at
+// once), then access (which waits out every already-in-flight accessShared
+// holder) — before it recheck-and-migrates, so no interaction with store.db
+// beyond this point can race a normal access that arrives after intent was
+// recorded.
 func (db *DB) migrateAsRunner(ctx context.Context, gate *accessGate) error {
 	unlockCoord, err := gate.acquireCoordinationExclusive(ctx)
 	if err != nil {
@@ -95,10 +108,21 @@ func (db *DB) migrateAsRunner(ctx context.Context, gate *accessGate) error {
 	}
 	defer unlockCoord()
 
+	unlockAccess, err := gate.accessExclusive()
+	if err != nil {
+		return err
+	}
+	defer unlockAccess()
+
 	// Recheck under exclusion: another process may have already migrated
-	// between this process's first check and now obtaining the
-	// coordination lock, in which case there is nothing left to do.
-	current, target, err := db.version(ctx)
+	// between this process's first check and now obtaining both exclusive
+	// locks, in which case there is nothing left to do. versionLocked, not
+	// version: this call already holds both locks, and version's own
+	// enterShared would try to re-acquire the coordination and access locks
+	// on separate file descriptors for the same lock files and deadlock
+	// against its own hold — flock is scoped to the open file description,
+	// not the process.
+	current, target, err := db.versionLocked(ctx)
 	if err != nil {
 		return err
 	}
@@ -119,7 +143,7 @@ func (db *DB) migrateAsRunner(ctx context.Context, gate *accessGate) error {
 		return err
 	}
 
-	if migrateErr := db.Migrate(ctx); migrateErr != nil {
+	if migrateErr := db.migrateLocked(ctx); migrateErr != nil {
 		marker.Stage = "failed"
 		marker.Error = migrateErr.Error()
 		if writeErr := writeMarker(gate.markerPath, marker); writeErr != nil {
