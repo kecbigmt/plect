@@ -479,13 +479,17 @@ def collect_comment_groups(kinds, comment_text):
     # fragment starting mid-sentence -- a truncated tail can coincidentally
     # match an unrelated file's own truncated tail, which is not the
     # duplicated-rationale shape this check exists to catch.
+    # A Go build constraint is language syntax a compiler reads, not
+    # rationale a reader does -- two files legitimately sharing the same
+    # directive is not the duplicated-rationale shape this check exists to
+    # catch, so it's excluded here the same way block-length excludes it.
     max_line = max(kinds) if kinds else 0
     groups = []
     run_lines = []
     run_texts = []
     for ln in range(1, max_line + 1):
         text = comment_text.get(ln, "")
-        if kinds.get(ln) == "comment" and text:
+        if kinds.get(ln) == "comment" and text and not GO_BUILD_LINE_RE.match(text):
             run_lines.append(ln)
             run_texts.append(text)
             continue

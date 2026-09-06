@@ -296,10 +296,8 @@ if ! grep -qE 'app/schema\.sql:[0-9]+: block-length 9 > 8' /tmp/comment-density-
 fi
 echo "ok: checker scores a SQL comment block"
 
-# Scenario 10: a TOML multiline string's closing delimiter is non-blank
-# code, not blank -- 5 "#" comments among 35 non-blank lines is 14.3%
-# (pass); miscounting the 5 closing """ lines as blank drops the
-# denominator to 30 and produces a false 16.7% failure.
+# Scenario 10: a TOML multiline string's closing delimiter counts as
+# non-blank code.
 reset_to_base
 {
   for i in $(seq 1 5); do
@@ -323,8 +321,7 @@ if ! run_check "$head_sha" >/tmp/comment-density-selftest-toml-multiline.log 2>&
 fi
 echo "ok: checker counts a TOML multiline-string closing delimiter as non-blank code"
 
-# Scenario 11: a duplicated comment sentence fails regardless of length --
-# issue #458 sets no minimum word count.
+# Scenario 11: a duplicated comment sentence fails regardless of length.
 reset_to_base
 {
   echo "package app"
@@ -351,9 +348,7 @@ fi
 echo "ok: checker fails a short duplicated comment sentence"
 
 # Scenario 12: a sentence spanning an unmodified line and a modified line
-# must be judged whole, not as the truncated tail starting at the modified
-# line alone -- two unrelated files whose tails coincidentally read the
-# same must not be flagged as a duplicate of each other.
+# must be judged whole, not as a truncated tail.
 git -C "$fixture" checkout -q -B truncation-base "$base_sha"
 git -C "$fixture" clean -qfdx
 {
@@ -399,3 +394,29 @@ if ! COMMENT_DENSITY_CHECK_ROOT="$fixture" "$checker" "$truncation_base_sha" "$t
   exit 1
 fi
 echo "ok: checker judges a sentence spanning an unmodified and a modified line as a whole, not a truncated tail"
+
+# Scenario 13: two files sharing the same //go:build directive must not
+# fail duplication.
+reset_to_base
+{
+  echo "//go:build linux"
+  echo
+  echo "package app"
+  echo
+  echo "func A() {}"
+} >"$fixture/app/a_linux.go"
+{
+  echo "//go:build linux"
+  echo
+  echo "package app"
+  echo
+  echo "func B() {}"
+} >"$fixture/app/b_linux.go"
+head_sha="$(commit_scenario)"
+
+if ! run_check "$head_sha" >/tmp/comment-density-selftest-buildtag-dup.log 2>&1; then
+  echo "FAIL: checker flagged a shared //go:build directive as duplicated rationale" >&2
+  cat /tmp/comment-density-selftest-buildtag-dup.log >&2
+  exit 1
+fi
+echo "ok: checker doesn't flag a shared //go:build directive as duplication"
