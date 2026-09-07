@@ -176,13 +176,9 @@ func TestRootPersistentPreRun_CreatesStorageDBForEveryCommand(t *testing.T) {
 	}
 }
 
-// TestStorageImport_DefaultDataHomeSucceedsWithoutDataHomeFlag is a
-// command-level regression test: the documented default cutover
-// (`plect storage import --from <backup>`, no --data-home) failed every
-// time before this fix, because root's own PersistentPreRunE pre-created an
-// empty storage.db at that same default path before storageImportCmd's RunE
-// ever ran, and Run then refused to promote into a directory that already
-// had one.
+// TestStorageImport_DefaultDataHomeSucceedsWithoutDataHomeFlag: the
+// documented default cutover used to always refuse itself here (root's own
+// PersistentPreRunE pre-created an empty storage.db at this same path).
 func TestStorageImport_DefaultDataHomeSucceedsWithoutDataHomeFlag(t *testing.T) {
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)
@@ -209,10 +205,8 @@ func TestStorageImport_DefaultDataHomeSucceedsWithoutDataHomeFlag(t *testing.T) 
 	}
 }
 
-// TestRootPersistentPreRun_DoesNotPreCreateStorageDBForStorageImport pins
-// the fix directly: storageImportCmd must see no live database at the
-// default path before its own RunE runs, the same carve-out
-// storageMigrateCmd already had.
+// TestRootPersistentPreRun_DoesNotPreCreateStorageDBForStorageImport: the
+// same pre-run carve-out storageMigrateCmd already had.
 func TestRootPersistentPreRun_DoesNotPreCreateStorageDBForStorageImport(t *testing.T) {
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)
@@ -225,9 +219,7 @@ func TestRootPersistentPreRun_DoesNotPreCreateStorageDBForStorageImport(t *testi
 		t.Fatal(err)
 	}
 
-	// A command that always fails its own RunE (missing --from) still runs
-	// PersistentPreRunE first; if that pre-run created storage.db, it would
-	// exist here even though the import itself never got a chance to run.
+	// Missing --from fails RunE, but PersistentPreRunE still runs first.
 	if _, err := execRoot(t, "storage", "import"); err == nil {
 		t.Fatal("storage import with no --from unexpectedly succeeded")
 	}

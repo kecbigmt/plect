@@ -96,10 +96,7 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 		}
 	}
 
-	// persistence.Open creates the database file itself but never its parent
-	// directory (unlike persistence.EnsureCurrent); DestDir is often a
-	// brand-new $XDG_DATA_HOME/plect on a fresh install, which has no reason
-	// to exist yet the first time an operator ever runs this command.
+	// Unlike persistence.EnsureCurrent, Open does not create its own parent dir.
 	if err := os.MkdirAll(opts.DestDir, 0o700); err != nil {
 		return report, fmt.Errorf("legacyimport: create %s: %w", opts.DestDir, err)
 	}
@@ -241,15 +238,9 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 		return report, fmt.Errorf("legacyimport: close temporary database: %w", err)
 	}
 
-	// The marker is written before the rename, not after: this way, the
-	// only failure that can happen once any destination file has changed is
-	// the rename itself, which leaves no storage.db at DBPath — so a retry
-	// finds nothing to refuse on and rebuilds from the backup exactly as a
-	// first attempt would. Writing the marker second would instead let a
-	// promoted, working storage.db sit next to an unmodified legacy
-	// state.json — a legacy binary would keep treating that state.json as
-	// current, unaware a cutover ever happened, and a retry would refuse
-	// outright (storage.db already exists) with no path to finish the job.
+	// Marker before rename: the only failure left afterward is the rename
+	// itself, leaving no storage.db — retryable — rather than a promoted
+	// db sitting next to a legacy state.json no marker ever locked out.
 	if err := atomicfile.Write(report.MarkerPath, []byte(rejectionMarker)); err != nil {
 		return report, fmt.Errorf("legacyimport: write legacy rejection marker: %w", err)
 	}
