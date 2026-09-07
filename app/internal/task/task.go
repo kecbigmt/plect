@@ -699,13 +699,11 @@ func reportCleanupFailure(obs Observer, r Resolved, elapsed time.Duration, err e
 // merge the session's Nodes and Tasks, since Seq allocation is shared across
 // both. Stops at the first failure; subsequent tasks in the slice are not run.
 //
-// RunSetup is idempotent: a "produced" task is verified before reuse, not
-// blindly skipped (see verifyLiveness/invalidateProducedNode); any other
-// state is re-run under the SAME declaration as the existing record. A node
-// whose existing, unreleased record names a DIFFERENT declaration is
-// refused rather than silently overwritten, since its own release recipe
-// must not be discarded just because the node id now means something else
-// — release it first (`plect down`/`plect destroy`) and retry.
+// RunSetup is idempotent: a "produced" task is verified before reuse (see
+// verifyLiveness/invalidateProducedNode); other states re-run under the SAME
+// declaration. A node whose unreleased record names a DIFFERENT declaration
+// is refused rather than overwritten -- release it first (`plect
+// down`/`plect destroy`) and retry.
 func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, tasks map[string]*contract.TaskState, observer Observer) error {
 	obs := observerOr(observer)
 	terminalOwner := terminalOwnerIn(ordered)
@@ -919,18 +917,13 @@ func taskIDFor(r Resolved) string {
 	return r.TaskID
 }
 
-// declarationChanged reports whether the node about to be (re-)set up names
-// a different declaration than existing's own recorded one -- the case
-// RunSetup refuses to silently overwrite while existing is unreleased.
 func declarationChanged(r Resolved, existing *contract.TaskState) bool {
 	if existing.Scope != r.Scope || existing.TaskID != taskIDFor(r) {
 		return true
 	}
-	// A nesting chain edit under the SAME task id/scope (a layer added,
-	// removed, reordered, or swapped) is also a different declaration: the
-	// existing, retained per-layer release recipe (contract.LayerState.
-	// Cleanup) belongs to the OLD chain shape and must not be silently
-	// reused against a differently-shaped one.
+	// A nesting chain edit under the same task id/scope is also a different
+	// declaration: the old chain's retained per-layer release recipe must
+	// not be reused against a differently-shaped one.
 	if len(r.Layers) != len(existing.Layers) {
 		return true
 	}
@@ -942,9 +935,6 @@ func declarationChanged(r Resolved, existing *contract.TaskState) bool {
 	return false
 }
 
-// describeTaskID renders a task_id column's stored value (empty means "same
-// as the node id", per taskIDFor's convention) back into a readable address
-// for an error message.
 func describeTaskID(taskID, nodeID string) string {
 	if taskID == "" {
 		return nodeID
@@ -968,36 +958,30 @@ func failedState(r Resolved, session SessionVars, now time.Time, errMsg string, 
 	}
 }
 
-// RetainedCleanup is the JSON shape persisted as TaskState.Cleanup: a plain
-// (non-nested) node's cleanup action plus the ownership/source facts needed
-// to run it again without re-reading the current definition. A nested
-// node's chain uses effect.RetainedLayerCleanup instead, per layer.
+// RetainedCleanup is TaskState.Cleanup's JSON shape for a plain node; a
+// nested node's chain uses effect.RetainedLayerCleanup instead, per layer.
 type RetainedCleanup struct {
 	Action     *lang.Action   `json:"action"`
 	SourcePath string         `json:"source_path,omitempty"`
 	From       lang.Ownership `json:"from"`
 }
 
-// retainCleanup returns r's retained cleanup contract, or nil when r has no
-// plain cleanup action to retain (nested nodes, whose per-layer contracts
-// effect.RunLayers retains instead; a node declaring none).
+// retainCleanup returns nil for a nested node (per-layer contracts retain
+// instead) or one declaring no cleanup.
 func retainCleanup(r Resolved) json.RawMessage {
 	if r.Cleanup == nil || len(r.Layers) > 0 {
 		return nil
 	}
 	encoded, err := json.Marshal(RetainedCleanup{Action: r.Cleanup, SourcePath: r.SourcePath, From: r.From})
 	if err != nil {
-		// r.Cleanup/From are plain config-loaded data; a marshal failure
-		// here is not a condition a caller can act on.
+		// Plain config-loaded data; cannot fail in practice.
 		return nil
 	}
 	return encoded
 }
 
-// DecodeRetainedCleanup decodes a plain node's TaskState.Cleanup, as
-// written by retainCleanup. ok is false with a nil error for an empty raw
-// value (a nested node, or one with no cleanup declared) -- not an error
-// condition a caller need report.
+// DecodeRetainedCleanup: ok is false with a nil error for an empty raw
+// value (a nested node, or one with no cleanup declared).
 func DecodeRetainedCleanup(raw json.RawMessage) (rc RetainedCleanup, ok bool, err error) {
 	if len(raw) == 0 {
 		return RetainedCleanup{}, false, nil
@@ -1008,11 +992,9 @@ func DecodeRetainedCleanup(raw json.RawMessage) (rc RetainedCleanup, ok bool, er
 	return rc, true, nil
 }
 
-// pluginRef names the resolved plugin catalog address and content revision
-// r's cleanup action's bin references resolve against, or empty for a
-// global/user-owned effect. It matches plugins.ContainingPlugin's own
-// directory-containment lookup for r.SourcePath, finding the exact mount
-// rather than just the enabling alias r.From carries.
+// pluginRef names the resolved plugin catalog address and content revision,
+// or empty for a global/user-owned effect. Matches plugins.ContainingPlugin's
+// own directory-containment lookup for r.SourcePath.
 func pluginRef(r Resolved, session SessionVars) string {
 	if !r.From.IsPlugin || r.SourcePath == "" {
 		return ""
