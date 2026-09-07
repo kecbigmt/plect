@@ -87,11 +87,30 @@ the first place. `node_executions.execution_dir` and `.plugin_ref` (a
 resolved plugin's catalog address, path, and content revision from its own
 `plect.lock` entry) round out what a release needs without depending on
 the session's current `workspace_dir` or the plugin catalog's current
-state. An execution that retained nothing — one from before this change, or
-a nested node's own composed `TaskState.Cleanup`, which is always nil —
-falls back to re-resolving the current definition by the execution's own
-retained `task_id`, tolerant of drift exactly like a dynamic instance's
-teardown already was.
+state — `task.RunCleanup` runs a plain node's cleanup in its retained
+`execution_dir` (falling back to the session's current workspace only for
+an execution that retained none, i.e. a pre-this-change row) and refuses to
+run it at all when the currently mounted plugin's content revision no
+longer matches the retained `plugin_ref`, rather than silently cleaning up
+against drifted content. An execution that retained nothing — one from
+before this change, or a nested node's own composed `TaskState.Cleanup`,
+which is always nil — falls back to re-resolving the current definition by
+the execution's own retained `task_id`, tolerant of drift exactly like a
+dynamic instance's teardown already was.
+
+`contracts/state.TaskState.ExecutionID` names the specific `node_executions`
+row a loaded state was read from. `task.RunSetup` carries it forward only
+when a fresh attempt continues that same unreleased row (a same-declaration
+retry); a genuinely new attempt — first setup, or one that revives a node
+already released by a liveness-triggered cleanup within the same call —
+leaves it empty. `persistence.upsertNodeExecutionTx` refuses a write whose
+`ExecutionID` no longer matches the row currently unreleased for that node
+(or no longer matches any unreleased row at all), rather than silently
+retargeting whatever generation happens to be current: without this, two
+writers racing a release-then-recreate of the same node could have the
+stale one overwrite the new generation's own release recipe with data read
+before the race, defeating the very isolation per-execution identity exists
+to provide.
 
 `service.unifiedTeardownList` (used by `plect down`/`plect destroy`, and
 internally by `--force-recreate`) now enumerates every unreleased execution
@@ -111,12 +130,18 @@ an unexpected cycle) instead of ascending `Seq` alone.
   the same write authority (the process holding the SQLite write lock) —
   no separate artifact store, and no new write path outside the existing
   `writeTasksTx`. `plugin_ref`'s content revision identifies *which*
-  plugin content a cleanup action ran against; it does not itself
-  guarantee that content remains reachable if the catalog has since been
-  garbage collected, and a managed retention store for that guarantee is
-  explicitly deferred — no consumer needs it yet, and Nix-style GC-root
-  retention is a real but separate design, not a byproduct of this schema
-  change.
+  plugin content a cleanup action ran against, and `task.RunCleanup`
+  actively checks it: a plain node's cleanup refuses to run at all when the
+  currently mounted plugin's revision has drifted from what setup recorded,
+  rather than running against different content silently. This check does
+  not itself guarantee the original content remains reachable if the
+  catalog has since been garbage collected, and a managed retention store
+  for that guarantee is explicitly deferred — no consumer needs it yet, and
+  Nix-style GC-root retention is a real but separate design, not a
+  byproduct of this schema change. The same revision check is not yet
+  wired for a nested node's per-layer cleanup, since
+  `effect.RetainedLayerCleanup` does not yet retain a per-layer
+  `plugin_ref` at all — a scoped follow-up, not attempted here.
 - **Sensitive setup inputs/environment.** `ExecutionDir`, `PluginRef`, and
   `Cleanup` are excluded from `contracts/state.TaskState`/`LayerState`'s
   ordinary JSON output (`json:"-"`), so they never reach the Web UI, an MCP

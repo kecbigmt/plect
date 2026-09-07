@@ -277,6 +277,20 @@ already reached `cleaned` — an absent-but-unreleased node is left
 untouched, so a workflow revision that simply stops declaring a node (or
 any other caller that happens to omit it from one write) can never discard
 its execution record or outstanding cleanup obligation merely by omission.
+
+Looking up "the current unreleased execution" by node_id alone is not
+sufficient to protect a specific generation once more than one writer can
+touch the same session: `contracts/state.TaskState.ExecutionID` names the
+row a loaded state actually came from, and `task.RunSetup` carries it
+forward only when a fresh attempt continues that exact row (a
+same-declaration retry) — a genuinely new attempt (first setup, or one
+reviving a node this same call already released via a liveness-triggered
+cleanup) leaves it empty. `upsertNodeExecutionTx` refuses a write whose
+`ExecutionID` names a row that is no longer the current unreleased one (or
+no longer unreleased at all), rather than silently updating whatever
+generation happens to be current. A write whose `ExecutionID` is empty is
+never checked this way, since it makes no claim about continuing a
+specific row.
 Release is the only thing that clears a node: `service.unifiedTeardownList`
 enumerates every unreleased execution directly from `session.Nodes` — not
 from the *current* plan, which has nothing to say about a node it no
@@ -328,21 +342,28 @@ cleanup action's `bin` references resolve against —
 `"<catalog-alias>/<plugin-path>@<revision>"`, or just the address for a
 non-reproducible (editable-path) mount `plect.lock` does not pin. Both are
 retained per execution so release does not depend on the session's
-*current* `workspace_dir` or the plugin catalog's current state. Pinning a
-revision this way identifies *which* plugin content a cleanup action ran
-against; it is not a general artifact store, and does not itself guarantee
-that content is still reachable if the catalog has since been garbage
-collected — that guarantee needs a concrete consumer before it is worth
-building.
+*current* `workspace_dir` or the plugin catalog's current state.
+`task.RunCleanup` consumes both: a plain node's cleanup runs in its
+retained `execution_dir` rather than the session's current workspace, and
+refuses to run at all when the currently mounted plugin's own revision no
+longer matches the retained `plugin_ref`. Pinning a revision this way
+identifies *which* plugin content a cleanup action ran against; it is not
+a general artifact store, and does not itself guarantee that content is
+still reachable if the catalog has since been garbage collected — that
+guarantee needs a concrete consumer before it is worth building. The
+revision check does not yet extend to a nested node's per-layer cleanup,
+since `effect.RetainedLayerCleanup` does not yet retain a per-layer
+`plugin_ref`.
 
-`ExecutionDir`, `PluginRef`, and `Cleanup` are excluded from
+`ExecutionDir`, `PluginRef`, `Cleanup`, and `ExecutionID` are excluded from
 `contracts/state.TaskState`/`LayerState`'s ordinary JSON output
 (`json:"-"`): they are persistence-internal retention details a node
-execution's own release logic needs, not facts an external consumer (the
-Web UI, an MCP tool response, `plect status --json`) needs to see, and
-excluding them by default avoids ever having to reason about which of
-their contents (a cleanup script's literal text, an input value it closes
-over) would be safe to disclose there.
+execution's own release logic (or, for `ExecutionID`, its own write-conflict
+check) needs, not facts an external consumer (the Web UI, an MCP tool
+response, `plect status --json`) needs to see, and excluding them by
+default avoids ever having to reason about which of their contents (a
+cleanup script's literal text, an input value it closes over) would be
+safe to disclose there.
 
 ### Release ordering
 
