@@ -30,8 +30,8 @@ func (c *Config) ResolveSessionWorkflow(s *domain.Session) (*WorkflowFile, error
 }
 
 // runScopeCache memoizes CurrentPlanRunScopedNodeSet by (workflow,
-// workspaceDirPath), reached via a pointer field (not embedded) since Config
-// is copied by value in tests and an embedded sync.Mutex would lock-copy.
+// workspaceDirPath); a pointer field since Config is copied by value in
+// tests and an embedded sync.Mutex would lock-copy.
 type runScopeCache struct {
 	mu    sync.Mutex
 	byKey map[runScopeCacheKey]runScopeCacheEntry
@@ -63,7 +63,7 @@ func (rc *runScopeCache) put(key runScopeCacheKey, entry runScopeCacheEntry) {
 	rc.byKey[key] = entry
 }
 
-// runScopeCacheInstance lazily creates c's cache instance via CompareAndSwap, so concurrent first callers race safely.
+// runScopeCacheInstance lazily creates c's cache via CompareAndSwap.
 func (c *Config) runScopeCacheInstance() *runScopeCache {
 	if rc := c.runScopeCache.Load(); rc != nil {
 		return rc
@@ -79,11 +79,10 @@ func (c *Config) runScopeCacheInstance() *runScopeCache {
 // run-scoped node ids as a set. ok is false when the workflow or its task
 // definitions do not resolve at all, which a caller must tell apart from a
 // legitimately empty node set (ok=true).
-// Memoized per (workflow, workspaceDirPath) for this *Config's lifetime —
-// dispatch/reactor Supervisor.reconcile calls RunScopeUp every ~1s poll
-// tick per up session, and this used to re-parse the whole definition tree
-// from scratch just to answer it. A new *Config (config.Live's own refresh)
-// invalidates the cache; nothing else here does.
+// Memoized per (workflow, workspaceDirPath) for this *Config's lifetime:
+// dispatch/reactor Supervisor.reconcile calls RunScopeUp every ~1s poll per
+// up session, re-parsing the whole definition tree just to answer it; a new
+// *Config (config.Live's own refresh) invalidates the cache.
 func (c *Config) CurrentPlanRunScopedNodeSet(s *domain.Session) (set map[string]bool, ok bool) {
 	key := runScopeCacheKey{workflow: s.Workflow, workspaceDirPath: s.WorkspaceDirPath}
 	cache := c.runScopeCacheInstance()
