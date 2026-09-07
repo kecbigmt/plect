@@ -1,199 +1,166 @@
-# Recovering a vanished workspace-provider output
+# Verifying workspace-provider liveness at up
 
 ## Context
 
-A workspace provider runs before Plecture can resolve the workspace cascade or
-compile a workflow plan. Its successful setup is recorded as the `@workflow`
-pseudo-node, and its `workspace_dir` output is mirrored into
-`session.workspace_dir_path`. A later `plect up` reuses a produced pseudo-node.
-The workflow-effect liveness walk cannot observe this record: a workspace
-provider has neither a scope nor a `[health]` surface, and the plan it walks
-depends on the provider output.
+A workspace provider establishes the workspace before Plecture can resolve the
+workspace cascade or compile a workflow plan. Its setup output is recorded as
+the @workflow pseudo-node and its workspace_dir is mirrored into
+session.workspace_dir_path. A produced pseudo-node is reused without an
+existence check.
 
-That ordering makes a lost workspace directory distinct from a lost workflow
-effect. The stored output can name a worktree that disappeared with a
-container, but core cannot reconstruct the old complete plan without first
-recreating that directory. In particular, a workspace overlay may have added
-nodes whose cleanup definitions no longer exist after the directory vanishes.
-Core therefore cannot selectively invalidate every affected node, or safely
-choose which external cleanup actions to omit, from the provider record alone.
+That makes a vanished workspace unlike a vanished workflow effect. Discovery
+treats a missing workspace-directory layer as empty, so an ordinary plect up
+can silently omit a workspace overlay and retain a dangling provider output.
+A later action can fail when it uses that path, and a session with no such
+action can still report a successful up. The workflow-effect liveness rule
+already prevents that ambiguity for every setup-bearing effect: the declaration
+names the fact that allows its production record to be reused.
 
-The shipped providers demonstrate why a common “run setup again” rule is not a
-provider contract. The GitHub provider's setup acquires a worktree and fetches
-resource metadata. The Slack provider's setup creates a directory and records
-a conversation. The local knowledge-bundle provider resolves another
-session's workspace, creates a scratch directory, and replaces a symlink.
-They are each safe to run only under the lifecycle their provider owns; the
-configuration language does not require arbitrary providers to make setup
-convergent on every `plect up`.
+The provider must name the same fact. Core cannot infer that a directory alone
+is the provider's workspace: GitHub owns a Git worktree, Slack owns a thread
+directory and conversation record, and the local knowledge-bundle provider
+owns a scratch directory with a knowledge link. The setup hook is arbitrary,
+so only the provider can say which of its output facts prove that its surface
+still exists.
 
-`plect up --force-recreate` is the explicit recovery lifecycle. It cleans
-workflow task state in reverse setup order, invokes provider cleanup with the
-force root, clears runtime state, runs provider setup, and compiles and sets up
-the new plan. It retains the session identity, relationships, resource binding,
-and event log. A cleanup failure leaves the session inspectable rather than
-silently discarding its remaining state.
-
-For the lost-directory case, the shipped provider cleanups converge. GitHub
-prunes a missing worktree registration and reuses an orphaned branch during
-the next setup. Slack's removal accepts an absent directory. The local
-knowledge-bundle provider treats an absent scratch directory as released.
+Repairing the provider before plan construction also resolves the apparent
+cleanup-definition problem. When a workspace overlay vanished, core could not
+select its old node cleanups. After provider repair recreates the workspace,
+core reads that overlay again before it selects stale nodes or performs node
+cleanup. A definition that remains unavailable is the existing fail-loud
+cleanup case, not a reason to leave provider liveness unspecified.
 
 ## Decision
 
-Plecture does not add workspace-provider liveness or automatic repair.
-Recovering a known-vanished workspace remains an explicit full-runtime
-recreation:
+Every workspace provider declares [health].alive. It uses the same liveness
+action vocabulary as an effect: shell, exec, or explicit noop. An executable
+action exits zero only when the provider surface exists; noop means the
+provider deliberately does not re-observe its production record. There is no
+core-implicit path check and no new action type.
 
-```text
-plect up <resource-id-or-session> --force-recreate
-```
+The declaration is mandatory because every workspace provider has setup. A
+provider without [health].alive is a load error with the actionable form used
+for setup-bearing effects: a workspace provider with setup declares
+[health].alive, as an executable probe or an explicit noop. Health is part of
+the workspace-provider kind, but it permits alive only; activity is an unknown
+field. An alive action uses the ordinary action validation and binding rules.
+It may read its stored self.outputs.* keys, which must be declared by the
+provider output contract, along with the provider's allowed session, input, and
+configured-root values.
 
-The command is intentionally not a health-cycle repair. A workspace provider
-does not contribute to complete-plan health, does not escalate a failed
-existence check, and has no scope. A provider record remains a production
-record and has no periodic liveness authority.
+| Provider field | Rule |
+|---|---|
+| [health] | Allowed only with alive. |
+| [health].alive | Required when setup is declared; parses as shell, exec, or noop. |
+| [health].activity | Rejected; a provider has no scope and never joins the health cycle. |
+| self.outputs.<key> in alive | Allowed only for a key declared by outputs_schema, as in cleanup. |
+| Missing alive | Load error rather than an implicit unchecked reuse. |
 
-Before running the command, an operator preserves any accessible work that is
-not already lost. The force root reaches provider cleanup: for a GitHub
-worktree that still exists, it can remove a dirty directory. A directory known
-to have vanished has no local uncommitted work for Plecture to protect; any
-such work was lost with the directory and cannot be recovered by a lifecycle
-probe. The command's explicit flag is the acknowledgement that the entire
-runtime, rather than a proved-safe subset of nodes, is being rebuilt.
+The shipped provider declarations use their own existence tests:
 
-No configuration surface changes. A provider keeps its existing setup and
-cleanup shape; `[health]` remains outside the `workspace_provider` kind and is
-a load error there.
-
-```toml
-[worktree]
-kind = "workspace_provider"
-
-[worktree.setup]
-type = "exec"
-bin = "github-worktree"
-
-[worktree.cleanup]
-type = "shell"
-script = '"$worktree_bin" cleanup --workspace-dir "$workspace_dir" --force="$force"'
-
-[worktree.cleanup.bind]
-workspace_dir = { from = "self.outputs.workspace_dir" }
-force = { from = "force" }
-```
-
-The validation rules stay unchanged:
-
-- `setup` is required for a workspace provider.
-- `cleanup` may read declared `self.outputs` keys and the `force` root.
-- `health` is not a workspace-provider field.
-- The reserved `workspace_dir` output is non-empty after setup and is never
-  mutable.
-
-Existing sessions and providers need no migration. A produced provider record
-continues to be reused by an ordinary `plect up`; an operator chooses
-`--force-recreate` for the vanished-output case. Existing force-recreation
-tests continue to specify state reset, ordered cleanup, setup failure, and
-inspectable failure behavior. The GitHub workspace tests continue to specify
-missing-worktree pruning and orphan-branch reuse. No behavior changes, so this
-decision adds no test.
-
-This is a core, plugin, and prompt boundary:
-
-- Core owns the full teardown and rebuild operation, because it alone has the
-  durable task records, dependency order, and runtime state to reset.
-- A plugin owns the safety and convergence of its own setup and cleanup, but
-  cannot determine whether every workflow effect using its output is safe to
-  discard.
-- A prompt can direct an operator to the existing explicit recovery command;
-  it must not imply that a missing path proves which partial repair is safe.
-
-## Consequences
-
-The known recovery path is broader than replacing one directory. It deliberately
-rebuilds task outputs, dynamic instances, environment state, runtime
-observation state, and provider outputs. This avoids retaining a record whose
-cleanup or inputs may refer to the lost workspace.
-
-An ordinary `plect up` does not verify a vanished provider output. Discovery
-treats the missing workspace-directory layer as empty, so trusted workflow and
-plan loading can succeed with the workspace overlay silently omitted. A
-produced node whose definition was available only through that lost layer can
-then fail stale-node cleanup because its effect definition is unknown. A node
-whose setup, probe, terminal, or later command uses the recorded directory can
-fail at that later action. A session without either kind of node can complete
-`up` while retaining a dangling `workspace_dir`. None of these outcomes is a
-reliable detection surface; an operator who knows the workspace vanished uses
-the explicit recovery command rather than waiting for one.
-
-A provider author who needs a narrower repair keeps that operation in its own
-plugin until two concrete consumers establish a safe shared lifecycle
-contract.
-
-The decision preserves the runtime-failure model's boundary: workflow effects
-declare liveness because they participate in a plan and health cycle; workspace
-providers establish the prerequisite for that plan. No state migration,
-configuration migration, or new health report is introduced.
-
-## Alternatives considered
-
-### Optional provider `[health].alive`
-
-Rejected. An action evaluated before plan construction could observe the
-recorded provider outputs, but a non-zero result does not say how to repair
-the workflow. It cannot resolve cleanup definitions that lived in the vanished
-workspace overlay, and it cannot prove that retaining a session-scoped
-subscription, terminal, or dynamic instance is safe after the workspace is
-recreated. Treating the failure as a health result would also make a
-scope-less provider participate in a complete-plan health model that has no
-place to compose or escalate it.
-
-The rejected shape would add a new configuration surface solely to detect a
-condition whose safe response remains full recreation:
-
-```toml
+~~~toml
 [worktree.health.alive]
 type = "shell"
-script = 'test -d "$workspace_dir"'
+script = 'test -d "$workspace_dir" && git -C "$workspace_dir" rev-parse --git-dir >/dev/null'
 
 [worktree.health.alive.bind]
 workspace_dir = { from = "self.outputs.workspace_dir" }
-```
+~~~
 
-Making this shape valid would require provider-specific action validation,
-stored-output roots, an execution point before cascade resolution, failure
-persistence, and a rule for invalidating every node. It would still require
-the explicit full teardown to protect external resources and uncommitted work.
-It adds a second authority without removing the operator decision, so it does
-not meet a present consumer need.
+~~~toml
+[thread_workspace.health.alive]
+type = "shell"
+script = 'test -d "$workspace_dir"'
 
-This option would not migrate stored records. A custom provider without the
-optional action would retain its existing skip behavior. Adding the action to
-the three shipped providers would make every existing session using one run a
-pre-plan check at its next `plect up`; a failed check would need new pseudo-node
-failure and descendant-invalidation state before setup could run again. Its
-implementation tests would extend `TestKindSurfaceMatchesSchema` and
-`TestProviderContracts` for the new declaration and roots, add provider
-liveness cases beside `TestRunWorkflowSetup_IdempotentSkip`, add an `Up`
-recovery case beside `TestUp_ForceRecreateResetsRuntimeWithoutPrev`, and update
-the shipped-provider integration coverage.
+[thread_workspace.health.alive.bind]
+workspace_dir = { from = "self.outputs.workspace_dir" }
+~~~
 
-### Run provider setup on every `plect up`
+~~~toml
+[local_okf.health.alive]
+type = "shell"
+script = 'test -d "$workspace_dir"'
 
-Rejected. This changes a recorded production action into an unconditional
-side effect. It requires every existing and user-authored provider setup to be
-idempotent, despite no such contract today, and repeats metadata fetches and
-conversation writes for the shipped providers. It also does not specify what
-happens when setup emits a different `workspace_dir` while produced workflow
-nodes still bind the old one. Re-running setup therefore cannot replace the
-explicit teardown-and-rebuild lifecycle.
+[local_okf.health.alive.bind]
+workspace_dir = { from = "self.outputs.workspace_dir" }
+~~~
 
-This option would not migrate stored records, but it would rewrite the
-`@workflow` produced record and mirrored `workspace_dir_path` on every `up` for
-every existing provider-backed session. Its implementation would replace the
-skip asserted by `TestRunWorkflowSetup_IdempotentSkip`, revisit the retry
-contract in `TestRunWorkflowSetup_PrevSurvivesRetry`, add repeated-`up` cases
-to `TestCreate_WorkflowSetupPath`, and update the GitHub, Slack, and local
-knowledge-bundle setup integration tests to assert repeated side effects and
-changed outputs.
+plect up evaluates the provider action before plan construction. A fresh
+session has no produced pseudo-node and runs provider setup as usual. For a
+produced pseudo-node, a successful or no-op action reuses its output. A failed
+action records the liveness failure, runs provider cleanup with force=true at
+the force root, then runs provider setup. Core mirrors the rebuilt outputs into
+the session and only then resolves the cascade and compiles the plan. Cleanup
+or setup failure stops the up attempt with its persisted failure state.
+
+Provider repair follows the node walk's invalidation rule. In
+app/internal/task/task.go, RunSetup calls invalidateProducedNode from
+app/internal/task/liveness.go when a produced effect cannot be reused. That
+path does not compare old and new output maps: it cleans that node and every
+transitive plan dependent before rebuilding them.
+app/internal/service/lifecycle_up.go supplies the compiled plan to that walk;
+the provider branch performs its check and repair before that compilation.
+After a provider repair and plan construction, core applies that same rule to
+each produced node whose input binds a provider output, directly through
+workflow.outputs.* or through the provider-derived workspace.* values, and to
+every transitive dependent of those nodes. It cleans those records before the
+ordinary node liveness walk and setup. The rule applies even when the rebuilt
+provider emits equal values; equality cannot prove that an old consumer still
+refers to the rebuilt surface.
+
+The provider is not a plan node. It has no scope, does not contribute activity,
+does not run in periodic health evaluation, and does not escalate a failed
+alive action. Its liveness failure is repaired only by the explicit plect up
+operation that observed it.
+
+An alive failure means the provider surface is gone or unusable. A provider
+author keeps its action limited to that fact, rather than a transient or
+readiness-like condition. The shipped tests above fail only in that condition.
+A directory that remains a usable workspace passes, so provider cleanup does
+not run and uncommitted work stays untouched. When the workspace is gone, no
+local work remains for Plecture to protect. plect up --force-recreate remains
+the operator's explicit whole-runtime rebuild for cases that require resetting
+every runtime record.
+
+## Consequences
+
+The implementation adds the three shipped declarations and changes the
+workspace-provider loader, kind surface, schema, and provider action validator
+together. It adds provider-liveness execution before plan construction and
+provider-dependent invalidation after plan construction. Tests cover missing
+provider liveness, rejected provider activity, output-contract validation for
+alive bindings, successful reuse, failed cleanup or setup, dependency cleanup,
+and the three shipped actions. Existing effect-liveness tests continue to be
+the specification for the common action and invalidation behavior.
+
+This is a configuration migration, not a state migration. A provider owner
+adds an executable probe or explicit noop; the three shipped providers add the
+declarations above. An existing provider definition without one fails to load,
+rather than retaining an unchecked compatibility path. Existing session
+records need no rewrite: their stored outputs supply the first alive action,
+and a failed check follows the repair lifecycle.
+
+The meaning and reservation of workspace_dir remain outside this decision. The
+[workspace-output design question](https://github.com/kecbigmt/plecture/issues/473)
+may retain, revise, or remove that reservation. In every outcome, a workspace
+provider still declares the liveness fact that authorizes reuse of its produced
+record; only the output path through which an action reads that fact can change.
+
+## Alternatives considered
+
+### Leave recovery to --force-recreate
+
+Rejected. It leaves workspace providers as the only setup-bearing kind whose
+lost surface can be reused silently. The earlier cleanup-selection concern is
+not unique to providers: after provider repair restores the cascade, ordinary
+stale-node cleanup selects definitions; a definition that is still absent
+fails loudly. An explicit whole-runtime reset remains useful, but it cannot be
+the sole response to a liveness condition Plecture can now observe precisely.
+
+### Implicitly test workspace_dir in core
+
+Rejected. A path test is asymmetric with effect liveness and cannot establish
+whether a provider's richer surface exists. It would also deepen a reservation
+whose scope belongs to the [workspace-output design question](https://github.com/kecbigmt/plecture/issues/473),
+rather than to provider lifecycle. A declared action lets each provider own
+its real invariant without extending core vocabulary.
