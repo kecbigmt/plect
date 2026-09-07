@@ -21,12 +21,10 @@ const SupportedVersion = 7
 
 // StateFile is the parsed, validated form of a state.json envelope.
 type StateFile struct {
-	Sessions       map[string]*domain.Session
-	Populations    map[string]*domain.PopulationState
-	UpReservations map[string]domain.UpReservation
-	// HeartbeatLogPositions is each session's legacy
-	// tick_backoff.last_log_position, keyed by name; see parseHeartbeatLogPositions.
-	HeartbeatLogPositions map[string]int64
+	Sessions              map[string]*domain.Session
+	Populations           map[string]*domain.PopulationState
+	UpReservations        map[string]domain.UpReservation
+	HeartbeatLogPositions map[string]int64 // see parseHeartbeatLogPositions
 }
 
 // Parse decodes and validates a complete state.json byte slice: it rejects
@@ -82,9 +80,7 @@ func Parse(data []byte) (*StateFile, error) {
 	return sf, nil
 }
 
-// parseHeartbeatLogPositions re-scans the raw envelope for a field
-// contract.TickBackoff no longer declares; a malformed envelope returns no
-// positions, since the caller's own decode already reports that failure.
+// parseHeartbeatLogPositions re-scans data for a field contract.TickBackoff no longer declares.
 func parseHeartbeatLogPositions(data []byte) map[string]int64 {
 	var raw struct {
 		Sessions map[string]struct {
