@@ -40,32 +40,25 @@ func DefaultPath() string {
 // `plect storage migrate` command. It waits out or refuses a concurrent
 // migration, refuses a database newer than this binary supports, and
 // migrates the schema itself (via Migrate) if this process is the one that
-// finds it behind — see docs/design/sqlite-persistence.md's "Migration
-// access gate". A development build (version.IsDevelopmentBuild) additionally
-// refuses to migrate a database it did not create (schema version > 0)
-// forward, rather than migrating it as a release build would; use
-// EnsureCurrentAllowDevBuild for the explicit opt-in.
+// finds it behind, unless it is a development build refusing a database it
+// did not create — see docs/design/sqlite-persistence.md's "Migration
+// access gate".
 //
 // The caller owns the returned DB's lifetime and must Close it.
 func EnsureCurrent(ctx context.Context, path string) (*DB, error) {
 	return ensureCurrent(ctx, path, migrationsSourceFS(), version.IsDevelopmentBuild(), false)
 }
 
-// EnsureCurrentAllowDevBuild is EnsureCurrent, except a development build
-// (version.IsDevelopmentBuild) is permitted to forward-migrate a database it
-// did not create. `plect storage migrate --allow-dev-build` is its only
-// caller; every other entry point uses EnsureCurrent and gets the refusal
-// below.
+// EnsureCurrentAllowDevBuild is EnsureCurrent's explicit opt-in for a
+// development build; `plect storage migrate --allow-dev-build` is its only caller.
 func EnsureCurrentAllowDevBuild(ctx context.Context, path string) (*DB, error) {
 	return ensureCurrent(ctx, path, migrationsSourceFS(), version.IsDevelopmentBuild(), true)
 }
 
-// ensureCurrent is EnsureCurrent with an injectable migration source and an
-// injectable dev-build determination, so this package's own tests can
-// exercise interrupted and concurrent migrations against a small,
-// controllable migration set, and the dev-build refusal itself, without
-// depending on the real migrations/ tree or the process's actual build
-// stamp.
+// ensureCurrent is EnsureCurrent with an injectable migration source and
+// dev-build determination, so this package's own tests can exercise
+// migrations and the refusal below without the real migrations/ tree or the
+// process's actual build stamp.
 func ensureCurrent(ctx context.Context, path string, migrations fs.FS, isDevBuild, allowDevBuild bool) (*DB, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("persistence: create database directory: %w", err)
@@ -93,10 +86,7 @@ func ensureCurrent(ctx context.Context, path string, migrations fs.FS, isDevBuil
 		return db, nil
 	}
 
-	// current > 0 means some earlier process already brought this database
-	// to a non-zero schema — a store this process did not create. current
-	// == 0 means this call is the one creating it, which carries none of
-	// the incident's risk (there is no pre-existing host data to strand).
+	// current == 0 means this call is creating the store, not migrating one it did not create.
 	if current > 0 && isDevBuild && !allowDevBuild {
 		db.Close()
 		return nil, fmt.Errorf("persistence: %s is at schema %d; this development build would migrate it to %d.\n"+
