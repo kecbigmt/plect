@@ -95,7 +95,8 @@ SELECT DISTINCT name FROM sessions ORDER BY name;
 -- Workflow nodes (static; Session.Nodes entries)
 
 -- name: EnsureNodeInstance :exec
-INSERT INTO node_instances (session_id, node_id) VALUES (?, ?)
+INSERT INTO node_instances (session_id, node_id)
+VALUES (?, ?)
 ON CONFLICT (session_id, node_id) DO NOTHING;
 
 -- name: DeleteNodeInstancesForSession :exec
@@ -179,7 +180,8 @@ DELETE FROM node_execution_dependencies WHERE execution_id = ?;
 
 -- name: InsertNodeExecutionDependency :exec
 INSERT INTO node_execution_dependencies (execution_id, depends_on_execution_id)
-VALUES (?, ?) ON CONFLICT (execution_id, depends_on_execution_id) DO NOTHING;
+VALUES (?, ?)
+ON CONFLICT (execution_id, depends_on_execution_id) DO NOTHING;
 
 -- name: ListNodeExecutionDependenciesForSession :many
 SELECT dependent.node_id AS node_id, ned.execution_id AS execution_id, prereq.node_id AS depends_on_node_id

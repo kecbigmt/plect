@@ -207,7 +207,8 @@ func (q *Queries) DeleteUpReservation(ctx context.Context, childSessionName stri
 
 const ensureNodeInstance = `-- name: EnsureNodeInstance :exec
 
-INSERT INTO node_instances (session_id, node_id) VALUES (?, ?)
+INSERT INTO node_instances (session_id, node_id)
+VALUES (?, ?)
 ON CONFLICT (session_id, node_id) DO NOTHING
 `
 
@@ -422,7 +423,8 @@ func (q *Queries) InsertNodeExecution(ctx context.Context, arg InsertNodeExecuti
 
 const insertNodeExecutionDependency = `-- name: InsertNodeExecutionDependency :exec
 INSERT INTO node_execution_dependencies (execution_id, depends_on_execution_id)
-VALUES (?, ?) ON CONFLICT (execution_id, depends_on_execution_id) DO NOTHING
+VALUES (?, ?)
+ON CONFLICT (execution_id, depends_on_execution_id) DO NOTHING
 `
 
 type InsertNodeExecutionDependencyParams struct {
