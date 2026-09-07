@@ -17,7 +17,7 @@ export function isLifecycleEvent(type: string): boolean {
 // rather than refetched.
 const STATUS_MESSAGE_EVENT_TYPE = "plect.status_message";
 
-// True if a cached detail existed to patch; the caller invalidates otherwise.
+// Scheduling a miss needs the caller's own debounce timer, so this only reports the miss back.
 function applyStatusMessagePatch(queryClient: QueryClient, sessionName: string, event: SessionEvent): boolean {
   let patched = false;
   queryClient.setQueryData(sessionDetailQueryKey(sessionName), (prev: SessionDetail | undefined) => {

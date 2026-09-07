@@ -83,7 +83,6 @@ describe("useLiveEvents", () => {
       const handlers = vi.mocked(openEventStream).mock.calls[0][2];
       handlers.onEvent(stubEvent({ type: "lifecycle.up" }));
 
-      // Still coalescing: no request yet.
       expect(invalidateSpy).not.toHaveBeenCalled();
 
       vi.runAllTimers();
@@ -110,7 +109,6 @@ describe("useLiveEvents", () => {
       handlers.onEvent(stubEvent({ id: "evt-3", type: "lifecycle.up" }));
       vi.runAllTimers();
 
-      // One invalidateQueries call per key (detail, list), not one per event.
       expect(invalidateSpy).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
@@ -202,8 +200,6 @@ describe("useLiveEvents", () => {
       createdAt: "2026-01-01T00:00:00Z",
       workspaceDirExists: false,
     };
-    // The stale response, snapshotted before the event, carries no message;
-    // the fresh one, snapshotted after, does — only the fresh one may win.
     const staleBody = baseBody;
     const freshBody = { ...baseBody, message: { text: "hi", updatedAt: "2026-01-01T00:00:01Z" } };
     vi.stubGlobal("fetch", vi.fn());
@@ -226,8 +222,6 @@ describe("useLiveEvents", () => {
         stubEvent({ type: "plect.status_message", metadata: { text: "hi", cleared: "false", previous: "" } }),
       );
 
-      // The coalesced invalidation fires while the very first fetch — its
-      // snapshot taken before the event — is still unresolved.
       await vi.advanceTimersByTimeAsync(400);
       expect(fetch).toHaveBeenCalledTimes(2);
 
@@ -323,7 +317,6 @@ describe("useLiveEvents", () => {
       expect(invalidateSpy).not.toHaveBeenCalled();
 
       vi.runAllTimers();
-      // Still keyed to "team/a", the session that actually observed the event.
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: sessionDetailQueryKey("team/a") });
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: sessionListQueryKey() });
     } finally {
