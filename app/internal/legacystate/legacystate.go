@@ -27,6 +27,14 @@ type StateFile struct {
 	Sessions       map[string]*domain.Session
 	Populations    map[string]*domain.PopulationState
 	UpReservations map[string]domain.UpReservation
+	// HeartbeatLogPositions is each session's legacy
+	// tick_backoff.last_log_position (an event-log byte offset), keyed by
+	// session name, for sessions that have one. contract.TickBackoff no
+	// longer declares this field (it was replaced by the heartbeat
+	// event_cursors kind before the SQLite cutover), so json.Unmarshal into
+	// Sessions silently drops it; this side channel is the only place the
+	// value survives for the importer to translate into a heartbeat cursor.
+	HeartbeatLogPositions map[string]int64
 }
 
 // Parse decodes and validates a complete state.json byte slice: it rejects
@@ -64,9 +72,10 @@ func Parse(data []byte) (*StateFile, error) {
 	}
 
 	sf := &StateFile{
-		Sessions:       make(map[string]*domain.Session, len(parsed.Sessions)),
-		Populations:    parsed.Populations,
-		UpReservations: parsed.UpReservations,
+		Sessions:              make(map[string]*domain.Session, len(parsed.Sessions)),
+		Populations:           parsed.Populations,
+		UpReservations:        parsed.UpReservations,
+		HeartbeatLogPositions: parseHeartbeatLogPositions(data),
 	}
 	for name, session := range parsed.Sessions {
 		if session == nil {
@@ -79,6 +88,35 @@ func Parse(data []byte) (*StateFile, error) {
 	normalizeSessionTree(sf.Sessions)
 
 	return sf, nil
+}
+
+// parseHeartbeatLogPositions re-scans the raw envelope for each session's
+// tick_backoff.last_log_position, a field contract.TickBackoff no longer
+// declares (see StateFile.HeartbeatLogPositions). A malformed envelope
+// returns no positions rather than an error: the caller's own decode step
+// into the typed Sessions map already reports that failure.
+func parseHeartbeatLogPositions(data []byte) map[string]int64 {
+	var raw struct {
+		Sessions map[string]struct {
+			TickBackoff *struct {
+				LastLogPosition int64 `json:"last_log_position"`
+			} `json:"tick_backoff"`
+		} `json:"sessions"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil
+	}
+	var positions map[string]int64
+	for name, session := range raw.Sessions {
+		if session.TickBackoff == nil {
+			continue
+		}
+		if positions == nil {
+			positions = make(map[string]int64)
+		}
+		positions[name] = session.TickBackoff.LastLogPosition
+	}
+	return positions
 }
 
 // ValidateVersion reports whether got is the one legacy envelope version

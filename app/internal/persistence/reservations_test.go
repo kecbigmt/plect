@@ -13,6 +13,57 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/persistence/sqlcgen"
 )
 
+func TestImportUpReservation_InsertsWithoutCapOrLivenessChecks(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+
+	// A live PID (this test process itself): ReserveUpSlot's own dead-PID
+	// sweep would otherwise delete the row before fn ever sees it.
+	selfPID := os.Getpid()
+	reservedAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	if err := db.ImportUpReservation(ctx, "childA", domain.UpReservation{Parent: "parent1", At: reservedAt, PID: selfPID}); err != nil {
+		t.Fatalf("ImportUpReservation: %v", err)
+	}
+
+	var got []domain.UpReservation
+	_, err := db.ReserveUpSlot(ctx, "probe", "parent1", func(_ map[string]*domain.Session, reservations map[string]domain.UpReservation) bool {
+		if r, ok := reservations["childA"]; ok {
+			got = append(got, r)
+		}
+		return false
+	})
+	if err != nil {
+		t.Fatalf("ReserveUpSlot: %v", err)
+	}
+	if len(got) != 1 || got[0].Parent != "parent1" || got[0].PID != selfPID {
+		t.Fatalf("imported reservation = %+v, want parent1/%d", got, selfPID)
+	}
+}
+
+func TestImportUpReservation_VirtualRootParent(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+
+	if err := db.ImportUpReservation(ctx, "childB", domain.UpReservation{Parent: domain.VirtualRootReservationParent, PID: os.Getpid()}); err != nil {
+		t.Fatalf("ImportUpReservation: %v", err)
+	}
+
+	var got domain.UpReservation
+	found := false
+	_, err := db.ReserveUpSlot(ctx, "probe", domain.VirtualRootReservationParent, func(_ map[string]*domain.Session, reservations map[string]domain.UpReservation) bool {
+		if r, ok := reservations["childB"]; ok {
+			got, found = r, true
+		}
+		return false
+	})
+	if err != nil {
+		t.Fatalf("ReserveUpSlot: %v", err)
+	}
+	if !found || got.Parent != domain.VirtualRootReservationParent {
+		t.Fatalf("imported reservation = %+v, found=%v, want virtual-root parent", got, found)
+	}
+}
+
 func TestReserveUpSlot_EnforcesCapAcrossSequentialCalls(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()

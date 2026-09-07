@@ -59,6 +59,72 @@ func TestPutSessionAndGetSession_RoundTripsRelationalFields(t *testing.T) {
 	}
 }
 
+func TestImportSession_UsesGivenIDAndLeavesParentLinkUnset(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	const legacyID = "01HZLEGACYIDXXXXXXXXXXXXX"
+	session := &domain.Session{
+		Name:          "legacy-case",
+		ParentSession: "some-parent-not-yet-imported",
+		Workflow:      "wf",
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+
+	if err := db.ImportSession(ctx, legacyID, session); err != nil {
+		t.Fatalf("ImportSession: %v", err)
+	}
+
+	got, err := db.GetSession(ctx, "legacy-case")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if got == nil {
+		t.Fatal("GetSession returned nil")
+	}
+	if got.ID != legacyID {
+		t.Errorf("ID = %q, want the given legacy id %q", got.ID, legacyID)
+	}
+	if got.ParentSession != "" {
+		t.Errorf("ParentSession = %q, want unresolved (empty) until a later PutSession pass", got.ParentSession)
+	}
+}
+
+func TestImportSession_ThenPutSessionResolvesParentLinkOnceParentExists(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	parent := &domain.Session{Name: "parent", CreatedAt: now, UpdatedAt: now}
+	child := &domain.Session{Name: "child", ParentSession: "parent", CreatedAt: now, UpdatedAt: now}
+
+	// Import order deliberately puts the child before its parent: import
+	// order over an unordered legacy session map must not matter.
+	if err := db.ImportSession(ctx, "child-id", child); err != nil {
+		t.Fatalf("ImportSession(child): %v", err)
+	}
+	if err := db.ImportSession(ctx, "parent-id", parent); err != nil {
+		t.Fatalf("ImportSession(parent): %v", err)
+	}
+
+	if err := db.PutSession(ctx, child); err != nil {
+		t.Fatalf("PutSession(child) parent-link pass: %v", err)
+	}
+
+	got, err := db.GetSession(ctx, "child")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if got.ParentSession != "parent" {
+		t.Errorf("ParentSession = %q, want %q resolved once the parent row exists", got.ParentSession, "parent")
+	}
+	if got.ID != "child-id" {
+		t.Errorf("ID = %q, want the id ImportSession preserved (%q), not a fresh mint", got.ID, "child-id")
+	}
+}
+
 func TestGetSession_MissingReturnsNilNil(t *testing.T) {
 	db := migratedTestDB(t)
 	got, err := db.GetSession(context.Background(), "nonexistent")

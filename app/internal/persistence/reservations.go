@@ -90,6 +90,33 @@ func (db *DB) ReleaseUpSlot(ctx context.Context, childName string) error {
 	})
 }
 
+// ImportUpReservation inserts one legacy up-slot reservation as-is, with
+// none of ReserveUpSlot's cap enforcement, live-holder rejection, or
+// dead-PID sweep — the one-time legacy importer's own entry point. A
+// reservation surviving into a cutover backup was left by a process that is
+// gone by the time writers are stopped for import, so this preserves the
+// recorded fact rather than reinterpreting it; the ordinary dead-PID sweep
+// in ReserveUpSlot cleans it up the next time anything reserves a slot.
+func (db *DB) ImportUpReservation(ctx context.Context, childName string, res domain.UpReservation) error {
+	return db.WithImmediateTx(ctx, func(tx *sql.Tx) error {
+		parentSessionName, virtualRoot := reservationColumnsFromParent(res.Parent)
+		reservedAt := res.At
+		if reservedAt.IsZero() {
+			reservedAt = time.Now().UTC()
+		}
+		if err := sqlcgen.New(tx).UpsertUpReservation(ctx, sqlcgen.UpsertUpReservationParams{
+			ChildSessionName:  childName,
+			ParentSessionName: parentSessionName,
+			VirtualRoot:       virtualRoot,
+			Pid:               int64(res.PID),
+			ReservedAt:        formatTime(reservedAt),
+		}); err != nil {
+			return fmt.Errorf("import up-slot reservation %q: %w", childName, err)
+		}
+		return nil
+	})
+}
+
 // reservationColumnsFromParent translates the domain-level parent value
 // (a real session name, or domain.VirtualRootReservationParent) into the
 // column pair that stores it without the sentinel: NULL/true for the
