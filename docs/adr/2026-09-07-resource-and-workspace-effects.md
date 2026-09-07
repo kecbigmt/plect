@@ -168,11 +168,12 @@ context, credentials, and observations.
 
 The existing workflow-address-plus-name identity can collide when two selected
 project roots each define a local workflow and population with the same names.
-Before implementation, either population identity and session provenance must
-include a stable configuration-selection context, or one runtime data store
-must deliberately reject simultaneous colliding contexts. A configuration
-digest is not suitable for this identity because an editable policy must retain
-ownership through a digest change.
+Population identity includes the stable configuration-selection context, the
+resolved workflow address, and the population name. The context is the selected
+canonical project root or the distinct global-only context when no project root
+is selected. Session provenance, membership identity, and their related keys
+carry that context. A configuration digest is not suitable because an editable
+policy must retain ownership through a digest change.
 
 ## Consequences
 

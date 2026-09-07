@@ -228,9 +228,12 @@ timeout. An omitted cap is unlimited.
 A population belongs to a workflow and therefore derives its resource type
 from the workflow. It cannot declare an independently authoritative resource.
 A population is deployment policy, declared only in user-owned global or
-trusted selected-project configuration. Its identity is the containing
-workflow's resolved address plus its unique `name`; that provenance is stored
-on every admitted session and is required for later mutation or destruction.
+trusted selected-project configuration. Its identity is its stable
+configuration-selection context, the containing workflow's resolved address,
+and its unique `name`. The context is the selected canonical project root or
+the distinct global-only context when no project root is selected. That
+provenance is stored on every admitted session and is required for later
+mutation or destruction.
 
 | Field | Meaning |
 |---|---|
