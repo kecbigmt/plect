@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -25,6 +26,26 @@ const cancellationCharChildSleep = 8 * time.Second
 // Must exceed effect.CancelWaitDelay: the executor's own fallback can take
 // that long, so a tighter budget fails even when it works as designed.
 const cancellationCharKillBudget = effect.CancelWaitDelay + 2*time.Second
+
+const cancellationCharFastKillBudget = effect.CancelWaitDelay / 2
+
+// assertGroupKillFast fails the test if a hung child in the same process
+// group as the executor took long enough to return that the WaitDelay
+// fallback, not the group kill, must have been what actually ended it — a
+// regression the wider cancellationCharKillBudget alone can't catch, since
+// it also passes a run that fell all the way through to WaitDelay. Gated to
+// linux, where the bound is deterministic; darwin's scheduler has made it
+// flaky in CI, so darwin relies on cancellationCharKillBudget alone (the
+// escaped-grandchild test covers that fallback path deliberately).
+func assertGroupKillFast(t *testing.T, elapsed time.Duration, opName string) {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		return
+	}
+	if elapsed > cancellationCharFastKillBudget {
+		t.Errorf("%s returned in %v after cancellation, want under %v: the process-group kill did not fire promptly, only the WaitDelay fallback closed the pipes", opName, elapsed, cancellationCharFastKillBudget)
+	}
+}
 
 // waitForFile is the synchronization point: a test cancels only once the
 // child has actually started, instead of guessing a wall-clock deadline.
@@ -109,6 +130,7 @@ func TestCharacterization_RunSetup_CancelledContextKillsHungChild(t *testing.T) 
 	}()
 
 	waitForFile(t, started)
+	cancelTime := time.Now()
 	cancel()
 
 	select {
@@ -116,6 +138,7 @@ func TestCharacterization_RunSetup_CancelledContextKillsHungChild(t *testing.T) 
 		if err == nil {
 			t.Fatalf("RunSetup: want an error surfaced from the cancelled context, got nil")
 		}
+		assertGroupKillFast(t, time.Since(cancelTime), "RunSetup")
 	case <-time.After(cancellationCharKillBudget):
 		t.Fatalf("RunSetup did not return within %v of cancellation", cancellationCharKillBudget)
 	}
@@ -144,6 +167,7 @@ func TestCharacterization_RunCleanup_CancelledContextKillsHungChild(t *testing.T
 	}()
 
 	waitForFile(t, started)
+	cancelTime := time.Now()
 	cancel()
 
 	select {
@@ -151,6 +175,7 @@ func TestCharacterization_RunCleanup_CancelledContextKillsHungChild(t *testing.T
 		if err == nil {
 			t.Fatalf("RunCleanup: want an error surfaced from the cancelled context, got nil")
 		}
+		assertGroupKillFast(t, time.Since(cancelTime), "RunCleanup")
 	case <-time.After(cancellationCharKillBudget):
 		t.Fatalf("RunCleanup did not return within %v of cancellation", cancellationCharKillBudget)
 	}
@@ -173,6 +198,7 @@ func TestCharacterization_RunAliveProbe_CancelledContextKillsHungChild(t *testin
 	}()
 
 	waitForFile(t, started)
+	cancelTime := time.Now()
 	cancel()
 
 	select {
@@ -180,6 +206,7 @@ func TestCharacterization_RunAliveProbe_CancelledContextKillsHungChild(t *testin
 		if err == nil {
 			t.Fatalf("RunAliveProbe: want an error surfaced from the cancelled context, got nil")
 		}
+		assertGroupKillFast(t, time.Since(cancelTime), "RunAliveProbe")
 	case <-time.After(cancellationCharKillBudget):
 		t.Fatalf("RunAliveProbe did not return within %v of cancellation", cancellationCharKillBudget)
 	}
@@ -207,6 +234,7 @@ func TestCharacterization_RunCapture_CancelledContextKillsHungChild(t *testing.T
 	}()
 
 	waitForFile(t, started)
+	cancelTime := time.Now()
 	cancel()
 
 	select {
@@ -214,6 +242,7 @@ func TestCharacterization_RunCapture_CancelledContextKillsHungChild(t *testing.T
 		if res.err == nil {
 			t.Fatalf("RunCapture: want an error surfaced from the cancelled context, got nil")
 		}
+		assertGroupKillFast(t, time.Since(cancelTime), "RunCapture")
 	case <-time.After(cancellationCharKillBudget):
 		t.Fatalf("RunCapture did not return within %v of cancellation", cancellationCharKillBudget)
 	}
