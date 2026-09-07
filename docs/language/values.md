@@ -109,25 +109,23 @@ receiving everything and relying on a later check to reject the rest.
 
 | Surface | Roots |
 |---|---|
-| Workspace provider `name` | `match.<capture>` |
-| Workspace provider `setup` | `resource.id`, `session.name`, `session.inputs.<key>`, `inputs.<key>`, `prev.<key>`, `config.workspace_dirs_root` |
-| Workspace provider `cleanup` | `self.outputs.<key>`, `inputs.<key>`, `cleanup.inputs.<key>`, `session.name`, `config.workspace_dirs_root`, `force` |
-| Workspace provider `subscribe` | `session.name`, `session.branch`, `resource.id` |
-| Workspace provider `unsubscribe` | `session.name`, `resource.id` |
-| Resource observer `observe` | `resource.id`, `workspace.dir`, `workspace.branch` |
-| Resource observer `finalize` | `resource.id`, `session.name`, `resource.revision`, `judges` |
-| Resource observer query means | `inputs.<key>` |
+| Resource `name` | `match.<capture>` |
+| Resource `observe` | `resource.id`, `resource.inputs.<key>` |
+| Resource `finalize` | `resource.id`, `session.name`, `resource.revision`, `judges`, `resource.inputs.<key>` |
+| Resource `subscribe` | `session.name`, `resource.id`, `resource.inputs.<key>` |
+| Resource `unsubscribe` | `session.name`, `resource.id`, `resource.inputs.<key>` |
+| Resource query means | `inputs.<key>` |
 | Workflow population session `inputs` | `resource.id`, `item.<key>` |
 | Workflow `display` | `workflow.outputs.<key>`, `session.inputs.<key>` |
-| Workflow node `inputs` | `nodes.<id>.outputs.<key>`, `workflow.outputs.<key>`, `session.*`, `session.inputs.<key>`, `workspace.*` |
+| Workflow node `inputs` | `nodes.<id>.outputs.<key>`, `workflow.outputs.<key>`, `session.*`, `session.inputs.<key>` |
 | Workflow event-channel `inputs` | same as workflow node inputs |
 | Channel `args`, `path`, `body`, `bind` | `event.*`, `event.metadata.<key>`, `inputs.<key>`, and the terminal capability |
 | Channel `timeout` | `inputs.<key>` only |
-| Effect `setup` | `inputs.<key>`, `prev.<key>`, `nodes.<id>.outputs.<key>`, `workflow.outputs.<key>`, `session.*`, `session.inputs.<key>`, `workspace.*`, `resource.id` |
-| Effect `cleanup` | `self.outputs.<key>`, `inputs.<key>`, `nodes.<id>.outputs.<key>`, `workflow.outputs.<key>`, `session.*`, `workspace.*` |
-| Effect `health` probes | `self.outputs.<key>`, `inputs.<key>`, `session.*`, `workspace.*` |
+| Effect `setup` | `inputs.<key>`, `prev.<key>`, `nodes.<id>.outputs.<key>`, `workflow.outputs.<key>`, `session.*`, `session.inputs.<key>`, `resource.id` |
+| Effect `cleanup` | `self.outputs.<key>`, `inputs.<key>`, `nodes.<id>.outputs.<key>`, `workflow.outputs.<key>`, `session.*` |
+| Effect `health` probes | `self.outputs.<key>`, `inputs.<key>`, `session.*` |
 | Effect `terminal` verbs | `self.outputs.<key>`, `session.*` |
-| Effect `inner.inputs`, `inner.env` | `inputs.<key>`, `locals.<key>`, `nodes.<id>.outputs.<key>`, `workflow.outputs.<key>`, `session.*`, `workspace.*` |
+| Effect `inner.inputs`, `inner.env` | `inputs.<key>`, `locals.<key>`, `nodes.<id>.outputs.<key>`, `workflow.outputs.<key>`, `session.*` |
 | Effect `outputs.bind` | `inner.outputs.<key>`, `locals.<key>`, `inputs.<key>` |
 | Task `done_when`, chain `when` | `resource.state.<key>`, `self.state.<key>` |
 | Task instruction body | `resource.id`, `resource.state.<key>`, `self.state.<key>`, `inputs.<key>`, `session.*`, `workflow.outputs.<key>` |
@@ -161,12 +159,11 @@ a chain read them. An effect's outputs are production records, so its
 instantiated, whether it comes from the nesting joint or from this layer's own
 inputs.
 
-<!-- fixture: values/live-root.toml -->
 ```toml
 [review]
 kind              = "task"
 description       = "Review a resource and record a verdict against its revision"
-resource_observer = "issue_pr"
+resource          = "issue_pr"
 instructions      = [{ text = "Review {{ resource.id }} and record a verdict against its current revision." }]
 
 [review.state_schema]
@@ -189,8 +186,8 @@ output reaches the outer contract. A computed value does not write through.
 ## Static topology
 
 Fields that determine topology are never computed, so the shape of a
-configuration is discoverable before anything is evaluated: `kind`, `uses`,
-`workspace_provider`, `inner.uses`, a chain's `workflow`, and an exec action's
+configuration is discoverable before anything is evaluated: `kind`, `resource`,
+`uses`, `inner.uses`, a chain's `workflow`, and an exec action's
 `command`. A tagged value on one of them is `PLECTURE-CFG-REF-DYNAMIC`.
 
 ## Validation rules
@@ -202,5 +199,5 @@ configuration is discoverable before anything is evaluated: `kind`, `uses`,
   action binding, or an argv element of an action that accepts one. A contract
   document declares types, not values, so no tagged value appears inside one.
 - A channel `timeout` projects `inputs.*` only.
-- A workflow's `workspace_provider_inputs` are literal data: the provider's
-  hooks run before any node output exists.
+- An effect input obeys the effect's declared contract; a node binding may
+  project an earlier node's output.

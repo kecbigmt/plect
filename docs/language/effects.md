@@ -1,6 +1,6 @@
 # Effects
 
-An effect is a lifecycle-managed provider: contracts, health, an optional
+An effect is a lifecycle-managed component: contracts, health, an optional
 interactive capability, and composition.
 
 It brings something up, keeps it observable, and takes it down. It does not
@@ -20,7 +20,6 @@ decide whether the work is finished — that is a [task document](tasks.md).
 That is the whole grammar. A completion predicate, the keys it reads, its
 budget, and the workflows it spawns all belong to a task document.
 
-<!-- fixture: effects/lifecycle.toml -->
 ```toml
 [pane]
 kind  = "effect"
@@ -30,13 +29,12 @@ scope = "run"
 type = "shell"
 script = '''
 tmux has-session -t "$session_name" 2>/dev/null \
-  || tmux new-session -d -s "$session_name" -c "$workspace_dir"
+  || tmux new-session -d -s "$session_name"
 printf '{"session_name":"%s"}\n' "$session_name"
 '''
 
 [pane.setup.bind]
-session_name  = { from = "session.name" }
-workspace_dir = { from = "workspace.dir" }
+session_name = { from = "session.name" }
 
 [pane.cleanup]
 type   = "shell"

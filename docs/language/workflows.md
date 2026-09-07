@@ -1,10 +1,17 @@
 # Workflows
 
 A workflow is a named bundle of nodes plus the event channels, display values,
-and clocks for the sessions it produces. It selects a workspace provider; the
-provider owns the resource-kind knowledge, and the workflow owns the effect shape
-on top of it. A workflow without one cannot acquire a workspace, so it cannot
-back a session.
+and clocks for the sessions it produces. It selects the resource those sessions
+address; effects own any lifecycle the session needs.
+
+A workflow declares, once, which node output is the session's working
+directory.
+
+`[<id>.resource_inputs]` is an optional literal object for the selected
+resource. It satisfies that resource's `inputs_schema` and supplies the
+resource actions' `resource.inputs.*` values. Resource query means retain
+their separate `inputs.*` values. It is resource wiring, not a node input: it
+does not create a lifecycle dependency.
 
 ## Nodes
 
@@ -16,16 +23,14 @@ rooted at `nodes.<id>.outputs` is a dependency edge. There is no `depends_on` â€
 wiring data is what declares order.
 
 `blocks` declares the reverse edge, making each listed node a dependent of this
-one. It exists for a cascade overlay that must insert itself ahead of base
-nodes it cannot modify.
+one.
 
-<!-- fixture: workflows/nodes.toml -->
 ```toml
 [goal_reviewer]
 kind               = "workflow"
 name               = "goal-review agent (local-okf)"
 description        = "Dispatch an agent session against a local-okf goal resource, then deliver the goal_review task's instructions."
-workspace_provider = "okf_bundle"
+resource           = "okf_goal"
 
 [goal_reviewer.display]
 title  = { from = "workflow.outputs.concept_id" }
@@ -127,9 +132,8 @@ are the only drivers.
 `stall_threshold`, and `renotify_every`. It names the cycle, not what health
 means; what each probe observes is an effect-level `[health]` declaration.
 
-Unlike the rest of a workflow's fields, `[tick]` and `[healthcheck]` are
-whole-table runtime tuning: a deeper cascade layer replaces a shallower layer's
-table wholesale rather than merging into it.
+`[tick]` and `[healthcheck]` are whole-table runtime tuning. A global workflow
+replacement supplies each table as one declaration rather than merging keys.
 
 ## Concurrency
 
@@ -174,10 +178,10 @@ on every admitted session and is required for later mutation or destruction.
 | Field | Meaning |
 |---|---|
 | `name` | Required stable identifier, unique within the workflow. |
-| `resource_observer` | Required static reference to the observer that recognizes, queries, and observes population resources. |
-| `query` | Required literal parameter object validated by the observer query's `inputs_schema`. |
-| `uses` | Required, non-empty selection of query means this entry runs, e.g. `["poll"]`. Each keyword must be one the resolved observer's query declares. |
-| `session.task` | Optional static initial task, installed with the name `initial`; it uses the same observer. |
+| `resource` | Required static reference to the resource that recognizes, queries, and observes population resources. |
+| `query` | Required literal parameter object validated by the resource query's `inputs_schema`. |
+| `uses` | Required, non-empty selection of query means this entry runs, e.g. `["poll"]`. Each keyword must be one the resolved resource's query declares. |
+| `session.task` | Optional static initial task, installed with the name `initial`; it uses the same resource. |
 | `session.inputs` | Optional values over literals, `resource.id`, and properties declared by the query `item_schema` under `item.*`. |
 | `session.destroy.force` | Whether an enabled automatic destruction uses force; defaults to false. |
 | `poll_every` | Required positive duration when `uses` selects `poll`; forbidden otherwise. |
@@ -186,10 +190,10 @@ on every admitted session and is required for later mutation or destruction.
 | `auto_destroy` | Permits guarded automatic destruction; defaults to false, producing a dry-run verdict instead. |
 
 `uses` is the sole authority for which means run: an entry naming only
-`poll` never starts the observer's subscribe action even when the observer
+`poll` never starts the resource's subscribe action even when the resource
 declares one, and an entry naming only `subscribe` never runs poll, even
-against an observer whose query declares both. There is no default
-selection, so a means a plugin observer adds later cannot start running in an
+against a resource whose query declares both. There is no default
+selection, so a means a plugin resource adds later cannot start running in an
 existing deployment until an entry names it explicitly.
 
 Selecting `poll` makes it the sole membership and absence authority for that
@@ -201,7 +205,7 @@ measured from successful session creation and reset by accepted repeated
 appearances or inbound session events, and a resource is never presumed
 absent. Internal, outbound, and status events do not reset that clock.
 
-Deselecting `poll` on an observer whose query declares it is a deliberate
+Deselecting `poll` on a resource whose query declares it is a deliberate
 trade: it drops absence detection and missed-event repair (a subscribe
 delivery gap is never independently corrected) in exchange for not running a
 poll means that is too expensive, rate-limited, or unavailable for this
@@ -230,17 +234,14 @@ inbound event. Eligible sessions are selected by oldest activity, then session
 name, and are brought down through ordinary run-scoped cleanup. An appearance,
 inbound event, or positive poll generation requests ordinary up again.
 
-`populations` is a whole-array cascade field: a deeper user-owned workflow
-declaration replaces the shallower array rather than merging entries. Removing
-or invalidly changing provenance never authorizes a differently named entry to
-adopt existing sessions. A resident config reload that fails validation keeps
-the last valid evaluator running.
+Removing or invalidly changing provenance never authorizes a differently named
+entry to adopt existing sessions. A resident config reload that fails
+validation keeps the last valid evaluator running.
 
-<!-- fixture: workflows/populations.toml -->
 ```toml
 [standing_cases]
-kind               = "workflow"
-workspace_provider = "query_provider"
+kind     = "workflow"
+resource = "query_source"
 
 [standing_cases.inputs_schema]
 type                 = "object"
@@ -252,8 +253,8 @@ resource = { type = "string" }
 context  = { type = "string" }
 
 [[standing_cases.populations]]
-name              = "dispatch"
-resource_observer = "query_source"
+name     = "dispatch"
+resource = "query_source"
 uses              = ["poll", "subscribe"]
 poll_every        = "5m"
 auto_down         = true
@@ -285,20 +286,22 @@ Population lifecycle decisions are durable events:
 | `plect.workflow_population.conflict` | Existing state has incompatible provenance. |
 | `plect.workflow_population.failure` | A query or lifecycle operation failed. |
 
-## Provider parameters
+## Resource selection
 
-`[<id>.workspace_provider_inputs]` sets the provider's author-declared
-parameters. The values are literal data: the provider's hooks run before any
-workspace or node output exists, so there is nothing for a projection to read.
+`resource` is a static reference. It selects the resource identity and
+delivery contract; it does not create a directory or add a lifecycle node.
+Automatic dispatch requires exactly one workflow naming the matched resource
+and errors otherwise. A machine-owned global workflow supplies a
+resource-specific variant when needed; the caller selects it with
+`--workflow`. An effect's inputs are its own contract and may bind a preceding
+node's output.
 
 ## Validation rules
 
-- `workspace_provider` and every node's `uses` resolve to a definition of the
+- `resource` and every node's `uses` resolve to a definition of the
   expected kind.
 - Two nodes may not share an id, including after `id` defaulting.
 - Dependencies derived from `nodes.<id>.outputs` projections form no cycle.
 - A node input projecting `nodes.<id>.outputs.<key>` names a node in this
   workflow and an output that node's effect declares.
-- `workspace_provider_inputs` values are literals.
-- A cascade layer may add fields but not redeclare one a shallower layer set,
-  except for the whole-table clocks.
+- Workflow selection is unambiguous for a matched resource.

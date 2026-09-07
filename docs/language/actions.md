@@ -1,8 +1,8 @@
 # Actions
 
-An action is a lifecycle execution: an effect's `setup` or `cleanup`, a health or
-terminal probe, a workspace provider's `setup`, `cleanup`, or `subscribe`, a
-resource observer's `observe` or `finalize`, and a channel's delivery.
+An action is a lifecycle execution: an effect's `setup` or `cleanup`, a health
+or terminal probe, a resource's `observe`, `finalize`, `subscribe`, or
+`unsubscribe`, and a channel's delivery.
 
 Every action declares a `type`: `exec` and `shell` everywhere, and `noop`,
 legal only under `[health.alive]`.
@@ -12,7 +12,6 @@ legal only under `[health.alive]`.
 Simple process execution is structural. No shell is involved, so no quoting
 question arises.
 
-<!-- fixture: actions/exec-bin.toml -->
 ```toml
 [bootstrap]
 kind  = "effect"
@@ -24,8 +23,6 @@ bin  = "okf-goal"
 args = [
   "task",
   "bootstrap",
-  "--workspace-dir",
-  { from = "workspace.dir" },
   "--owner",
   { from = "inputs.owner" },
   "--session",

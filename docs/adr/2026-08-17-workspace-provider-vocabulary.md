@@ -1,3 +1,7 @@
+---
+superseded_by: 2026-09-07-resource-and-workspace-effects
+---
+
 # Workspace provider vocabulary
 
 ## Context

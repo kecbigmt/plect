@@ -15,11 +15,9 @@ sweep reads every other `.toml` file as a definition document.
 
 ## config.toml
 
-<!-- fixture: config/config.toml -->
 ```toml
-schema_version = 2
+schema_version = 3
 
-workspace_dirs_root = "~/worktrees"
 max_up_children     = 12
 resource_allowlist  = ["^https://github\\.com/kecbigmt/"]
 plugin_dirs         = ["~/.config/plect/plugins"]
@@ -36,15 +34,17 @@ task = { type = "string" }
 | Field | Meaning |
 |---|---|
 | `schema_version` | The dialect this config tree is written in. |
-| `workspace_dirs_root` | Where workspace directories are created. |
 | `max_up_children` | Optional positive cap for sessions whose logical parent is the virtual root. |
 | `resource_allowlist` | Patterns a resource identifier must match to be accepted. |
 | `plugin_dirs` | Additional plugin mount directories, after the catalog-resolved ones. |
 | `channels` | Channel definitions delivering for every session. |
 | `inputs_schema` | Contract for the session inputs this machine accepts. |
 
-`workspace_dirs_root` is the value a workspace provider projects as
-`config.workspace_dirs_root`.
+`config.toml` has no workspace-directory setting.
+
+Resource-specific customization is a workflow in the machine-owned global
+layer. The caller selects it with `--workflow`; a checkout does not contribute
+configuration.
 
 `max_up_children` applies one machine-wide capacity key to every session with
 no real parent, including sessions placed in an explicit `root:*` sibling
@@ -97,9 +97,8 @@ something to name.
 An alias is user-local: it is what makes a catalog-qualified reference
 resolvable on this machine, and it is why a plugin author can never write one.
 
-<!-- fixture: config/catalogs.toml -->
 ```toml
-schema_version = 2
+schema_version = 3
 
 [[catalogs]]
 alias   = "official"

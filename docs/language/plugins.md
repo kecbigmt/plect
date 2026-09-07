@@ -9,12 +9,11 @@ definition documents — they sit outside a definition root and carry no `kind`.
 `plugin.toml` lives at a plugin's root and declares the package's identity, the
 executables it owns, and the services the resident process supervises.
 
-<!-- fixture: plugins/manifest.toml -->
 ```toml
-schema_version    = 2
+schema_version    = 3
 version           = "0.1.0"
 plect_min_version = "0.0.0"
-description       = "GitHub workspace provider, resource observation, and watcher subscription."
+description       = "GitHub resource, workspace effect, and watcher subscription."
 
 [[executables]]
 name  = "github-worktree"
@@ -63,10 +62,9 @@ A service's `executable` names one of this manifest's own executables.
 `catalog.toml` lives at a catalog root and declares which plugins the catalog
 publishes.
 
-<!-- fixture: plugins/catalog.toml -->
 ```toml
-schema_version = 2
-description    = "Plecture's official plugin catalog: reusable workspace provider, resource observer, task, and channel packs."
+schema_version = 3
+description    = "Plecture's official plugin catalog: reusable resource, effect, task, and channel packs."
 
 plugins = [
   "tmux",

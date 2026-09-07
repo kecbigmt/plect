@@ -21,12 +21,11 @@ document that declared it.
 | `when` | The facts that must hold for the chain to fire. |
 | `inputs` | The session inputs handed to the spawned workflow. |
 
-<!-- fixture: chains/static-workflow.toml -->
 ```toml
 [pursue_goal]
 kind              = "task"
 description       = "Pursue one goal until an independent reviewer confirms it"
-resource_observer = "goal"
+resource          = "goal"
 instructions      = [{ text = "Pursue the goal at {{ resource.id }} until its checklist is satisfied." }]
 
 [pursue_goal.done_when]
@@ -76,19 +75,18 @@ spawned session.
 `resource` names what the spawned session is about. It is a value over the
 same roots `inputs` reads, because it is one of the facts the firing instance
 projects — what separates it is that the spawned session is *bound* to it
-rather than handed it. The workflow's provider then resolves it exactly as it
+rather than handed it. The workflow's resource then resolves it exactly as it
 resolves a resource dispatched directly.
 
 Omitting it binds the spawned session to the declaring session's own resource.
 That default is what a chain spawning more work on the same subject wants; a
 chain whose spawned session is about something else says so.
 
-<!-- fixture: chains/spawn-resource.toml -->
 ```toml
 [work]
 kind              = "task"
 description       = "Implement a fix and hand the pull request to a reviewer"
-resource_observer = "issue_pr"
+resource          = "issue_pr"
 instructions      = [{ text = "Resolve the issue at {{ resource.id }} and open a pull request." }]
 
 [work.done_when]
@@ -141,7 +139,7 @@ consumer.
 - A `resource` that resolves to nothing, or to an empty string, blocks the
   fire.
 - A `when` judge id names a judge leaf this document's `done_when` declares.
-- A check fact names a key the declared observer publishes, or one this
+- A check fact names a key the declared resource publishes, or one this
   document's `state_schema` declares.
 - Chain inputs project public work facts, not locals.
 - Chain inputs satisfy the target workflow's `inputs_schema`.

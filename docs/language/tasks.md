@@ -4,7 +4,7 @@ Plecture gives autonomous work a place to go. A task document is the work — on
 piece of it, made explicit enough to hand over.
 
 A task declaration is an ordinary `[<id>]` table carrying `kind = "task"`, in
-any `tasks/*.toml` file. `done_when` says when it is done, `resource_observer`
+any `tasks/*.toml` file. `done_when` says when it is done, `resource`
 what it is about, `[[chains]]` what follows from it — and `instructions` says
 what is to be done. One declaration carries all of it, because an instruction
 and the conditions for calling it finished are one statement about one task.
@@ -13,12 +13,11 @@ The place that work goes is a session — assembled from effects by a workflow,
 and described in the chapters after this one. Work is divided into tasks; a
 task document declares one, and an instance carries it out.
 
-<!-- fixture: tasks/document.toml -->
 ```toml
 [work]
 kind              = "task"
 description       = "Implement a fix or feature for an issue and create a PR"
-resource_observer = "issue_pr"
+resource          = "issue_pr"
 instructions      = [{ file = "document.md" }]
 
 [work.inputs_schema]
@@ -126,7 +125,7 @@ no identity spelling of its own.
 |---|---|
 | `kind` | `task`. |
 | `description` | What this task is for. |
-| `resource_observer` | The resource observer this task is written for. |
+| `resource` | The resource this task is written for. |
 | `[[<id>.instructions]]` | The instruction, as an ordered array of `text` / `file` segments. |
 | `[<id>.inputs_schema]` | The instruction's author-declared parameters. |
 | `[<id>.state_schema]` | This task's own state: the keys something else writes. |
@@ -149,15 +148,15 @@ session writes into an instance. It is plain JSON Schema, and it carries no
 mutability annotation — state is mutable by definition.
 
 One rule covers the whole language: any definition that holds state declares it
-with `state_schema`. A resource observer declares the state it publishes about a
+with `state_schema`. A resource declares the state it publishes about a
 resource; a task document declares the state it holds about itself.
 
 Those two schemas are the two roots a completion predicate reads:
-`resource.state.*` for what the observer publishes, and `self.state.*` for what this
+`resource.state.*` for what the resource publishes, and `self.state.*` for what this
 task holds. Both are live — every read is current as of that evaluation.
 
 There is no intermediate declaration between a schema and the predicate that
-reads it. A key does not have to be re-listed to be readable: the observer's
+reads it. A key does not have to be re-listed to be readable: the resource's
 `state_schema` already says what exists, and this document's `state_schema` says
 what it keeps.
 
@@ -165,12 +164,11 @@ what it keeps.
 Core special-cases nothing about it: it is an ordinary declared state key whose
 meaning lives entirely in the configuration that reads it.
 
-<!-- fixture: tasks/observe-live-roots.toml -->
 ```toml
 [review]
-kind              = "task"
-description       = "Review a pull request and record a verdict"
-resource_observer = "issue_pr"
+kind        = "task"
+description = "Review a pull request and record a verdict"
+resource    = "issue_pr"
 instructions      = [{ text = "Review the pull request at {{ resource.id }} and record your verdict." }]
 
 [review.inputs_schema]
@@ -180,7 +178,7 @@ type = "object"
 instruction = { type = "string" }
 
 # verdict_revision is this task's own state: written into the instance by the
-# reviewer rather than published by the observer. It carries no mutability
+# reviewer rather than published by the resource. It carries no mutability
 # annotation, because state is mutable by definition.
 [review.state_schema]
 type = "object"
@@ -222,12 +220,11 @@ probe, no interactive endpoint, and no nesting joint. It brings nothing up and
 takes nothing down — those are an effect's concerns, and a task document is
 dispatched into a session a workflow has already built.
 
-<!-- fixture: tasks/lifecycle-field.invalid.toml -->
 ```toml
 [broken_task]
-kind              = "task"
-description       = "A task document that tries to own a lifecycle"
-resource_observer = "issue_pr"
+kind        = "task"
+description = "A task document that tries to own a lifecycle"
+resource    = "issue_pr"
 instructions      = [{ text = "Resolve the issue at {{ resource.id }}." }]
 
 [broken_task.setup]
@@ -257,15 +254,14 @@ evaluated per instance.
 
 ## Resource binding
 
-A task document declares the observer it is written for:
+A task document declares the resource it is written for:
 
 ```toml
-resource_observer = "issue_pr"
+resource = "issue_pr"
 ```
 
-The field is named after the kind it references, the same way a workflow's
-`workspace_provider` is, and it is validated the same way — an ordinary dotted
-reference whose target must declare `kind = "resource_observer"`.
+The field is named after the kind it references and is an ordinary dotted
+reference whose target must declare `kind = "resource"`.
 
 An instance is still a document paired with a resource. The document is
 *type-declared and instance-late-bound*: which resource, it learns at
@@ -274,31 +270,31 @@ instantiation; what kind of resource, it states up front.
 Declaring it closes the chain at load time:
 
 ```text
-resource observer  state_schema   the keys it publishes
-        ↓
-task document      done_when      reads them as resource.state.*
+resource       state_schema   the keys it publishes
+    ↓
+task document  done_when      reads them as resource.state.*
 ```
 
-Because the observer is known from the declaration, a key it does not publish is
+Because the resource is known from the declaration, a key it does not publish is
 a load error rather than a surprise at run time. And because the declaration
 states a type, instantiation checks compatibility up front: binding an instance
-to a resource that does not resolve to the declared observer fails immediately,
+to a resource that does not resolve to the declared resource fails immediately,
 rather than producing an instance that can never satisfy.
 
 Every shipped task document is written for exactly one resource type, so this
 dependency already existed — it was hiding in a runtime convention. Declaring it
 is the move this language makes everywhere else.
 
-An observer that reports more than one kind of thing is a sign the observer wants
+One resource that reports more than one kind of thing is a sign it wants
 splitting rather than the declaration wanting widening. Where a document's
 completion depends on which kind it got — a pull request's checks against an
-issue's timestamp, say — two observers state that better than one observer plus a
+issue's timestamp, say — two resources state that better than one resource plus a
 kind check.
 
-A `done_when` check on the observer's own kind key remains useful for narrowing
-*within* one observer, where a single observer publishes more than one subtype:
+A `done_when` check on the resource's own kind key remains useful for narrowing
+*within* one resource, where it publishes more than one subtype:
 `resource.state.resource_kind in ["pull", "issue"]` distinguishes two shapes
-the same observer reports.
+the same resource reports.
 
 A workflow's `[[nodes]]` never reference a task document. A node names an effect,
 because a node is a position in a lifecycle graph; task arrives afterward,
@@ -312,8 +308,8 @@ naming the base. An extension is a real declaration with its own id —
 referencing sites (workflows, dispatch, another chain) name the extension, and
 the base stays untouched and independently referable.
 
-An extension does not declare `resource_observer`; it inherits the base's, so
-the observer a completion leaf resolves against has one source, never two
+An extension does not declare `resource`; it inherits the base's, so
+the resource a completion leaf resolves against has one source, never two
 declarations that could disagree.
 `description` is the one exception to composition: it is per-declaration
 display metadata, entirely outside it. An extension states its own
@@ -379,12 +375,11 @@ Two extensions of one base each choosing a different reviewer with a static
 chain — the shape that dissolves a templated `{{if eq .Work.workflow
 "claude"}}codex{{else}}claude{{end}}` conditional into two plain declarations:
 
-<!-- fixture: tasks/extends/cross-tool-reviewer.toml -->
 ```toml
 [work]
-kind              = "task"
-description       = "Implement a fix and hand it to review"
-resource_observer = "issue_pr"
+kind        = "task"
+description = "Implement a fix and hand it to review"
+resource    = "issue_pr"
 instructions      = [{ text = "Resolve the issue at {{ resource.id }}." }]
 
 [work.done_when]
@@ -427,12 +422,11 @@ kind = "workflow"
 A gate variant appends one instruction segment and the judge that records it —
 additive on both surfaces the same declaration touches:
 
-<!-- fixture: tasks/extends/gate-variant.toml -->
 ```toml
 [review]
-kind              = "task"
-description       = "Review a pull request and record a verdict"
-resource_observer = "issue_pr"
+kind        = "task"
+description = "Review a pull request and record a verdict"
+resource    = "issue_pr"
 instructions      = [{ text = "Review the pull request at {{ resource.id }}." }]
 
 [review.done_when]
@@ -454,12 +448,11 @@ Three layers deep — an official base, a team extension, and a member's
 personal extension of the team's — is the team-adoption shape unbounded depth
 and the inner-first default rule exist for:
 
-<!-- fixture: tasks/extends/team-layers.toml -->
 ```toml
 [official_review]
-kind              = "task"
-description       = "Review a change against the official contract"
-resource_observer = "issue_pr"
+kind        = "task"
+description = "Review a change against the official contract"
+resource    = "issue_pr"
 instructions      = [{ text = "Review the change at {{ resource.id }}." }]
 
 [official_review.done_when]
@@ -481,22 +474,22 @@ instructions = [{ text = "Additionally leave inline comments for anything worth 
 
 ## Validation rules
 
-- A task declaration carries a `resource_observer`.
-- `resource_observer` resolves to a definition of that kind.
+- A task declaration carries a `resource`.
+- `resource` resolves to a definition of that kind.
 - Each `instructions` element carries exactly one of `text` and `file`.
 - An element's `file` resolves, relative to the declaring file, to a readable
   file within the declaring layer.
 - A completion key reads `resource.state.*` or `self.state.*`.
-- A `resource.state.*` key names a property the declared observer's
+- A `resource.state.*` key names a property the declared resource's
   `state_schema` declares, and a `self.state.*` key one this document's declares —
   both checked at load.
-- An instance's resource resolves to the declared observer.
+- An instance's resource resolves to the declared resource.
 - Instantiation observes the resource once; a failed first observation rejects
   instantiation, and no instance is created.
 - A lifecycle field is not part of the task grammar.
 - A workflow node referencing a task document is a kind mismatch.
 - `extends` resolves to a definition of kind `task`.
-- A document declaring `extends` does not also declare `resource_observer`.
+- A document declaring `extends` does not also declare `resource`.
 - An extends chain that reaches itself is a load error.
 - A judge id is declared by at most one definition in an extends chain.
 - A chain id is declared by at most one definition in an extends chain.
