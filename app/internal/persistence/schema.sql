@@ -59,43 +59,18 @@ CREATE INDEX sessions_alias_idx ON sessions(alias);
 CREATE INDEX sessions_parent_idx ON sessions(parent_session_id);
 
 -- Static workflow-DAG nodes; task_instances holds the dynamic ones.
---
--- node_instances is the logical node's identity only: a setup attempt's own
--- facts (status, inputs/outputs, cleanup contract...) live on node_executions
--- instead, one row per attempt, so a later setup for the same node_id never
--- overwrites an older, unreleased allocation's own release recipe -- the
--- node_id alone is insufficient once a node can carry several execution
--- generations across its session's lifetime. See
--- docs/design/sqlite-persistence.md's "Node execution identity" section.
+-- node_instances is the logical node's identity only -- see
+-- docs/design/sqlite-persistence.md's "Node execution identity" section for
+-- why a setup attempt's own facts live on node_executions instead.
 CREATE TABLE node_instances (
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     node_id TEXT NOT NULL,
     PRIMARY KEY (session_id, node_id)
 );
 
--- One row per setup attempt for a node_instances row. task_id/scope are this
--- attempt's own facts (a workflow revision can remap a node_id onto a
--- different declaration between attempts), not the logical node's identity.
--- At most one row per (session_id, node_id) may be unreleased (status <>
--- 'cleaned') at a time -- see node_executions_one_unreleased_idx -- so
--- release ordering never needs to reason about two live generations of the
--- same node competing at once; node_execution_dependencies instead orders
--- unreleased executions of *different* nodes against each other.
---
--- Every column below has a genuine, currently-reachable node-level consumer
--- (not merely "the old struct had it"): resource/resource_observation_json/
--- resource_observed_at back a workflow-node resource observation a
--- `chains.when`/done_when predicate reads as `resource.state.*` regardless
--- of whether the node is static or dynamic (see
--- TestCheckSession_ChainFiresWhenWhenAndOutputsHold and its siblings in
--- app/internal/service/chain_test.go, which seed exactly this on a node);
--- name mirrors task_instances' own instance-identity column for the same
--- shared TaskState shape; extra_done_when_json and done_when_json are a
--- node's own `done_when`/override, read by the same completion-predicate
--- machinery regardless of collection (see this file's earlier one-off
--- carve-out note for done_when_json); finalized_at is set by `plect task
--- finalize`, which can target a node id (domain.TaskState resolves node ids
--- before task ids).
+-- One row per setup attempt for a node_instances row; at most one per
+-- (session_id, node_id) may be unreleased (status <> 'cleaned') at a time,
+-- enforced below by node_executions_one_unreleased_idx.
 CREATE TABLE node_executions (
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
@@ -106,10 +81,6 @@ CREATE TABLE node_executions (
     scope TEXT NOT NULL CHECK (scope IN ('session', 'run')),
     status TEXT NOT NULL CHECK (status IN ('produced', 'failed', 'cleaned')),
     resource TEXT,
-    -- execution_dir is the absolute working directory the setup ran in
-    -- (the session's workspace directory at setup time); retained per
-    -- execution so a later release does not need to trust whatever the
-    -- session's *current* workspace_dir happens to be.
     execution_dir TEXT,
     inputs_json TEXT CHECK (inputs_json IS NULL OR json_valid(inputs_json)),
     outputs_json TEXT CHECK (outputs_json IS NULL OR json_valid(outputs_json)),
@@ -118,17 +89,7 @@ CREATE TABLE node_executions (
     resource_observed_at TEXT,
     done_when_json TEXT CHECK (done_when_json IS NULL OR json_valid(done_when_json)),
     extra_done_when_json TEXT CHECK (extra_done_when_json IS NULL OR json_valid(extra_done_when_json)),
-    -- cleanup_json is the retained cleanup contract as resolved at setup
-    -- time (the cleanup action's type/bin/script/args/bind, still templated
-    -- against the inputs this row already retains) -- declaration-owned
-    -- shape, defined in docs/design/sqlite-persistence.md, so release does
-    -- not need to re-read whatever the *current* task/effect definition
-    -- says. NULL for an execution with no cleanup (a task that declares
-    -- none, or a failed attempt that produced nothing to clean up).
     cleanup_json TEXT CHECK (cleanup_json IS NULL OR json_valid(cleanup_json)),
-    -- plugin_ref is the resolved plugin catalog address and revision the
-    -- cleanup action's `bin` references resolve against, or NULL for a
-    -- global/user-owned effect with no plugin involved.
     plugin_ref TEXT,
     error TEXT,
     setup_at TEXT,
@@ -141,9 +102,8 @@ CREATE TABLE node_executions (
 CREATE INDEX node_executions_session_node_idx ON node_executions(session_id, node_id, sequence);
 CREATE UNIQUE INDEX node_executions_one_unreleased_idx ON node_executions(session_id, node_id) WHERE status <> 'cleaned';
 
--- One row per layer of one execution's nested effect chain, ordered by
--- position. Belongs to the execution, not the node_id, so a revised nesting
--- chain never replaces an older, unreleased chain's own cleanup information.
+-- One row per layer of one execution's nested effect chain, keyed by
+-- execution rather than node_id -- see "Node execution identity" above.
 CREATE TABLE node_execution_layers (
     execution_id TEXT NOT NULL REFERENCES node_executions(id) ON DELETE CASCADE,
     position INTEGER NOT NULL,
@@ -159,22 +119,12 @@ CREATE TABLE node_execution_layers (
     failed_at TEXT,
     cleaned_at TEXT,
     error TEXT,
-    -- cleanup_json is this layer's own retained cleanup contract (the
-    -- layer's cleanup action, source/ownership, and outward joint, resolved
-    -- at setup time; shape is effect.RetainedLayerCleanup) -- schema-free,
-    -- since cleanup never needs the compiled input/locals/outputs schemas a
-    -- layer's setup answers to. NULL for a layer with no cleanup.
     cleanup_json TEXT CHECK (cleanup_json IS NULL OR json_valid(cleanup_json)),
     PRIMARY KEY (execution_id, position)
 );
 
--- Snapshot of which other node's currently-unreleased execution this
--- execution was resolved against at its own setup time (from
--- task.Resolved.DependsOn), so release ordering (dependents released before
--- prerequisites) survives a later config change that rewires, or entirely
--- drops, the node that expressed the edge. execution_id is the dependent
--- (released first); depends_on_execution_id is the prerequisite (released
--- after).
+-- execution_id is the dependent (released first); depends_on_execution_id
+-- is the prerequisite -- see "Node execution identity" above.
 CREATE TABLE node_execution_dependencies (
     execution_id TEXT NOT NULL REFERENCES node_executions(id) ON DELETE CASCADE,
     depends_on_execution_id TEXT NOT NULL REFERENCES node_executions(id) ON DELETE CASCADE,

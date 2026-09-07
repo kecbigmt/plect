@@ -141,36 +141,19 @@ type TaskState struct {
 	Resource string         `json:"resource,omitempty"` // bound --resource at instantiation
 	Name     string         `json:"name,omitempty"`     // --name instance identity (key == name when set)
 	Layers   []LayerState   `json:"layers,omitempty"`   // per-layer record for a nested task; empty for a plain one
-	// DependsOn is the workflow node ids this node's setup was resolved
-	// against at the time this attempt was created (task.Resolved.DependsOn,
-	// itself derived from node input bindings, not authored directly). It is
-	// meaningful only for a workflow-DAG node (a Session.Nodes entry, never a
-	// Session.Tasks one); persistence snapshots it as the recorded
-	// prerequisite of this specific execution, so release ordering survives a
-	// later config change that rewires or drops the node that expressed the
-	// edge. See docs/design/sqlite-persistence.md's "Node execution identity"
-	// section and node_execution_dependencies.
+	// DependsOn is the node ids this attempt's setup resolved as
+	// prerequisites, snapshotted so release ordering survives a later
+	// config change; see docs/design/sqlite-persistence.md's "Node
+	// execution identity" section. Node-only, like the three fields below.
 	DependsOn []string `json:"depends_on,omitempty"`
-	// ExecutionDir is the absolute working directory this node's setup ran
-	// in (the session's workspace directory at setup time), retained per
-	// execution so a later release does not depend on the session's
-	// *current* workspace_dir. Meaningful only for a workflow-DAG node.
-	// Excluded from ordinary JSON output: it is a persistence-internal
-	// retention detail, not a fact external consumers (Web UI, MCP) need to
-	// see.
-	ExecutionDir string `json:"-"`
-	// PluginRef is the resolved plugin catalog address and revision this
-	// execution's cleanup action's `bin` references resolve against, empty
-	// for a global/user-owned effect with no plugin involved. Same
-	// json:"-" rationale as ExecutionDir.
-	PluginRef string `json:"-"`
-	// Cleanup is the retained cleanup contract as resolved at setup time
-	// (already-encoded JSON; shape documented in
-	// docs/design/sqlite-persistence.md), so a later release does not need
-	// to re-read whatever the *current* task/effect definition says. Nil
-	// for an execution with no cleanup. Same json:"-" rationale as
-	// ExecutionDir.
-	Cleanup json.RawMessage `json:"-"`
+	// ExecutionDir, PluginRef, and Cleanup are node-execution retention
+	// details (working directory, resolved plugin+revision, and the
+	// retained cleanup contract, respectively — same doc section as
+	// DependsOn) excluded from ordinary JSON output as persistence-internal,
+	// not facts an external consumer needs.
+	ExecutionDir string          `json:"-"`
+	PluginRef    string          `json:"-"`
+	Cleanup      json.RawMessage `json:"-"`
 	// State is what a task instance holds about itself: the keys a reviewer
 	// or another session records into it, read by a completion predicate as
 	// `self.state.*`. Distinct from Outputs, which is what an effect's setup
@@ -230,13 +213,9 @@ type LayerState struct {
 	FailedAt             time.Time `json:"failed_at,omitzero"`
 	CleanedAt            time.Time `json:"cleaned_at,omitzero"`
 	Error                string    `json:"error,omitempty"`
-	// Cleanup is this layer's own retained cleanup contract (already-encoded
-	// JSON; shape is effect.RetainedLayerCleanup), so releasing a nested
-	// node's chain does not need to re-read whatever the *current*
-	// task/effect definition says for this layer. Nil for a layer with no
-	// cleanup, and for every task_instance_layers row: only
-	// node_execution_layers populates it today. Excluded from ordinary JSON
-	// output for the same reason as TaskState's own retained fields.
+	// Cleanup is this layer's own retained cleanup contract (shape is
+	// effect.RetainedLayerCleanup); nil for a plain-task layer row, which
+	// never populates it. See TaskState.Cleanup.
 	Cleanup json.RawMessage `json:"-"`
 }
 

@@ -15,14 +15,11 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// TestDestroy_ReleasesNodeRemovedFromWorkflow proves Destroy itself (not
-// just plect up's own separate stale-cleanup path) tears down a produced
-// node the current workflow no longer declares, exercised end to end
-// through the real Destroy call rather than unifiedTeardownList directly.
+// Exercises Destroy end to end, not unifiedTeardownList directly.
 func TestDestroy_ReleasesNodeRemovedFromWorkflow(t *testing.T) {
 	cfg := writeWorkflowFixture(t, t.TempDir(), "coding",
 		[]taskFixture{{id: "kept", scope: "run", setup: `echo '{}'`, cleanup: "true"}},
-		[]nodeFixture{{id: "kept"}}, // "retired" is no longer declared
+		[]nodeFixture{{id: "kept"}},
 	)
 	store := testStore(t)
 	seedSessionWithNodes(t, store, "sess-1", "acme", 1, "coding", map[string]*contract.TaskState{
@@ -42,14 +39,11 @@ func TestDestroy_ReleasesNodeRemovedFromWorkflow(t *testing.T) {
 	}
 }
 
-// TestDown_ReleasesRunScopedNodeRemovedFromWorkflow is TestDestroy_ReleasesNodeRemovedFromWorkflow's
-// counterpart for `plect down`: a run-scoped node the current workflow no
-// longer declares is still released, and the session's other (session-scoped)
-// state survives, matching Down's existing run-only scoping.
+// `plect down`'s counterpart: session-scoped state must survive.
 func TestDown_ReleasesRunScopedNodeRemovedFromWorkflow(t *testing.T) {
 	cfg := writeWorkflowFixture(t, t.TempDir(), "coding",
 		[]taskFixture{{id: "review", scope: "session", setup: `echo '{}'`, cleanup: "true"}},
-		[]nodeFixture{{id: "review"}}, // "retired" is no longer declared
+		[]nodeFixture{{id: "review"}},
 	)
 	store := testStore(t)
 	seedSessionWithNodes(t, store, "sess-1", "acme", 1, "coding", map[string]*contract.TaskState{
@@ -73,14 +67,8 @@ func TestDown_ReleasesRunScopedNodeRemovedFromWorkflow(t *testing.T) {
 	}
 }
 
-// TestUp_FailedSetupRetainsCleanupContractAcrossARestart proves a
-// failed/partial setup's attempt record and its retained cleanup contract
-// survive being read back fresh -- state.Store
-// holds nothing in Go memory across calls, so a later, independent read is
-// exactly what a restarted process's own first read would see -- and a
-// later Destroy can still release it using that retained contract alone,
-// with no live task definition required (LoadTaskDefinitions never runs a
-// cleanup script's own definition through it).
+// A later Destroy must release a failed/partial setup using its own
+// retained cleanup contract alone, with no live task definition required.
 func TestUp_FailedSetupRetainsCleanupContractAcrossARestart(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -122,11 +110,6 @@ func TestUp_FailedSetupRetainsCleanupContractAcrossARestart(t *testing.T) {
 	}
 }
 
-// TestUnifiedTeardownList_ReleasesNodeRemovedFromCurrentWorkflow proves a
-// produced node the current workflow no longer declares must still be
-// enumerated for teardown, using its own retained identity rather than the
-// current plan (which has nothing to say about a node it doesn't declare
-// at all).
 func TestUnifiedTeardownList_ReleasesNodeRemovedFromCurrentWorkflow(t *testing.T) {
 	cfg := writeWorkflowFixture(t, t.TempDir(), "wf",
 		[]taskFixture{{id: "kept", scope: "session", setup: "echo '{}'", cleanup: "true"}},
@@ -160,10 +143,6 @@ func TestUnifiedTeardownList_ReleasesNodeRemovedFromCurrentWorkflow(t *testing.T
 	}
 }
 
-// TestUnifiedTeardownList_UsesRetainedCleanupWhenCurrentDefinitionIsGone
-// proves a removed node's own retained cleanup contract is what teardown
-// actually resolves to, not a re-resolution attempt against the (now
-// entirely absent) current definition.
 func TestUnifiedTeardownList_UsesRetainedCleanupWhenCurrentDefinitionIsGone(t *testing.T) {
 	cfg := writeWorkflowFixture(t, t.TempDir(), "wf", nil, nil)
 	retained, err := json.Marshal(task.RetainedCleanup{Action: &lang.Action{Type: lang.ActionShell, Script: "retired-cleanup"}})
@@ -185,13 +164,8 @@ func TestUnifiedTeardownList_UsesRetainedCleanupWhenCurrentDefinitionIsGone(t *t
 	}
 }
 
-// TestUnifiedTeardownList_OrdersByRecordedDependencyNotSeqAlone proves
-// release ordering follows each execution's own recorded DependsOn edge
-// even when it disagrees with plain ascending-Seq order (the case a
-// dependent's Seq happens to be lower than its prerequisite's, e.g. after
-// the prerequisite's own later generation). RunCleanup reclaims this list
-// in reverse, so the dependent ("b") must come out AFTER its prerequisite
-// ("a") for "b" to release first.
+// b's Seq is lower than its prerequisite a's, so RunCleanup's reverse pass
+// must still release b first; that requires a to come out before b here.
 func TestUnifiedTeardownList_OrdersByRecordedDependencyNotSeqAlone(t *testing.T) {
 	cfg := writeWorkflowFixture(t, t.TempDir(), "wf", nil, nil)
 	session := &domain.Session{

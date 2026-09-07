@@ -215,18 +215,12 @@ func TestMigrate_DownRestoresPreDissolutionSchemaWithoutError(t *testing.T) {
 	}
 }
 
-// preNodeExecutionIdentityVersion is the goose version immediately before
-// this package's node-execution-identity migration -- the last migration
-// where a node_instances row still carries its own status/inputs/outputs
-// directly instead of delegating them to node_executions.
+// preNodeExecutionIdentityVersion is the last migration where a
+// node_instances row still carries its own status/inputs/outputs directly.
 const preNodeExecutionIdentityVersion = 20260907002408
 
-// TestMigrate_AddNodeExecutionIdentityPreservesExistingNodeRows is the
-// upgrade-path case TestSchemaSQL_MatchesMigrationHistory cannot cover: that
-// check only ever migrates an empty database. It proves an existing
-// node_instances/node_instance_layers row survives the split into
-// node_instances (identity only) + node_executions (this row's data, as the
-// node's first recorded execution) + node_execution_layers.
+// Covers the upgrade path TestSchemaSQL_MatchesMigrationHistory cannot: that
+// check only ever migrates an empty database.
 func TestMigrate_AddNodeExecutionIdentityPreservesExistingNodeRows(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
@@ -289,12 +283,7 @@ func TestMigrate_AddNodeExecutionIdentityPreservesExistingNodeRows(t *testing.T)
 	}
 }
 
-// TestMigrate_DownRestoresNodeInstancesColumnsWithoutError proves this
-// migration's Down runs without error and restores a node's data under the
-// pre-change node_instances shape. Best-effort, not lossless (see the
-// migration's own Down comment, and the record_json-dissolution precedent
-// above): a node with more than one recorded execution would collapse onto
-// its latest, and any recorded dependency edge is discarded.
+// Best-effort, not lossless -- see the migration's own Down comment.
 func TestMigrate_DownRestoresNodeInstancesColumnsWithoutError(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()

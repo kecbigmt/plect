@@ -699,23 +699,13 @@ func reportCleanupFailure(obs Observer, r Resolved, elapsed time.Duration, err e
 // merge the session's Nodes and Tasks, since Seq allocation is shared across
 // both. Stops at the first failure; subsequent tasks in the slice are not run.
 //
-// RunSetup is idempotent: a task whose persisted state is already
-// "produced" is verified before it is reused, not blindly skipped — see
-// verifyLiveness and invalidateProducedNode. Tasks in any other state
-// (absent, "failed", "cleaned") are re-run with a fresh setup attempt, under
-// the SAME declaration (task id, scope, and nesting-chain shape all
-// unchanged) as the existing record. Task authors must make their setup
-// scripts cope with retry by verifying the desired state rather than
-// blindly recreating; see README "Task model" section.
-//
-// A node whose existing, unreleased (not yet "cleaned") record names a
-// DIFFERENT declaration — a workflow revision remapped this node id onto a
-// different task/effect, or edited its nesting chain's shape — is refused
-// rather than silently overwritten: an unreleased allocation's own release
-// recipe must not be discarded just because the node id it lived under now
-// means something else. Release it
-// first (`plect down`/`plect destroy`) and retry. This is deliberately not
-// gated by a force flag yet, since no caller needs one.
+// RunSetup is idempotent: a "produced" task is verified before reuse, not
+// blindly skipped (see verifyLiveness/invalidateProducedNode); any other
+// state is re-run under the SAME declaration as the existing record. A node
+// whose existing, unreleased record names a DIFFERENT declaration is
+// refused rather than silently overwritten, since its own release recipe
+// must not be discarded just because the node id now means something else
+// — release it first (`plect down`/`plect destroy`) and retry.
 func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, tasks map[string]*contract.TaskState, observer Observer) error {
 	obs := observerOr(observer)
 	terminalOwner := terminalOwnerIn(ordered)
@@ -979,15 +969,9 @@ func failedState(r Resolved, session SessionVars, now time.Time, errMsg string, 
 }
 
 // RetainedCleanup is the JSON shape persisted as TaskState.Cleanup: a plain
-// (non-nested) node's cleanup action, resolved at setup time, plus the
-// ownership/source facts needed to run it again later without re-reading
-// whatever the *current* task/effect definition says. lang.Action and
-// lang.Value are plain data (no compiled/unexported internals), so this
-// round-trips through encoding/json with no custom (un)marshaling.
-//
-// A nested node's own cleanup chain does not use this shape -- see
-// effect.RetainedLayerCleanup instead, retained per layer on
-// contracts/state.LayerState.Cleanup.
+// (non-nested) node's cleanup action plus the ownership/source facts needed
+// to run it again without re-reading the current definition. A nested
+// node's chain uses effect.RetainedLayerCleanup instead, per layer.
 type RetainedCleanup struct {
 	Action     *lang.Action   `json:"action"`
 	SourcePath string         `json:"source_path,omitempty"`
@@ -1003,9 +987,8 @@ func retainCleanup(r Resolved) json.RawMessage {
 	}
 	encoded, err := json.Marshal(RetainedCleanup{Action: r.Cleanup, SourcePath: r.SourcePath, From: r.From})
 	if err != nil {
-		// r.Cleanup/From are plain data assembled by this package's own
-		// config-loading code; a marshal failure here would mean that
-		// invariant broke, not a runtime condition a caller can act on.
+		// r.Cleanup/From are plain config-loaded data; a marshal failure
+		// here is not a condition a caller can act on.
 		return nil
 	}
 	return encoded
@@ -1025,17 +1008,11 @@ func DecodeRetainedCleanup(raw json.RawMessage) (rc RetainedCleanup, ok bool, er
 	return rc, true, nil
 }
 
-// pluginRef names the catalog alias r's setup resolved bin references
-// against, or empty for a global/user-owned effect. This is the alias
-// only, not a pinned revision/digest: resolving a stable revision would
-// require threading the plugin lockfile into RunSetup, which no caller
-// needs yet.
 // pluginRef names the resolved plugin catalog address and content revision
 // r's cleanup action's bin references resolve against, or empty for a
-// global/user-owned effect with no plugin involved. It matches
-// plugins.ContainingPlugin's own directory-containment lookup -- the same
-// convention plugins.ResolveBin trusts for the identical SourcePath -- so it
-// finds the exact mount, not just the enabling alias r.From carries.
+// global/user-owned effect. It matches plugins.ContainingPlugin's own
+// directory-containment lookup for r.SourcePath, finding the exact mount
+// rather than just the enabling alias r.From carries.
 func pluginRef(r Resolved, session SessionVars) string {
 	if !r.From.IsPlugin || r.SourcePath == "" {
 		return ""

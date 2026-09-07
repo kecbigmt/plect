@@ -111,13 +111,9 @@ func CleanupLayers(def config.TaskDefinition) []Layer {
 }
 
 // RetainedLayerCleanup is the JSON shape persisted as
-// contracts/state.LayerState.Cleanup: exactly the fields CleanupLayers
-// itself builds fresh from a definition (this layer's own cleanup action,
-// source/ownership, and outward joint) -- schema-free, since cleanup never
-// needs the compiled InputsSchema/LocalsSchema/OutputsSchema a plain Layer
-// otherwise carries. lang.Action, lang.Ownership, and config.OutputBinding
-// are plain data, so this round-trips through encoding/json with no custom
-// (un)marshaling.
+// contracts/state.LayerState.Cleanup -- the same fields CleanupLayers builds
+// fresh from a definition, schema-free, so retention needs no serialization
+// beyond encoding/json.
 type RetainedLayerCleanup struct {
 	EffectID    string                 `json:"effect_id"`
 	Cleanup     *lang.Action           `json:"cleanup,omitempty"`
@@ -137,9 +133,8 @@ func RetainLayerCleanup(l Layer) json.RawMessage {
 		From: l.From, BindOutputs: l.BindOutputs,
 	})
 	if err != nil {
-		// l's fields are plain data assembled by this package's own
-		// config-loading code; a marshal failure here would mean that
-		// invariant broke, not a runtime condition a caller can act on.
+		// l's fields are plain config-loaded data; a marshal failure here
+		// is not a condition a caller can act on.
 		return nil
 	}
 	return encoded
@@ -160,12 +155,9 @@ func DecodeRetainedLayerCleanup(raw json.RawMessage) (rc RetainedLayerCleanup, o
 }
 
 // LayersFromRetained rebuilds a nested node's cleanup-relevant layer chain
-// entirely from its own persisted per-layer records, so releasing it never
-// re-reads whatever the *current* task/effect definition says. It reports
-// ok=false (no partial result) when any state lacks a retained contract --
-// a pre-this-change execution, say -- so the caller falls back to
-// CleanupLayers wholesale rather than mixing retained and re-resolved
-// layers in one chain.
+// entirely from its own persisted per-layer records. ok is false (no
+// partial result) when any state lacks a retained contract, so the caller
+// falls back to CleanupLayers wholesale rather than mixing chains.
 func LayersFromRetained(states []contract.LayerState) ([]Layer, bool) {
 	if len(states) == 0 {
 		return nil, false

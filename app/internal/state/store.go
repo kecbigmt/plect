@@ -133,13 +133,8 @@ func (s *Store) Update(name string, fn func(*domain.Session) error) error {
 	return db.UpdateSession(context.Background(), name, fn)
 }
 
-// PruneReleasedNode immediately drops name's node_id row once its own
-// caller already knows (in this same operation) that node's execution just
-// reached "cleaned" -- rather than waiting for a later, unrelated write
-// that happens to stop mentioning it (see persistence.DB.PruneReleasedNode
-// and writeTasksTx's own absence-triggered pruning). It reports whether the
-// row was actually pruned; false with a nil error means an unreleased
-// execution still exists.
+// PruneReleasedNode reports whether name's node_id row was pruned; see
+// persistence.DB.PruneReleasedNode.
 func (s *Store) PruneReleasedNode(name, nodeID string) (bool, error) {
 	db, err := s.dbHandle()
 	if err != nil {

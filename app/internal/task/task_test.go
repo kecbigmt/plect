@@ -276,11 +276,8 @@ func TestRunCleanup_RequiredSelfOutputAbsenceFailsTheRelease(t *testing.T) {
 	}
 }
 
-// TestRunSetup_RetainsCleanupContractAndExecutionDir proves a plain node's
-// setup snapshots its own cleanup action, execution directory, and plugin
-// reference onto TaskState (see docs/design/sqlite-persistence.md's "Node
-// execution identity" section). persistence.writeTasksTx persists Cleanup
-// opaquely; this test only proves the task package's own producer side.
+// Only proves the task package's own producer side; persistence.writeTasksTx
+// persists Cleanup opaquely.
 func TestRunSetup_RetainsCleanupContractAndExecutionDir(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -314,12 +311,8 @@ func TestRunSetup_RetainsCleanupContractAndExecutionDir(t *testing.T) {
 	}
 }
 
-// TestRunSetup_RefusesUnreleasedNodeWhenNestingChainShapeChanges proves a
-// node whose task id and scope are unchanged but whose nesting chain shape
-// was revised (a different inner effect) is still a different declaration
-// -- the old chain's own retained per-layer release recipe must survive
-// untouched until something explicitly releases it, not be silently
-// discarded because the composed identity looked the same.
+// A revised inner effect under the same task id/scope is still a different
+// declaration; the old chain's retained per-layer recipe must survive.
 func TestRunSetup_RefusesUnreleasedNodeWhenNestingChainShapeChanges(t *testing.T) {
 	withScriptedExecutor(t, &scriptedExecutor{stdout: map[string]string{"inner-a-setup": `{"pid":1}`}})
 	outer := config.TaskDefinition{ID: "outer", Scope: "run", Cleanup: shellStub("outer-cleanup")}
@@ -342,14 +335,8 @@ func TestRunSetup_RefusesUnreleasedNodeWhenNestingChainShapeChanges(t *testing.T
 	}
 }
 
-// TestRunSetup_NestedNodeRetainsCleanupPerLayerNotOnTheComposedState proves
-// a nested (layered) node's own, composed TaskState.Cleanup is left nil
-// (the plain-node retained-contract shape does not fit a layered chain),
-// while EACH layer's own cleanup is retained separately on
-// LayerState.Cleanup instead (effect.RetainLayerCleanup, wired into
-// effect.RunLayers) -- schema-free, since cleanup never needs the compiled
-// input/locals/outputs schemas a layer's setup answers to (see
-// effect.CleanupLayers, which never sets them either).
+// A nested node's composed TaskState.Cleanup stays nil; each layer retains
+// its own cleanup separately on LayerState.Cleanup instead.
 func TestRunSetup_NestedNodeRetainsCleanupPerLayerNotOnTheComposedState(t *testing.T) {
 	withScriptedExecutor(t, &scriptedExecutor{stdout: map[string]string{"inner-setup": `{"pid":42}`}})
 	outer := config.TaskDefinition{ID: "outer", Scope: "run", Cleanup: shellStub("outer-cleanup")}
@@ -378,11 +365,6 @@ func TestRunSetup_NestedNodeRetainsCleanupPerLayerNotOnTheComposedState(t *testi
 	}
 }
 
-// TestRunSetup_RetainsPluginRefWithRevision proves a plugin-owned node's
-// PluginRef names both the mounted plugin's catalog-qualified id and its
-// locked content revision, resolved via plugins.ContainingPlugin against
-// the declaration's own SourcePath -- the same lookup plugins.ResolveBin
-// trusts for the identical path.
 func TestRunSetup_RetainsPluginRefWithRevision(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -438,11 +420,6 @@ func TestRunSetup_CapturesOutputsAndRespectsDeps(t *testing.T) {
 	}
 }
 
-// TestRunSetup_StampsDependsOnFromResolvedNode proves each node's setup
-// records its own resolved dependency edges onto TaskState.DependsOn --
-// persistence.writeTasksTx snapshots these into node_execution_dependencies
-// so release ordering survives even once the workflow declaration that
-// derived them changes or the dependency node disappears from it.
 func TestRunSetup_StampsDependsOnFromResolvedNode(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -587,11 +564,8 @@ func TestRunSetup_RefusesUnreleasedNodeUnderADifferentDeclaration(t *testing.T) 
 	}
 }
 
-// TestRunSetup_RefusesUnreleasedProducedNodeUnderADifferentDeclaration
-// covers the same refusal for a currently "produced" node whose new
-// declaration no longer declares an alive probe at all -- without the
-// refusal, an absent probe would vacuously "pass" liveness and this node
-// would be treated as already matching a declaration it never actually ran.
+// Without the refusal, a "produced" node whose new declaration has no
+// alive probe at all would vacuously "pass" liveness.
 func TestRunSetup_RefusesUnreleasedProducedNodeUnderADifferentDeclaration(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")

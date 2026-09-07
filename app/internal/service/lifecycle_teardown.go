@@ -62,26 +62,15 @@ type teardownItem struct {
 }
 
 // unifiedTeardownList builds the single cleanup-ordered Resolved list for a
-// teardown phase: every retained, unreleased node execution merged with
-// every dynamic instance into one dependency-ordered (falling back to
-// ascending Seq) slice. RunCleanup reclaims in reverse, so the result's own
-// order is prerequisites-before-dependents — a dependent is then released
-// before what it depends on, and (absent any recorded edge) a node
-// instantiated after another is still cleaned first. The @workflow
-// pseudo-node is excluded; it is released last via the workspace provider
-// cleanup hook.
-//
-// Static nodes are enumerated directly from session.Nodes — not from plan,
-// which only reflects the *current* workflow declaration — so a node the
-// workflow no longer declares is still torn down, using whatever THAT
-// execution itself retained (see resolveNodeCleanup), never whatever the
-// current plan says its node_id currently means.
-//
+// teardown phase, merging every retained unreleased node execution with
+// every dynamic instance (RunCleanup reclaims in reverse, so the result is
+// ordered prerequisites-before-dependents; see orderTeardownItems). The
+// @workflow pseudo-node is excluded; it releases last via the workspace
+// provider cleanup hook. Static nodes are enumerated from session.Nodes, not
+// plan, so a node the current workflow no longer declares is still torn
+// down using what that execution itself retained (resolveNodeCleanup).
 // runOnly restricts to run-scoped tasks (the `down` lifecycle); destroy
-// passes false to reclaim every task regardless of scope. A dynamic
-// instance whose task definition has since disappeared is reclaimed with an
-// empty cleanup (best-effort, since there is no definition left to run
-// against).
+// passes false for every scope.
 func unifiedTeardownList(cfg *config.Config, session *domain.Session, runOnly bool) ([]task.Resolved, error) {
 	defs, err := cfg.LoadTaskDefinitions(session.WorkspaceDirPath)
 	if err != nil {
@@ -156,14 +145,10 @@ func unifiedTeardownList(cfg *config.Config, session *domain.Session, runOnly bo
 }
 
 // resolveNodeCleanup fills r's cleanup fields from st's own retained
-// contract when one exists (a plain node's Cleanup, or a nested node's
-// per-layer Layers — see task.DecodeRetainedCleanup and
-// effect.LayersFromRetained), so release does not depend on whatever the
-// *current* task/effect definition says. It falls back to re-resolving
-// r.TaskID against defs, tolerant of a missing or drifted definition
-// exactly like a dynamic instance's teardown already is, only when st
-// retains nothing usable — an execution from before this change, or one
-// with no cleanup at all.
+// contract when one exists (task.DecodeRetainedCleanup or
+// effect.LayersFromRetained), falling back to re-resolving r.TaskID against
+// defs -- tolerant of a missing/drifted definition, like a dynamic
+// instance's teardown -- only when st retains nothing usable.
 func resolveNodeCleanup(r *task.Resolved, st *contract.TaskState, defs map[string]config.TaskDefinition) {
 	if rc, ok, err := task.DecodeRetainedCleanup(st.Cleanup); err == nil && ok {
 		r.Cleanup = rc.Action
@@ -182,15 +167,10 @@ func resolveNodeCleanup(r *task.Resolved, st *contract.TaskState, defs map[strin
 	}
 }
 
-// orderTeardownItems returns items' Resolved values in dependency-respecting
-// order: whenever one item's own DependsOn names another item present in
-// this same list, the dependent is ordered before the prerequisite (so
-// RunCleanup's reverse iteration releases the dependent first). Ties, and
-// anything with no recorded edge at all, fall back to ascending Seq — this
-// list's entire ordering signal before node executions started recording
-// DependsOn. A cycle (which retained, previously-valid edges should never
-// produce) falls back to plain Seq order for the whole list rather than
-// dropping an item from teardown.
+// orderTeardownItems orders each item's dependent before its prerequisite
+// (per DependsOn), so RunCleanup's reverse iteration releases the dependent
+// first. Ties and unrecorded edges fall back to ascending Seq; a cycle
+// falls back to plain Seq order for the whole list.
 func orderTeardownItems(items []teardownItem) []task.Resolved {
 	n := len(items)
 	if n == 0 {

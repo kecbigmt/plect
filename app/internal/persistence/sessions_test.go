@@ -551,13 +551,9 @@ func TestPutSession_NodeInstanceDoneWhenRoundTripsAsEmbeddedJSON(t *testing.T) {
 	}
 }
 
-// TestPutSession_UnreleasedNodeSurvivesBeingDroppedFromTheMap proves a node
-// whose latest execution is still unreleased (produced/failed) is never
-// discarded just because a later Put
-// stops mentioning it -- a workflow revision doing exactly that must not
-// silently destroy the execution record and cleanup obligation that
-// `plect down`/`destroy` still needs. See
-// TestPutSession_ReleasedNodeIsPrunedWhenDroppedFromTheMap for the
+// A workflow revision that stops declaring a still-unreleased node must not
+// silently destroy the execution record `plect down`/`destroy` still needs.
+// See TestPutSession_ReleasedNodeIsPrunedWhenDroppedFromTheMap for the
 // complementary, already-released case.
 func TestPutSession_UnreleasedNodeSurvivesBeingDroppedFromTheMap(t *testing.T) {
 	db := migratedTestDB(t)
@@ -593,11 +589,6 @@ func TestPutSession_UnreleasedNodeSurvivesBeingDroppedFromTheMap(t *testing.T) {
 	}
 }
 
-// TestPutSession_ReleasedNodeIsPrunedWhenDroppedFromTheMap proves the
-// complementary case: a node whose latest execution already reached
-// "cleaned" is pruned once a Put stops mentioning it, preserving today's
-// tidiness for the ordinary case where a caller (e.g.
-// persistStaleWorkflowCleanup) explicitly finished releasing it first.
 func TestPutSession_ReleasedNodeIsPrunedWhenDroppedFromTheMap(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()

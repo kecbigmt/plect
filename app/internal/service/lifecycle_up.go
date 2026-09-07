@@ -256,15 +256,11 @@ func cleanupStaleWorkflowNodes(cfg *config.Config, store *state.Store, sessionNa
 	return nil
 }
 
-// persistStaleWorkflowCleanup writes the (possibly now "cleaned") TaskState
-// back onto its node id first -- never deleting the map entry itself, since
-// persistence can only correctly decide whether a released node's row
-// survives being dropped once the "cleaned" transition has actually reached
-// the database (see writeTasksTx's release-only pruning in
-// app/internal/persistence/tasks.go) -- then explicitly prunes each entry
-// that reached "cleaned", so a node this operation itself just finished
-// releasing disappears from this same result rather than waiting for a
-// later, unrelated write that happens to omit it.
+// persistStaleWorkflowCleanup writes each stale node's TaskState back first
+// (never deleting the map entry itself -- persistence decides whether a
+// released node's row survives, see writeTasksTx), then explicitly prunes
+// whatever reached "cleaned" so it disappears from this same result rather
+// than a later write.
 func persistStaleWorkflowCleanup(store *state.Store, sessionName string, session *domain.Session, stale []task.Resolved) error {
 	if err := store.Update(sessionName, func(s *domain.Session) error {
 		if s.Nodes == nil {

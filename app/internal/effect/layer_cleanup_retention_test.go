@@ -8,26 +8,19 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// TestRetainLayerCleanup_OmitsCompiledSchemaFields proves the retained
-// contract round-trips through JSON even when the source Layer carries
-// compiled *jsonschema.Schema values RunSetup's own ResolveLayers would set
-// -- RetainLayerCleanup only ever copies the schema-free fields
-// CleanupLayers itself builds, so those compiled fields never need to be
-// (and cannot be) serialized.
+// A compiled InputsSchema (as a real setup-time Layer carries) must not
+// break or leak into RetainLayerCleanup's output.
 func TestRetainLayerCleanup_OmitsCompiledSchemaFields(t *testing.T) {
 	schema, err := lang.CompileSchema(map[string]any{"type": "object"}, "", "plect:test")
 	if err != nil {
 		t.Fatalf("CompileSchema: %v", err)
 	}
 	layer := Layer{
-		EffectID:    "outer",
-		Cleanup:     &lang.Action{Type: lang.ActionShell, Script: "outer-cleanup"},
-		SourcePath:  "/plugins/acme/tasks/outer.toml",
-		From:        lang.Ownership{IsPlugin: true, Alias: "acme"},
-		BindOutputs: []config.OutputBinding{{Key: "pid", InnerKey: "pid", Direct: true}},
-		// A real setup-time Layer (effect.ResolveLayers) has these compiled;
-		// RetainLayerCleanup must not choke on them, and must not attempt to
-		// serialize them.
+		EffectID:     "outer",
+		Cleanup:      &lang.Action{Type: lang.ActionShell, Script: "outer-cleanup"},
+		SourcePath:   "/plugins/acme/tasks/outer.toml",
+		From:         lang.Ownership{IsPlugin: true, Alias: "acme"},
+		BindOutputs:  []config.OutputBinding{{Key: "pid", InnerKey: "pid", Direct: true}},
 		InputsSchema: schema,
 	}
 
@@ -53,18 +46,12 @@ func TestRetainLayerCleanup_OmitsCompiledSchemaFields(t *testing.T) {
 	}
 }
 
-// TestRetainLayerCleanup_NoCleanupReturnsNil proves a layer declaring no
-// cleanup retains nothing, matching CleanupLayers' own convention of a nil
-// Cleanup action for such a layer.
 func TestRetainLayerCleanup_NoCleanupReturnsNil(t *testing.T) {
 	if got := RetainLayerCleanup(Layer{EffectID: "outer"}); got != nil {
 		t.Fatalf("RetainLayerCleanup = %s, want nil", got)
 	}
 }
 
-// TestLayersFromRetained_ReconstructsCleanupOnlyChain proves the retained
-// per-layer records round-trip into the same schema-free shape
-// CleanupLayers builds from live config, in order.
 func TestLayersFromRetained_ReconstructsCleanupOnlyChain(t *testing.T) {
 	states := []contract.LayerState{
 		{EffectID: "outer", Cleanup: RetainLayerCleanup(Layer{EffectID: "outer", Cleanup: &lang.Action{Type: lang.ActionShell, Script: "outer-cleanup"}})},
@@ -79,11 +66,6 @@ func TestLayersFromRetained_ReconstructsCleanupOnlyChain(t *testing.T) {
 	}
 }
 
-// TestLayersFromRetained_FallsBackWholesaleWhenAnyLayerLacksRetention
-// proves a mixed chain (one layer with a retained contract, one without --
-// a pre-this-change execution, say) reports ok=false rather than a partial
-// result, so the caller falls back to re-resolving the whole chain from the
-// current definition instead of mixing retained and re-resolved layers.
 func TestLayersFromRetained_FallsBackWholesaleWhenAnyLayerLacksRetention(t *testing.T) {
 	states := []contract.LayerState{
 		{EffectID: "outer", Cleanup: RetainLayerCleanup(Layer{EffectID: "outer", Cleanup: &lang.Action{Type: lang.ActionShell, Script: "outer-cleanup"}})},

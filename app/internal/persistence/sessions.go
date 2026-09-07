@@ -181,11 +181,8 @@ func (db *DB) sessionEverExisted(ctx context.Context, name string) (bool, error)
 	return existed, err
 }
 
-// PruneReleasedNode removes node_id's row (and every recorded execution and
-// layer) from sessionName's live session, but only when it currently has no
-// unreleased execution -- see queries.sql's DeleteReleasedNodeInstance. It
-// reports whether the row was actually pruned; a false result with a nil
-// error means an unreleased execution still exists and nothing was touched.
+// PruneReleasedNode reports whether node_id's row was pruned; see
+// queries.sql's DeleteReleasedNodeInstance.
 func (db *DB) PruneReleasedNode(ctx context.Context, sessionName, nodeID string) (bool, error) {
 	var pruned bool
 	err := db.WithImmediateTx(ctx, func(tx *sql.Tx) error {
@@ -210,13 +207,10 @@ func (db *DB) PruneReleasedNode(ctx context.Context, sessionName, nodeID string)
 	return pruned, nil
 }
 
-// ResetNodes unconditionally discards every node_instances row (and, via
-// cascade, every recorded execution, layer, and dependency edge) for
-// sessionName. It exists only for an explicit whole-runtime reset
-// (--force-recreate's own rebuild, see service.recreateSessionRuntime),
-// which deliberately throws away every node's execution history -- unlike
-// an ordinary PutSession/UpdateSession write, whose own node reconciliation
-// retains a node still unreleased when a caller merely stops mentioning it.
+// ResetNodes unconditionally discards every node's execution history for
+// sessionName, unlike an ordinary PutSession/UpdateSession write, whose own
+// reconciliation retains a node still unreleased. For --force-recreate's
+// deliberate rebuild only; see service.recreateSessionRuntime.
 func (db *DB) ResetNodes(ctx context.Context, sessionName string) error {
 	return db.WithImmediateTx(ctx, func(tx *sql.Tx) error {
 		q := sqlcgen.New(tx)

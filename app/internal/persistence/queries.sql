@@ -92,15 +92,8 @@ SELECT EXISTS(SELECT 1 FROM sessions WHERE name = ?);
 -- name: ListEverSessionNames :many
 SELECT DISTINCT name FROM sessions ORDER BY name;
 
--- Workflow nodes (static; Session.Nodes entries)
---
--- node_instances is the logical node's identity; node_executions holds one
--- row per setup attempt, at most one of which may be unreleased (status <>
--- 'cleaned') per node at a time. A write reconciles by finding the current
--- unreleased execution (CurrentNodeExecution) and updating it in place, or
--- inserting a fresh one when none exists -- see persistence/tasks.go's
--- upsertNodeExecutionTx, which is the sole caller of the Insert/Update pair
--- below.
+-- Workflow nodes (static; Session.Nodes entries). See
+-- docs/design/sqlite-persistence.md's "Node execution identity" section.
 
 -- name: EnsureNodeInstance :exec
 INSERT INTO node_instances (session_id, node_id) VALUES (?, ?)
@@ -110,21 +103,12 @@ ON CONFLICT (session_id, node_id) DO NOTHING;
 DELETE FROM node_instances WHERE session_id = ? AND node_id = ?;
 
 -- name: DeleteNodeInstancesForSession :exec
--- Unconditionally wipes every node (and, via cascade, every execution,
--- layer, and dependency edge) for the session -- used only by an explicit
--- whole-runtime reset (--force-recreate), which deliberately discards every
--- node's execution history rather than retaining an unreleased one the way
--- an ordinary write does. See ResetNodes.
+-- Unconditional whole-runtime wipe; see ResetNodes.
 DELETE FROM node_instances WHERE session_id = ?;
 
 -- name: DeleteReleasedNodeInstance :execrows
--- Prunes node_id only if it currently has no unreleased execution -- a
--- caller-driven, immediate counterpart to writeTasksTx's own
--- absence-triggered pruning, for a caller (persistStaleWorkflowCleanup) that
--- knows in the same breath a specific node's cleanup just succeeded and
--- wants it gone from this same operation's result rather than the next
--- write that happens to omit it. A non-zero result means it was pruned; zero
--- means an unreleased execution still exists (nothing was touched).
+-- A non-zero result means node_id was pruned; zero means an unreleased
+-- execution still exists (nothing was touched).
 DELETE FROM node_instances
 WHERE session_id = ? AND node_id = ?
 AND NOT EXISTS (
@@ -162,13 +146,9 @@ UPDATE node_executions SET
 WHERE id = ?;
 
 -- name: ListCurrentNodeExecutions :many
--- One row per node_id: its latest execution by (sequence, id), whatever
--- that execution's status -- a released node stays visible (matching
--- task_instances' own until-explicitly-pruned convention) until
--- DeleteNodeInstance removes it. The id tiebreak only matters when two
--- generations somehow share a sequence (callers are expected to assign a
--- strictly increasing one per attempt); it keeps the pick deterministic
--- rather than leaving it to join-order chance.
+-- One row per node_id: its latest execution by (sequence, id) -- the id
+-- tiebreak keeps the pick deterministic if two generations ever share a
+-- sequence.
 SELECT ne.id, ne.session_id, ne.node_id, ne.sequence, ne.task_id, ne.name,
        ne.scope, ne.status, ne.resource, ne.execution_dir, ne.inputs_json,
        ne.outputs_json, ne.state_json, ne.resource_observation_json,
@@ -212,10 +192,8 @@ INSERT INTO node_execution_dependencies (execution_id, depends_on_execution_id)
 VALUES (?, ?) ON CONFLICT (execution_id, depends_on_execution_id) DO NOTHING;
 
 -- name: ListNodeExecutionDependenciesForSession :many
--- One row per recorded edge, resolved back to the node_ids on both ends so a
--- reader that only knows node_ids (see loadTasks) can rebuild
--- TaskState.DependsOn without carrying raw execution ids into the domain
--- layer.
+-- Resolved back to the node_ids on both ends so loadTasks can rebuild
+-- TaskState.DependsOn without carrying raw execution ids into the domain layer.
 SELECT dependent.node_id AS node_id, ned.execution_id AS execution_id, prereq.node_id AS depends_on_node_id
 FROM node_execution_dependencies ned
 INNER JOIN node_executions dependent ON dependent.id = ned.execution_id

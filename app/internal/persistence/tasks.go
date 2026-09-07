@@ -137,16 +137,11 @@ func loadTasks(ctx context.Context, q sqlcgen.DBTX, sessionID string) (nodes, ta
 
 // writeTasksTx reconciles node_instances/node_executions against nodes and
 // task_instances against tasks. A node absent from nodes is pruned only once
-// its latest execution has already reached "cleaned" -- an absent but
-// unreleased one is left untouched, so a node silently dropped from a
-// caller's in-memory map (a workflow revision that stopped declaring it,
-// say) never loses its execution record or outstanding cleanup obligation;
-// see docs/design/sqlite-persistence.md's "Node execution identity" section.
-// task_instances keeps its own, different reconciliation: each current
-// dynamic instance is upserted (preserving its id across an ordinary update;
-// see UpsertTaskInstance), and any instance_name no longer present is
-// explicitly deleted, which is what mints a fresh id on a later cleanup +
-// setup under the same name. Neither ever touches another session's rows.
+// its latest execution has already reached "cleaned"; an absent but
+// unreleased one is left untouched -- see docs/design/sqlite-persistence.md's
+// "Node execution identity" section. task_instances instead upserts every
+// current instance and deletes any instance_name no longer present
+// unconditionally, minting a fresh id on a later setup under the same name.
 func (db *DB) writeTasksTx(ctx context.Context, tx *sql.Tx, sessionID string, nodes, tasks map[string]*contract.TaskState) error {
 	q := sqlcgen.New(tx)
 
@@ -256,11 +251,9 @@ func rawJSONFromColumn(s sql.NullString) json.RawMessage {
 // TaskState.DependsOn) ordered before its dependent, restricted to edges
 // between two keys both present in nodes -- a dependency already persisted
 // from an earlier write is resolved directly against the database instead
-// (see upsertNodeExecutionTx), so it needs no ordering here. This guarantees
-// a dependency's row exists before its dependent's own write looks it up
-// within the same transaction. Ties, and any cycle (which a valid workflow
-// graph never produces), fall back to sorted key order rather than dropping
-// a node from the write.
+// (see upsertNodeExecutionTx). This guarantees a dependency's row exists
+// before its dependent's write looks it up within the same transaction.
+// Ties and cycles fall back to sorted key order.
 func orderNodesByDependency(nodes map[string]*contract.TaskState) []string {
 	keys := make([]string, 0, len(nodes))
 	for k, ts := range nodes {
