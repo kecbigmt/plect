@@ -1,12 +1,10 @@
 package effect
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/lang"
-	contract "github.com/kecbigmt/plecture/contracts/state"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
@@ -108,58 +106,4 @@ func CleanupLayers(def config.TaskDefinition) []Layer {
 		})
 	}
 	return out
-}
-
-// RetainedLayerCleanup is contracts/state.LayerState.Cleanup's JSON shape.
-type RetainedLayerCleanup struct {
-	EffectID    string                 `json:"effect_id"`
-	Cleanup     *lang.Action           `json:"cleanup,omitempty"`
-	SourcePath  string                 `json:"source_path,omitempty"`
-	From        lang.Ownership         `json:"from"`
-	BindOutputs []config.OutputBinding `json:"bind_outputs,omitempty"`
-}
-
-// RetainLayerCleanup returns nil when l declares no cleanup.
-func RetainLayerCleanup(l Layer) json.RawMessage {
-	if l.Cleanup == nil {
-		return nil
-	}
-	encoded, err := json.Marshal(RetainedLayerCleanup{
-		EffectID: l.EffectID, Cleanup: l.Cleanup, SourcePath: l.SourcePath,
-		From: l.From, BindOutputs: l.BindOutputs,
-	})
-	if err != nil {
-		// l's fields carry no compiled internals, so this cannot fail.
-		return nil
-	}
-	return encoded
-}
-
-// DecodeRetainedLayerCleanup: ok is false with a nil error for an empty raw
-// value (a layer with no cleanup).
-func DecodeRetainedLayerCleanup(raw json.RawMessage) (rc RetainedLayerCleanup, ok bool, err error) {
-	if len(raw) == 0 {
-		return RetainedLayerCleanup{}, false, nil
-	}
-	if err := json.Unmarshal(raw, &rc); err != nil {
-		return RetainedLayerCleanup{}, false, err
-	}
-	return rc, true, nil
-}
-
-// LayersFromRetained: ok is false (no partial result) when any state lacks
-// a retained contract.
-func LayersFromRetained(states []contract.LayerState) ([]Layer, bool) {
-	if len(states) == 0 {
-		return nil, false
-	}
-	out := make([]Layer, len(states))
-	for i, state := range states {
-		rc, ok, err := DecodeRetainedLayerCleanup(state.Cleanup)
-		if err != nil || !ok {
-			return nil, false
-		}
-		out[i] = Layer{EffectID: rc.EffectID, Cleanup: rc.Cleanup, SourcePath: rc.SourcePath, From: rc.From, BindOutputs: rc.BindOutputs}
-	}
-	return out, true
 }

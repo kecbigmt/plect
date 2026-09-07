@@ -86,7 +86,7 @@ func ResolveBin(mounted []Mounted, sourcePath, ref string) (string, error) {
 // containing plugin's own [[executables]] never has a duplicate name
 // (LoadManifest rejects that), so at most one match can ever exist.
 func resolvePluginLocalBin(mounted []Mounted, sourcePath, ref string) (string, error) {
-	owner, ok := ContainingPlugin(mounted, sourcePath)
+	owner, ok := containingPlugin(mounted, sourcePath)
 	if !ok {
 		return "", fmt.Errorf(`bin %q: a bare executable name only resolves inside plugin-mounted config; this file was not mounted from any catalog plugin (use "<catalog-alias>/<plugin-path>/<executable-name>" instead)`, ref)
 	}
@@ -98,11 +98,11 @@ func resolvePluginLocalBin(mounted []Mounted, sourcePath, ref string) (string, e
 	return "", fmt.Errorf("bin %q: plugin %q declares no executable named %q", ref, owner.ID, ref)
 }
 
-// ContainingPlugin finds the mounted plugin whose directory contains
+// containingPlugin finds the mounted plugin whose directory contains
 // sourcePath, i.e. the plugin sourcePath's file was mounted from. Picks the
 // longest matching Dir so a plugin nested under another plugin's directory
 // resolves to its own, more specific, manifest rather than the outer one's.
-func ContainingPlugin(mounted []Mounted, sourcePath string) (Mounted, bool) {
+func containingPlugin(mounted []Mounted, sourcePath string) (Mounted, bool) {
 	var best Mounted
 	found := false
 	for _, m := range mounted {

@@ -76,7 +76,6 @@ CREATE TABLE node_executions (
     scope TEXT NOT NULL CHECK (scope IN ('session', 'run')),
     status TEXT NOT NULL CHECK (status IN ('produced', 'failed', 'cleaned')),
     resource TEXT,
-    execution_dir TEXT,
     inputs_json TEXT CHECK (inputs_json IS NULL OR json_valid(inputs_json)),
     outputs_json TEXT CHECK (outputs_json IS NULL OR json_valid(outputs_json)),
     state_json TEXT CHECK (state_json IS NULL OR json_valid(state_json)),
@@ -84,8 +83,6 @@ CREATE TABLE node_executions (
     resource_observed_at TEXT,
     done_when_json TEXT CHECK (done_when_json IS NULL OR json_valid(done_when_json)),
     extra_done_when_json TEXT CHECK (extra_done_when_json IS NULL OR json_valid(extra_done_when_json)),
-    cleanup_json TEXT CHECK (cleanup_json IS NULL OR json_valid(cleanup_json)),
-    plugin_ref TEXT,
     error TEXT,
     setup_at TEXT,
     failed_at TEXT,
@@ -113,7 +110,6 @@ CREATE TABLE node_execution_layers (
     failed_at TEXT,
     cleaned_at TEXT,
     error TEXT,
-    cleanup_json TEXT CHECK (cleanup_json IS NULL OR json_valid(cleanup_json)),
     PRIMARY KEY (execution_id, position)
 );
 

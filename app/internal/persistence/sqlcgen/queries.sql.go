@@ -23,9 +23,9 @@ func (q *Queries) CountLiveSessionsNamed(ctx context.Context, name string) (int6
 
 const currentNodeExecution = `-- name: CurrentNodeExecution :one
 SELECT id, session_id, node_id, sequence, task_id, name, scope, status, resource,
-       execution_dir, inputs_json, outputs_json, state_json,
+       inputs_json, outputs_json, state_json,
        resource_observation_json, resource_observed_at, done_when_json,
-       extra_done_when_json, cleanup_json, plugin_ref, error, setup_at,
+       extra_done_when_json, error, setup_at,
        failed_at, cleaned_at, finalized_at
 FROM node_executions WHERE session_id = ? AND node_id = ? AND status <> 'cleaned'
 `
@@ -48,7 +48,6 @@ func (q *Queries) CurrentNodeExecution(ctx context.Context, arg CurrentNodeExecu
 		&i.Scope,
 		&i.Status,
 		&i.Resource,
-		&i.ExecutionDir,
 		&i.InputsJson,
 		&i.OutputsJson,
 		&i.StateJson,
@@ -56,8 +55,6 @@ func (q *Queries) CurrentNodeExecution(ctx context.Context, arg CurrentNodeExecu
 		&i.ResourceObservedAt,
 		&i.DoneWhenJson,
 		&i.ExtraDoneWhenJson,
-		&i.CleanupJson,
-		&i.PluginRef,
 		&i.Error,
 		&i.SetupAt,
 		&i.FailedAt,
@@ -354,11 +351,11 @@ func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) error 
 const insertNodeExecution = `-- name: InsertNodeExecution :one
 INSERT INTO node_executions (
     id, session_id, node_id, sequence, task_id, name, scope, status, resource,
-    execution_dir, inputs_json, outputs_json, state_json,
+    inputs_json, outputs_json, state_json,
     resource_observation_json, resource_observed_at, done_when_json,
-    extra_done_when_json, cleanup_json, plugin_ref, error, setup_at,
+    extra_done_when_json, error, setup_at,
     failed_at, cleaned_at, finalized_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING id
 `
 
@@ -372,7 +369,6 @@ type InsertNodeExecutionParams struct {
 	Scope                   string
 	Status                  string
 	Resource                sql.NullString
-	ExecutionDir            sql.NullString
 	InputsJson              sql.NullString
 	OutputsJson             sql.NullString
 	StateJson               sql.NullString
@@ -380,8 +376,6 @@ type InsertNodeExecutionParams struct {
 	ResourceObservedAt      sql.NullString
 	DoneWhenJson            sql.NullString
 	ExtraDoneWhenJson       sql.NullString
-	CleanupJson             sql.NullString
-	PluginRef               sql.NullString
 	Error                   sql.NullString
 	SetupAt                 sql.NullString
 	FailedAt                sql.NullString
@@ -400,7 +394,6 @@ func (q *Queries) InsertNodeExecution(ctx context.Context, arg InsertNodeExecuti
 		arg.Scope,
 		arg.Status,
 		arg.Resource,
-		arg.ExecutionDir,
 		arg.InputsJson,
 		arg.OutputsJson,
 		arg.StateJson,
@@ -408,8 +401,6 @@ func (q *Queries) InsertNodeExecution(ctx context.Context, arg InsertNodeExecuti
 		arg.ResourceObservedAt,
 		arg.DoneWhenJson,
 		arg.ExtraDoneWhenJson,
-		arg.CleanupJson,
-		arg.PluginRef,
 		arg.Error,
 		arg.SetupAt,
 		arg.FailedAt,
@@ -441,8 +432,8 @@ const insertNodeExecutionLayer = `-- name: InsertNodeExecutionLayer :exec
 INSERT INTO node_execution_layers (
     execution_id, position, effect_id, status, inputs_json, locals_json,
     outputs_json, env_json, heartbeat_ticks, heartbeat_escalations,
-    setup_at, failed_at, cleaned_at, error, cleanup_json
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    setup_at, failed_at, cleaned_at, error
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertNodeExecutionLayerParams struct {
@@ -460,7 +451,6 @@ type InsertNodeExecutionLayerParams struct {
 	FailedAt             sql.NullString
 	CleanedAt            sql.NullString
 	Error                sql.NullString
-	CleanupJson          sql.NullString
 }
 
 func (q *Queries) InsertNodeExecutionLayer(ctx context.Context, arg InsertNodeExecutionLayerParams) error {
@@ -479,7 +469,6 @@ func (q *Queries) InsertNodeExecutionLayer(ctx context.Context, arg InsertNodeEx
 		arg.FailedAt,
 		arg.CleanedAt,
 		arg.Error,
-		arg.CleanupJson,
 	)
 	return err
 }
@@ -800,10 +789,10 @@ func (q *Queries) LatestEventByType(ctx context.Context, arg LatestEventByTypePa
 
 const listCurrentNodeExecutions = `-- name: ListCurrentNodeExecutions :many
 SELECT ne.id, ne.session_id, ne.node_id, ne.sequence, ne.task_id, ne.name,
-       ne.scope, ne.status, ne.resource, ne.execution_dir, ne.inputs_json,
+       ne.scope, ne.status, ne.resource, ne.inputs_json,
        ne.outputs_json, ne.state_json, ne.resource_observation_json,
        ne.resource_observed_at, ne.done_when_json, ne.extra_done_when_json,
-       ne.cleanup_json, ne.plugin_ref, ne.error, ne.setup_at, ne.failed_at,
+       ne.error, ne.setup_at, ne.failed_at,
        ne.cleaned_at, ne.finalized_at
 FROM node_executions ne
 WHERE ne.session_id = ?
@@ -834,7 +823,6 @@ func (q *Queries) ListCurrentNodeExecutions(ctx context.Context, sessionID strin
 			&i.Scope,
 			&i.Status,
 			&i.Resource,
-			&i.ExecutionDir,
 			&i.InputsJson,
 			&i.OutputsJson,
 			&i.StateJson,
@@ -842,8 +830,6 @@ func (q *Queries) ListCurrentNodeExecutions(ctx context.Context, sessionID strin
 			&i.ResourceObservedAt,
 			&i.DoneWhenJson,
 			&i.ExtraDoneWhenJson,
-			&i.CleanupJson,
-			&i.PluginRef,
 			&i.Error,
 			&i.SetupAt,
 			&i.FailedAt,
@@ -1133,7 +1119,7 @@ const listNodeExecutionLayersForSession = `-- name: ListNodeExecutionLayersForSe
 SELECT nel.execution_id, nel.position, nel.effect_id, nel.status,
        nel.inputs_json, nel.locals_json, nel.outputs_json, nel.env_json,
        nel.heartbeat_ticks, nel.heartbeat_escalations, nel.setup_at,
-       nel.failed_at, nel.cleaned_at, nel.error, nel.cleanup_json
+       nel.failed_at, nel.cleaned_at, nel.error
 FROM node_execution_layers nel
 INNER JOIN node_executions ne ON ne.id = nel.execution_id
 WHERE ne.session_id = ?
@@ -1164,7 +1150,6 @@ func (q *Queries) ListNodeExecutionLayersForSession(ctx context.Context, session
 			&i.FailedAt,
 			&i.CleanedAt,
 			&i.Error,
-			&i.CleanupJson,
 		); err != nil {
 			return nil, err
 		}
@@ -1612,9 +1597,9 @@ func (q *Queries) NextEventSequence(ctx context.Context, sessionID string) (int6
 
 const nodeExecutionByID = `-- name: NodeExecutionByID :one
 SELECT id, session_id, node_id, sequence, task_id, name, scope, status, resource,
-       execution_dir, inputs_json, outputs_json, state_json,
+       inputs_json, outputs_json, state_json,
        resource_observation_json, resource_observed_at, done_when_json,
-       extra_done_when_json, cleanup_json, plugin_ref, error, setup_at,
+       extra_done_when_json, error, setup_at,
        failed_at, cleaned_at, finalized_at
 FROM node_executions WHERE id = ?
 `
@@ -1632,7 +1617,6 @@ func (q *Queries) NodeExecutionByID(ctx context.Context, id string) (NodeExecuti
 		&i.Scope,
 		&i.Status,
 		&i.Resource,
-		&i.ExecutionDir,
 		&i.InputsJson,
 		&i.OutputsJson,
 		&i.StateJson,
@@ -1640,8 +1624,6 @@ func (q *Queries) NodeExecutionByID(ctx context.Context, id string) (NodeExecuti
 		&i.ResourceObservedAt,
 		&i.DoneWhenJson,
 		&i.ExtraDoneWhenJson,
-		&i.CleanupJson,
-		&i.PluginRef,
 		&i.Error,
 		&i.SetupAt,
 		&i.FailedAt,
@@ -1687,9 +1669,9 @@ func (q *Queries) SessionNameByID(ctx context.Context, id string) (string, error
 const updateNodeExecution = `-- name: UpdateNodeExecution :exec
 UPDATE node_executions SET
     sequence = ?, task_id = ?, name = ?, scope = ?, status = ?, resource = ?,
-    execution_dir = ?, inputs_json = ?, outputs_json = ?, state_json = ?,
+    inputs_json = ?, outputs_json = ?, state_json = ?,
     resource_observation_json = ?, resource_observed_at = ?, done_when_json = ?,
-    extra_done_when_json = ?, cleanup_json = ?, plugin_ref = ?, error = ?,
+    extra_done_when_json = ?, error = ?,
     setup_at = ?, failed_at = ?, cleaned_at = ?, finalized_at = ?
 WHERE id = ?
 `
@@ -1701,7 +1683,6 @@ type UpdateNodeExecutionParams struct {
 	Scope                   string
 	Status                  string
 	Resource                sql.NullString
-	ExecutionDir            sql.NullString
 	InputsJson              sql.NullString
 	OutputsJson             sql.NullString
 	StateJson               sql.NullString
@@ -1709,8 +1690,6 @@ type UpdateNodeExecutionParams struct {
 	ResourceObservedAt      sql.NullString
 	DoneWhenJson            sql.NullString
 	ExtraDoneWhenJson       sql.NullString
-	CleanupJson             sql.NullString
-	PluginRef               sql.NullString
 	Error                   sql.NullString
 	SetupAt                 sql.NullString
 	FailedAt                sql.NullString
@@ -1727,7 +1706,6 @@ func (q *Queries) UpdateNodeExecution(ctx context.Context, arg UpdateNodeExecuti
 		arg.Scope,
 		arg.Status,
 		arg.Resource,
-		arg.ExecutionDir,
 		arg.InputsJson,
 		arg.OutputsJson,
 		arg.StateJson,
@@ -1735,8 +1713,6 @@ func (q *Queries) UpdateNodeExecution(ctx context.Context, arg UpdateNodeExecuti
 		arg.ResourceObservedAt,
 		arg.DoneWhenJson,
 		arg.ExtraDoneWhenJson,
-		arg.CleanupJson,
-		arg.PluginRef,
 		arg.Error,
 		arg.SetupAt,
 		arg.FailedAt,

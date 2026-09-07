@@ -12,14 +12,6 @@ type Mounted struct {
 	Dir             string
 	Manifest        Manifest
 	NonReproducible bool
-	// Revision is this plugin's own locked content hash (plect.lock's
-	// PluginLockEntry.ContentHash), identifying the exact content this
-	// mount resolved independent of the catalog's own mutable tree --
-	// retained by a node execution's plugin_ref so a later release can name
-	// the exact plugin content its cleanup ran against. Empty for a
-	// non-reproducible (editable-path) mount, which plect.lock does not
-	// pin.
-	Revision string
 }
 
 // ErrMissingCatalogLock is returned when a non-editable catalog has no
@@ -208,7 +200,7 @@ func VerifyAndMountPlugin(catalog ResolvedCatalog, pluginPath string, cacheRoot 
 		if err != nil {
 			return Mounted{}, err
 		}
-		return finishPluginMount(id, dir, m, true, "", currentPlectVersion)
+		return finishPluginMount(id, dir, m, true, currentPlectVersion)
 	}
 
 	entry, ok := lock.FindPlugin(id)
@@ -251,10 +243,10 @@ func VerifyAndMountPlugin(catalog ResolvedCatalog, pluginPath string, cacheRoot 
 	if hash != entry.ContentHash {
 		return Mounted{}, &ErrHashMismatch{Path: dir, Want: entry.ContentHash, Got: hash}
 	}
-	return finishPluginMount(id, dir, m, false, entry.ContentHash, currentPlectVersion)
+	return finishPluginMount(id, dir, m, false, currentPlectVersion)
 }
 
-func finishPluginMount(id, dir string, m Manifest, nonReproducible bool, revision, currentPlectVersion string) (Mounted, error) {
+func finishPluginMount(id, dir string, m Manifest, nonReproducible bool, currentPlectVersion string) (Mounted, error) {
 	satisfied, err := AtLeast(currentPlectVersion, m.PlectMinVersion)
 	if err != nil {
 		return Mounted{}, fmt.Errorf("plugin %q: %w", id, err)
@@ -262,7 +254,7 @@ func finishPluginMount(id, dir string, m Manifest, nonReproducible bool, revisio
 	if !satisfied {
 		return Mounted{}, &ErrIncompatible{ID: id, Required: m.PlectMinVersion, Running: currentPlectVersion}
 	}
-	return Mounted{ID: id, Dir: dir, Manifest: m, NonReproducible: nonReproducible, Revision: revision}, nil
+	return Mounted{ID: id, Dir: dir, Manifest: m, NonReproducible: nonReproducible}, nil
 }
 
 // VerifyAndMountAll resolves every registered catalog and its enabled

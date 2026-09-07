@@ -101,8 +101,8 @@ classifies every `_json` column by its owning declaration:
 | --- | --- | --- | --- |
 | `sessions` | `id` (ULID) primary key; `name` (unique only among live rows — see "Session identity and lifecycle"); `status`, nullable `destroyed_at`; nullable `parent_session_id` and `root_session_id`, each referencing `sessions(id)`; nullable `resource_id`, `alias`, `workspace_dir`, `population_workflow`, `population_name` (the pair also references `populations(workflow, name)`); `workflow`, `created_at`, `updated_at` | inputs, health, tick backoff | `state.json` `sessions` entries |
 | `node_instances` | `(session_id, node_id)` primary key; session foreign key; no other columns | none — purely the logical node's identity | `state.json` `sessions.*.tasks` entries with `dynamic` unset (keys only) |
-| `node_executions` | `id` (ULID, minted per setup attempt) primary key; `(session_id, node_id)` foreign key to `node_instances`; `sequence`; nullable `task_id`, `name`, `resource`; `scope`, `status`, nullable `finalized_at`; at most one unreleased (`status <> 'cleaned'`) row per `(session_id, node_id)` — see "Node execution identity" | inputs, outputs, state, observed value, `done_when` (rare, not relationally queried), extra completion data, retained cleanup contract, execution directory, plugin reference, error, lifecycle timestamps | `state.json` `sessions.*.tasks` entries with `dynamic` unset (per-attempt facts) |
-| `node_execution_layers` | `(execution_id, position)` primary key; execution foreign key (`ON DELETE CASCADE`) | inputs, locals, outputs, env, heartbeat counters, lifecycle timestamps, error, retained per-layer cleanup contract | `TaskState.Layers` (static node instances) |
+| `node_executions` | `id` (ULID, minted per setup attempt) primary key; `(session_id, node_id)` foreign key to `node_instances`; `sequence`; nullable `task_id`, `name`, `resource`; `scope`, `status`, nullable `finalized_at`; at most one unreleased (`status <> 'cleaned'`) row per `(session_id, node_id)` — see "Node execution identity" | inputs, outputs, state, observed value, `done_when` (rare, not relationally queried), extra completion data, error, lifecycle timestamps | `state.json` `sessions.*.tasks` entries with `dynamic` unset (per-attempt facts) |
+| `node_execution_layers` | `(execution_id, position)` primary key; execution foreign key (`ON DELETE CASCADE`) | inputs, locals, outputs, env, heartbeat counters, lifecycle timestamps, error | `TaskState.Layers` (static node instances) |
 | `node_execution_dependencies` | `(execution_id, depends_on_execution_id)` primary key; both reference `node_executions(id)` (`ON DELETE CASCADE`) | none — the edge itself is the payload | snapshotted from `task.Resolved.DependsOn` at the dependent's own setup time — see "Node execution identity" |
 | `task_instances` | `id` (ULID, stable across every write that still names the same `(session_id, instance_name)`; re-minted only when a cleanup removes the row before a later setup recreates it) primary key; `(session_id, instance_name)` unique; session foreign key; `task_id`, `scope`, `status`, `sequence`, nullable `resource`, `named`, nullable `finalized_at` | inputs, outputs, state, observed value, extra completion data, error, lifecycle timestamps | `state.json` `sessions.*.tasks` entries with `dynamic: true` |
 | `task_instance_layers` | `(task_instance_id, position)` primary key; task-instance foreign key | inputs, locals, outputs, env, heartbeat counters, lifecycle timestamps, error | `TaskState.Layers` (dynamic instances) |
@@ -244,14 +244,13 @@ A workflow node and one of its setup attempts are different things.
 `(session_id, node_id)`, and nothing else. `node_executions` holds one row
 per setup attempt, with its own ULID `id`, `sequence` (the same
 monotonically increasing instantiation counter `TaskState.Seq` always was),
-and every per-attempt fact the old single-row `node_instances` used to carry
-directly: `task_id`, `name`, `scope`, `resource`, `status`, inputs, outputs,
-state, resource observation, `done_when`, extra `done_when`, error, and
-lifecycle timestamps. A node_id can outlive several execution generations
-across a session's lifetime — a workflow revision remaps it onto a
-different task, or a failed setup is retried after an operator releases the
-old allocation — and each generation gets its own `node_executions` row
-rather than overwriting the last one in place.
+and every other per-attempt fact: `task_id`, `name`, `scope`, `resource`,
+`status`, inputs, outputs, state, resource observation, `done_when`, extra
+`done_when`, error, and lifecycle timestamps. A node_id can outlive several
+execution generations across a session's lifetime — a workflow revision
+remaps it onto a different task, or a failed setup is retried after an
+operator releases the old allocation — and each generation gets its own
+`node_executions` row rather than overwriting the last one in place.
 
 At most one row per `(session_id, node_id)` may be unreleased (`status <>
 'cleaned'`) at a time (`node_executions_one_unreleased_idx`, a partial
@@ -260,13 +259,13 @@ otherwise begin: if a node's existing, unreleased record names a different
 declaration — a different `task_id`/`scope`, or a nesting chain whose layer
 count or effect ids differ — the setup is refused with an actionable error
 naming both the retained and requested declarations, rather than silently
-discarding the old record's own release recipe. This is deliberately not
-gated by a force flag: no caller needs one yet, and refusal (pointing the
-operator at `plect down`/`plect destroy`) is a complete, correct answer to
-"an unreleased allocation must not be silently replaced." A retry of the
-*same* declaration (a failed setup re-run, or an already-produced node
-whose liveness check failed and was invalidated) is not a new declaration,
-so it updates the existing unreleased row in place, preserving its id.
+discarding the old record. This is deliberately not gated by a force flag:
+no caller needs one yet, and refusal (pointing the operator at `plect
+down`/`plect destroy`) is a complete, correct answer to "an unreleased
+allocation must not be silently replaced." A retry of the *same*
+declaration (a failed setup re-run, or an already-produced node whose
+liveness check failed and was invalidated) is not a new declaration, so it
+updates the existing unreleased row in place, preserving its id.
 
 Persistence enforces the identity side of this independent of the gate
 above: `writeTasksTx`'s node reconciliation looks up the current unreleased
@@ -276,7 +275,7 @@ incoming write's `Nodes` map is pruned only when its latest execution has
 already reached `cleaned` — an absent-but-unreleased node is left
 untouched, so a workflow revision that simply stops declaring a node (or
 any other caller that happens to omit it from one write) can never discard
-its execution record or outstanding cleanup obligation merely by omission.
+its execution record or outstanding release obligation merely by omission.
 
 Looking up "the current unreleased execution" by node_id alone is not
 sufficient to protect a specific generation once more than one writer can
@@ -291,96 +290,51 @@ status, refusing the write instead if the row is gone or if it has since
 been released (`status = 'cleaned'`) while the incoming write's own status
 has not — the one status combination this does not refuse is both sides
 already `'cleaned'`, which is a caller re-persisting a checkpoint it already
-wrote, not a conflict. Resolving by id rather than "current unreleased"
-is also what lets that re-persist target the same row instead of minting a
+wrote, not a conflict. Resolving by id rather than "current unreleased" is
+also what lets that re-persist target the same row instead of minting a
 duplicate cleaned one, since the "current unreleased" query would no longer
-see it. A write whose `ExecutionID` is empty makes no claim about continuing a
+see it.
+
+A write whose `ExecutionID` is empty makes no claim about continuing a
 specific row, so it instead falls back to "the current unreleased row for
 this node_id, if any" — update in place, or insert a fresh row when none
-exists. Two identity gaps live in this fallback, tracked by
-[#513](https://github.com/kecbigmt/plecture/issues/513) rather than
-closed here: a same-pass liveness-invalidate-then-rebuild's
-intermediate release is never itself persisted (`task.RunSetup` operates on
-one in-memory state per node id and cannot represent "old row now cleaned"
-and "new row just produced" at once), so it collapses onto an update of the
-released row instead of minting a fresh generation; and a genuinely new
-first attempt racing a different writer's concurrent setup of the same node
-lands on the same fallback and cannot tell the two cases apart either. See
-the ADR's Consequences section.
+exists. Two identity gaps live in this fallback: a same-pass
+liveness-invalidate-then-rebuild's intermediate release is never itself
+persisted (`task.RunSetup` operates on one in-memory state per node id and
+cannot represent "old row now cleaned" and "new row just produced" at
+once), so it collapses onto an update of the released row instead of
+minting a fresh generation; and a genuinely new first attempt racing a
+different writer's concurrent setup of the same node lands on the same
+fallback and cannot tell the two cases apart either. Both are accepted,
+documented limitations rather than something this fallback can resolve
+from the information available to it alone.
 
 Release is the only thing that clears a node: `service.unifiedTeardownList`
 enumerates every unreleased execution directly from `session.Nodes` — not
 from the *current* plan, which has nothing to say about a node it no
-longer declares — and `persistence.PruneReleasedNode`/`ResetNodes` are the
-two explicit ways a row is actually removed (a caller, such as
-`persistStaleWorkflowCleanup`, that already knows a specific node's cleanup
-just succeeded; or `--force-recreate`'s own deliberate whole-runtime wipe,
-which discards every node's history on purpose instead of retaining it).
+longer declares — and resolves each one's cleanup by looking up its current
+task definition by the execution's own retained `task_id`. Cleanup code is
+always resolved fresh from the current, project-trusted configuration tree;
+it is never read back from the database and replayed. A node whose
+definition can no longer be found this way is marked unresolved:
+`task.RunCleanup` reports it as an error and leaves its record unreleased
+rather than treating "no cleanup to run" as trivial success.
+`persistence.PruneReleasedNode`/`ResetNodes` are the two explicit ways a row
+is actually removed (a caller, such as `persistStaleWorkflowCleanup`, that
+already knows a specific node's cleanup just succeeded; or
+`--force-recreate`'s own deliberate whole-runtime wipe, which discards every
+node's history on purpose instead of retaining it).
 
-### Retained cleanup contract
+### Alternatives considered
 
-Release must be possible from a node's own retained record, not from
-whatever the *current* task/effect definition says: a workflow revision
-that changes or removes a definition must not change how an already-running
-allocation gets cleaned up. `node_executions.cleanup_json` (a plain node)
-and `node_execution_layers.cleanup_json` (a nested node, one entry per
-layer) hold this: the resolved cleanup action (`lang.Action`, itself plain
-data — no compiled or unexported internals), its source path and ownership,
-and, per layer, the outward joint (`config.OutputBinding`) a layer's
-cleanup needs to read its own public contract. This is exactly the
-schema-free shape `effect.CleanupLayers` already built fresh from config for
-teardown before this change; retention only moves *when* that shape is
-computed, from teardown time to setup time. The compiled
-`InputsSchema`/`LocalsSchema`/`OutputsSchema` a setup-time `effect.Layer`
-also carries are never part of it — cleanup never read them in the first
-place, so there is nothing there that resists JSON serialization.
-
-`task.RunSetup`'s own internal `retainCleanup`/`effect.RetainLayerCleanup` produce this JSON at setup
-time; `task.DecodeRetainedCleanup`/`effect.LayersFromRetained` decode it at
-release time. `service.resolveNodeCleanup` prefers the retained contract
-and falls back to re-resolving the current task definition by the
-execution's own retained `task_id` — tolerant of a missing or changed
-definition, exactly like a dynamic instance's teardown already was — only
-for an execution that retained nothing: one from before this change (the
-migration below leaves `cleanup_json`/`plugin_ref`/`execution_dir` `NULL`
-for every carried-forward row, since a SQL migration cannot read
-`config.toml`), or a nested node's own composed `TaskState.Cleanup`, which
-is always nil (its per-layer contracts carry the recipe instead).
-`effect.LayersFromRetained` reports its whole chain as unavailable if any
-one layer lacks a retained contract, so a caller never mixes retained and
-re-resolved layers in one release.
-
-`node_executions.execution_dir` is the absolute working directory the
-setup ran in (the session's workspace directory at setup time), and
-`node_executions.plugin_ref` is the resolved plugin catalog address, path,
-and content revision (`plugins.Mounted.Revision`, the plugin's own entry in
-`plect.lock`, independent of the catalog's own mutable tree) a plugin-owned
-cleanup action's `bin` references resolve against —
-`"<catalog-alias>/<plugin-path>@<revision>"`, or just the address for a
-non-reproducible (editable-path) mount `plect.lock` does not pin. Both are
-retained per execution so release does not depend on the session's
-*current* `workspace_dir` or the plugin catalog's current state.
-`task.RunCleanup` consumes both: a plain node's cleanup runs in its
-retained `execution_dir` rather than the session's current workspace, and
-refuses to run at all when the currently mounted plugin's own revision no
-longer matches the retained `plugin_ref`. Pinning a revision this way
-identifies *which* plugin content a cleanup action ran against; it is not
-a general artifact store, and does not itself guarantee that content is
-still reachable if the catalog has since been garbage collected — that
-guarantee needs a concrete consumer before it is worth building. The
-revision check does not yet extend to a nested node's per-layer cleanup,
-since `effect.RetainedLayerCleanup` does not yet retain a per-layer
-`plugin_ref`.
-
-`ExecutionDir`, `PluginRef`, `Cleanup`, and `ExecutionID` are excluded from
-`contracts/state.TaskState`/`LayerState`'s ordinary JSON output
-(`json:"-"`): they are persistence-internal retention details a node
-execution's own release logic (or, for `ExecutionID`, its own write-conflict
-check) needs, not facts an external consumer (the Web UI, an MCP tool
-response, `plect status --json`) needs to see, and excluding them by
-default avoids ever having to reason about which of their contents (a
-cleanup script's literal text, an input value it closes over) would be
-safe to disclose there.
+A `generation` counter bumped in place on the existing `node_instances` row
+was considered instead of a separate `node_executions` row per attempt; it
+would preserve the current status but not the outputs of a superseded,
+still-unreleased attempt — exactly the data an interrupted release needs. A
+force-flag-gated reconstruction (releasing an old unreleased execution and
+immediately proceeding with a new declaration in one step) was also
+considered; no caller needs it, since `plect down`/`plect destroy` already
+exist as the explicit two-step release path.
 
 ### Release ordering
 
@@ -411,8 +365,7 @@ edge to another node in the *same* write is always resolvable: the
 prerequisite's row already exists by the time the dependent looks up its
 current execution id.
 
-See `2026-09-07-node-execution-identity.md` for the decision this schema
-implements; the migration from the prior single-row `node_instances` shape
+The migration from the prior single-row `node_instances` shape
 (`app/internal/persistence/migrations/20260907085032_add_node_execution_identity.sql`)
 carries its own reasoning for how it preserves existing rows.
 
@@ -552,9 +505,8 @@ as-is; a structural change Atlas cannot safely diff against a database
 already holding rows (see `app/internal/persistence/migrations/`'s own
 `20260907002408_...` migration for the case this design's own session-id
 rework hit, and its `20260907085032_...` migration for the node execution
-identity split — see `2026-09-07-node-execution-identity.md`) is
-hand-written instead, reaching the identical structural end state
-`schema.sql` declares. Either way the migration file's exact SQL
+identity split) is hand-written instead, reaching the identical structural
+end state `schema.sql` declares. Either way the migration file's exact SQL
 text — quoting, per-index `CREATE` statements — is authoritative over any
 excerpt here.
 

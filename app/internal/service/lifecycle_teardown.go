@@ -95,7 +95,7 @@ func unifiedTeardownList(cfg *config.Config, session *domain.Session, runOnly bo
 		}
 		taskID := instanceDefinitionAddress(key, st, true, nodes)
 		r := task.Resolved{NodeID: key, TaskID: taskID, Scope: st.Scope, DependsOn: st.DependsOn}
-		resolveNodeCleanup(&r, st, defs)
+		r.Unresolved = !resolveNodeCleanup(&r, defs)
 		items = append(items, teardownItem{seq: st.Seq, r: r})
 		static[key] = true
 	}
@@ -129,24 +129,20 @@ func unifiedTeardownList(cfg *config.Config, session *domain.Session, runOnly bo
 	return orderTeardownItems(items), nil
 }
 
-// resolveNodeCleanup prefers st's own retained contract, falling back to
-// re-resolving r.TaskID against defs only when st retains nothing usable.
-func resolveNodeCleanup(r *task.Resolved, st *contract.TaskState, defs map[string]config.TaskDefinition) {
-	if rc, ok, err := task.DecodeRetainedCleanup(st.Cleanup); err == nil && ok {
-		r.Cleanup = rc.Action
-		r.SourcePath = rc.SourcePath
-		r.From = rc.From
-		return
+// resolveNodeCleanup resolves r's cleanup recipe from the current config
+// tree by r.TaskID -- cleanup code is never read back from the database and
+// replayed, only ever resolved fresh from project-trusted config. ok is
+// false when no such definition exists any more, in which case r carries no
+// cleanup recipe at all.
+func resolveNodeCleanup(r *task.Resolved, defs map[string]config.TaskDefinition) bool {
+	def, ok := defs[r.TaskID]
+	if !ok {
+		return false
 	}
-	if layers, ok := effect.LayersFromRetained(st.Layers); ok {
-		r.Layers = layers
-		return
-	}
-	if def, ok := defs[r.TaskID]; ok {
-		r.Cleanup = def.Cleanup
-		r.SourcePath = def.SourcePath
-		r.Layers = effect.CleanupLayers(def)
-	}
+	r.Cleanup = def.Cleanup
+	r.SourcePath = def.SourcePath
+	r.Layers = effect.CleanupLayers(def)
+	return true
 }
 
 // orderTeardownItems orders each dependent before its prerequisite (per

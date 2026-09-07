@@ -2,7 +2,6 @@ package persistence
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 	"time"
 
@@ -53,84 +52,6 @@ func countNodeExecutionsForTest(t *testing.T, db *DB, sessionName, nodeID string
 		t.Fatalf("count node_executions(%q/%q): %v", sessionName, nodeID, err)
 	}
 	return count
-}
-
-// TestPutSession_NodeExecutionRetainedFactsRoundTrip proves ExecutionDir,
-// Cleanup (the retained cleanup contract), and PluginRef survive a
-// PutSession/GetSession round trip -- persistence stores Cleanup opaquely
-// (json.RawMessage) and must not alter its bytes.
-func TestPutSession_NodeExecutionRetainedFactsRoundTrip(t *testing.T) {
-	db := migratedTestDB(t)
-	ctx := context.Background()
-	now := time.Now().UTC()
-
-	cleanup := json.RawMessage(`{"action":{"Type":"shell","Script":"true"},"from":{"IsPlugin":true,"Alias":"acme"}}`)
-	session := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Nodes: map[string]*contract.TaskState{
-		"a": {
-			Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "work",
-			ExecutionDir: "/tmp/workdir", Cleanup: cleanup, PluginRef: "acme",
-		},
-	}}
-	if err := db.PutSession(ctx, session); err != nil {
-		t.Fatalf("PutSession: %v", err)
-	}
-
-	got, err := db.GetSession(ctx, "s1")
-	if err != nil {
-		t.Fatalf("GetSession: %v", err)
-	}
-	node := got.Nodes["a"]
-	if node == nil {
-		t.Fatal("node missing")
-	}
-	if node.ExecutionDir != "/tmp/workdir" {
-		t.Errorf("ExecutionDir = %q, want %q", node.ExecutionDir, "/tmp/workdir")
-	}
-	if node.PluginRef != "acme" {
-		t.Errorf("PluginRef = %q, want %q", node.PluginRef, "acme")
-	}
-	if string(node.Cleanup) != string(cleanup) {
-		t.Errorf("Cleanup = %s, want %s", node.Cleanup, cleanup)
-	}
-}
-
-// TestPutSession_NodeExecutionLayerCleanupRoundTrips proves a nested node's
-// per-layer retained cleanup contract (LayerState.Cleanup) survives a
-// PutSession/GetSession round trip, distinct per layer.
-func TestPutSession_NodeExecutionLayerCleanupRoundTrips(t *testing.T) {
-	db := migratedTestDB(t)
-	ctx := context.Background()
-	now := time.Now().UTC()
-
-	outerCleanup := json.RawMessage(`{"effect_id":"outer","cleanup":{"Type":"shell","Script":"outer-cleanup"},"from":{}}`)
-	innerCleanup := json.RawMessage(`{"effect_id":"inner","cleanup":{"Type":"shell","Script":"inner-cleanup"},"from":{}}`)
-	session := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Nodes: map[string]*contract.TaskState{
-		"a": {
-			Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "work",
-			Layers: []contract.LayerState{
-				{EffectID: "outer", Status: contract.TaskStatusProduced, Cleanup: outerCleanup},
-				{EffectID: "inner", Status: contract.TaskStatusProduced, Cleanup: innerCleanup},
-			},
-		},
-	}}
-	if err := db.PutSession(ctx, session); err != nil {
-		t.Fatalf("PutSession: %v", err)
-	}
-
-	got, err := db.GetSession(ctx, "s1")
-	if err != nil {
-		t.Fatalf("GetSession: %v", err)
-	}
-	node := got.Nodes["a"]
-	if node == nil || len(node.Layers) != 2 {
-		t.Fatalf("node.Layers = %+v, want 2 layers", node)
-	}
-	if string(node.Layers[0].Cleanup) != string(outerCleanup) {
-		t.Errorf("layer 0 Cleanup = %s, want %s", node.Layers[0].Cleanup, outerCleanup)
-	}
-	if string(node.Layers[1].Cleanup) != string(innerCleanup) {
-		t.Errorf("layer 1 Cleanup = %s, want %s", node.Layers[1].Cleanup, innerCleanup)
-	}
 }
 
 // TestPutSession_NodeExecutionIDStableAcrossOrdinaryUpdate mirrors

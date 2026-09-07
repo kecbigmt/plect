@@ -1,7 +1,6 @@
 package service
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,15 +9,18 @@ import (
 	"testing"
 
 	"github.com/kecbigmt/plecture/app/internal/domain"
-	"github.com/kecbigmt/plecture/app/internal/lang"
-	"github.com/kecbigmt/plecture/app/internal/task"
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// Exercises Destroy end to end, not unifiedTeardownList directly.
+// Exercises Destroy end to end, not unifiedTeardownList directly. "retired"
+// keeps its own task definition even though the current workflow no longer
+// declares a node for it, so its cleanup still resolves normally.
 func TestDestroy_ReleasesNodeRemovedFromWorkflow(t *testing.T) {
 	cfg := writeWorkflowFixture(t, t.TempDir(), "coding",
-		[]taskFixture{{id: "kept", scope: "run", setup: `echo '{}'`, cleanup: "true"}},
+		[]taskFixture{
+			{id: "kept", scope: "run", setup: `echo '{}'`, cleanup: "true"},
+			{id: "retired", scope: "run", cleanup: "true"},
+		},
 		[]nodeFixture{{id: "kept"}},
 	)
 	store := testStore(t)
@@ -39,10 +41,42 @@ func TestDestroy_ReleasesNodeRemovedFromWorkflow(t *testing.T) {
 	}
 }
 
+// When a node's own task definition can no longer be resolved at all (not
+// just dropped from the current workflow's node list), Destroy must report
+// it and leave its record unreleased rather than silently discarding it --
+// unlike the definition-still-resolvable case above, releasing everything
+// else it can.
+func TestDestroy_ReportsAndLeavesUnreleasedANodeWithNoResolvableDefinition(t *testing.T) {
+	cfg := writeWorkflowFixture(t, t.TempDir(), "coding",
+		[]taskFixture{{id: "kept", scope: "run", setup: `echo '{}'`, cleanup: "true"}},
+		[]nodeFixture{{id: "kept"}},
+	)
+	store := testStore(t)
+	seedSessionWithNodes(t, store, "sess-1", "acme", 1, "coding", map[string]*contract.TaskState{
+		"gone": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, TaskID: "gone", Seq: 1, Outputs: map[string]any{}},
+		"kept": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Seq: 2, Outputs: map[string]any{}},
+	})
+
+	obs := &orderObserver{}
+	if _, err := Destroy(cfg, store, DestroyParams{Identifier: "sess-1", Observer: obs}); err == nil {
+		t.Fatal("Destroy: want an error reporting the unresolvable node, got nil")
+	}
+	if idx(obs.cleaned, "kept") < 0 {
+		t.Fatalf("cleaned = %v, want %q still released despite %q's unresolvable definition", obs.cleaned, "kept", "gone")
+	}
+	s := store.Get("sess-1")
+	if s.Nodes["gone"] == nil || s.Nodes["gone"].Status == contract.TaskStatusCleaned {
+		t.Fatalf("gone = %+v, want it left unreleased", s.Nodes["gone"])
+	}
+}
+
 // `plect down`'s counterpart: session-scoped state must survive.
 func TestDown_ReleasesRunScopedNodeRemovedFromWorkflow(t *testing.T) {
 	cfg := writeWorkflowFixture(t, t.TempDir(), "coding",
-		[]taskFixture{{id: "review", scope: "session", setup: `echo '{}'`, cleanup: "true"}},
+		[]taskFixture{
+			{id: "review", scope: "session", setup: `echo '{}'`, cleanup: "true"},
+			{id: "retired", scope: "run", cleanup: "true"},
+		},
 		[]nodeFixture{{id: "review"}},
 	)
 	store := testStore(t)
@@ -67,9 +101,11 @@ func TestDown_ReleasesRunScopedNodeRemovedFromWorkflow(t *testing.T) {
 	}
 }
 
-// A later Destroy must release a failed/partial setup using its own
-// retained cleanup contract alone, with no live task definition required.
-func TestUp_FailedSetupRetainsCleanupContractAcrossARestart(t *testing.T) {
+// A later Destroy must release a failed/partial setup by resolving its
+// cleanup from the current task definition -- the record survives a
+// restart (a fresh store read), and release never reads cleanup code back
+// out of the database.
+func TestUp_FailedSetupCanStillBeDestroyedAfterARestart(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
 	}
@@ -94,9 +130,6 @@ func TestUp_FailedSetupRetainsCleanupContractAcrossARestart(t *testing.T) {
 	if s == nil || s.Nodes["flaky"] == nil || s.Nodes["flaky"].Status != contract.TaskStatusFailed {
 		t.Fatalf("after Up failure, flaky = %+v, want a retained failed attempt", s.Nodes["flaky"])
 	}
-	if len(s.Nodes["flaky"].Cleanup) == 0 {
-		t.Fatal("after Up failure, flaky has no retained cleanup contract")
-	}
 
 	if _, err := Destroy(cfg, store, DestroyParams{Identifier: "sess-1"}); err != nil {
 		t.Fatalf("Destroy: %v", err)
@@ -106,7 +139,7 @@ func TestUp_FailedSetupRetainsCleanupContractAcrossARestart(t *testing.T) {
 		t.Fatalf("read cleanup log: %v", err)
 	}
 	if !strings.Contains(string(data), "flaky-cleaned") {
-		t.Fatalf("cleanup log = %q, want the retained cleanup contract to have run", data)
+		t.Fatalf("cleanup log = %q, want cleanup resolved from the current definition to have run", data)
 	}
 }
 
@@ -143,24 +176,24 @@ func TestUnifiedTeardownList_ReleasesNodeRemovedFromCurrentWorkflow(t *testing.T
 	}
 }
 
-func TestUnifiedTeardownList_UsesRetainedCleanupWhenCurrentDefinitionIsGone(t *testing.T) {
+// Cleanup code is never read back from the database and replayed: when a
+// node's current task definition can no longer be resolved, it is marked
+// Unresolved (RunCleanup then reports it and leaves it unreleased) instead
+// of running whatever it once resolved to at setup time.
+func TestUnifiedTeardownList_MarksNodeUnresolvedWhenCurrentDefinitionIsGone(t *testing.T) {
 	cfg := writeWorkflowFixture(t, t.TempDir(), "wf", nil, nil)
-	retained, err := json.Marshal(task.RetainedCleanup{Action: &lang.Action{Type: lang.ActionShell, Script: "retired-cleanup"}})
-	if err != nil {
-		t.Fatal(err)
-	}
 	session := &domain.Session{
 		Workflow: "wf",
 		Nodes: map[string]*contract.TaskState{
-			"retired": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "retired", Cleanup: retained},
+			"retired": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "retired"},
 		},
 	}
 	items, err := unifiedTeardownList(cfg, session, false)
 	if err != nil {
 		t.Fatalf("unifiedTeardownList: %v", err)
 	}
-	if len(items) != 1 || items[0].Cleanup == nil || items[0].Cleanup.Script != "retired-cleanup" {
-		t.Fatalf("items = %+v, want the retained cleanup action", items)
+	if len(items) != 1 || !items[0].Unresolved {
+		t.Fatalf("items = %+v, want the retired node marked Unresolved", items)
 	}
 }
 

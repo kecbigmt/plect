@@ -114,45 +114,45 @@ AND NOT EXISTS (
 
 -- name: CurrentNodeExecution :one
 SELECT id, session_id, node_id, sequence, task_id, name, scope, status, resource,
-       execution_dir, inputs_json, outputs_json, state_json,
+       inputs_json, outputs_json, state_json,
        resource_observation_json, resource_observed_at, done_when_json,
-       extra_done_when_json, cleanup_json, plugin_ref, error, setup_at,
+       extra_done_when_json, error, setup_at,
        failed_at, cleaned_at, finalized_at
 FROM node_executions WHERE session_id = ? AND node_id = ? AND status <> 'cleaned';
 
 -- name: NodeExecutionByID :one
 SELECT id, session_id, node_id, sequence, task_id, name, scope, status, resource,
-       execution_dir, inputs_json, outputs_json, state_json,
+       inputs_json, outputs_json, state_json,
        resource_observation_json, resource_observed_at, done_when_json,
-       extra_done_when_json, cleanup_json, plugin_ref, error, setup_at,
+       extra_done_when_json, error, setup_at,
        failed_at, cleaned_at, finalized_at
 FROM node_executions WHERE id = ?;
 
 -- name: InsertNodeExecution :one
 INSERT INTO node_executions (
     id, session_id, node_id, sequence, task_id, name, scope, status, resource,
-    execution_dir, inputs_json, outputs_json, state_json,
+    inputs_json, outputs_json, state_json,
     resource_observation_json, resource_observed_at, done_when_json,
-    extra_done_when_json, cleanup_json, plugin_ref, error, setup_at,
+    extra_done_when_json, error, setup_at,
     failed_at, cleaned_at, finalized_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING id;
 
 -- name: UpdateNodeExecution :exec
 UPDATE node_executions SET
     sequence = ?, task_id = ?, name = ?, scope = ?, status = ?, resource = ?,
-    execution_dir = ?, inputs_json = ?, outputs_json = ?, state_json = ?,
+    inputs_json = ?, outputs_json = ?, state_json = ?,
     resource_observation_json = ?, resource_observed_at = ?, done_when_json = ?,
-    extra_done_when_json = ?, cleanup_json = ?, plugin_ref = ?, error = ?,
+    extra_done_when_json = ?, error = ?,
     setup_at = ?, failed_at = ?, cleaned_at = ?, finalized_at = ?
 WHERE id = ?;
 
 -- name: ListCurrentNodeExecutions :many
 SELECT ne.id, ne.session_id, ne.node_id, ne.sequence, ne.task_id, ne.name,
-       ne.scope, ne.status, ne.resource, ne.execution_dir, ne.inputs_json,
+       ne.scope, ne.status, ne.resource, ne.inputs_json,
        ne.outputs_json, ne.state_json, ne.resource_observation_json,
        ne.resource_observed_at, ne.done_when_json, ne.extra_done_when_json,
-       ne.cleanup_json, ne.plugin_ref, ne.error, ne.setup_at, ne.failed_at,
+       ne.error, ne.setup_at, ne.failed_at,
        ne.cleaned_at, ne.finalized_at
 FROM node_executions ne
 WHERE ne.session_id = ?
@@ -170,14 +170,14 @@ DELETE FROM node_execution_layers WHERE execution_id = ?;
 INSERT INTO node_execution_layers (
     execution_id, position, effect_id, status, inputs_json, locals_json,
     outputs_json, env_json, heartbeat_ticks, heartbeat_escalations,
-    setup_at, failed_at, cleaned_at, error, cleanup_json
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    setup_at, failed_at, cleaned_at, error
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: ListNodeExecutionLayersForSession :many
 SELECT nel.execution_id, nel.position, nel.effect_id, nel.status,
        nel.inputs_json, nel.locals_json, nel.outputs_json, nel.env_json,
        nel.heartbeat_ticks, nel.heartbeat_escalations, nel.setup_at,
-       nel.failed_at, nel.cleaned_at, nel.error, nel.cleanup_json
+       nel.failed_at, nel.cleaned_at, nel.error
 FROM node_execution_layers nel
 INNER JOIN node_executions ne ON ne.id = nel.execution_id
 WHERE ne.session_id = ?

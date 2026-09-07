@@ -144,16 +144,8 @@ type TaskState struct {
 	// DependsOn is the node ids this attempt's setup resolved as
 	// prerequisites, snapshotted so release ordering survives a later
 	// config change; see docs/design/sqlite-persistence.md's "Node
-	// execution identity" section. Node-only, like the three fields below.
+	// execution identity" section. Node-only.
 	DependsOn []string `json:"depends_on,omitempty"`
-	// ExecutionDir, PluginRef, and Cleanup are node-execution retention
-	// details (working directory, resolved plugin+revision, and the
-	// retained cleanup contract, respectively — same doc section as
-	// DependsOn) excluded from ordinary JSON output as persistence-internal,
-	// not facts an external consumer needs.
-	ExecutionDir string          `json:"-"`
-	PluginRef    string          `json:"-"`
-	Cleanup      json.RawMessage `json:"-"`
 	// ExecutionID is the node_executions row this state was read from, or
 	// empty for a state never yet persisted. A write that intends to update
 	// this exact row in place (a same-declaration retry) carries it forward;
@@ -219,10 +211,6 @@ type LayerState struct {
 	FailedAt             time.Time `json:"failed_at,omitzero"`
 	CleanedAt            time.Time `json:"cleaned_at,omitzero"`
 	Error                string    `json:"error,omitempty"`
-	// Cleanup is this layer's own retained cleanup contract (shape is
-	// effect.RetainedLayerCleanup); nil for a plain-task layer row, which
-	// never populates it. See TaskState.Cleanup.
-	Cleanup json.RawMessage `json:"-"`
 }
 
 // Session is the shared representation of a plect session's durable state.

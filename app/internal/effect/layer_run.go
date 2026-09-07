@@ -57,7 +57,7 @@ func RunLayers(goCtx context.Context, layers []Layer, host ChainHost, workDir st
 				return states, lastStderr, fmt.Errorf("layer %q: bound inputs: %w", layer.EffectID, err)
 			}
 		}
-		state := contract.LayerState{EffectID: layer.EffectID, Inputs: inputs, SetupAt: now, Cleanup: RetainLayerCleanup(layer)}
+		state := contract.LayerState{EffectID: layer.EffectID, Inputs: inputs, SetupAt: now}
 
 		emitted := map[string]any{}
 		if layer.Setup != nil {

@@ -2,7 +2,6 @@ package task
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,9 +10,7 @@ import (
 	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/config"
-	"github.com/kecbigmt/plecture/app/internal/effect"
 	"github.com/kecbigmt/plecture/app/internal/lang"
-	"github.com/kecbigmt/plecture/app/internal/plugins"
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
@@ -276,41 +273,6 @@ func TestRunCleanup_RequiredSelfOutputAbsenceFailsTheRelease(t *testing.T) {
 	}
 }
 
-// Only proves the task package's own producer side; persistence.writeTasksTx
-// persists Cleanup opaquely.
-func TestRunSetup_RetainsCleanupContractAndExecutionDir(t *testing.T) {
-	if _, err := exec.LookPath("bash"); err != nil {
-		t.Skip("bash not available")
-	}
-	plan := buildPlan(t,
-		[]taskStub{{id: "a", scope: "run", setup: `echo '{}'`, cleanup: `true`}},
-		[]nodeStub{{id: "a"}},
-	)
-	tasks := map[string]*contract.TaskState{}
-	if err := RunSetup(context.Background(), plan.Run, SessionVars{WorkspaceDirPath: "/tmp/x"}, tasks, nil); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-	got := tasks["a"]
-	if got.ExecutionDir != "/tmp/x" {
-		t.Fatalf("ExecutionDir = %q, want %q", got.ExecutionDir, "/tmp/x")
-	}
-	if len(got.Cleanup) == 0 {
-		t.Fatal("Cleanup not retained")
-	}
-	var decoded struct {
-		Action struct {
-			Type   string `json:"Type"`
-			Script string `json:"Script"`
-		} `json:"action"`
-	}
-	if err := json.Unmarshal(got.Cleanup, &decoded); err != nil {
-		t.Fatalf("Cleanup did not decode as JSON: %v (%s)", err, got.Cleanup)
-	}
-	if decoded.Action.Type != lang.ActionShell || decoded.Action.Script != "true" {
-		t.Fatalf("decoded retained cleanup action = %+v, want the declared shell action", decoded.Action)
-	}
-}
-
 // A revised inner effect under the same task id/scope is still a different
 // declaration; the old chain's retained per-layer recipe must survive.
 func TestRunSetup_RefusesUnreleasedNodeWhenNestingChainShapeChanges(t *testing.T) {
@@ -332,58 +294,6 @@ func TestRunSetup_RefusesUnreleasedNodeWhenNestingChainShapeChanges(t *testing.T
 	}
 	if got := tasks["outer"].Layers; len(got) != 2 || got[1].EffectID != "inner-a" {
 		t.Fatalf("retained layers = %+v, want the old chain (inner-a) left untouched", got)
-	}
-}
-
-// A nested node's composed TaskState.Cleanup stays nil; each layer retains
-// its own cleanup separately on LayerState.Cleanup instead.
-func TestRunSetup_NestedNodeRetainsCleanupPerLayerNotOnTheComposedState(t *testing.T) {
-	withScriptedExecutor(t, &scriptedExecutor{stdout: map[string]string{"inner-setup": `{"pid":42}`}})
-	outer := config.TaskDefinition{ID: "outer", Scope: "run", Cleanup: shellStub("outer-cleanup")}
-	inner := config.TaskDefinition{ID: "inner", Scope: "run", Setup: shellStub("inner-setup"), Cleanup: shellStub("inner-cleanup")}
-	tasks := map[string]*contract.TaskState{}
-	if err := RunSetup(context.Background(), nestedPlan(t, outer, inner), SessionVars{Name: "s"}, tasks, nil); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-	if got := tasks["outer"].Cleanup; got != nil {
-		t.Fatalf("Cleanup = %s, want nil on the composed state for a nested node", got)
-	}
-	if len(tasks["outer"].Layers) != 2 {
-		t.Fatalf("Layers = %+v, want 2", tasks["outer"].Layers)
-	}
-	for i, name := range []string{"outer-cleanup", "inner-cleanup"} {
-		rc, ok, err := effect.DecodeRetainedLayerCleanup(tasks["outer"].Layers[i].Cleanup)
-		if err != nil {
-			t.Fatalf("layer %d: decode retained cleanup: %v", i, err)
-		}
-		if !ok {
-			t.Fatalf("layer %d: no retained cleanup contract", i)
-		}
-		if rc.Cleanup == nil || rc.Cleanup.Script != name {
-			t.Fatalf("layer %d retained cleanup = %+v, want Script %q", i, rc.Cleanup, name)
-		}
-	}
-}
-
-func TestRunSetup_RetainsPluginRefWithRevision(t *testing.T) {
-	if _, err := exec.LookPath("bash"); err != nil {
-		t.Skip("bash not available")
-	}
-	pluginDir := t.TempDir()
-	mount := plugins.Mounted{ID: "acme/tools", Dir: pluginDir, Revision: "deadbeef"}
-	r := Resolved{
-		NodeID:     "a",
-		Scope:      "run",
-		Setup:      &lang.Action{Type: lang.ActionShell, Script: `echo '{}'`},
-		SourcePath: pluginDir + "/tasks/a.toml",
-		From:       lang.Ownership{IsPlugin: true},
-	}
-	tasks := map[string]*contract.TaskState{}
-	if err := RunSetup(context.Background(), []Resolved{r}, SessionVars{Plugins: []plugins.Mounted{mount}}, tasks, nil); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-	if got, want := tasks["a"].PluginRef, "acme/tools@deadbeef"; got != want {
-		t.Fatalf("PluginRef = %q, want %q", got, want)
 	}
 }
 
@@ -807,69 +717,6 @@ func TestRunCleanup_ReverseOrder(t *testing.T) {
 	}
 	if tasks["b"].Status != contract.TaskStatusCleaned {
 		t.Fatalf("b.Status = %q", tasks["b"].Status)
-	}
-}
-
-// A node's cleanup must run in its own retained ExecutionDir, not the
-// session's current WorkspaceDirPath, so a workspace move/rebuild between
-// setup and release does not silently redirect an old attempt's cleanup.
-func TestRunCleanup_RunsInRetainedExecutionDirNotCurrentWorkspace(t *testing.T) {
-	if _, err := exec.LookPath("bash"); err != nil {
-		t.Skip("bash not available")
-	}
-	executionDir := t.TempDir()
-	currentWorkspace := t.TempDir()
-	plan := buildPlan(t,
-		[]taskStub{{id: "a", scope: "run", setup: "echo '{}'", cleanup: "pwd > cleanup-cwd.txt"}},
-		[]nodeStub{{id: "a"}},
-	)
-	tasks := map[string]*contract.TaskState{
-		"a": {Scope: "run", Status: contract.TaskStatusProduced, Outputs: map[string]any{}, ExecutionDir: executionDir},
-	}
-	if err := RunCleanup(context.Background(), plan.Run, SessionVars{WorkspaceDirPath: currentWorkspace}, tasks, nil); err != nil {
-		t.Fatalf("cleanup: %v", err)
-	}
-	data, err := os.ReadFile(filepath.Join(executionDir, "cleanup-cwd.txt"))
-	if err != nil {
-		t.Fatalf("cleanup did not run in the retained ExecutionDir: %v", err)
-	}
-	if got := strings.TrimSpace(string(data)); got != executionDir {
-		t.Fatalf("cleanup ran in %q, want the retained ExecutionDir %q", got, executionDir)
-	}
-	if _, err := os.Stat(filepath.Join(currentWorkspace, "cleanup-cwd.txt")); err == nil {
-		t.Fatal("cleanup ran in the session's current WorkspaceDirPath instead of the retained ExecutionDir")
-	}
-}
-
-// A retained PluginRef that no longer matches the currently mounted plugin's
-// content revision must block cleanup rather than silently run it against
-// drifted plugin content.
-func TestRunCleanup_RefusesWhenRetainedPluginRefNoLongerMatchesTheMount(t *testing.T) {
-	if _, err := exec.LookPath("bash"); err != nil {
-		t.Skip("bash not available")
-	}
-	pluginDir := t.TempDir()
-	plan := buildPlan(t,
-		[]taskStub{{id: "a", scope: "run", setup: "echo '{}'", cleanup: "true"}},
-		[]nodeStub{{id: "a"}},
-	)
-	r := plan.Run[0]
-	r.SourcePath = pluginDir + "/tasks/a.toml"
-	r.From = lang.Ownership{IsPlugin: true}
-	plan.Run[0] = r
-	tasks := map[string]*contract.TaskState{
-		"a": {
-			Scope: "run", Status: contract.TaskStatusProduced, Outputs: map[string]any{},
-			PluginRef: "acme/tools@deadbeef",
-		},
-	}
-	session := SessionVars{Plugins: []plugins.Mounted{{ID: "acme/tools", Dir: pluginDir, Revision: "newcontent"}}}
-	err := RunCleanup(context.Background(), plan.Run, session, tasks, nil)
-	if err == nil {
-		t.Fatal("RunCleanup: want a plugin-content-mismatch error, got nil")
-	}
-	if tasks["a"].Status != contract.TaskStatusFailed {
-		t.Fatalf("a.Status = %q, want failed", tasks["a"].Status)
 	}
 }
 
