@@ -52,7 +52,7 @@ func TestRunWorkflowSetup_ResolvesBinReference(t *testing.T) {
 			&lang.Value{Form: lang.FormBin, Bin: "official/github/github-worktree"}),
 	}
 	tasks := map[string]*contract.TaskState{}
-	outputs, err := RunWorkflowSetup(prov, effect.WorkflowHookVars{ResourceID: "r", SessionName: "s", Plugins: mounted}, tasks, nil)
+	outputs, _, err := RunWorkflowSetup(prov, effect.WorkflowHookVars{ResourceID: "r", SessionName: "s", Plugins: mounted}, tasks, nil)
 	if err != nil {
 		t.Fatalf("RunWorkflowSetup: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestRunWorkflowSetup_ProducesWorkspaceDir(t *testing.T) {
 		Setup: providerExec(`printf '{"workspace_dir":"%s","branch":"issue/1"}' "$1"`, literalValue(dir)),
 	}
 	tasks := map[string]*contract.TaskState{}
-	outputs, err := RunWorkflowSetup(prov, effect.WorkflowHookVars{ResourceID: "https://example.com/1", SessionName: "s"}, tasks, nil)
+	outputs, _, err := RunWorkflowSetup(prov, effect.WorkflowHookVars{ResourceID: "https://example.com/1", SessionName: "s"}, tasks, nil)
 	if err != nil {
 		t.Fatalf("RunWorkflowSetup: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestRunWorkflowSetup_ReadsItsSurfaceRoots(t *testing.T) {
 			fromValue("config.workspace_dirs_root"), fromValueOr("session.inputs.flavour", "")),
 	}
 	tasks := map[string]*contract.TaskState{}
-	outputs, err := RunWorkflowSetup(prov, effect.WorkflowHookVars{
+	outputs, _, err := RunWorkflowSetup(prov, effect.WorkflowHookVars{
 		ResourceID:        "res-1",
 		SessionName:       "sess-1",
 		WorkspaceDirsRoot: "/roots/workspace_dirs",
@@ -121,7 +121,7 @@ func TestRunWorkflowSetup_AValueIsNeverCommandText(t *testing.T) {
 	}
 	malicious := `x"; touch ` + marker + `; echo "`
 	tasks := map[string]*contract.TaskState{}
-	if _, err := RunWorkflowSetup(prov, effect.WorkflowHookVars{ResourceID: malicious, SessionName: "s"}, tasks, nil); err != nil {
+	if _, _, err := RunWorkflowSetup(prov, effect.WorkflowHookVars{ResourceID: malicious, SessionName: "s"}, tasks, nil); err != nil {
 		t.Fatalf("RunWorkflowSetup: %v", err)
 	}
 	if _, err := os.Stat(marker); err == nil {
@@ -139,7 +139,7 @@ func TestRunWorkflowSetup_AValueIsNeverCommandText(t *testing.T) {
 func TestRunWorkflowSetup_MissingWorkspaceDirFails(t *testing.T) {
 	prov := config.WorkspaceProviderConfig{ID: "wf", Setup: providerExec(`echo '{"branch":"b"}'`)}
 	tasks := map[string]*contract.TaskState{}
-	_, err := RunWorkflowSetup(prov, effect.WorkflowHookVars{}, tasks, nil)
+	_, _, err := RunWorkflowSetup(prov, effect.WorkflowHookVars{}, tasks, nil)
 	if err == nil {
 		t.Fatal("expected error for missing workspace_dir output")
 	}
@@ -161,7 +161,7 @@ func TestRunWorkflowSetup_IdempotentSkip(t *testing.T) {
 			Outputs: map[string]any{"workspace_dir": "/tmp/wd"},
 		},
 	}
-	outputs, err := RunWorkflowSetup(prov, effect.WorkflowHookVars{}, tasks, nil)
+	outputs, _, err := RunWorkflowSetup(prov, effect.WorkflowHookVars{}, tasks, nil)
 	if err != nil {
 		t.Fatalf("produced pseudo-node must short-circuit: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestRunWorkflowSetup_PrevSurvivesRetry(t *testing.T) {
 			Outputs: map[string]any{"workspace_dir": "/tmp/old"},
 		},
 	}
-	if _, err := RunWorkflowSetup(prov, effect.WorkflowHookVars{}, tasks, nil); err != nil {
+	if _, _, err := RunWorkflowSetup(prov, effect.WorkflowHookVars{}, tasks, nil); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(marker)
@@ -208,12 +208,179 @@ func TestRunWorkflowSetup_OutputsSchemaEnforced(t *testing.T) {
 		},
 	}
 	tasks := map[string]*contract.TaskState{}
-	_, err := RunWorkflowSetup(prov, effect.WorkflowHookVars{}, tasks, nil)
+	_, _, err := RunWorkflowSetup(prov, effect.WorkflowHookVars{}, tasks, nil)
 	if err == nil {
 		t.Fatal("expected schema violation")
 	}
 	if !strings.Contains(err.Error(), "schema") {
 		t.Errorf("unexpected message: %v", err)
+	}
+}
+
+// A produced provider record whose alive probe passes is reused: no cleanup,
+// no fresh setup.
+func TestRunWorkflowSetup_PassingAliveReusesWithoutCleanup(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "cleanup-ran")
+	prov := config.WorkspaceProviderConfig{
+		ID:      "wf",
+		Setup:   providerExec("echo should-not-run >&2; exit 1"),
+		Cleanup: providerExec("touch " + marker),
+		Health:  &config.HealthConfig{Alive: providerExec("exit 0")},
+	}
+	tasks := map[string]*contract.TaskState{
+		contract.WorkflowPseudoNodeID: {
+			Scope:   contract.TaskScopeSession,
+			Status:  contract.TaskStatusProduced,
+			Outputs: map[string]any{"workspace_dir": "/tmp/wd"},
+		},
+	}
+	outputs, repaired, err := RunWorkflowSetup(prov, effect.WorkflowHookVars{}, tasks, nil)
+	if err != nil {
+		t.Fatalf("RunWorkflowSetup: %v", err)
+	}
+	if repaired {
+		t.Error("repaired = true, want false: a passing alive probe reuses the record")
+	}
+	if outputs["workspace_dir"] != "/tmp/wd" {
+		t.Errorf("outputs = %v, want the reused record's outputs", outputs)
+	}
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Error("cleanup ran even though the alive probe passed")
+	}
+}
+
+// A noop alive probe reuses the produced record without running anything —
+// not even the probe itself.
+func TestRunWorkflowSetup_NoopAliveReusesWithoutExecutingAnything(t *testing.T) {
+	prov := config.WorkspaceProviderConfig{
+		ID:     "wf",
+		Setup:  providerExec("echo should-not-run >&2; exit 1"),
+		Health: &config.HealthConfig{Alive: &lang.Action{Type: lang.ActionNoop}},
+	}
+	tasks := map[string]*contract.TaskState{
+		contract.WorkflowPseudoNodeID: {
+			Scope:   contract.TaskScopeSession,
+			Status:  contract.TaskStatusProduced,
+			Outputs: map[string]any{"workspace_dir": "/tmp/wd"},
+		},
+	}
+	outputs, repaired, err := RunWorkflowSetup(prov, effect.WorkflowHookVars{}, tasks, nil)
+	if err != nil {
+		t.Fatalf("RunWorkflowSetup: %v", err)
+	}
+	if repaired {
+		t.Error("repaired = true, want false: a noop probe never runs a check to fail")
+	}
+	if outputs["workspace_dir"] != "/tmp/wd" {
+		t.Errorf("outputs = %v, want the reused record's outputs", outputs)
+	}
+}
+
+// A failed alive probe repairs the record: cleanup runs with force=true,
+// then setup runs again and its fresh outputs replace the stale ones.
+func TestRunWorkflowSetup_FailingAliveRepairsViaForcedCleanupThenSetup(t *testing.T) {
+	dir := t.TempDir()
+	cleanupMarker := filepath.Join(dir, "cleanup-force")
+	prov := config.WorkspaceProviderConfig{
+		ID:    "wf",
+		Setup: providerExec(`echo '{"workspace_dir":"/tmp/new"}'`),
+		Cleanup: providerExec(`printf '%s' "$1" > "$2"`,
+			fromValue("force"), literalValue(cleanupMarker)),
+		Health: &config.HealthConfig{Alive: providerExec("exit 1")},
+	}
+	tasks := map[string]*contract.TaskState{
+		contract.WorkflowPseudoNodeID: {
+			Scope:   contract.TaskScopeSession,
+			Status:  contract.TaskStatusProduced,
+			Outputs: map[string]any{"workspace_dir": "/tmp/old"},
+		},
+	}
+	outputs, repaired, err := RunWorkflowSetup(prov, effect.WorkflowHookVars{}, tasks, nil)
+	if err != nil {
+		t.Fatalf("RunWorkflowSetup: %v", err)
+	}
+	if !repaired {
+		t.Error("repaired = false, want true: the alive probe failed")
+	}
+	if outputs["workspace_dir"] != "/tmp/new" {
+		t.Errorf("outputs = %v, want the rebuilt record", outputs)
+	}
+	got, readErr := os.ReadFile(cleanupMarker)
+	if readErr != nil {
+		t.Fatalf("read cleanup marker: %v", readErr)
+	}
+	if strings.TrimSpace(string(got)) != "true" {
+		t.Errorf("cleanup's force root = %q, want true: repair always forces cleanup", got)
+	}
+	st := tasks[contract.WorkflowPseudoNodeID]
+	if st.Status != contract.TaskStatusProduced || st.Outputs["workspace_dir"] != "/tmp/new" {
+		t.Errorf("pseudo-node state = %+v, want produced with the rebuilt outputs", st)
+	}
+}
+
+// The alive probe observes its own recorded outputs, the provider's
+// resolved inputs, the session name, and the configured workspace-dirs
+// root — the same roots cleanup does, minus force and cleanup.inputs.
+func TestRunWorkflowSetup_AliveProbeReadsItsSurfaceRoots(t *testing.T) {
+	prov := config.WorkspaceProviderConfig{
+		ID:    "wf",
+		Setup: providerExec("echo should-not-run >&2; exit 1"),
+		Health: &config.HealthConfig{Alive: providerExec(
+			`test "$1" = "/tmp/old" && test "$2" = "review" && test "$3" = "sess-1" && test "$4" = "/roots"`,
+			fromValue("self.outputs.workspace_dir"), fromValue("inputs.flavour"),
+			fromValue("session.name"), fromValue("config.workspace_dirs_root"),
+		)},
+	}
+	tasks := map[string]*contract.TaskState{
+		contract.WorkflowPseudoNodeID: {
+			Scope:   contract.TaskScopeSession,
+			Status:  contract.TaskStatusProduced,
+			Outputs: map[string]any{"workspace_dir": "/tmp/old"},
+		},
+	}
+	vars := effect.WorkflowHookVars{
+		SessionName:       "sess-1",
+		WorkspaceDirsRoot: "/roots",
+		Inputs:            map[string]any{"flavour": "review"},
+	}
+	if _, repaired, err := RunWorkflowSetup(prov, vars, tasks, nil); err != nil {
+		t.Fatalf("RunWorkflowSetup: %v", err)
+	} else if repaired {
+		t.Error("repaired = true, want false: the probe observed its expected roots and passed")
+	}
+}
+
+// A cleanup failure during repair stops the whole attempt without ever
+// running setup, and the persisted state carries the cleanup's own failure
+// rather than the alive check's.
+func TestRunWorkflowSetup_FailingAliveRepairCleanupFailureStopsBeforeSetup(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "setup-ran")
+	prov := config.WorkspaceProviderConfig{
+		ID:      "wf",
+		Setup:   providerExec("touch " + marker + "; echo '{\"workspace_dir\":\"/tmp/new\"}'"),
+		Cleanup: providerExec("exit 7"),
+		Health:  &config.HealthConfig{Alive: providerExec("exit 1")},
+	}
+	tasks := map[string]*contract.TaskState{
+		contract.WorkflowPseudoNodeID: {
+			Scope:   contract.TaskScopeSession,
+			Status:  contract.TaskStatusProduced,
+			Outputs: map[string]any{"workspace_dir": "/tmp/old"},
+		},
+	}
+	_, repaired, err := RunWorkflowSetup(prov, effect.WorkflowHookVars{}, tasks, nil)
+	if err == nil {
+		t.Fatal("expected the repair's forced cleanup failure to stop the attempt")
+	}
+	if repaired {
+		t.Error("repaired = true, want false: a failed repair never completes")
+	}
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Error("setup ran even though the repair's forced cleanup failed")
+	}
+	st := tasks[contract.WorkflowPseudoNodeID]
+	if st.Status != contract.TaskStatusFailed {
+		t.Fatalf("pseudo-node status = %q, want failed", st.Status)
 	}
 }
 

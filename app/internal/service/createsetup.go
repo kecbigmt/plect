@@ -125,18 +125,12 @@ func createWithWorkflowSetup(cfg *config.Config, store *state.Store, params Crea
 		Plugins:           cfg.Plugins,
 		SourcePath:        prov.SourcePath,
 	}
-	outputs, setupErr := task.RunWorkflowSetup(prov, vars, session.Tasks, params.Observer)
+	outputs, repaired, setupErr := task.RunWorkflowSetup(prov, vars, session.Tasks, params.Observer)
 	session.UpdatedAt = time.Now()
-	if outputs != nil {
-		if workspaceDir, ok := outputs[contract.OutputKeyWorkspaceDir].(string); ok {
-			// The session's own workspace-directory field is the one every
-			// consumer (cd/attach/ls/web UI/hooks) reads, so mirror it here.
-			session.WorkspaceDirPath = workspaceDir
-		}
-		if branch, ok := outputs["branch"].(string); ok && branch != "" {
-			session.Branch = branch
-		}
-	}
+	// The session's own workspace-directory field is the one every consumer
+	// (cd/attach/ls/web UI/hooks) reads, so mirror the provider's outputs
+	// onto it here.
+	mirrorWorkspaceProviderOutputs(session, outputs)
 	if err := store.Put(session); err != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to save session state: %v", err)}
 	}
@@ -150,6 +144,14 @@ func createWithWorkflowSetup(cfg *config.Config, store *state.Store, params Crea
 	plan, err := buildPlanForSession(cfg, session.WorkspaceDirPath, session)
 	if err != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: err.Error()}
+	}
+	// A repaired (not merely reused) provider record invalidates every
+	// already-produced session node bound to its outputs before this pass
+	// gets a chance to reuse one built against the vanished surface — this
+	// only matters for a create resuming a partial session, where some
+	// session-scoped nodes may already be produced.
+	if invalidateErr := invalidateProviderRepair(cfg, session, plan, repaired, params.Observer); invalidateErr != nil {
+		return nil, &Error{Code: ErrExecutionFailed, Message: invalidateErr.Error()}
 	}
 	tasksErr := task.RunSetup(context.Background(), plan.Session, sessionVars(cfg, session, plan), session.Tasks, params.Observer)
 	session.UpdatedAt = time.Now()

@@ -3,9 +3,11 @@ package task
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/effect"
+	"github.com/kecbigmt/plecture/app/internal/lang"
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
@@ -74,14 +76,28 @@ func invalidateProducedNode(goCtx context.Context, r Resolved, ordered []Resolve
 // transitively depends on it. ordered is already topologically sorted, so
 // membership filtering alone preserves dependency order — no re-sort needed.
 func transitiveDependents(nodeID string, ordered []Resolved) []Resolved {
+	return dependentsClosure(map[string]bool{nodeID: true}, dependentsGraph(ordered), ordered)
+}
+
+// dependentsGraph maps each node id to the node ids whose DependsOn names it.
+func dependentsGraph(ordered []Resolved) map[string][]string {
 	children := make(map[string][]string, len(ordered))
 	for _, r := range ordered {
 		for _, dep := range r.DependsOn {
 			children[dep] = append(children[dep], r.NodeID)
 		}
 	}
-	seen := map[string]bool{nodeID: true}
-	queue := []string{nodeID}
+	return children
+}
+
+// dependentsClosure filters ordered down to roots and their closure over children.
+func dependentsClosure(roots map[string]bool, children map[string][]string, ordered []Resolved) []Resolved {
+	seen := make(map[string]bool, len(roots))
+	queue := make([]string, 0, len(roots))
+	for id := range roots {
+		seen[id] = true
+		queue = append(queue, id)
+	}
 	for len(queue) > 0 {
 		cur := queue[0]
 		queue = queue[1:]
@@ -99,4 +115,30 @@ func transitiveDependents(nodeID string, ordered []Resolved) []Resolved {
 		}
 	}
 	return out
+}
+
+// InvalidateProviderBoundNodes cleans every produced node whose input wiring
+// reads a workspace-provider output (workflow.outputs.* or workspace.*), and
+// every transitive dependent.
+func InvalidateProviderBoundNodes(goCtx context.Context, ordered []Resolved, session SessionVars, tasks map[string]*contract.TaskState, obs Observer) error {
+	roots := map[string]bool{}
+	for _, r := range ordered {
+		if readsProviderOutput(r.Inputs) {
+			roots[r.NodeID] = true
+		}
+	}
+	if len(roots) == 0 {
+		return nil
+	}
+	toClean := dependentsClosure(roots, dependentsGraph(ordered), ordered)
+	return RunCleanup(goCtx, toClean, session, tasks, observerOr(obs))
+}
+
+func readsProviderOutput(inputs map[string]*lang.Value) bool {
+	for _, path := range lang.ProjectedRoots(inputs) {
+		if path == "workspace" || strings.HasPrefix(path, "workspace.") || strings.HasPrefix(path, "workflow.outputs.") {
+			return true
+		}
+	}
+	return false
 }

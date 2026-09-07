@@ -174,13 +174,24 @@ func Up(cfg *config.Config, store *state.Store, params UpParams) (*UpResult, err
 		session.Tasks = make(map[string]*contract.TaskState)
 	}
 
-	plan, err := buildPlanForSession(cfg, session.WorkspaceDirPath, session)
-	if err != nil {
-		return nil, &Error{Code: ErrExecutionFailed, Message: err.Error()}
-	}
 	wf, wfErr := loadSessionWorkflow(cfg, session.WorkspaceDirPath, session)
 	if wfErr != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: wfErr.Error()}
+	}
+	// --force-recreate already rebuilds every runtime record unconditionally.
+	repaired := false
+	if !(params.ForceRecreate && forceRecreateExisting) {
+		var repairErr *Error
+		repaired, repairErr = checkAndRepairWorkspaceProvider(cfg, store, sessionName, session, wf, params.Observer)
+		if repairErr != nil {
+			return nil, repairErr
+		}
+	}
+	// Built after any repair above, so a rebuilt workspace's cascade is read
+	// fresh rather than against the vanished directory.
+	plan, err := buildPlanForSession(cfg, session.WorkspaceDirPath, session)
+	if err != nil {
+		return nil, &Error{Code: ErrExecutionFailed, Message: err.Error()}
 	}
 	if params.ForceRecreate && forceRecreateExisting {
 		var recreateErr error
@@ -188,8 +199,13 @@ func Up(cfg *config.Config, store *state.Store, params UpParams) (*UpResult, err
 		if recreateErr != nil {
 			return nil, recreateErr
 		}
-	} else if cleanupErr := cleanupStaleWorkflowNodes(cfg, store, sessionName, session, plan, params.Observer); cleanupErr != nil {
-		return nil, cleanupErr
+	} else {
+		if cleanupErr := cleanupStaleWorkflowNodes(cfg, store, sessionName, session, plan, params.Observer); cleanupErr != nil {
+			return nil, cleanupErr
+		}
+		if invalidateErr := invalidateProviderRepair(cfg, session, plan, repaired, params.Observer); invalidateErr != nil {
+			return nil, &Error{Code: ErrExecutionFailed, Message: invalidateErr.Error()}
+		}
 	}
 	setupErr := task.RunSetup(context.Background(), plan.UpOrder(), sessionVars(cfg, session, plan), session.Tasks, params.Observer)
 	session.UpdatedAt = time.Now()
@@ -356,14 +372,7 @@ func recreateSessionRuntime(cfg *config.Config, store *state.Store, sessionName 
 
 	outputs, setupErr := runWorkflowSetupForSession(cfg, wf, session, observer)
 	session.UpdatedAt = time.Now()
-	if outputs != nil {
-		if workspaceDir, ok := outputs[contract.OutputKeyWorkspaceDir].(string); ok {
-			session.WorkspaceDirPath = workspaceDir
-		}
-		if branch, ok := outputs["branch"].(string); ok && branch != "" {
-			session.Branch = branch
-		}
-	}
+	mirrorWorkspaceProviderOutputs(session, outputs)
 	if err := replaceRuntimeState(store, sessionName, session); err != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to save session state: %v", err)}
 	}
@@ -415,5 +424,9 @@ func runWorkflowSetupForSession(cfg *config.Config, wf config.WorkflowFile, sess
 		Plugins:           cfg.Plugins,
 		SourcePath:        prov.SourcePath,
 	}
-	return task.RunWorkflowSetup(prov, vars, session.Tasks, observer)
+	// Called only from recreateSessionRuntime, after session.Tasks has already
+	// been reset to empty: there is no produced pseudo-node here to repair, so
+	// the repaired flag is always false and has no caller to report it to.
+	outputs, _, setupErr := task.RunWorkflowSetup(prov, vars, session.Tasks, observer)
+	return outputs, setupErr
 }

@@ -4,8 +4,10 @@ This design is governed by
 [`../adr/2026-08-18-health-declaration.md`](../adr/2026-08-18-health-declaration.md),
 for the activity envelope's shape,
 [`../adr/2026-08-18-activity-envelope-fingerprint-centric.md`](../adr/2026-08-18-activity-envelope-fingerprint-centric.md),
-and, for the current-plan composition rule below,
-[`../adr/2026-09-06-runtime-failure-model.md`](../adr/2026-09-06-runtime-failure-model.md).
+for the current-plan composition rule below,
+[`../adr/2026-09-06-runtime-failure-model.md`](../adr/2026-09-06-runtime-failure-model.md),
+and, for a workspace provider's own `[health.alive]`,
+[`../adr/2026-09-06-vanished-workspace-provider-output.md`](../adr/2026-09-06-vanished-workspace-provider-output.md).
 
 ## Design Core
 
@@ -213,3 +215,12 @@ A workflow's `[healthcheck]` table declares the sampling cycle — how often the
 probes run, the stall threshold they are judged against, and the parent
 re-notification interval. It names when health is observed; `[health]` names
 what health means for one effect.
+
+A workspace provider declares its own `[health.alive]` — see
+[`../language/workspace-providers.md`](../language/workspace-providers.md#health)
+— but the provider
+is not a plan node: it has no scope, contributes nothing to either
+composition above, and never joins the periodic health cycle. `plect up`
+evaluates it once, before plan construction, and repairs a failed check in
+place; a lost provider surface is invisible to the health sweep between one
+`plect up` and the next.

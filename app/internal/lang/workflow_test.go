@@ -184,6 +184,32 @@ payload = { json = { nested = { list = [ { from = "nodes.producer.outputs.value"
 	}
 }
 
+// A provider repair's invalidation pass asks whether a node reads a
+// provider output at all, not which sibling node it reads, so ProjectedRoots
+// must surface the raw workflow.outputs / workspace paths NodeReads' node-id
+// filter discards.
+func TestProjectedRoots_SurfacesNonNodePaths(t *testing.T) {
+	inputs := map[string]*Value{
+		"wd":     {Form: FormFrom, From: "workflow.outputs.workspace_dir"},
+		"branch": {Form: FormFrom, From: "workspace.branch"},
+		"peer":   {Form: FormFrom, From: "nodes.producer.outputs.value"},
+	}
+	got := ProjectedRoots(inputs)
+	want := map[string]bool{
+		"workflow.outputs.workspace_dir": true,
+		"workspace.branch":               true,
+		"nodes.producer.outputs.value":   true,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ProjectedRoots = %v, want %v", got, want)
+	}
+	for _, path := range got {
+		if !want[path] {
+			t.Errorf("ProjectedRoots returned unexpected path %q", path)
+		}
+	}
+}
+
 func TestValidateWorkflow_CycleThroughAJSONOperandRejected(t *testing.T) {
 	def := workflowDef(t, `
 [session]

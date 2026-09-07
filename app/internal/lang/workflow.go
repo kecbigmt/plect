@@ -164,13 +164,31 @@ func nodeBlocks(entry map[string]any, pos Position) ([]string, error) {
 func NodeReads(inputs map[string]*Value) []string {
 	var out []string
 	seen := map[string]bool{}
-	add := func(path string) {
+	for _, path := range ProjectedRoots(inputs) {
 		id, ok := nodeReadID(path)
 		if !ok || seen[id] {
-			return
+			continue
 		}
 		seen[id] = true
 		out = append(out, id)
+	}
+	return out
+}
+
+// ProjectedRoots collects every root path one node's input wiring projects
+// from, in key order. It is NodeReads' traversal without the node-id filter,
+// for a consumer that needs the raw paths themselves — a provider repair's
+// invalidation pass, which asks whether a node reads `workflow.outputs.*` or
+// `workspace.*` rather than which sibling node it reads.
+func ProjectedRoots(inputs map[string]*Value) []string {
+	var out []string
+	seen := map[string]bool{}
+	add := func(path string) {
+		if seen[path] {
+			return
+		}
+		seen[path] = true
+		out = append(out, path)
 	}
 	for _, key := range sortedValueKeys(inputs) {
 		valueReads(inputs[key], add)

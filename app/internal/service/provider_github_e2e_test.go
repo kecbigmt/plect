@@ -388,7 +388,7 @@ func TestE2E_GithubWorkspaceProviderSrcLayoutSingleWorkdir(t *testing.T) {
 
 	tasks := map[string]*contract.TaskState{}
 	vars := effect.WorkflowHookVars{ResourceID: "https://github.com/testowner/testrepo/issues/42", SessionName: session, Plugins: mounted, SourcePath: prov.SourcePath}
-	out, err := task.RunWorkflowSetup(prov, vars, tasks, nil)
+	out, _, err := task.RunWorkflowSetup(prov, vars, tasks, nil)
 	if err != nil {
 		t.Fatalf("setup: %v", err)
 	}
@@ -412,7 +412,7 @@ func TestE2E_GithubWorkspaceProviderSrcLayoutSingleWorkdir(t *testing.T) {
 func runSetup(t *testing.T, prov config.WorkspaceProviderConfig, mounted []plugins.Mounted, session string) map[string]any {
 	t.Helper()
 	tasks := map[string]*contract.TaskState{}
-	out, err := task.RunWorkflowSetup(prov, effect.WorkflowHookVars{
+	out, _, err := task.RunWorkflowSetup(prov, effect.WorkflowHookVars{
 		ResourceID:  "https://github.com/testowner/testrepo/issues/42",
 		SessionName: session,
 		Plugins:     mounted,
@@ -474,7 +474,7 @@ func TestE2E_GithubWorkspaceProviderConvergesAndReclaims(t *testing.T) {
 		SourcePath:    prov.SourcePath,
 		CleanupInputs: map[string]string{"delete_branch": "true"},
 	}
-	if _, err := task.RunWorkflowSetup(prov, vars, tasks, nil); err != nil {
+	if _, _, err := task.RunWorkflowSetup(prov, vars, tasks, nil); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 
@@ -512,7 +512,7 @@ func TestE2E_GithubWorkspaceProviderConvergesAndReclaims(t *testing.T) {
 		t.Fatal("precondition: branch should survive workdir removal")
 	}
 	tasks2 = map[string]*contract.TaskState{}
-	if _, err := task.RunWorkflowSetup(prov, vars, tasks2, nil); err != nil {
+	if _, _, err := task.RunWorkflowSetup(prov, vars, tasks2, nil); err != nil {
 		t.Fatalf("re-dispatch over orphan branch should reuse it, got: %v", err)
 	}
 }

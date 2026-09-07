@@ -76,6 +76,20 @@ func ProviderRoots(vars WorkflowHookVars, prev, self map[string]any, cleanup boo
 	return env
 }
 
+// AliveRoots builds the roots a workspace provider's [health].alive probe
+// observes: its own recorded outputs, plus the same session, input, and
+// configured-root values cleanup exposes. It carries neither cleanup's
+// force flag nor cleanup.inputs — an alive probe only asks whether the
+// recorded surface still exists, never how to release it.
+func AliveRoots(vars WorkflowHookVars, self map[string]any) lang.Roots {
+	return lang.Roots{
+		"self":    map[string]any{"outputs": lang.NormalizeOutputs(self)},
+		"inputs":  lang.NormalizeOutputs(vars.Inputs),
+		"session": map[string]any{"name": vars.SessionName},
+		"config":  map[string]any{"workspace_dirs_root": vars.WorkspaceDirsRoot},
+	}
+}
+
 // ProviderEval resolves a provider hook's values, with `bin` resolving
 // against the plugin that declared it.
 func ProviderEval(env lang.Roots, mounted []plugins.Mounted, sourcePath string, from lang.Ownership) lang.Eval {

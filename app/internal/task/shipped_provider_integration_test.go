@@ -219,7 +219,7 @@ func runProviderHook(t *testing.T, prov config.WorkspaceProviderConfig, hook str
 	}
 	switch hook {
 	case "setup":
-		_, err := RunWorkflowSetup(prov, vars, map[string]*contract.TaskState{}, nil)
+		_, _, err := RunWorkflowSetup(prov, vars, map[string]*contract.TaskState{}, nil)
 		return err
 	case "cleanup":
 		vars.Force = true

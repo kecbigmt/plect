@@ -1,9 +1,11 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/domain"
@@ -129,6 +131,78 @@ func terminalBinding(plan *task.Plan, s *domain.Session) *task.TerminalBinding {
 		}
 	}
 	return &task.TerminalBinding{Ops: t.Terminal, Outputs: outputs, SourcePath: t.SourcePath, From: t.From}
+}
+
+// mirrorWorkspaceProviderOutputs copies workspace_dir and branch from a
+// provider's outputs onto the session record, the fields every other
+// consumer (cascade resolution, task cwd, cd/attach) reads directly.
+func mirrorWorkspaceProviderOutputs(session *domain.Session, outputs map[string]any) {
+	if outputs == nil {
+		return
+	}
+	if workspaceDir, ok := outputs[contract.OutputKeyWorkspaceDir].(string); ok {
+		session.WorkspaceDirPath = workspaceDir
+	}
+	if branch, ok := outputs["branch"].(string); ok && branch != "" {
+		session.Branch = branch
+	}
+}
+
+// invalidateProviderRepair cleans every produced plan node bound to a
+// workspace-provider output, once that provider has actually been repaired.
+func invalidateProviderRepair(cfg *config.Config, session *domain.Session, plan *task.Plan, repaired bool, observer task.Observer) error {
+	if !repaired {
+		return nil
+	}
+	return task.InvalidateProviderBoundNodes(context.Background(), plan.UpOrder(), sessionVars(cfg, session, plan), session.Tasks, observer)
+}
+
+// checkAndRepairWorkspaceProvider evaluates a produced session's workspace
+// provider liveness, via task.RunWorkflowSetup's own reuse check, before the
+// plan is built. A session with no produced provider record has nothing to
+// check.
+func checkAndRepairWorkspaceProvider(cfg *config.Config, store *state.Store, sessionName string, session *domain.Session, wf config.WorkflowFile, observer task.Observer) (repaired bool, svcErr *Error) {
+	if wf.WorkspaceProvider == "" {
+		return false, nil
+	}
+	existing, ok := session.Tasks[contract.WorkflowPseudoNodeID]
+	if !ok || existing == nil || existing.Status != contract.TaskStatusProduced {
+		return false, nil
+	}
+	workspaceProviders, err := cfg.LoadWorkspaceProviders()
+	if err != nil {
+		return false, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("load workspace providers: %v", err)}
+	}
+	prov, provOK, provErr := workspaceProviderFor(wf, workspaceProviders)
+	if provErr != nil {
+		return false, &Error{Code: ErrExecutionFailed, Message: provErr.Error()}
+	}
+	if !provOK {
+		return false, nil
+	}
+	provInputs, inputsErr := resolveWorkspaceProviderInputs(prov, wf)
+	if inputsErr != nil {
+		return false, &Error{Code: ErrInvalidInput, Message: inputsErr.Error()}
+	}
+	vars := effect.WorkflowHookVars{
+		ResourceID:        session.ResourceID,
+		SessionName:       session.Name,
+		WorkspaceDirsRoot: cfg.WorkspaceDirsRoot,
+		SessionInputs:     session.Inputs,
+		Inputs:            provInputs,
+		Plugins:           cfg.Plugins,
+		SourcePath:        prov.SourcePath,
+	}
+	outputs, repaired, setupErr := task.RunWorkflowSetup(prov, vars, session.Tasks, observer)
+	session.UpdatedAt = time.Now()
+	mirrorWorkspaceProviderOutputs(session, outputs)
+	if err := mergeTasks(store, sessionName, session); err != nil {
+		return repaired, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to save session state: %v", err)}
+	}
+	if setupErr != nil {
+		return repaired, &Error{Code: ErrExecutionFailed, Message: setupErr.Error()}
+	}
+	return repaired, nil
 }
 
 func inputsOnExistingSessionMessage() string {

@@ -109,7 +109,7 @@ func TestShippedWorkspaceProvider_SetupHookDoesNotShellInjectResourceID(t *testi
 	// Setup is expected to fail (github-worktree is not on PATH in this
 	// test and the resource id is not a valid URL); only the absence of the
 	// injected side effect is under test.
-	_, _ = task.RunWorkflowSetup(prov, vars, tasks, nil)
+	_, _, _ = task.RunWorkflowSetup(prov, vars, tasks, nil)
 
 	if _, err := os.Stat(marker); err == nil {
 		t.Fatal("the injected command executed: a resource id reached the shell as syntax")
@@ -230,7 +230,7 @@ func TestShippedSlackThreadProvider_SetupCreatesWorkspace(t *testing.T) {
 	)
 	vars := effect.WorkflowHookVars{ResourceID: permalink, SessionName: sessionName, WorkspaceDirsRoot: workspaceDirsRoot}
 
-	outputs, err := task.RunWorkflowSetup(prov, vars, map[string]*contract.TaskState{}, nil)
+	outputs, _, err := task.RunWorkflowSetup(prov, vars, map[string]*contract.TaskState{}, nil)
 	if err != nil {
 		t.Fatalf("RunWorkflowSetup: %v", err)
 	}
@@ -285,7 +285,7 @@ func TestShippedSlackThreadProvider_SetupToleratesJSONSpecialCharactersInWorkspa
 				WorkspaceDirsRoot: workspaceDirsRoot,
 			}
 
-			outputs, err := task.RunWorkflowSetup(prov, vars, map[string]*contract.TaskState{}, nil)
+			outputs, _, err := task.RunWorkflowSetup(prov, vars, map[string]*contract.TaskState{}, nil)
 			if err != nil {
 				t.Fatalf("RunWorkflowSetup: %v", err)
 			}

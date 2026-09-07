@@ -317,6 +317,88 @@ func TestRunSetup_DependentCleanupFailureStopsTheWalk(t *testing.T) {
 	}
 }
 
+// InvalidateProviderBoundNodes is the invalidation pass a workspace provider
+// repair runs before the ordinary node liveness walk: a produced node that
+// binds a rebuilt provider fact has no probe of its own that would catch a
+// stale value, so this walk has to find it by input wiring alone.
+func TestInvalidateProviderBoundNodes_CleansBoundNodeAndItsDependent(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	tmpDir := t.TempDir()
+	aCleaned := tmpDir + "/a-cleaned"
+	bCleaned := tmpDir + "/b-cleaned"
+	plan := buildPlan(t,
+		[]taskStub{
+			{id: "a", scope: "run", setup: `echo '{}'`, cleanup: "touch " + aCleaned},
+			{id: "b", scope: "run", setup: `echo '{}'`, cleanup: "touch " + bCleaned},
+		},
+		[]nodeStub{
+			{id: "a", inputs: map[string]*lang.Value{"wd": fromValue("workflow.outputs.workspace_dir")}},
+			{id: "b", inputs: map[string]*lang.Value{"a_dep": fromValue("nodes.a.outputs.value")}},
+		},
+	)
+	tasks := map[string]*contract.TaskState{
+		"a": {Scope: "run", Status: contract.TaskStatusProduced, Outputs: map[string]any{"value": "x"}},
+		"b": {Scope: "run", Status: contract.TaskStatusProduced, Outputs: map[string]any{}},
+	}
+	if err := InvalidateProviderBoundNodes(context.Background(), plan.Run, SessionVars{}, tasks, nil); err != nil {
+		t.Fatalf("InvalidateProviderBoundNodes: %v", err)
+	}
+	if _, statErr := exec.Command("bash", "-c", "test -f "+aCleaned).CombinedOutput(); statErr != nil {
+		t.Fatal("a, whose inputs bind workflow.outputs.workspace_dir, must be cleaned")
+	}
+	if _, statErr := exec.Command("bash", "-c", "test -f "+bCleaned).CombinedOutput(); statErr != nil {
+		t.Fatal("b, a's dependent, must be cleaned even though it never itself reads a provider output")
+	}
+	if tasks["a"].Status != contract.TaskStatusCleaned || tasks["b"].Status != contract.TaskStatusCleaned {
+		t.Fatalf("a = %q, b = %q, want both cleaned", tasks["a"].Status, tasks["b"].Status)
+	}
+}
+
+// A workspace-derived workspace.* binding is the other provider-derived
+// fact the ADR names; a node reading it must be caught the same way a
+// workflow.outputs.* reader is.
+func TestInvalidateProviderBoundNodes_CatchesWorkspaceRoot(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	tmpDir := t.TempDir()
+	cleaned := tmpDir + "/cleaned"
+	plan := buildPlan(t,
+		[]taskStub{{id: "a", scope: "run", setup: `echo '{}'`, cleanup: "touch " + cleaned}},
+		[]nodeStub{{id: "a", inputs: map[string]*lang.Value{"dir": fromValue("workspace.dir")}}},
+	)
+	tasks := map[string]*contract.TaskState{
+		"a": {Scope: "run", Status: contract.TaskStatusProduced, Outputs: map[string]any{}},
+	}
+	if err := InvalidateProviderBoundNodes(context.Background(), plan.Run, SessionVars{}, tasks, nil); err != nil {
+		t.Fatalf("InvalidateProviderBoundNodes: %v", err)
+	}
+	if _, statErr := exec.Command("bash", "-c", "test -f "+cleaned).CombinedOutput(); statErr != nil {
+		t.Fatal("a, whose inputs bind workspace.dir, must be cleaned")
+	}
+}
+
+// A node with no provider-derived binding at all must be left untouched:
+// invalidation is targeted at what actually consumed the rebuilt facts, not
+// a blanket rebuild of the whole plan.
+func TestInvalidateProviderBoundNodes_UnrelatedNodeUntouched(t *testing.T) {
+	plan := buildPlan(t,
+		[]taskStub{{id: "c", scope: "run", setup: `echo '{}'`, cleanup: "true"}},
+		[]nodeStub{{id: "c", inputs: map[string]*lang.Value{"x": fromValue("session.name")}}},
+	)
+	tasks := map[string]*contract.TaskState{
+		"c": {Scope: "run", Status: contract.TaskStatusProduced, Outputs: map[string]any{}},
+	}
+	if err := InvalidateProviderBoundNodes(context.Background(), plan.Run, SessionVars{}, tasks, nil); err != nil {
+		t.Fatal(err)
+	}
+	if tasks["c"].Status != contract.TaskStatusProduced {
+		t.Fatalf("c.Status = %q, want left untouched (produced)", tasks["c"].Status)
+	}
+}
+
 func TestRunSetup_RebuiltNodeSetupFailure(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")

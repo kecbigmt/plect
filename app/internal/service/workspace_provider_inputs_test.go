@@ -151,7 +151,7 @@ uses = "noop"
 	// The hook is actually run, not just rendered: it echoes the parameter
 	// back as its `workspace_dir` output, so the assertion below fails unless
 	// the value survived every step from the workflow file to the script.
-	outputs, err := task.RunWorkflowSetup(prov, effect.WorkflowHookVars{
+	outputs, _, err := task.RunWorkflowSetup(prov, effect.WorkflowHookVars{
 		ResourceID:  "demo:1",
 		SessionName: "demo-1",
 		Inputs:      inputs,

@@ -66,3 +66,50 @@ func TestProviderHook_SetupObservesNoSelfOutputs(t *testing.T) {
 		t.Fatal("expected setup to observe no self.outputs root")
 	}
 }
+
+func resolveAliveValue(t *testing.T, vars WorkflowHookVars, self map[string]any, value *lang.Value) (string, error) {
+	t.Helper()
+	eval := ProviderEval(AliveRoots(vars, self), nil, "", lang.Ownership{})
+	resolved, absent, err := eval.Argument(value)
+	if absent {
+		return "", nil
+	}
+	return resolved, err
+}
+
+// The alive probe observes its own recorded outputs, its resolved inputs,
+// the session name, and the configured workspace-dirs root — the same
+// roots cleanup does, minus force and cleanup.inputs.
+func TestAliveRoots_ExposesRecordedOutputsAndProviderContext(t *testing.T) {
+	vars := WorkflowHookVars{
+		SessionName:       "test-session",
+		WorkspaceDirsRoot: "/roots/workspace_dirs",
+		Inputs:            map[string]any{"flavour": "review"},
+	}
+	self := map[string]any{"workspace_dir": "/tmp/wd"}
+	for path, want := range map[string]string{
+		"self.outputs.workspace_dir": "/tmp/wd",
+		"inputs.flavour":             "review",
+		"session.name":               "test-session",
+		"config.workspace_dirs_root": "/roots/workspace_dirs",
+	} {
+		got, err := resolveAliveValue(t, vars, self, &lang.Value{Form: lang.FormFrom, From: path})
+		if err != nil {
+			t.Fatalf("resolve %q: %v", path, err)
+		}
+		if got != want {
+			t.Errorf("%s = %q, want %q", path, got, want)
+		}
+	}
+}
+
+// force and cleanup.inputs.* belong to an explicit teardown, not a liveness
+// check: the alive probe must observe neither.
+func TestAliveRoots_ExcludesForceAndCleanupInputs(t *testing.T) {
+	vars := WorkflowHookVars{SessionName: "test-session", Force: true, CleanupInputs: map[string]string{"delete_branch": "true"}}
+	for _, path := range []string{"force", "cleanup.inputs.delete_branch"} {
+		if _, err := resolveAliveValue(t, vars, nil, &lang.Value{Form: lang.FormFrom, From: path}); err == nil {
+			t.Errorf("expected %q to be unresolvable on the alive surface", path)
+		}
+	}
+}
