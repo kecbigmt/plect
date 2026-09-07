@@ -119,10 +119,12 @@ cannot override either directory per node or action. Cleanup uses the directory
 its setup used; a vanished directory is a cleanup failure, not an invitation to
 run elsewhere. A probe launch failure caused by that directory invalidates the
 node, then cleanup attempts the stored directory and records its failure if it
-cannot launch there either. The failed record and allocation remain durable;
-an explicit later `up` may reconstruct the invalidated node and its
-prerequisites from the latest desired workflow. `--force-recreate` is reserved
-for rebuilding a node that has not been invalidated.
+cannot launch there either. The failed record, allocation, and cleanup
+obligation remain durable. A later `up` may retry that recorded cleanup, but
+cannot set up the invalidated node or its prerequisites until successful
+recorded cleanup confirms release of the old allocation.
+`--force-recreate` does not waive that condition. A missing directory does not
+prove that a process or external allocation is gone.
 
 ## Outputs are production records
 

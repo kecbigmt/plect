@@ -79,11 +79,13 @@ vanished, cleanup records a failure and does not run in any fallback directory.
 This preserves cleanup actions' directory boundary. Down, repeated up, and
 destroy use the same rule. A liveness probe whose launch needs that vanished
 directory fails to launch, invalidates the node, and attempts cleanup in the
-stored setup directory. If that cleanup also fails, the failed execution record
-and its allocation remain durable. A later explicit `up` may reconstruct the
-invalidated node and its prerequisites using the latest desired workflow;
-`--force-recreate` is for a caller who needs to rebuild a record that has not
-been invalidated. No recovery action runs cleanup in a substitute directory.
+stored setup directory. If that cleanup also fails, its record, allocation, and
+cleanup obligation remain durable. A later explicit `up` may retry that stored
+cleanup, but cannot set up the invalidated node or its prerequisites until the
+old allocation's release is confirmed by successful recorded cleanup.
+`--force-recreate` does not waive that condition. A missing directory does not
+prove that a process or external allocation is gone. No recovery action runs
+cleanup in a substitute directory.
 
 `[<id>.outputs]` is the workflow's explicit public projection record;
 `outputs_schema` declares it. Each binding is evaluable from node outputs as
@@ -146,10 +148,18 @@ rebuilds a node on its own.
 
 Each setup attempt has a session-owned execution record, including partial and
 failed attempts. It records the cleanup declaration, setup inputs and outputs,
-setup directory, and resolved plugin version and reference. The local
-session-state store is the trust boundary for those records: it alone protects
-their writes, and records are not signed. Plugin executables and instruction
-sidecars named by an unreleased record remain available until release.
+setup directory, resolved plugin version and reference, and the dependency
+edges and allocation-lifetime information needed to release the existing plan.
+The local session-state store is the trust boundary for those records: it alone
+protects their writes, and records are not signed. Plugin executables and
+instruction sidecars named by an unreleased record remain available until
+release.
+
+Retained execution records are a retained execution plan. Release follows its
+recorded dependency order rather than an order derived from the latest desired
+workflow: an old agent depending on an old checkout is cleaned up before that
+checkout is released. This preserves the lifetime boundaries of allocations
+whose declarations were removed or changed.
 
 The current operation supplies `force` and plugin-owned cleanup inputs; it does
 not replace the record's cleanup declaration. A record that still matches a

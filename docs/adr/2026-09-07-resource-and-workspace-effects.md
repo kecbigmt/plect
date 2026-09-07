@@ -66,11 +66,14 @@ directory it is creating or a daemon's cwd. A workflow without
 `workdir` has no default directory. Cleanup uses the directory selected for
 that node's setup; if it has disappeared, cleanup fails and records that fact.
 A probe launch failure there invalidates the node, attempts cleanup in the
-stored directory, and retains the failed record and allocation if cleanup also
-cannot launch. An explicit later `up` may reconstruct that node and its
-prerequisites from the latest desired workflow; it never falls back to the
-invocation directory or another node's directory. There are no per-node or
-per-action cwd overrides.
+stored directory, and retains the failed record, allocation, and cleanup
+obligation if cleanup also cannot launch. A later explicit `up` may retry that
+stored cleanup, but may not reconstruct the node or its prerequisites until
+successful recorded cleanup confirms release of the old allocation.
+`--force-recreate` does not waive that condition. A missing directory does not
+prove that a process or external allocation is gone. Recovery never falls back
+to the invocation directory or another node's directory. There are no per-node
+or per-action cwd overrides.
 
 `[workflow.outputs]` and `outputs_schema` are the public projection record.
 They bind declared values when their source node outputs exist and are persisted
