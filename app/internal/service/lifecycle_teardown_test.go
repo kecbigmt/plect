@@ -41,11 +41,12 @@ func TestDestroy_ReleasesNodeRemovedFromWorkflow(t *testing.T) {
 	}
 }
 
-// When a node's own task definition can no longer be resolved at all (not
-// just dropped from the current workflow's node list), Destroy must report
-// it and leave its record unreleased rather than silently discarding it --
-// unlike the definition-still-resolvable case above, releasing everything
-// else it can.
+// Without --force, a node whose own task definition can no longer be
+// resolved at all (not just dropped from the current workflow's node list)
+// leaves Destroy reporting it and its record unreleased -- releasing
+// everything else it can, unlike the definition-still-resolvable case
+// above. --force is the operator's explicit discard and is not covered
+// here (see TestDestroy_ForceContinuesOnCleanupError).
 func TestDestroy_ReportsAndLeavesUnreleasedANodeWithNoResolvableDefinition(t *testing.T) {
 	cfg := writeWorkflowFixture(t, t.TempDir(), "coding",
 		[]taskFixture{{id: "kept", scope: "run", setup: `echo '{}'`, cleanup: "true"}},

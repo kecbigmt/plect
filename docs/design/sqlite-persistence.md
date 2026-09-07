@@ -62,24 +62,14 @@ provider schema, and the database stores it opaquely, enforcing only
 well-formedness (`CHECK (col IS NULL OR json_valid(col))`, or `CHECK
 (json_valid(col))` for a `NOT NULL` one like `events.metadata_json`), never
 its internal structure. Core-owned structure is never stored as JSON — it
-gets relational columns or a child table instead. Two narrow exceptions
-exist, each for the same reason: the shape is rare enough, and never
-relationally queried, that splitting it into columns/child tables would add
-relational structure with no query that uses it.
+gets relational columns or a child table instead. One narrow exception
+exists: `node_executions.done_when_json`, a static workflow node's
+`done_when`, is core-owned shape, but declaring one is rare (no shipped
+workflow node relies on it) and never relationally queried, so it is never
+split into the `task_done_when_states`/`task_done_when_judges` shape
+`task_instances` gets.
 
-- `node_executions.done_when_json`: a static workflow node's `done_when` is
-  core-owned shape, but declaring one is rare (no shipped workflow node
-  relies on it), so it is never split into the
-  `task_done_when_states`/`task_done_when_judges` shape `task_instances`
-  gets.
-- `node_executions.cleanup_json` and `node_execution_layers.cleanup_json`:
-  the retained cleanup contract (see "Node execution identity" below) is a
-  snapshot of a `lang.Action` plus its ownership/joint facts — core-owned
-  Go structs (`task.RetainedCleanup`, `effect.RetainedLayerCleanup`), not a
-  provider schema — but it exists purely to be replayed at release time,
-  never queried by column.
-
-These are one-off carve-outs for that reason alone, not a general license
+This is a one-off carve-out for that reason alone, not a general license
 for core-owned structure to hide in a `_json` column. The table below
 classifies every `_json` column by its owning declaration:
 
@@ -91,7 +81,6 @@ classifies every `_json` column by its owning declaration:
 | `node_executions`/`task_instances`.`resource_observation_json` | the resource observer's `state_schema` |
 | `node_executions`/`task_instances`.`extra_done_when_json` | the config-language `done_when` schema (a `--done-when-json` instance override; see `service.judge.go`'s `effectiveDoneWhen`) |
 | `node_executions.done_when_json` | core-owned shape, embedded as a narrow, documented exception (see above) rather than declaration-owned |
-| `node_executions.cleanup_json`, `node_execution_layers.cleanup_json` | core-owned shape (`task.RetainedCleanup`/`effect.RetainedLayerCleanup`), embedded as a narrow, documented exception (see above) rather than declaration-owned |
 | `node_execution_layers`/`task_instance_layers`.`inputs_json`, `.locals_json`, `.outputs_json` | the nesting layer's own effect declaration |
 | `node_execution_layers`/`task_instance_layers`.`env_json` | the workflow/effect's declared process environment for that layer |
 | `population_members.item_json` | the workspace provider's own resource-item map |
