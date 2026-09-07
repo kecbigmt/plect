@@ -51,13 +51,11 @@ func (db *DB) GetSession(ctx context.Context, name string) (*domain.Session, err
 	return s, nil
 }
 
-// AllSessions returns every live session, keyed by name (see GetSession). It
-// loads every session's extras (parent, children, channel health, tasks) in
-// one batch of queries covering the whole result set, rather than one round
-// of loadSessionExtras' own queries per row: at this call's actual scale
-// (every non-destroyed session, not just the handful currently up) a
-// per-row loop turns into several thousand SQL round trips per call, which
-// is the N+1 this method exists to not have.
+// AllSessions returns every live session, keyed by name (see GetSession).
+// It batches loadSessionExtras' sub-loads across the whole result set
+// instead of running them per row, since at this call's scale (every
+// non-destroyed session, not just the handful actually up) a per-row loop
+// is exactly the N+1 this method exists not to have.
 func (db *DB) AllSessions(ctx context.Context) (map[string]*domain.Session, error) {
 	result := make(map[string]*domain.Session)
 	err := db.WithReadTx(ctx, func(tx *sql.Tx) error {
@@ -641,10 +639,9 @@ func (db *DB) loadSessionExtras(ctx context.Context, q sqlcgen.DBTX, s *domain.S
 	return nil
 }
 
-// loadSessionExtrasBatch is loadSessionExtras generalized over many sessions
-// at once: each of its four sub-loads (parent, children, channel health,
-// tasks) runs once for the whole slice, batched by session id, instead of
-// once per session. See AllSessions' doc comment for why this matters.
+// loadSessionExtrasBatch is loadSessionExtras generalized over many
+// sessions at once: each sub-load runs once for the whole slice, batched
+// by session id, instead of once per session (see AllSessions' comment).
 func (db *DB) loadSessionExtrasBatch(ctx context.Context, q sqlcgen.DBTX, sessions []*domain.Session) error {
 	if len(sessions) == 0 {
 		return nil
