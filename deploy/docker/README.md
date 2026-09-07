@@ -49,6 +49,26 @@ docker build -f deploy/docker/Dockerfile \
 build from a fork or a private mirror overrides it as a second
 `--build-arg`.)
 
+Pass `PLECT_VERSION` (e.g. `0.2.0`) to stamp the built `plect` binary as a
+release build, the same `-ldflags -X
+github.com/kecbigmt/plecture/app/internal/version.Current=<version>` that
+`.github/workflows/release.yml` stamps into the released archives:
+
+```bash
+docker build -f deploy/docker/Dockerfile \
+  --build-arg PLECT_SOURCE_SHA="$(git rev-parse HEAD)" \
+  --build-arg PLECT_VERSION=0.2.0 \
+  -t plecture-base:<tag> .
+```
+
+Left unset (the default), the image keeps `Current`'s `"0.0.0-dev"`
+placeholder, so `version.IsDevelopmentBuild()` stays true and the
+migration access gate (`docs/design/sqlite-persistence.md`'s "Migration
+access gate") refuses to forward-migrate `storage.db` against an existing
+schema — the right default for an image built from a non-release
+`PLECT_SOURCE_SHA`. Only set `PLECT_VERSION` when `PLECT_SOURCE_SHA` names
+an actual release tag's commit.
+
 That SHA is stamped into the built image (the `org.opencontainers.image.revision`
 label, and a plain `/etc/plecture-source-revision` file readable from inside
 the running container) — a way to confirm, after the fact, exactly which
@@ -100,7 +120,7 @@ container restart; everything else is recreated on boot.
 |---|---|---|
 | `PLECT_CONFIG_HOME` | `/etc/plect` | Baked into the image, not the volume — a config change is an image rebuild (see "Extending this image"). |
 | `HOME` | `/var/lib/plect/home` | Yes — agent CLI login/session history (`~/.claude`, `~/.codex`), any plugin cache under `~/.cache`. |
-| `XDG_DATA_HOME` | `/var/lib/plect/data` | Yes — `plect` durable state (`state.json`, event logs) and plugin durable data (e.g. `github-watcher`'s subscription registry). |
+| `XDG_DATA_HOME` | `/var/lib/plect/data` | Yes — `plect` durable state (`storage.db`) and plugin durable data (e.g. `github-watcher`'s subscription registry). |
 | `XDG_STATE_HOME` | `/var/lib/plect/state` | Yes — plugin runtime state (e.g. agent activity-probe records). |
 | `XDG_RUNTIME_DIR` | `/run/plect` | **No** — UDS paths (the bus socket). Recreated fresh every boot by `entrypoint.sh`; a stale socket path from a previous boot must never be reused. |
 | `PLECT_BUS_SOCKET` | `/run/plect/bus.sock` | No (under `XDG_RUNTIME_DIR`). |
@@ -167,11 +187,15 @@ criterion; this PR does not add one):
 ```bash
 docker build -f deploy/docker/Dockerfile \
   --build-arg PLECT_SOURCE_SHA="$(git rev-parse HEAD)" \
+  --build-arg PLECT_VERSION=<tag without the leading v, e.g. 0.2.0> \
   -t <registry>/<repo>:<tag> .
 docker push <registry>/<repo>:<tag>
 # then: update the ECS service/task definition to the new tag (Terraform,
 # in the team's own deployment repository — out of scope here).
 ```
+
+`PLECT_VERSION` only makes sense when `PLECT_SOURCE_SHA` names a released
+tag's commit — see "Build" above.
 
 ## Extending this image
 

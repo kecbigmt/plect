@@ -37,8 +37,20 @@ RUN git init -q /src \
 FROM golang:1.25.6-bookworm@sha256:f4490d7b261d73af4543c46ac6597d7d101b6e1755bcdd8c5159fda7046b6b3e AS builder
 
 COPY --from=source /src /opt/plect-repo
+# Left empty (the default), the build stays a development build: Current
+# keeps its "0.0.0-dev" placeholder, and the migration access gate
+# (docs/design/sqlite-persistence.md) refuses to forward-migrate a
+# storage.db it did not create — on purpose, for any image not built from
+# a release-pinned PLECT_SOURCE_SHA. A packager building a release image
+# sets PLECT_VERSION to the tag, matching what .github/workflows/release.yml
+# stamps into its own archives.
+ARG PLECT_VERSION
 RUN mkdir -p /out/bin \
-  && go -C /opt/plect-repo/app build -o /out/bin/plect ./cmd/plect
+  && flags="" \
+  && if [ -n "${PLECT_VERSION}" ]; then \
+       flags="-X github.com/kecbigmt/plecture/app/internal/version.Current=${PLECT_VERSION}"; \
+     fi \
+  && go -C /opt/plect-repo/app build -ldflags "${flags}" -o /out/bin/plect ./cmd/plect
 
 # `plect init` registers /opt/plect-repo (app/ and contracts/ ride along as
 # plugins/'s siblings because some in-repo plugin executables' go.mod
