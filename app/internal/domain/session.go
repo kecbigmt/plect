@@ -86,10 +86,8 @@ func SessionBranch(s *Session) string {
 	return branch
 }
 
-// MergedTasks combines s.Nodes and s.Tasks into the single map the pre-split
-// Session.Tasks was, for a caller that means the whole session regardless of
-// origin. It is a fresh shallow copy, so a caller must not rely on writing
-// into it to reach s.Nodes/s.Tasks.
+// MergedTasks combines s.Nodes and s.Tasks into one map (a fresh shallow
+// copy — writing into it does not reach s.Nodes/s.Tasks).
 func MergedTasks(s *Session) map[string]*contract.TaskState {
 	if s == nil {
 		return nil
@@ -104,11 +102,8 @@ func MergedTasks(s *Session) map[string]*contract.TaskState {
 	return merged
 }
 
-// TaskState looks up key across s.Nodes and s.Tasks, for a caller that
-// addresses one instance by a key that could structurally be either (e.g. a
-// user-supplied `plect judge`/`plect task finalize` handle). The returned
-// pointer is the same one stored in whichever collection holds it, so
-// mutating through it mutates the session's own record directly.
+// TaskState looks up key across s.Nodes and s.Tasks, returning the same
+// pointer stored in whichever holds it (so mutating it mutates the session).
 func TaskState(s *Session, key string) *contract.TaskState {
 	if s == nil {
 		return nil
