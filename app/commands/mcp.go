@@ -90,8 +90,7 @@ var mcpListenCmd = &cobra.Command{
 // filename. The fallback is the fixed "/tmp", not os.TempDir(): on a host
 // with no $XDG_RUNTIME_DIR (e.g. macOS), os.TempDir() is a long per-process
 // path that, joined with a realistic session name, can push a unix socket
-// path past the sun_path length limit — the same convention the shipped
-// claude runtime effect's own socket path already follows.
+// path past the sun_path length limit.
 func defaultSessionMcpListenSocket(sessionName string) string {
 	rt := os.Getenv("XDG_RUNTIME_DIR")
 	if rt == "" {
