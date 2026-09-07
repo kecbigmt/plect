@@ -10,6 +10,15 @@ export function sessionListQueryKey() {
   return ["sessions"] as const;
 }
 
+// Only useLiveEvents (useEvents.ts) marks either query stale; an implicit
+// staleTime/focus/reconnect refetch would repeat the request on a schedule
+// unrelated to whether anything actually changed.
+const NO_IMPLICIT_REFETCH = {
+  staleTime: Infinity,
+  refetchOnWindowFocus: false,
+  refetchOnReconnect: false,
+} as const;
+
 export function useSessionList() {
   return useQuery({
     queryKey: sessionListQueryKey(),
@@ -18,6 +27,7 @@ export function useSessionList() {
     // findBy* timeout before isError ever turns true; matches
     // useBootstrap's own reasoning for disabling it.
     retry: false,
+    ...NO_IMPLICIT_REFETCH,
   });
 }
 
@@ -35,5 +45,6 @@ export function useSessionDetail(sessionName: string | null) {
     // (matching useSessionList/useBootstrap) automatic retry+backoff would
     // only delay a genuine failure surfacing to the user.
     retry: false,
+    ...NO_IMPLICIT_REFETCH,
   });
 }

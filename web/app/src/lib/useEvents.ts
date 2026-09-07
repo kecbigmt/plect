@@ -1,9 +1,40 @@
-import { useEffect, useState } from "react";
-import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
+import { useInfiniteQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 
 import { fetchEventPage, type SessionEvent, type SessionEventPage } from "@/lib/eventsApi";
 import { openEventStream, type EventStreamState } from "@/lib/eventStream";
+import type { SessionDetail } from "@/lib/sessionsApi";
 import { sessionDetailQueryKey, sessionListQueryKey } from "@/lib/useSessions";
+
+// Run/health are server-probed and only a lifecycle.* event means either changed.
+const LIFECYCLE_EVENT_PREFIX = "lifecycle.";
+
+export function isLifecycleEvent(type: string): boolean {
+  return type.startsWith(LIFECYCLE_EVENT_PREFIX);
+}
+
+// Fires every few seconds per active session, so it's applied from the
+// event's own payload below rather than refetched.
+const STATUS_MESSAGE_EVENT_TYPE = "plect.status_message";
+
+function applyStatusMessagePatch(queryClient: QueryClient, sessionName: string, event: SessionEvent): void {
+  queryClient.setQueryData(sessionDetailQueryKey(sessionName), (prev: SessionDetail | undefined) => {
+    if (!prev) {
+      return prev;
+    }
+    const cleared = event.metadata?.cleared === "true";
+    if (cleared) {
+      return { ...prev, message: undefined };
+    }
+    return {
+      ...prev,
+      message: { text: event.metadata?.text ?? event.summary, updatedAt: event.time },
+    };
+  });
+}
+
+// Debounces a burst of lifecycle events into one refetch.
+const INVALIDATE_COALESCE_MS = 300;
 
 export function sessionEventsQueryKey(sessionName: string) {
   return ["events", sessionName] as const;
@@ -59,6 +90,7 @@ export function useLiveEvents(sessionName: string | null, historyReady: boolean,
   const queryClient = useQueryClient();
   const [liveEvents, setLiveEvents] = useState<SessionEvent[]>([]);
   const [state, setState] = useState<EventStreamState>("connecting");
+  const invalidateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (sessionName === null || !historyReady) {
@@ -71,15 +103,32 @@ export function useLiveEvents(sessionName: string | null, historyReady: boolean,
       {
         onEvent: (event) => {
           setLiveEvents((prev) => (prev.some((e) => e.id === event.id) ? prev : [...prev, event]));
-          // Direct derivation would be incomplete: not every state change emits an event.
-          queryClient.invalidateQueries({ queryKey: sessionDetailQueryKey(sessionName) });
-          queryClient.invalidateQueries({ queryKey: sessionListQueryKey() });
+          if (event.type === STATUS_MESSAGE_EVENT_TYPE) {
+            applyStatusMessagePatch(queryClient, sessionName, event);
+            return;
+          }
+          if (!isLifecycleEvent(event.type)) {
+            return;
+          }
+          if (invalidateTimerRef.current !== null) {
+            clearTimeout(invalidateTimerRef.current);
+          }
+          invalidateTimerRef.current = setTimeout(() => {
+            invalidateTimerRef.current = null;
+            queryClient.invalidateQueries({ queryKey: sessionDetailQueryKey(sessionName) });
+            queryClient.invalidateQueries({ queryKey: sessionListQueryKey() });
+          }, INVALIDATE_COALESCE_MS);
         },
         onStateChange: setState,
       },
       controller.signal,
     );
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      if (invalidateTimerRef.current !== null) {
+        clearTimeout(invalidateTimerRef.current);
+      }
+    };
   }, [sessionName, historyReady, resumeCursor, queryClient]);
 
   return { liveEvents, state };

@@ -240,6 +240,24 @@ cursor semantics; unavailable replay triggers refetching. A stream does not
 guarantee notification of every state change. Disconnected, stale, unavailable,
 and empty are distinguishable states.
 
+The session list and a session's detail are each fetched once per page load
+and otherwise held indefinitely: neither has an implicit staleness window, and
+neither refetches on window refocus or network reconnect. Only the selected
+session's own live stream can mark either stale, and only for a lifecycle
+event (`lifecycle.*`: created, up, down, destroyed, task setup, task
+cleanup) — the one signal for a run/health change, itself a server-probed
+fact the event payload never carries, so learning the new value needs a real
+refetch; a burst of several lifecycle events from one operation coalesces
+into a single refetch rather than one per event. A self-reported
+status-message event carries its own new value inline and instead patches
+the cached detail directly, with no request at all — necessary since it can
+fire every few seconds per session and a resume backlog can replay dozens at
+once. Ordinary conversational events (`user.emit`, `plect.instruction`, and
+every other type) never touch either query; the timeline already renders them
+from the event itself. The shell, header, and last-known tree render before
+the list request resolves; the list shows its own loading state instead of
+blocking the rest of the page.
+
 The HTTP API has a version and explicit compatibility checks for independently
 updated clients and servers. This does not require speculative compatibility
 shims. Paths, DTOs, errors, and recovery behavior are specified before their
