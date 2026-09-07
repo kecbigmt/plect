@@ -17,13 +17,15 @@ export function isLifecycleEvent(type: string): boolean {
 // event's own payload below rather than refetched.
 const STATUS_MESSAGE_EVENT_TYPE = "plect.status_message";
 
-// No-op with no cached detail to patch: an unresolved fetch already reflects
-// any status message that preceded it (docs/design/web-ui.md).
-function applyStatusMessagePatch(queryClient: QueryClient, sessionName: string, event: SessionEvent): void {
+// Returns whether a cached detail existed to patch; the caller invalidates
+// instead otherwise (docs/design/web-ui.md).
+function applyStatusMessagePatch(queryClient: QueryClient, sessionName: string, event: SessionEvent): boolean {
+  let patched = false;
   queryClient.setQueryData(sessionDetailQueryKey(sessionName), (prev: SessionDetail | undefined) => {
     if (!prev) {
       return prev;
     }
+    patched = true;
     const cleared = event.metadata?.cleared === "true";
     if (cleared) {
       return { ...prev, message: undefined };
@@ -33,6 +35,7 @@ function applyStatusMessagePatch(queryClient: QueryClient, sessionName: string, 
       message: { text: event.metadata?.text ?? event.summary, updatedAt: event.time },
     };
   });
+  return patched;
 }
 
 // Debounces a burst of lifecycle events into one refetch; never cleared by
@@ -94,6 +97,9 @@ export function useLiveEvents(sessionName: string | null, historyReady: boolean,
   const [liveEvents, setLiveEvents] = useState<SessionEvent[]>([]);
   const [state, setState] = useState<EventStreamState>("connecting");
   const invalidateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // OR'd across whatever coalesces into the pending invalidation, so a
+  // status-only trigger can't drop a lifecycle trigger's list invalidation.
+  const invalidateListTooRef = useRef(false);
 
   useEffect(() => {
     if (sessionName === null || !historyReady) {
@@ -102,14 +108,18 @@ export function useLiveEvents(sessionName: string | null, historyReady: boolean,
     const session = sessionName;
     const controller = new AbortController();
 
-    function scheduleInvalidate() {
+    function scheduleInvalidate(includeList: boolean) {
+      invalidateListTooRef.current = invalidateListTooRef.current || includeList;
       if (invalidateTimerRef.current !== null) {
         clearTimeout(invalidateTimerRef.current);
       }
       invalidateTimerRef.current = setTimeout(() => {
         invalidateTimerRef.current = null;
         queryClient.invalidateQueries({ queryKey: sessionDetailQueryKey(session) });
-        queryClient.invalidateQueries({ queryKey: sessionListQueryKey() });
+        if (invalidateListTooRef.current) {
+          queryClient.invalidateQueries({ queryKey: sessionListQueryKey() });
+        }
+        invalidateListTooRef.current = false;
       }, INVALIDATE_COALESCE_MS);
     }
 
@@ -120,13 +130,15 @@ export function useLiveEvents(sessionName: string | null, historyReady: boolean,
         onEvent: (event) => {
           setLiveEvents((prev) => (prev.some((e) => e.id === event.id) ? prev : [...prev, event]));
           if (event.type === STATUS_MESSAGE_EVENT_TYPE) {
-            applyStatusMessagePatch(queryClient, session, event);
+            if (!applyStatusMessagePatch(queryClient, session, event)) {
+              scheduleInvalidate(false);
+            }
             return;
           }
           if (!isLifecycleEvent(event.type)) {
             return;
           }
-          scheduleInvalidate();
+          scheduleInvalidate(true);
         },
         onStateChange: setState,
       },

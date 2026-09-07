@@ -252,14 +252,14 @@ operation into a single refetch, and the pending refetch runs to completion
 on its own schedule rather than being cancelled by a session switch or
 unmount, so quickly navigating through several sessions cannot force it
 early. A self-reported status-message event carries its own new value
-inline and instead patches the cached detail directly, with no request at
-all — necessary since it can fire every few seconds per session and a
-resume backlog can replay dozens at once. One that arrives before the
-detail has ever been cached is dropped: an unresolved fetch returns the
-server's current state, which already reflects any status message that
-preceded it, and a message landing during that window is corrected by the
-next status event, the next lifecycle refetch, or the periodic refresh
-below.
+inline and, when the detail is already cached, patches it directly with no
+request at all — necessary since it can fire every few seconds per session
+and a resume backlog can replay dozens at once. One that arrives before the
+detail has ever been cached instead schedules the same coalesced refetch
+(detail only, never the list): the status snapshots the session before its
+slower work, so a fetch already in flight can resolve without this fact,
+and only a fresh fetch started after the event can be relied on to reflect
+it.
 
 The selected session's own stream cannot observe another session's facts, so
 an unselected or newly created session's lifecycle/status change does not

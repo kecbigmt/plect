@@ -8,7 +8,7 @@ vi.mock("@/lib/eventStream", () => ({ openEventStream: vi.fn() }));
 import { openEventStream } from "@/lib/eventStream";
 import type { SessionEvent } from "@/lib/eventsApi";
 import { isLifecycleEvent, useLiveEvents } from "@/lib/useEvents";
-import { sessionDetailQueryKey, sessionListQueryKey, useSessionList } from "@/lib/useSessions";
+import { sessionDetailQueryKey, sessionListQueryKey, useSessionDetail, useSessionList } from "@/lib/useSessions";
 
 function makeWrapper() {
   const queryClient = new QueryClient();
@@ -145,18 +145,48 @@ describe("useLiveEvents", () => {
     });
   });
 
-  it("issues no request and mutates nothing for a status-message event with no cached detail", () => {
-    const { queryClient, wrapper } = makeWrapper();
+  it("schedules exactly one coalesced detail refetch, no list refetch, for a status-message event with no cached detail", async () => {
+    const queryClient = new QueryClient();
+    function wrapper({ children }: { children: ReactNode }) {
+      return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+    }
     const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
-    renderHook(() => useLiveEvents("team/a", true, ""), { wrapper });
-
-    const handlers = vi.mocked(openEventStream).mock.calls[0][2];
-    handlers.onEvent(
-      stubEvent({ type: "plect.status_message", metadata: { text: "hi", cleared: "false", previous: "" } }),
+    vi.stubGlobal("fetch", vi.fn());
+    vi.mocked(fetch).mockImplementation(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            sessionName: "team/a",
+            run: "up",
+            resourceId: "",
+            createdAt: "2026-01-01T00:00:00Z",
+            workspaceDirExists: false,
+          }),
+          { status: 200 },
+        ),
+      ),
     );
 
-    expect(invalidateSpy).not.toHaveBeenCalled();
-    expect(queryClient.getQueryData(sessionDetailQueryKey("team/a"))).toBeUndefined();
+    try {
+      const detail = renderHook(() => useSessionDetail("team/a"), { wrapper });
+      renderHook(() => useLiveEvents("team/a", true, ""), { wrapper });
+
+      const handlers = vi.mocked(openEventStream).mock.calls[0][2];
+      handlers.onEvent(
+        stubEvent({ type: "plect.status_message", metadata: { text: "hi", cleared: "false", previous: "" } }),
+      );
+
+      await waitFor(() => expect(detail.result.current.isSuccess).toBe(true));
+      const fetchesSoFar = vi.mocked(fetch).mock.calls.length;
+
+      await waitFor(() => expect(vi.mocked(fetch).mock.calls.length).toBeGreaterThan(fetchesSoFar));
+
+      expect(fetch).toHaveBeenCalledTimes(fetchesSoFar + 1);
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: sessionDetailQueryKey("team/a") });
+      expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: sessionListQueryKey() });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   // A resume backlog or an actively narrating session can replay/emit many
@@ -213,10 +243,8 @@ describe("useLiveEvents", () => {
       expect(invalidateSpy).not.toHaveBeenCalled();
 
       unmount();
-      // Unmounting must not cancel it outright...
       expect(invalidateSpy).not.toHaveBeenCalled();
 
-      // ...it still fires on its own original schedule.
       vi.runAllTimers();
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: sessionDetailQueryKey("team/a") });
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: sessionListQueryKey() });
