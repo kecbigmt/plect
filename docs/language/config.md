@@ -15,15 +15,14 @@ sweep reads every other `.toml` file as a definition document.
 
 ## config.toml
 
-<!-- fixture: config/config.toml -->
 ```toml
-schema_version = 2
+schema_version = 3
 
-workspace_dirs_root = "~/worktrees"
 max_up_children     = 12
 resource_allowlist  = ["^https://github\\.com/kecbigmt/"]
 plugin_dirs         = ["~/.config/plect/plugins"]
 channels            = ["notify"]
+trusted_project_roots = ["/projects/widgets"]
 
 [inputs_schema]
 type                 = "object"
@@ -36,15 +35,40 @@ task = { type = "string" }
 | Field | Meaning |
 |---|---|
 | `schema_version` | The dialect this config tree is written in. |
-| `workspace_dirs_root` | Where workspace directories are created. |
 | `max_up_children` | Optional positive cap for sessions whose logical parent is the virtual root. |
 | `resource_allowlist` | Patterns a resource identifier must match to be accepted. |
 | `plugin_dirs` | Additional plugin mount directories, after the catalog-resolved ones. |
 | `channels` | Channel definitions delivering for every session. |
+| `trusted_project_roots` | Canonical project roots permitted to contribute a project layer. |
 | `inputs_schema` | Contract for the session inputs this machine accepts. |
 
-`workspace_dirs_root` is the value a workspace provider projects as
-`config.workspace_dirs_root`.
+`config.toml` has no workspace-directory setting. The invocation's nearest
+ancestor containing `.plect/project.toml` is its project root. When its
+canonical path is in `trusted_project_roots`, that root's `.plect/` definition
+tree composes after plugins and the machine-owned global layer. No other
+ancestor is read, and a generated checkout is never a configuration source.
+
+An interactive invocation encountering an unlisted root displays its canonical
+path, explains that project definitions can execute commands, and asks whether
+to trust it. Yes writes the canonical root to `trusted_project_roots` and
+continues that invocation; no stops it. A non-interactive invocation stops
+with instructions to add that canonical root to `trusted_project_roots`.
+Chains and populations cannot grant trust, and a trust failure never selects a
+global workflow. Trust is a root property, not a digest property; removing a
+root revokes use of its project definitions for future desired operations.
+
+A session records its selected project root, participating layer revisions,
+and effective digest at creation. Later operations use that root rather than
+their caller's cwd, but load the latest valid definitions at the recorded root.
+They compare and report a changed digest; a digest mismatch neither fails an
+operation nor destroys or rebuilds nodes. The current workflow is the desired
+state used for reconciliation. Nodes already set up retain execution records
+used for their cleanup. If a desired revision requires a node to be rebuilt,
+the diagnostic directs the caller to `--force-recreate`. If the recorded root
+cannot be read, desired operations fail with an actionable error and do not
+select another root; record-based cleanup and release remain available. Chains
+inherit their triggering session's root. A resident population inherits the
+root captured when the resident started, not its process cwd.
 
 `max_up_children` applies one machine-wide capacity key to every session with
 no real parent, including sessions placed in an explicit `root:*` sibling
@@ -97,9 +121,8 @@ something to name.
 An alias is user-local: it is what makes a catalog-qualified reference
 resolvable on this machine, and it is why a plugin author can never write one.
 
-<!-- fixture: config/catalogs.toml -->
 ```toml
-schema_version = 2
+schema_version = 3
 
 [[catalogs]]
 alias   = "official"
@@ -132,6 +155,7 @@ edit.
   the direction the comparison found.
 - A catalog alias matches `^[A-Za-z0-9][A-Za-z0-9_-]*$`.
 - Every `channels` entry resolves to a definition of kind `channel`.
+- Each `trusted_project_roots` entry is an absolute canonical path.
 - `max_up_children`, when declared, is at least one.
 - A missing `catalogs.toml` means no catalogs are registered, which is not an
   error.

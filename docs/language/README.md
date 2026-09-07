@@ -26,8 +26,7 @@ general-purpose expression language of its own.
 | [`effects.md`](effects.md) | The effect kind: lifecycle, health, terminal, and nesting |
 | [`workflows.md`](workflows.md) | The workflow kind: nodes, event channels, display, and the clocks |
 | [`channels.md`](channels.md) | The channel kind and its delivery primitives |
-| [`workspace-providers.md`](workspace-providers.md) | The workspace provider kind |
-| [`resource-observers.md`](resource-observers.md) | The resource observer kind |
+| [`resources.md`](resources.md) | The resource kind: identity, observation, and delivery binding |
 | [`declarations.md`](declarations.md) | Definition blocks, discovery, namespaces, and the reference grammar |
 | [`values.md`](values.md) | The five value forms, the tagged-value vocabulary, and the per-surface roots |
 | [`expressions.md`](expressions.md) | The Plecture CEL profile |
@@ -51,9 +50,9 @@ Four layers carry the language, with deliberately different responsibilities.
 | Executable specification | Exact behavior at valid, invalid, and boundary cases | [`../../testdata/config-language/`](../../testdata/config-language/) |
 | Rationale | Why a language decision was made | [`../adr/`](../adr/) |
 
-The chapters here stay thin. A construct subtle enough to need a long
-paragraph also has conformance fixtures that make its cases executable, and
-every chapter's worked example is one of those fixtures quoted verbatim.
+The chapters here stay thin. Conformance fixtures make boundary cases
+executable; chapters quote a fixture verbatim when an executable example is
+needed to state a rule.
 
 What a definition may structurally be is answered by the implementation, and
 the conformance corpus holds it to naming the exact diagnostic and layer each
@@ -96,7 +95,7 @@ A reference is always `<subject>.<store>.<key>`. The subject says whose facts
 these are — `self`, `inner`, `resource`, `nodes.<id>`, `workflow` — and the
 store says which of that subject's contracts they come from: `outputs`, `state`,
 `inputs`. So an effect reads its own production records as `self.outputs.<key>`, a
-task document its own state as `self.state.<key>`, and the observer it is bound
+task document its own state as `self.state.<key>`, and the resource it is bound
 to as `resource.state.<key>`.
 
 Static resolution — references, kinds, and root existence — is never dropped. Projecting JSON Schema into CEL type information, and checking an
@@ -148,15 +147,15 @@ the CLI's name would claim the language's rules for one of its consumers.
 | `PLECTURE-CFG-TASK-INSTRUCTION-CONTROL-FLOW` | semantic | An instruction body carries a `{{ ... }}` construct other than a dotted-path projection. |
 | `PLECTURE-CFG-FROM-ROOT` | structural / semantic | A value reads a root the containing surface does not offer. It is structural where a surface's roots are a fixed prefix set, as on an effect's `outputs.bind` and a task document's completion leaves, and semantic otherwise. |
 | `PLECTURE-CFG-FROM-PATH` | semantic | A projection names a field the resolved contract does not declare. |
-| `PLECTURE-CFG-RESOURCE-OBSERVER-MISMATCH` | instantiation | An instance's resource does not resolve to the observer its task document declares. |
-| `PLECTURE-CFG-FIRST-OBSERVE-FAILED` | instantiation | The observation instantiation performs failed, so no instance is created; the observer's own error is reported. |
+| `PLECTURE-CFG-RESOURCE-OBSERVER-MISMATCH` | instantiation | An instance's resource does not resolve to the resource its task document declares. |
+| `PLECTURE-CFG-FIRST-OBSERVE-FAILED` | instantiation | The observation instantiation performs failed, so no instance is created; the resource's own error is reported. |
 | `PLECTURE-CFG-BIN-UNKNOWN` | semantic | An executable reference resolves to no declared executable. |
 | `PLECTURE-CFG-TERMINAL-UNAVAILABLE` | semantic | A terminal capability is consumed where no effect in the plan declares that verb. |
 | `PLECTURE-CFG-HEALTH-ALIVE-REQUIRED` | structural | An effect declares `setup` without declaring `[health.alive]`. |
 | `PLECTURE-CFG-NESTING-CYCLE` | semantic | A nesting chain reaches itself. |
 | `PLECTURE-CFG-NESTING-OUTPUT-MUTABLE` | semantic | A computed nested output is marked mutable. |
 | `PLECTURE-CFG-NESTING-PROJECTION-MISMATCH` | semantic | A direct nested projection disagrees with the inner output's type or mutability. |
-| `PLECTURE-CFG-EXTENDS-INHERITED-FIELD` | structural | A task declares `extends` alongside `resource_observer`, which extends inherits rather than composes. |
+| `PLECTURE-CFG-EXTENDS-INHERITED-FIELD` | structural | A task declares `extends` alongside `resource`, which extends inherits rather than composes. |
 | `PLECTURE-CFG-EXTENDS-CYCLE` | semantic | An extends chain reaches itself. |
 | `PLECTURE-CFG-EXTENDS-JUDGE-ID-DUPLICATE` | semantic | A judge id is declared by more than one declaration in an extends chain. |
 | `PLECTURE-CFG-EXTENDS-CHAIN-ID-DUPLICATE` | semantic | A chain id is declared by more than one declaration in an extends chain. |
@@ -165,7 +164,7 @@ the CLI's name would claim the language's rules for one of its consumers.
 | `PLECTURE-CFG-EXTENDS-SCHEMA-SHAPE` | structural | A document declaring `extends` declares an `inputs_schema`/`state_schema` key other than `type` or `properties`. |
 | `PLECTURE-CFG-EXTENDS-SCHEMA-FILE-UNSUPPORTED` | semantic | An extends chain of more than one layer includes a layer using `inputs_schema_file`/`state_schema_file`. |
 | `PLECTURE-CFG-WORKFLOW-CYCLE` | semantic | The dependencies derived from node projections form a cycle. |
-| `PLECTURE-CFG-POPULATION-CONTRACT` | semantic | A population violates its trusted ownership, query parameter, timing, or shared observer contract. |
+| `PLECTURE-CFG-POPULATION-CONTRACT` | semantic | A population violates its trusted ownership, query parameter, timing, or shared resource contract. |
 | `PLECTURE-CFG-CEL-SYNTAX` | cel | An expression does not parse as CEL. |
 | `PLECTURE-CFG-CEL-UNKNOWN-NAME` | cel | An expression names a variable not visible at its site. |
 | `PLECTURE-CFG-CEL-TYPE` | cel | An operation, or a result type, does not satisfy the site's expected type. |

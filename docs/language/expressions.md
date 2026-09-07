@@ -112,12 +112,11 @@ dropped. A check that is dropped becomes an accepted-invalid conformance
 fixture, so what the language would reject stays recorded even while the
 implementation accepts it:
 
-<!-- fixture: expressions/type-mismatch.accepted-invalid.toml -->
 ```toml
 [review]
 kind              = "task"
 description       = "A task document whose computed leaf does not type-check"
-resource_observer = "issue_pr"
+resource          = "issue_pr"
 instructions      = [{ text = "Review {{ resource.id }} and record a verdict." }]
 
 [review.state_schema]

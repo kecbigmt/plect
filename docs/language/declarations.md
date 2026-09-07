@@ -22,8 +22,8 @@ kind = "<kind>"
 | `<id>` | The responsibility name references use. |
 | `kind` | The declaration contract this block implements. |
 
-The kind vocabulary is `effect`, `task`, `channel`, `workflow`,
-`workspace_provider`, and `resource_observer`.
+The kind vocabulary is `effect`, `task`, `channel`, `workflow`, and
+`resource`.
 
 Every kind is declared the same way, `task` included: a `[<id>]` table
 carrying `kind`, in a TOML definition document. A task's instruction — the one
@@ -33,34 +33,31 @@ named by `file`, resolved relative to the declaring file. Nothing else
 changes for it: the id is the table name, the id grammar holds, the namespace
 is shared, and references resolve the same way. See [`tasks.md`](tasks.md).
 
-A kind uses its bare concept name when the declaration's runtime counterpart
-is its own instance: effects instantiate into task instances, channels into
-channel deliveries, workflows into workflow executions. A kind uses a role
-compound when the declaration produces or observes something that exists apart
-from the declaration: a `workspace_provider` produces workspaces, and a
-`resource_observer` observes resources that exist externally. Every block in
-this language is a definition, so no kind name says so.
+A resource is the external thing a session and task address. Effects, channels,
+and workflows have runtime instances; a task is the statement of work about a
+resource. Every block in this language is a definition.
 
 An id is a TOML bare-key segment matching `^[A-Za-z_][A-Za-z0-9_]*$`. Quoted
 keys are not ids. Dots are excluded because dots separate address segments.
 Hyphens are excluded because an effect id is also a workflow node id when a node
 omits `id`, and a node id must be a safe dotted path segment.
 
-An id names a responsibility, not a provider repeated for qualification: a
+An id names a responsibility, not a product name repeated for qualification: a
 Claude Code plugin's launch effect is `[runtime]`, so its catalog-qualified
 address reads `official.claude.runtime`.
 
 Nested and array tables stay under the definition table:
 
-<!-- fixture: references/relative.toml -->
 ```toml
-[worktree]
-kind = "workspace_provider"
+[github_issue]
+kind  = "resource"
+match = '^https://github\.com/(?P<id>.+)$'
+name  = { from = "match.id" }
 
-[worktree.setup]
+[github_issue.observe]
 type = "exec"
-bin  = "github-worktree"
-args = ["setup", "--resource", { from = "resource.id" }]
+bin  = "github-issue-pr"
+args = ["observe", "--resource", { from = "resource.id" }]
 
 [runtime]
 kind  = "effect"
@@ -75,8 +72,8 @@ args = ["launch"]
 type = "noop"
 
 [review_session]
-kind               = "workflow"
-workspace_provider = "worktree"
+kind     = "workflow"
+resource = "github_issue"
 
 [[review_session.nodes]]
 uses = "runtime"
@@ -88,8 +85,8 @@ definition does not exist without a top-level `[<id>]` table and its `kind`.
 ## Discovery
 
 Each trusted config layer has a definition root: a plugin's `config/`
-directory, the user config home excluding reserved root files, and a trusted
-ancestor overlay's `.plect/` directory.
+directory, the user config home excluding reserved root files, or a trusted
+project's `.plect/` directory excluding its project marker.
 
 Within a definition root, every `.toml` file that is not a reserved root file
 is read recursively in lexicographic order by slash-separated relative path. A
@@ -100,21 +97,32 @@ Subdirectories are author organization only: one definition per file and
 kind-named directories such as `config/effects/` are equally valid and mean the
 same thing.
 
-The reserved root files are `config.toml`, `catalogs.toml`, and `plect.lock`.
-They are not definition files.
+The user config home's reserved root files are `config.toml`, `catalogs.toml`,
+and `plect.lock`. They are not definition files. A project definition root
+reserves `.plect/project.toml`; it contains exactly the required marker:
+
+```toml
+schema_version = 3
+```
+
+No fields other than `schema_version` are valid there, and it never contributes
+a definition. Its version declares the dialect of that selected project
+definition layer only. The global configuration dialect remains the
+`schema_version` in `config.toml`; neither declaration governs the other.
+A missing marker version or a version the binary does not know is a load error
+under the same dialect comparison rules as `config.toml`.
 
 Cross-file array-of-table entries append in traversal order while preserving
 in-file order. Cross-file duplicate definition ids in one layer are load
 errors, as are table collisions below a definition table that TOML would
 reject in one concatenated document.
 
-The workspace-dir `.plect/` overlay is cloned, untrusted content and is not a
-full definition root. It loads only workflow fragments, from
-`.plect/workflows/`, under the workflow cascade rules; fragment identity comes
-from the `[<id>]` table with `kind = "workflow"`, and the directory is only an
-allowlist. Effect definitions there are a load error, because cloned content
-must not carry shell. Workspace provider, resource observer, and channel
-definitions are not loaded at all.
+Invocation selects an optional project definition layer before workflow setup:
+the nearest ancestor with `.plect/project.toml` is its project root. Only that
+root's `.plect/` tree participates; no higher ancestor and no generated
+checkout participates. The project root must be listed as trusted in the
+machine configuration, or be explicitly trusted by an interactive invocation;
+chains and populations cannot grant that trust. See [`config.md`](config.md).
 
 ## Namespaces
 
@@ -127,12 +135,10 @@ alias and plugin path.
 
 | Deeper definition | Rule |
 |---|---|
-| Same id, same kind, whole-definition kinds | Replaces the shallower definition. |
-| Same id, same kind, workflow | Merges with the shallower workflow by the workflow cascade rules. |
+| Same id, same kind | A deeper user declaration replaces the shallower declaration as a whole. |
 | Same id, different kind | Coexist. Each layer has its own namespace, so the deeper declaration shadows nothing, and a reference resolves by the kind its site expects. |
 
-The whole-definition kinds are workspace provider, resource observer, channel,
-effect, and task.
+The whole-definition kinds are resource, channel, effect, task, and workflow.
 
 Catalog-qualified references select catalog plugin definitions and are not
 shadowed by a same-id relative definition in a user-owned layer. A same-id
@@ -170,11 +176,10 @@ aliases are user-local and unknowable to a plugin author, and cross-plugin
 references from shipped plugin config remain banned by the plugin boundary
 rule.
 
-<!-- fixture: references/qualified.toml -->
 ```toml
 [my_review]
-kind               = "workflow"
-workspace_provider = "official.github.worktree"
+kind     = "workflow"
+resource = "official.github.issue"
 
 [[my_review.nodes]]
 uses = "official.tmux.pane"
@@ -205,13 +210,13 @@ A reference carries no kind segment. After resolution, the target's declared
 
 | Reference site | Expected kind |
 |---|---|
-| Workflow `workspace_provider` | `workspace_provider` |
-| Workflow population `resource_observer` | `resource_observer` |
+| Workflow `resource` | `resource` |
+| Workflow population `resource` | `resource` |
 | Workflow population `session.task` | `task` |
 | Workflow node `uses` | `effect` |
 | Workflow event channel `uses` | `channel` |
 | Effect `inner.uses` | `effect` |
-| Task field `resource_observer` | `resource_observer` |
+| Task field `resource` | `resource` |
 | Task field `extends` | `task` |
 | Task chain `workflow` | `workflow` |
 | Dynamic-instantiation target | `task` |
@@ -249,5 +254,4 @@ executable name. See [`actions.md`](actions.md).
 - A plugin-owned reference includes no catalog alias and no other plugin's
   ownership segment.
 - A reference site's expected kind matches the resolved target's `kind`.
-- The workspace-dir `.plect/` overlay loads only the path-restricted workflow
-  overlay.
+- A `.plect/` directory is never read as configuration.

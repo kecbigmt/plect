@@ -4,9 +4,9 @@ A channel definition binds an event delivery to a primitive. Trusted config
 fixes the primitive and the message shape; a workflow supplies only the
 author-declared parameters. Event data never chooses what runs.
 
-Channels follow the workspace-provider trust model rather than the workflow
-cascade: an `exec` or `shell` channel runs a process, so only user-owned or
-machine-owned layers may declare one.
+Channels are trusted plugin, machine-owned, or selected trusted-project
+configuration: an `exec` or `shell` channel runs a process, so an untrusted
+repository checkout may not declare one.
 
 ## Primitives
 
@@ -73,7 +73,7 @@ include = ["plect.instruction", "plect.node.result"]
 
 `[<id>.input_schema]` declares the channel's parameters per key: a `type`, a
 `required` flag, and an optional `default`. This is deliberately not the full
-JSON Schema document effects and providers carry — only a channel input's
+JSON Schema document effects and resources carry — only a channel input's
 presence is checked before delivery, and a `default` is what makes an optional
 parameter usable at all.
 

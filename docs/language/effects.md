@@ -1,10 +1,16 @@
 # Effects
 
-An effect is a lifecycle-managed provider: contracts, health, an optional
+An effect is a lifecycle-managed component: contracts, health, an optional
 interactive capability, and composition.
 
 It brings something up, keeps it observable, and takes it down. It does not
 decide whether the work is finished — that is a [task document](tasks.md).
+
+An effect may acquire part of a session environment, including a directory.
+There is no workspace-provider lifecycle. A session-scoped checkout or
+conversation-directory effect is an ordinary node whose outputs may be chosen
+by its workflow's single `workdir` declaration. It does not reserve an output
+name, and a workflow with no `workdir` is valid.
 
 ## Surface
 
@@ -12,6 +18,7 @@ decide whether the work is finished — that is a [task document](tasks.md).
 |---|---|
 | `scope` | `run` or `session`, defaulting to `run`. |
 | `setup`, `cleanup` | The lifecycle actions. See [`actions.md`](actions.md). |
+| `[cleanup.inputs_schema]` | Optional JSON Schema for plugin-owned destruction inputs. |
 | `inputs_schema`, `outputs_schema` | The effect's contracts. |
 | `[health]` | The `alive` and `activity` probes. |
 | `[terminal]` | The interactive endpoint, if this effect owns one. |
@@ -20,7 +27,6 @@ decide whether the work is finished — that is a [task document](tasks.md).
 That is the whole grammar. A completion predicate, the keys it reads, its
 budget, and the workflows it spawns all belong to a task document.
 
-<!-- fixture: effects/lifecycle.toml -->
 ```toml
 [pane]
 kind  = "effect"
@@ -30,13 +36,12 @@ scope = "run"
 type = "shell"
 script = '''
 tmux has-session -t "$session_name" 2>/dev/null \
-  || tmux new-session -d -s "$session_name" -c "$workspace_dir"
+  || tmux new-session -d -s "$session_name"
 printf '{"session_name":"%s"}\n' "$session_name"
 '''
 
 [pane.setup.bind]
-session_name  = { from = "session.name" }
-workspace_dir = { from = "workspace.dir" }
+session_name = { from = "session.name" }
 
 [pane.cleanup]
 type   = "shell"
@@ -67,6 +72,64 @@ uses = "pane"
 ```
 
 A nested effect that declares no `scope` takes the innermost layer's scope.
+
+## Cleanup inputs
+
+Cleanup receives destruction-time intent separately from setup inputs.
+`plect down` and `plect destroy` supply the core boolean `force` and an
+invocation cleanup-input object. An effect declaring `[cleanup.inputs_schema]`
+receives its validated plugin-owned keys as `cleanup.inputs.*`; an effect with
+no cleanup input schema receives no such keys. An invocation key that no
+cleanup effect declares is an error, and a key supplied to more than one effect
+must have the same schema. Creation-time `inputs.*` never substitutes for this
+object.
+
+```toml
+[checkout_effect]
+kind  = "effect"
+scope = "session"
+
+[checkout_effect.cleanup]
+type   = "shell"
+script = 'checkout-tool remove --force="$force" --delete-branch="$delete_branch"'
+
+[checkout_effect.cleanup.bind]
+force         = { from = "force" }
+delete_branch = { from = "cleanup.inputs.delete_branch", default = false }
+
+[checkout_effect.cleanup.inputs_schema]
+type = "object"
+
+[checkout_effect.cleanup.inputs_schema.properties]
+delete_branch = { type = "boolean" }
+```
+
+Population-driven destruction supplies its declared force policy and no
+plugin-owned cleanup input unless the population explicitly supplies that
+effect's cleanup-input object. A caller may use the same surface for an
+explicit `down` or `destroy`; cleanup intent is not inferred from resource or
+workflow creation.
+
+When a workflow declares `workdir`, graph-derived preparation nodes execute
+setup, liveness, and cleanup in the session's recorded preparation directory.
+A direct invocation records its caller directory; a chain inherits it from its
+triggering session; and a population inherits the resident's recorded value.
+All other nodes execute setup and liveness in the declared directory. Effects
+cannot override either directory per node or action. Cleanup uses the directory
+its setup used; a vanished directory is a cleanup failure, not an invitation to
+run elsewhere. A probe launch failure caused by that directory invalidates the
+node, then cleanup attempts the stored directory and records its failure if it
+cannot launch there either. The failed record, allocation, and cleanup
+obligation remain durable. A later `up` may retry that recorded cleanup, but
+cannot set up the invalidated node or its prerequisites until successful
+recorded cleanup or explicit operator confirmation of external release resolves
+the old allocation's obligation. If cleanup cannot run, automatic
+reconstruction stops with an operator-recovery error; the retained record,
+cleanup information, and failure reason remain inspectable. The confirmation is
+an audited operator assertion for one execution, not a successful cleanup and
+not a release of other allocations. `--force-recreate` does not acknowledge an
+obligation implicitly. A missing directory does not prove that a process or
+external allocation is gone.
 
 ## Outputs are production records
 
