@@ -13,8 +13,9 @@ completion. `finalize` records a task's accepted completion and its evidence.
 `subscribe` and `unsubscribe` bind or remove delivery for one session/resource
 pair.
 
-Each resource action takes a resource input object satisfying
-`inputs_schema`. The object is supplied at the operation that needs it:
+Each resource action takes a resource input object satisfying `inputs_schema`
+when the resource declares one; no declaration means the empty object. The
+object is supplied at the operation that needs it:
 
 - `plect up` supplies it for the entry resource;
 - adding a task supplies it for that task's concrete resource, including a
@@ -73,7 +74,7 @@ optional appearance context. It does not duplicate observation state.
 
 ## Validation rules
 
-- `match`, `name`, `observe`, `inputs_schema`, and `state_schema` are required.
+- `match`, `name`, `observe`, and `state_schema` are required.
 - A `name` projection names only captures declared by `match`.
 - Every action operation receives an object satisfying `inputs_schema`.
 - Query inputs satisfy the query input schema independently of action inputs.

@@ -26,9 +26,10 @@ and tasks which may concern a resource other than the session's entry resource.
 resource-instance name (`name`), observes it, queries it, binds delivery, and
 finalizes it. Resource action inputs are supplied at each concrete operation:
 an entry invocation, an additional task-resource binding, and a standalone
-resource operation each provide an object satisfying that resource's
-`inputs_schema`. Query inputs are a separate object satisfying the query
-contract. They do not inherit from one another.
+resource operation each provide an object satisfying that resource's declared
+`inputs_schema` (or the empty object when none is declared). Query inputs are
+a separate object satisfying the query contract. They do not inherit from one
+another.
 
 A workflow declares exactly one entry resource type. `plect up` receives a
 concrete entry-resource identifier and an optional workflow. With no workflow,
