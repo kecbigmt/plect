@@ -189,8 +189,6 @@ out = { type = "string", required = true }
 	}
 }
 
-// deliverProcess used to leave cmd.Env nil, so a channel command inherited
-// this process's data-home variables verbatim.
 func TestDeliver_ProcessStripsBothDataHomeVars(t *testing.T) {
 	t.Setenv("PLECT_DATA_HOME", "/poisoned")
 	t.Setenv("XDG_DATA_HOME", "/poisoned-xdg")

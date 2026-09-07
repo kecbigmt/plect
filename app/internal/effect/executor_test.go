@@ -84,8 +84,6 @@ func TestExecutor_RequestForKeepsEachFormsInvocationShape(t *testing.T) {
 	}
 }
 
-// hostExecutor.Run used to leave cmd.Env nil with an empty ExecRequest.Env,
-// inheriting PLECT_DATA_HOME verbatim regardless of IsolateDataHome.
 func TestExecutor_HostExecutorStripsPlectDataHomeUnlessEnvRebindsIt(t *testing.T) {
 	t.Setenv("PLECT_DATA_HOME", "/poisoned")
 	t.Setenv("XDG_DATA_HOME", "/still-inherited")
@@ -117,8 +115,6 @@ func TestExecutor_HostExecutorStripsPlectDataHomeUnlessEnvRebindsIt(t *testing.T
 	}
 }
 
-// IsolateDataHome=true (ExecHook's policy, used for a task's setup/cleanup)
-// must strip XDG_DATA_HOME too, not just PLECT_DATA_HOME.
 func TestExecutor_HostExecutorIsolatesXDGDataHomeWhenRequested(t *testing.T) {
 	t.Setenv("PLECT_DATA_HOME", "/poisoned")
 	t.Setenv("XDG_DATA_HOME", "/poisoned-xdg")
@@ -134,10 +130,6 @@ func TestExecutor_HostExecutorIsolatesXDGDataHomeWhenRequested(t *testing.T) {
 	}
 }
 
-// ExecHook is the real entry point a task's setup/cleanup (a
-// terminal-multiplexer pane's setup, in particular) runs through, so this
-// pins the acceptance-level guarantee: neither data-home variable reaches
-// that child.
 func TestExecHook_IsolatesBothDataHomeVars(t *testing.T) {
 	t.Setenv("PLECT_DATA_HOME", "/poisoned")
 	t.Setenv("XDG_DATA_HOME", "/poisoned-xdg")
@@ -151,8 +143,6 @@ func TestExecHook_IsolatesBothDataHomeVars(t *testing.T) {
 	}
 }
 
-// RunHook backs a workspace provider or resource observer, which may
-// already depend on inheriting XDG_DATA_HOME for its own on-disk state.
 func TestRunHook_KeepsXDGDataHomeButIsolatesPlectDataHome(t *testing.T) {
 	t.Setenv("PLECT_DATA_HOME", "/poisoned")
 	t.Setenv("XDG_DATA_HOME", "/still-inherited")

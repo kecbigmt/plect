@@ -37,36 +37,22 @@ never disagree about where the store lives.
 
 `datahome` builds a child's base environment two ways: `InheritableEnv`
 removes only `PLECT_DATA_HOME`; `IsolatedEnv` removes both `PLECT_DATA_HOME`
-and `XDG_DATA_HOME`. Every child process a declaration starts appends any
-binding the declaration itself supplies after this base (which wins, since a
-later occurrence of a duplicate key overrides an earlier one), rather than
-building its environment from the raw process environment. Which base a
-path uses depends on whether an existing declaration depends on the child
-inheriting `XDG_DATA_HOME` for its own on-disk state, unrelated to plect's
-own store:
+and `XDG_DATA_HOME`. A declaration-started child builds its environment from
+one of these bases rather than from the raw process environment, appending
+any binding the declaration itself supplies after the base (which wins,
+since a later occurrence of a duplicate key overrides an earlier one).
+Process fan-out that shares the parent's own store (`plect serve` spawning a
+`plect mcp serve` per connection) builds its environment neither way.
 
-- `app/internal/effect.ExecHook` (a task's setup/cleanup/health/capture,
-  including a terminal-multiplexer pane's long-lived shell) uses
-  `IsolatedEnv`: a task's setup may start a long-lived child whose own shell
-  must not inherit either variable, since a development build invoked inside
-  it must resolve the default data directory rather than reuse the parent
-  process's.
-- `app/internal/effect.RunHook` (workspace-provider setup/cleanup/subscribe,
-  resource observe/finalize) and `app/internal/population`'s resource-
-  observer poll/subscribe query use `InheritableEnv`: the shipped
-  `github-watcher` service and its poll/subscribe/observe hooks locate their
-  own subscription registry via `XDG_DATA_HOME`, independent of plect's
-  store, and the config language has no per-hook mechanism yet for such a
-  declaration to rebind it explicitly if it were also stripped here.
-- `app/internal/pluginservice` (a supervised service daemon, e.g.
-  `github-watcher`'s own resident process) also uses `InheritableEnv`, for
-  the same reason.
-- `app/internal/channel` (a channel delivery) uses `IsolatedEnv`: no shipped
-  channel destination depends on inheriting either variable.
-
-Process fan-out that intentionally shares the parent's own store (`plect
-serve` spawning a `plect mcp serve` per connection) does not go through
-either base — sharing the store is the point there.
+`app/internal/effect.ExecHook` (a task's setup/cleanup/health/capture,
+including a terminal-multiplexer pane's long-lived shell) and
+`app/internal/channel` (a channel delivery) use `IsolatedEnv`.
+`app/internal/effect.RunHook` (workspace-provider setup/cleanup/subscribe,
+resource observe/finalize), `app/internal/population`'s resource-observer
+poll/subscribe query, and `app/internal/pluginservice` (a supervised
+service) use `InheritableEnv`: a workspace-provider hook, resource-observer
+query, or service may read `XDG_DATA_HOME` for on-disk state of its own,
+unrelated to plect's store.
 
 ## Version authority and consumers
 

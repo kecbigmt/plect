@@ -18,9 +18,6 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// TestNewStore_HonorsPlectDataHomeLikeStateStore guards against the two
-// packages' default-dir resolution drifting apart now that both delegate to
-// datahome.Resolve rather than each duplicating the XDG lookup inline.
 func TestNewStore_HonorsPlectDataHomeLikeStateStore(t *testing.T) {
 	override := filepath.Join(t.TempDir(), "custom-data")
 	t.Setenv("PLECT_DATA_HOME", override)

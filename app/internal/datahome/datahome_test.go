@@ -40,11 +40,6 @@ func TestResolve_EnvVarOverridesXDGDataHomeWithNoSuffix(t *testing.T) {
 	}
 }
 
-// TestInheritableEnv_StripsPlectDataHomeButKeepsXDGDataHome pins the
-// asymmetry: EnvVar is plect-specific and always stripped, while XDGEnvVar
-// is a general-purpose variable existing declarations (a resource
-// observer, a plugin service) already rely on inheriting for their own
-// unrelated on-disk state — see the doc comment on InheritableEnv.
 func TestInheritableEnv_StripsPlectDataHomeButKeepsXDGDataHome(t *testing.T) {
 	t.Setenv(EnvVar, "/x")
 	t.Setenv(XDGEnvVar, "/shared")

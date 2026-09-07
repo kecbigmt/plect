@@ -8,11 +8,8 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/datahome"
 )
 
-// TestDataHomeFlag_OverridesDefaultDataDirectory exercises --data-home the
-// way TestConfigShow_FlagWinsOverEnvVar exercises --config-home: `storage
-// migrate` reports persistence.DefaultPath(), which must resolve under the
-// flag's directory once PersistentPreRunE has exported it to
-// $PLECT_DATA_HOME.
+// `storage migrate` reports persistence.DefaultPath() directly, unlike `ls`
+// which would need a config home too.
 func TestDataHomeFlag_OverridesDefaultDataDirectory(t *testing.T) {
 	t.Setenv(datahome.EnvVar, "")
 	t.Setenv(datahome.XDGEnvVar, "")
