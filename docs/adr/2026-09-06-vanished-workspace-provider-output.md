@@ -144,6 +144,16 @@ rather than retaining an unchecked compatibility path. Existing session
 records need no rewrite: their stored outputs supply the first alive action,
 and a failed check follows the repair lifecycle.
 
+A lost workspace-provider surface is not visible to the periodic health sweep
+and is repaired only by the next `plect up`; a lost workflow effect is reported
+as unhealthy by that sweep. This asymmetry is accepted because a workspace is
+normally lost with the run-scoped effects whose loss the sweep reports, so an
+operator is notified and one `plect up` repairs both. Plecture introduces no
+provider-specific health composition because the [workspace-output design
+question](https://github.com/kecbigmt/plecture/issues/473) may fold providers
+into effects, making them ordinary plan nodes and closing the gap without a
+rule to retire.
+
 The meaning and reservation of workspace_dir remain outside this decision. The
 [workspace-output design question](https://github.com/kecbigmt/plecture/issues/473)
 may retain, revise, or remove that reservation. In every outcome, a workspace
