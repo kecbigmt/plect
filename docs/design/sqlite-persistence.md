@@ -100,10 +100,25 @@ classifies every `_json` column by its owning declaration:
 | `population_member_blockers` | `(workflow, name, resource_id, position)` primary key; foreign key to `population_members` | one blocker reason per row | `PopulationMember.LastBlockers` |
 | `session_channel_health` | `(session_id, kind)` primary key; session foreign key; `kind` CHECK IN `validation`/`delivery` | consecutive failures, first/last failure time, last channel/error, escalation time | `Session.ChannelValidationHealth`/`ChannelDeliveryHealth` |
 | `up_reservations` | `child_session_name` primary key; nullable `parent_session_name`, `virtual_root`, `pid`, `reserved_at` | none | `state.json` `up_reservations` |
-| `pending_deliveries` | `(session_name, resource_id, operation)` primary key; `operation` is subscribe or unsubscribe | none | `pending_delivery.json` |
 | `events` | `id` primary key; `(session_id, sequence)` unique and references `sessions(id)`; `direction` CHECK IN `inbound`/`outbound`/`internal`; `metadata_json` CHECK `json_valid` | type, source, direction, summary, body, metadata, and recorded time | each `log.jsonl` record |
 | `event_cursors` | `(session_id, kind)` primary key and session foreign key (`ON DELETE CASCADE`); `kind` CHECK IN `delivery`/`tick`/`heartbeat`; `next_sequence` | none | `.cursor.<consumer>` |
-| `session_tombstones` | `session_name` primary key; `destroyed_at` | tombstone session snapshot | `tombstone.json` |
+
+### Stays file-based after cutover
+
+Not every pre-cutover artifact moves into `storage.db`. Each of the
+following remains exactly where it already lives, unmigrated by the
+importer and untouched by cutover:
+
+| File | Why it stays file-based |
+| --- | --- |
+| `events/<session>/tombstone.json` | A per-session snapshot written once, at destroy, and read rarely (post-teardown diagnostics); it needs no index, no relational query, and no transactional coupling with the tables it survives independently of. `eventlog.Store.WriteTombstone`/`ReadTombstone` read and write it directly. |
+| `events/<session>/chain_attempts.json` | A best-effort, per-session cap-refusal dedup streak, not a durable historical fact — routinely swept and replaced wholesale, never queried across sessions. `eventlog.Store`'s `SwapChainAttempt`/`RevertChainAttempt`/`ClearChainAttempts` own it. |
+| `pending_delivery.json` | One shared file recording every session's outstanding subscribe/unsubscribe intents, read and rewritten directly by `service/pendingdelivery.go`; it has no per-row identity that benefits from relational storage. |
+| `delivery-locks/<session>.lock` | Pure OS-level mutual exclusion for a delivery decision (`service/deliverylock.go`), not data — a `flock`, not a fact worth persisting. |
+
+The importer validates that none of these (or their own lock files) is
+still held by a live writer, but never reads them for data or copies them:
+see "One-time importer inventory" below.
 
 `Session.Message` is not a stored field on any table: a session's
 self-reported status line is derived from the most recent
@@ -389,7 +404,9 @@ upgrade.
 | `Destroy` | Update the session's live row to `status = 'destroyed'`, `destroyed_at = now` (the same upsert path `Put` uses, since the row's `id` and every other column are untouched), then delete its up-slot reservation, in one write transaction. | Retires the session (hidden from a live listing, its name freed for reuse) without deleting it: its rows, tasks, and event history remain reachable by `id`. |
 | `eventlog.Store.Append` | Resolves the target's live session row, minting a minimal placeholder one first if none exists yet (a plain event target, not necessarily one created through Create), then in one write transaction reads `NextEventSequence` from `MAX(sequence)` against that row and inserts the event. | Preserves the "publish needs no prior create" contract while keeping each append's own sequence assignment atomic. |
 | `CommitCursor` | Upsert one consumer’s next sequence in one write transaction. | Preserves at-least-once dispatch and reactor restart behavior. |
-| `WriteTombstone` | Upsert one tombstone in one write transaction. | Preserves the fail-closed tombstone checkpoint. |
+
+`WriteTombstone` is not in this table: it stays a direct file write (see
+"Stays file-based after cutover" above), not a database transaction.
 
 A session's status line is not part of this table: it is derived entirely
 from its `plect.status_message` event stream (see "Status message" above),
@@ -562,9 +579,10 @@ alongside the database. The command reads the following runtime paths.
 | `events/<escaped-session>/log.jsonl` | Decode complete lines in byte order; reject invalid event identity, session mismatch, duplicate ID, and a malformed complete line; discard only a trailing partial line, matching the live reader; import stream and events. A record with no `direction` imports as `internal`, counted in the import summary. |
 | `events/<escaped-session>/.gen` | Read one trimmed non-empty stream identifier when present and reuse it as the imported session row's `id`; otherwise mint a fresh id after recording that no old page cursor survives cutover. |
 | `events/<escaped-session>/.cursor.<consumer>` | Parse a non-negative decimal boundary, validate it against the log boundary index, map `<consumer>` to its `event_cursors.kind` (`dispatcher` imports as `delivery`, `tick-reactor` imports as `tick`), and import the translated position. |
-| `events/<escaped-session>/tombstone.json` | Decode one tombstone, require that its embedded name matches the directory session, and import its snapshot and destruction time. |
+| `events/<escaped-session>/tombstone.json` | Stays file-based (see "Stays file-based after cutover" above); the importer never reads or copies it. |
+| `events/<escaped-session>/chain_attempts.json` | Stays file-based; never read or copied. |
 | `events/<escaped-session>/.lock` | Confirm it is not held before import; do not copy it. The database transaction and access gate replace it. |
-| `pending_delivery.json` | Decode subscribe and unsubscribe maps; require non-empty session and resource values; deduplicate entries into `pending_deliveries`. |
+| `pending_delivery.json` | Stays file-based; never read or copied. |
 | `pending_delivery.json.lock` | Confirm it is not held before import; do not copy it. |
 | `delivery-locks/<escaped-session>.lock` | Confirm no lock is held; do not copy it. The delivery decision keeps its service-level serialization through a database-backed lock/transaction. |
 
