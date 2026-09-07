@@ -761,6 +761,7 @@ func insertNodeExecutionLayersTx(ctx context.Context, q *sqlcgen.Queries, execut
 			FailedAt:             formatTimeNull(l.FailedAt),
 			CleanedAt:            formatTimeNull(l.CleanedAt),
 			Error:                nullString(l.Error),
+			CleanupJson:          nullRawJSON(l.Cleanup),
 		}); err != nil {
 			return fmt.Errorf("insert node execution layer %d: %w", i, err)
 		}
@@ -826,6 +827,7 @@ func layersFromNodeExecutionRows(rows []sqlcgen.NodeExecutionLayer) ([]contract.
 		if err != nil {
 			return nil, fmt.Errorf("layer at position %d: %w", r.Position, err)
 		}
+		l.Cleanup = rawJSONFromColumn(r.CleanupJson)
 		out[i] = l
 	}
 	return out, nil

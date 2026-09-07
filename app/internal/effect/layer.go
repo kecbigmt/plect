@@ -1,10 +1,12 @@
 package effect
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/lang"
+	contract "github.com/kecbigmt/plecture/contracts/state"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
@@ -106,4 +108,75 @@ func CleanupLayers(def config.TaskDefinition) []Layer {
 		})
 	}
 	return out
+}
+
+// RetainedLayerCleanup is the JSON shape persisted as
+// contracts/state.LayerState.Cleanup: exactly the fields CleanupLayers
+// itself builds fresh from a definition (this layer's own cleanup action,
+// source/ownership, and outward joint) -- schema-free, since cleanup never
+// needs the compiled InputsSchema/LocalsSchema/OutputsSchema a plain Layer
+// otherwise carries. lang.Action, lang.Ownership, and config.OutputBinding
+// are plain data, so this round-trips through encoding/json with no custom
+// (un)marshaling.
+type RetainedLayerCleanup struct {
+	EffectID    string                 `json:"effect_id"`
+	Cleanup     *lang.Action           `json:"cleanup,omitempty"`
+	SourcePath  string                 `json:"source_path,omitempty"`
+	From        lang.Ownership         `json:"from"`
+	BindOutputs []config.OutputBinding `json:"bind_outputs,omitempty"`
+}
+
+// RetainLayerCleanup returns l's retained cleanup contract, or nil when l
+// declares no cleanup.
+func RetainLayerCleanup(l Layer) json.RawMessage {
+	if l.Cleanup == nil {
+		return nil
+	}
+	encoded, err := json.Marshal(RetainedLayerCleanup{
+		EffectID: l.EffectID, Cleanup: l.Cleanup, SourcePath: l.SourcePath,
+		From: l.From, BindOutputs: l.BindOutputs,
+	})
+	if err != nil {
+		// l's fields are plain data assembled by this package's own
+		// config-loading code; a marshal failure here would mean that
+		// invariant broke, not a runtime condition a caller can act on.
+		return nil
+	}
+	return encoded
+}
+
+// DecodeRetainedLayerCleanup decodes one layer's contracts/state.LayerState.
+// Cleanup, as written by RetainLayerCleanup. ok is false with a nil error
+// for an empty raw value (a layer with no cleanup) -- not an error
+// condition a caller need report.
+func DecodeRetainedLayerCleanup(raw json.RawMessage) (rc RetainedLayerCleanup, ok bool, err error) {
+	if len(raw) == 0 {
+		return RetainedLayerCleanup{}, false, nil
+	}
+	if err := json.Unmarshal(raw, &rc); err != nil {
+		return RetainedLayerCleanup{}, false, err
+	}
+	return rc, true, nil
+}
+
+// LayersFromRetained rebuilds a nested node's cleanup-relevant layer chain
+// entirely from its own persisted per-layer records, so releasing it never
+// re-reads whatever the *current* task/effect definition says. It reports
+// ok=false (no partial result) when any state lacks a retained contract --
+// a pre-this-change execution, say -- so the caller falls back to
+// CleanupLayers wholesale rather than mixing retained and re-resolved
+// layers in one chain.
+func LayersFromRetained(states []contract.LayerState) ([]Layer, bool) {
+	if len(states) == 0 {
+		return nil, false
+	}
+	out := make([]Layer, len(states))
+	for i, state := range states {
+		rc, ok, err := DecodeRetainedLayerCleanup(state.Cleanup)
+		if err != nil || !ok {
+			return nil, false
+		}
+		out[i] = Layer{EffectID: rc.EffectID, Cleanup: rc.Cleanup, SourcePath: rc.SourcePath, From: rc.From, BindOutputs: rc.BindOutputs}
+	}
+	return out, true
 }

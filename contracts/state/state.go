@@ -230,6 +230,14 @@ type LayerState struct {
 	FailedAt             time.Time `json:"failed_at,omitzero"`
 	CleanedAt            time.Time `json:"cleaned_at,omitzero"`
 	Error                string    `json:"error,omitempty"`
+	// Cleanup is this layer's own retained cleanup contract (already-encoded
+	// JSON; shape is effect.RetainedLayerCleanup), so releasing a nested
+	// node's chain does not need to re-read whatever the *current*
+	// task/effect definition says for this layer. Nil for a layer with no
+	// cleanup, and for every task_instance_layers row: only node_execution_layers
+	// populates it today (see issue #496). Excluded from ordinary JSON
+	// output for the same reason as TaskState's own retained fields.
+	Cleanup json.RawMessage `json:"-"`
 }
 
 // Session is the shared representation of a plect session's durable state.

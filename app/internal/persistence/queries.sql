@@ -191,14 +191,14 @@ DELETE FROM node_execution_layers WHERE execution_id = ?;
 INSERT INTO node_execution_layers (
     execution_id, position, effect_id, status, inputs_json, locals_json,
     outputs_json, env_json, heartbeat_ticks, heartbeat_escalations,
-    setup_at, failed_at, cleaned_at, error
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    setup_at, failed_at, cleaned_at, error, cleanup_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: ListNodeExecutionLayersForSession :many
 SELECT nel.execution_id, nel.position, nel.effect_id, nel.status,
        nel.inputs_json, nel.locals_json, nel.outputs_json, nel.env_json,
        nel.heartbeat_ticks, nel.heartbeat_escalations, nel.setup_at,
-       nel.failed_at, nel.cleaned_at, nel.error
+       nel.failed_at, nel.cleaned_at, nel.error, nel.cleanup_json
 FROM node_execution_layers nel
 INNER JOIN node_executions ne ON ne.id = nel.execution_id
 WHERE ne.session_id = ?

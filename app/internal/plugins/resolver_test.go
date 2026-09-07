@@ -291,6 +291,30 @@ func TestVerifyAndMountPlugin_LockedSuccess(t *testing.T) {
 	if mounted.ID != "local/okf" || mounted.NonReproducible {
 		t.Errorf("Mounted = %+v", mounted)
 	}
+	// Revision identifies the exact plugin content a node execution's
+	// plugin_ref retains (see app/internal/task's pluginRef): it must be
+	// the plugin's own locked content hash, not the catalog's.
+	if mounted.Revision != hash {
+		t.Errorf("Revision = %q, want the locked content hash %q", mounted.Revision, hash)
+	}
+}
+
+// TestVerifyAndMountPlugin_EditableCatalogLeavesRevisionEmpty proves a
+// non-reproducible (editable-path) mount's Revision stays empty: plect.lock
+// pins no content hash for it, so there is nothing to retain.
+func TestVerifyAndMountPlugin_EditableCatalogLeavesRevisionEmpty(t *testing.T) {
+	dir := t.TempDir()
+	pluginDir := filepath.Join(dir, "okf")
+	writeMinimalPlugin(t, pluginDir)
+	catalog := ResolvedCatalog{Alias: "local", Source: "path+editable://" + dir, Root: dir, NonReproducible: true, Manifest: CatalogManifest{Plugins: []string{"okf"}}}
+
+	mounted, err := VerifyAndMountPlugin(catalog, "okf", t.TempDir(), &Lockfile{}, testPlectVersion)
+	if err != nil {
+		t.Fatalf("VerifyAndMountPlugin: unexpected error: %v", err)
+	}
+	if mounted.Revision != "" {
+		t.Errorf("Revision = %q, want empty for a non-reproducible mount", mounted.Revision)
+	}
 }
 
 func TestVerifyAndMountPlugin_EditableCatalogNeedsNoLockEntry(t *testing.T) {

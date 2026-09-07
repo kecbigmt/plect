@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/config"
+	"github.com/kecbigmt/plecture/app/internal/effect"
 	"github.com/kecbigmt/plecture/app/internal/lang"
+	"github.com/kecbigmt/plecture/app/internal/plugins"
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
@@ -312,14 +314,15 @@ func TestRunSetup_RetainsCleanupContractAndExecutionDir(t *testing.T) {
 	}
 }
 
-// TestRunSetup_RetainsNoCleanupContractForNestedNode proves a nested
-// (layered) node's Cleanup is left nil even though it declares one -- the
-// retained-contract shape does not cover effect.Layer's own cleanup chain
-// (its InputsSchema etc. are not JSON-serializable as-is), a scoped,
-// documented gap (see task.go's retainedCleanup doc comment). Its cleanup
-// still runs via the existing, unretained resolution path -- only the new
-// cleanup_json retention is skipped.
-func TestRunSetup_RetainsNoCleanupContractForNestedNode(t *testing.T) {
+// TestRunSetup_NestedNodeRetainsCleanupPerLayerNotOnTheComposedState proves
+// a nested (layered) node's own, composed TaskState.Cleanup is left nil
+// (the plain-node retained-contract shape does not fit a layered chain),
+// while EACH layer's own cleanup is retained separately on
+// LayerState.Cleanup instead (effect.RetainLayerCleanup, wired into
+// effect.RunLayers) -- schema-free, since cleanup never needs the compiled
+// input/locals/outputs schemas a layer's setup answers to (see
+// effect.CleanupLayers, which never sets them either).
+func TestRunSetup_NestedNodeRetainsCleanupPerLayerNotOnTheComposedState(t *testing.T) {
 	withScriptedExecutor(t, &scriptedExecutor{stdout: map[string]string{"inner-setup": `{"pid":42}`}})
 	outer := config.TaskDefinition{ID: "outer", Scope: "run", Cleanup: shellStub("outer-cleanup")}
 	inner := config.TaskDefinition{ID: "inner", Scope: "run", Setup: shellStub("inner-setup"), Cleanup: shellStub("inner-cleanup")}
@@ -328,7 +331,49 @@ func TestRunSetup_RetainsNoCleanupContractForNestedNode(t *testing.T) {
 		t.Fatalf("setup: %v", err)
 	}
 	if got := tasks["outer"].Cleanup; got != nil {
-		t.Fatalf("Cleanup = %s, want nil for a nested node", got)
+		t.Fatalf("Cleanup = %s, want nil on the composed state for a nested node", got)
+	}
+	if len(tasks["outer"].Layers) != 2 {
+		t.Fatalf("Layers = %+v, want 2", tasks["outer"].Layers)
+	}
+	for i, name := range []string{"outer-cleanup", "inner-cleanup"} {
+		rc, ok, err := effect.DecodeRetainedLayerCleanup(tasks["outer"].Layers[i].Cleanup)
+		if err != nil {
+			t.Fatalf("layer %d: decode retained cleanup: %v", i, err)
+		}
+		if !ok {
+			t.Fatalf("layer %d: no retained cleanup contract", i)
+		}
+		if rc.Cleanup == nil || rc.Cleanup.Script != name {
+			t.Fatalf("layer %d retained cleanup = %+v, want Script %q", i, rc.Cleanup, name)
+		}
+	}
+}
+
+// TestRunSetup_RetainsPluginRefWithRevision proves a plugin-owned node's
+// PluginRef names both the mounted plugin's catalog-qualified id and its
+// locked content revision, resolved via plugins.ContainingPlugin against
+// the declaration's own SourcePath -- the same lookup plugins.ResolveBin
+// trusts for the identical path.
+func TestRunSetup_RetainsPluginRefWithRevision(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	pluginDir := t.TempDir()
+	mount := plugins.Mounted{ID: "acme/tools", Dir: pluginDir, Revision: "deadbeef"}
+	r := Resolved{
+		NodeID:     "a",
+		Scope:      "run",
+		Setup:      &lang.Action{Type: lang.ActionShell, Script: `echo '{}'`},
+		SourcePath: pluginDir + "/tasks/a.toml",
+		From:       lang.Ownership{IsPlugin: true},
+	}
+	tasks := map[string]*contract.TaskState{}
+	if err := RunSetup(context.Background(), []Resolved{r}, SessionVars{Plugins: []plugins.Mounted{mount}}, tasks, nil); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if got, want := tasks["a"].PluginRef, "acme/tools@deadbeef"; got != want {
+		t.Fatalf("PluginRef = %q, want %q", got, want)
 	}
 }
 

@@ -159,6 +159,12 @@ CREATE TABLE node_execution_layers (
     failed_at TEXT,
     cleaned_at TEXT,
     error TEXT,
+    -- cleanup_json is this layer's own retained cleanup contract (the
+    -- layer's cleanup action, source/ownership, and outward joint, resolved
+    -- at setup time; shape is effect.RetainedLayerCleanup) -- schema-free,
+    -- since cleanup never needs the compiled input/locals/outputs schemas a
+    -- layer's setup answers to. NULL for a layer with no cleanup.
+    cleanup_json TEXT CHECK (cleanup_json IS NULL OR json_valid(cleanup_json)),
     PRIMARY KEY (execution_id, position)
 );
 

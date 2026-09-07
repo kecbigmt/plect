@@ -74,6 +74,7 @@ type NodeExecutionLayer struct {
 	FailedAt             sql.NullString
 	CleanedAt            sql.NullString
 	Error                sql.NullString
+	CleanupJson          sql.NullString
 }
 
 type NodeInstance struct {

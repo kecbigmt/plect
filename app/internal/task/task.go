@@ -803,7 +803,7 @@ func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, ta
 				DependsOn:    append([]string(nil), r.DependsOn...),
 				ExecutionDir: session.WorkspaceDirPath,
 				Cleanup:      retainCleanup(r),
-				PluginRef:    pluginRef(r),
+				PluginRef:    pluginRef(r, session),
 				Seq:          nextSeq(tasks),
 				SetupAt:      now,
 			}
@@ -851,7 +851,7 @@ func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, ta
 			DependsOn:    append([]string(nil), r.DependsOn...),
 			ExecutionDir: session.WorkspaceDirPath,
 			Cleanup:      retainCleanup(r),
-			PluginRef:    pluginRef(r),
+			PluginRef:    pluginRef(r, session),
 			Seq:          nextSeq(tasks),
 			SetupAt:      now,
 		}
@@ -955,38 +955,36 @@ func failedState(r Resolved, session SessionVars, now time.Time, errMsg string, 
 		DependsOn:    append([]string(nil), r.DependsOn...),
 		ExecutionDir: session.WorkspaceDirPath,
 		Cleanup:      retainCleanup(r),
-		PluginRef:    pluginRef(r),
+		PluginRef:    pluginRef(r, session),
 		FailedAt:     now,
 		Error:        errMsg,
 	}
 }
 
-// retainedCleanup is the JSON shape persisted as TaskState.Cleanup: a plain
+// RetainedCleanup is the JSON shape persisted as TaskState.Cleanup: a plain
 // (non-nested) node's cleanup action, resolved at setup time, plus the
 // ownership/source facts needed to run it again later without re-reading
 // whatever the *current* task/effect definition says. lang.Action and
 // lang.Value are plain data (no compiled/unexported internals), so this
 // round-trips through encoding/json with no custom (un)marshaling.
 //
-// Deferred: a nested node's own cleanup chain (r.Layers) is not retained
-// here -- effect.Layer carries compiled *jsonschema.Schema fields that are
-// not JSON-serializable as-is, and teardown for a nested chain still
-// re-resolves it from the current definition, exactly as before this
-// change. This is a scoped, documented gap (see issue #496's PR body), not
-// an oversight.
-type retainedCleanup struct {
+// A nested node's own cleanup chain does not use this shape -- see
+// effect.RetainedLayerCleanup instead, retained per layer on
+// contracts/state.LayerState.Cleanup.
+type RetainedCleanup struct {
 	Action     *lang.Action   `json:"action"`
 	SourcePath string         `json:"source_path,omitempty"`
 	From       lang.Ownership `json:"from"`
 }
 
 // retainCleanup returns r's retained cleanup contract, or nil when r has no
-// plain cleanup action to retain (nested nodes; a node declaring none).
+// plain cleanup action to retain (nested nodes, whose per-layer contracts
+// effect.RunLayers retains instead; a node declaring none).
 func retainCleanup(r Resolved) json.RawMessage {
 	if r.Cleanup == nil || len(r.Layers) > 0 {
 		return nil
 	}
-	encoded, err := json.Marshal(retainedCleanup{Action: r.Cleanup, SourcePath: r.SourcePath, From: r.From})
+	encoded, err := json.Marshal(RetainedCleanup{Action: r.Cleanup, SourcePath: r.SourcePath, From: r.From})
 	if err != nil {
 		// r.Cleanup/From are plain data assembled by this package's own
 		// config-loading code; a marshal failure here would mean that
@@ -996,16 +994,43 @@ func retainCleanup(r Resolved) json.RawMessage {
 	return encoded
 }
 
+// DecodeRetainedCleanup decodes a plain node's TaskState.Cleanup, as
+// written by retainCleanup. ok is false with a nil error for an empty raw
+// value (a nested node, or one with no cleanup declared) -- not an error
+// condition a caller need report.
+func DecodeRetainedCleanup(raw json.RawMessage) (rc RetainedCleanup, ok bool, err error) {
+	if len(raw) == 0 {
+		return RetainedCleanup{}, false, nil
+	}
+	if err := json.Unmarshal(raw, &rc); err != nil {
+		return RetainedCleanup{}, false, err
+	}
+	return rc, true, nil
+}
+
 // pluginRef names the catalog alias r's setup resolved bin references
 // against, or empty for a global/user-owned effect. This is the alias
 // only, not a pinned revision/digest: resolving a stable revision would
 // require threading the plugin lockfile into RunSetup, which no caller
 // needs yet.
-func pluginRef(r Resolved) string {
-	if !r.From.IsPlugin {
+// pluginRef names the resolved plugin catalog address and content revision
+// r's cleanup action's bin references resolve against, or empty for a
+// global/user-owned effect with no plugin involved. It matches
+// plugins.ContainingPlugin's own directory-containment lookup -- the same
+// convention plugins.ResolveBin trusts for the identical SourcePath -- so it
+// finds the exact mount, not just the enabling alias r.From carries.
+func pluginRef(r Resolved, session SessionVars) string {
+	if !r.From.IsPlugin || r.SourcePath == "" {
 		return ""
 	}
-	return r.From.Alias
+	mount, ok := plugins.ContainingPlugin(session.Plugins, r.SourcePath)
+	if !ok {
+		return ""
+	}
+	if mount.Revision == "" {
+		return mount.ID
+	}
+	return mount.ID + "@" + mount.Revision
 }
 
 // toJSONShape normalizes a map[string]any (with string-typed leaves from
