@@ -157,11 +157,10 @@ func TestBuildWorkspaceProviderBinaries_BuildsOnce(t *testing.T) {
 	}
 }
 
-// Gates TestForceSharedBuildFailure, a no-op without it.
 const forceSharedBuildFailureEnvVar = "PLECT_TEST_FORCE_SHARED_BUILD_FAILURE"
 
-// Runs only as a subprocess (see TestMain_RemovesTheSharedDirAfterAFailedBuild):
-// poisoning the real shared build singleton is safe only in a throwaway process.
+// Poisoning the real shared build singleton is safe only in a throwaway
+// process, so this only runs as a subprocess.
 func TestForceSharedBuildFailure(t *testing.T) {
 	if os.Getenv(forceSharedBuildFailureEnvVar) != "1" {
 		t.Skip("subprocess helper; set " + forceSharedBuildFailureEnvVar + " to run")

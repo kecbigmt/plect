@@ -21,13 +21,6 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// onceBuiltBinaries is app/internal/service's identically-named type,
-// duplicated in this package because the original is unexported. build
-// compiles binaries into one shared directory the first time it is called
-// and returns that same directory (and any error) on every later call; the
-// directory is set as soon as it exists, before any build in the list
-// starts, so a build failing partway through still leaves a directory for
-// cleanup to find.
 type onceBuiltBinaries struct {
 	once sync.Once
 	dir  string

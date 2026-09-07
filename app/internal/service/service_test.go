@@ -24,10 +24,6 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// onceBuiltBinaries builds a fixed list of Go binaries into a shared temp
-// directory exactly once, recording dir before any build runs so a partial
-// failure still leaves something cleanup can find. Declared without the
-// integration tag its caller carries, so TestMain applies either way.
 type onceBuiltBinaries struct {
 	once sync.Once
 	dir  string
@@ -41,6 +37,8 @@ func (o *onceBuiltBinaries) build(root string, binaries []struct{ moduleDir, pkg
 			o.err = err
 			return
 		}
+		// Set before any build runs, so a build failing partway through the
+		// list still leaves a directory for cleanup to find.
 		o.dir = dir
 		for _, b := range binaries {
 			cmd := exec.Command("go", "build", "-o", filepath.Join(dir, b.name), b.pkg)
@@ -57,8 +55,6 @@ func (o *onceBuiltBinaries) build(root string, binaries []struct{ moduleDir, pkg
 	return o.dir, o.err
 }
 
-// cleanup removes o.dir, including after a failed build (build records dir
-// before any build in the list runs).
 func (o *onceBuiltBinaries) cleanup() {
 	if o.dir != "" {
 		os.RemoveAll(o.dir)
