@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 
 	"github.com/kecbigmt/plecture/app/internal/lang"
 )
@@ -90,75 +89,14 @@ func (l layerDir) scope() layerScope {
 	}
 }
 
-// layerResultCache memoizes discoverLayers by workspaceDirPath, reached via
-// a pointer field (not embedded) since Config is copied by value in tests
-// and an embedded sync.Mutex would make each copy a lock copy.
-type layerResultCache struct {
-	mu     sync.Mutex
-	byPath map[string][]discoveredLayer
-}
-
-func (lc *layerResultCache) get(path string) ([]discoveredLayer, bool) {
-	lc.mu.Lock()
-	defer lc.mu.Unlock()
-	layers, ok := lc.byPath[path]
-	return layers, ok
-}
-
-func (lc *layerResultCache) put(path string, layers []discoveredLayer) {
-	lc.mu.Lock()
-	defer lc.mu.Unlock()
-	if lc.byPath == nil {
-		lc.byPath = make(map[string][]discoveredLayer)
-	}
-	lc.byPath[path] = layers
-}
-
-func (lc *layerResultCache) evict(path string) {
-	lc.mu.Lock()
-	defer lc.mu.Unlock()
-	delete(lc.byPath, path)
-}
-
-// layerResultCache lazily creates c's cache instance, racing safely via CompareAndSwap.
-func (c *Config) layerResultCache() *layerResultCache {
-	if lc := c.layerCache.Load(); lc != nil {
-		return lc
-	}
-	lc := &layerResultCache{}
-	if !c.layerCache.CompareAndSwap(nil, lc) {
-		lc = c.layerCache.Load()
-	}
-	return lc
-}
-
-// resolveLayers is discoverLayers with fresh:true evicting
-// workspaceDirPath's cache first, for a caller needing an on-disk edit now.
-func (c *Config) resolveLayers(workspaceDirPath string, fresh bool) ([]discoveredLayer, error) {
-	if fresh {
-		c.layerResultCache().evict(workspaceDirPath)
-	}
-	return c.discoverLayers(workspaceDirPath)
-}
-
 // discoverLayers reads every cascade layer's definition root once, in
 // shallowest-first order. workspaceDirPath selects the ancestor overlays; an
 // empty one means the trusted base layers alone, which is what a caller
 // outside any workspace directory sees.
-// Memoized per workspaceDirPath for this *Config's lifetime; a new *Config
-// or resolveLayers' fresh eviction invalidates it.
 func (c *Config) discoverLayers(workspaceDirPath string) ([]discoveredLayer, error) {
-	cache := c.layerResultCache()
-	if cached, ok := cache.get(workspaceDirPath); ok {
-		return cached, nil
-	}
-	fn := c.discoverLayerFn
-	if fn == nil {
-		fn = discoverLayer
-	}
 	out := make([]discoveredLayer, 0, len(c.PluginDirs)+2)
 	for _, layer := range c.definitionRoots(workspaceDirPath) {
-		defs, err := fn(layer)
+		defs, err := discoverLayer(layer)
 		if err != nil {
 			return nil, err
 		}
@@ -167,7 +105,6 @@ func (c *Config) discoverLayers(workspaceDirPath string) ([]discoveredLayer, err
 		}
 		out = append(out, discoveredLayer{layer: layer, defs: defs})
 	}
-	cache.put(workspaceDirPath, out)
 	return out, nil
 }
 

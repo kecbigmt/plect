@@ -30,9 +30,8 @@ func loadTrustedKind[T any](resolved []resolvedDefinition, one func(*lang.Defini
 // trustedKind resolves one kind over the base layers alone. A caller loading a
 // kind the cascade does not reach has no workspace directory to pass, and
 // reading the overlays anyway would only discover declarations it must skip.
-// fresh is resolveLayers' escape hatch; see its doc comment.
-func (c *Config) trustedKind(kind lang.Kind, fresh bool) ([]resolvedDefinition, error) {
-	layers, err := c.resolveLayers("", fresh)
+func (c *Config) trustedKind(kind lang.Kind) ([]resolvedDefinition, error) {
+	layers, err := c.discoverLayers("")
 	if err != nil {
 		return nil, err
 	}

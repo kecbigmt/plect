@@ -133,7 +133,7 @@ func (sup *Supervisor) checkDeadman(ctx context.Context) {
 		if !cfg.RunScopeUp(s) {
 			continue
 		}
-		tc, err := resolveTickConfig(cfg, s, false)
+		tc, err := resolveTickConfig(cfg, s)
 		if err != nil || tc.Heartbeat.Duration <= 0 {
 			continue
 		}
@@ -151,20 +151,11 @@ func (sup *Supervisor) checkDeadman(ctx context.Context) {
 // disagree about what an unresolvable config means — the deadman sweep has
 // nothing to check, while a running reactor must keep the declaration it
 // already had.
-//
-// fresh is resolveLayers' escape hatch (see config.Config.resolveLayers):
-// sessionReactor.refreshTickConfig passes true, since its whole point is
-// recovering from a bad config sooner than the next config.Live swap; the
-// deadman sweep passes false and takes whatever is memoized.
-func resolveTickConfig(cfg *config.Config, s *domain.Session, fresh bool) (config.TickConfig, error) {
+func resolveTickConfig(cfg *config.Config, s *domain.Session) (config.TickConfig, error) {
 	if s.Workflow == "" {
 		return config.TickConfig{}, nil
 	}
-	load := cfg.LoadWorkflows
-	if fresh {
-		load = cfg.LoadWorkflowsFresh
-	}
-	workflows, err := load(s.WorkspaceDirPath)
+	workflows, err := cfg.LoadWorkflows(s.WorkspaceDirPath)
 	if err != nil {
 		return config.TickConfig{}, err
 	}
@@ -214,11 +205,7 @@ func (sup *Supervisor) buildReactor(name string, s *domain.Session) *sessionReac
 	var tc config.TickConfig
 	hc := config.DefaultHealthcheckConfig()
 	if s.Workflow != "" {
-		// Fresh, matching dispatch.Supervisor.buildDispatcher: this only
-		// runs on a session-up transition, and NewSupervisor's cfg-getter
-		// doc already promises a config change since this session last came
-		// up is visible here without a daemon restart.
-		workflows, err := cfg.LoadWorkflowsFresh(s.WorkspaceDirPath)
+		workflows, err := cfg.LoadWorkflows(s.WorkspaceDirPath)
 		if err != nil {
 			sup.logger.Warn("reactor: load workflows failed; declared [tick]/heartbeat inactive, judge builtin still active", "session", name, "error", err)
 		} else if wf, ok := workflows[s.Workflow]; ok {

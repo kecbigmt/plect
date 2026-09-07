@@ -94,13 +94,9 @@ type Config struct {
 	catalogRegistrations *plugins.CatalogRegistrations
 	catalogLock          *plugins.Lockfile
 	catalogCacheRoot     string
-	// layerCache backs discoverLayers' memoization; see layerResultCache
-	// and discoverLayers in discover.go.
-	layerCache atomic.Pointer[layerResultCache]
-	// discoverLayerFn overrides discoverLayer for tests, matching the
-	// deadmanFn/tickFn seam convention elsewhere: nil means the real
-	// discoverLayer.
-	discoverLayerFn  func(layerDir) ([]*lang.Definition, error)
+	// runScopeCache backs CurrentPlanRunScopedNodeSet's memoization; see
+	// runScopeCache and CurrentPlanRunScopedNodeSet in runstate.go.
+	runScopeCache    atomic.Pointer[runScopeCache]
 	Detached         bool           `toml:"detached"`
 	Channels         []string       `toml:"channels"`
 	InputsSchema     map[string]any `toml:"inputs_schema"`

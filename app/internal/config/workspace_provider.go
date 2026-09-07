@@ -104,7 +104,7 @@ func (p WorkspaceProviderConfig) HasResolver() bool {
 // declaration is a second address rather than a replacement, and two plugins
 // may each declare the id (see loadTrustedKind).
 func (c *Config) LoadWorkspaceProviders() (map[string]WorkspaceProviderConfig, error) {
-	resolved, err := c.trustedKind(lang.KindWorkspaceProvider, false)
+	resolved, err := c.trustedKind(lang.KindWorkspaceProvider)
 	if err != nil {
 		return nil, err
 	}

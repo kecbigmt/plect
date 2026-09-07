@@ -529,17 +529,7 @@ type layerDir struct {
 // Trust restriction: a workflow document in the workspace-dir layer is clone
 // content and may only add nodes.
 func (c *Config) LoadWorkflows(workspaceDirPath string) (map[string]WorkflowFile, error) {
-	return c.loadWorkflows(workspaceDirPath, false)
-}
-
-// LoadWorkflowsFresh is LoadWorkflows with resolveLayers' fresh escape hatch:
-// see its doc comment for which callers need this instead of LoadWorkflows.
-func (c *Config) LoadWorkflowsFresh(workspaceDirPath string) (map[string]WorkflowFile, error) {
-	return c.loadWorkflows(workspaceDirPath, true)
-}
-
-func (c *Config) loadWorkflows(workspaceDirPath string, fresh bool) (map[string]WorkflowFile, error) {
-	layers, err := c.resolveLayers(workspaceDirPath, fresh)
+	layers, err := c.discoverLayers(workspaceDirPath)
 	if err != nil {
 		return nil, err
 	}

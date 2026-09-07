@@ -92,17 +92,7 @@ func (d ChannelDefinition) ApplyInputDefaults(inputs map[string]any) map[string]
 // excluded for the same reason as workspace providers — a channel may run a
 // process.
 func (c *Config) LoadChannels() (map[string]ChannelDefinition, error) {
-	return c.loadChannels(false)
-}
-
-// LoadChannelsFresh is LoadChannels with resolveLayers' fresh escape hatch:
-// see its doc comment for which callers need this instead of LoadChannels.
-func (c *Config) LoadChannelsFresh() (map[string]ChannelDefinition, error) {
-	return c.loadChannels(true)
-}
-
-func (c *Config) loadChannels(fresh bool) (map[string]ChannelDefinition, error) {
-	resolved, err := c.trustedKind(lang.KindChannel, fresh)
+	resolved, err := c.trustedKind(lang.KindChannel)
 	if err != nil {
 		return nil, err
 	}
