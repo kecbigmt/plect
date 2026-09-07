@@ -58,17 +58,14 @@ CREATE UNIQUE INDEX sessions_live_name ON sessions(name) WHERE status <> 'destro
 CREATE INDEX sessions_alias_idx ON sessions(alias);
 CREATE INDEX sessions_parent_idx ON sessions(parent_session_id);
 
--- Static workflow-DAG nodes' identity only; a setup attempt's own facts
--- live on node_executions below. See docs/design/sqlite-persistence.md's
--- "Node execution identity" section.
+-- Static workflow-DAG nodes' identity only; see node_executions below.
 CREATE TABLE node_instances (
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     node_id TEXT NOT NULL,
     PRIMARY KEY (session_id, node_id)
 );
 
--- One row per setup attempt; node_executions_one_unreleased_idx below
--- enforces at most one unreleased (status <> 'cleaned') row per node.
+-- One row per setup attempt; see node_executions_one_unreleased_idx below.
 CREATE TABLE node_executions (
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
@@ -120,8 +117,7 @@ CREATE TABLE node_execution_layers (
     PRIMARY KEY (execution_id, position)
 );
 
--- execution_id is the dependent (released first); depends_on_execution_id
--- is the prerequisite.
+-- execution_id is the dependent (released first), depends_on_execution_id the prerequisite.
 CREATE TABLE node_execution_dependencies (
     execution_id TEXT NOT NULL REFERENCES node_executions(id) ON DELETE CASCADE,
     depends_on_execution_id TEXT NOT NULL REFERENCES node_executions(id) ON DELETE CASCADE,
