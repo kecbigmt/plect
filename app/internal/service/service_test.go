@@ -25,12 +25,10 @@ import (
 )
 
 // onceBuiltBinaries builds a fixed list of Go binaries into a shared temp
-// directory exactly once per test binary run, recording the directory
-// before any build in the list runs — so a build partway through the list
-// failing still leaves dir set to something a caller can clean up, not just
-// the all-succeeded path. Declared here, without the integration tag its
-// only caller (provider_github_e2e_test.go) carries, so TestMain's cleanup
-// below runs identically whether or not that tag is set.
+// directory exactly once, recording dir before any build runs so a partial
+// failure still leaves something a caller can clean up. Declared here,
+// without the integration tag its only caller carries, so TestMain's
+// cleanup below applies whether or not that tag is set.
 type onceBuiltBinaries struct {
 	once sync.Once
 	dir  string

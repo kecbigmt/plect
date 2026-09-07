@@ -166,13 +166,6 @@ func TestBuildShippedPluginBinaries_BuildsOnce(t *testing.T) {
 	}
 }
 
-// TestOnceBuiltBinaries_RecordsDirBeforeBuildsFinish uses its own
-// onceBuiltBinaries value (not the package's shared singleton, which a
-// forced failure here would otherwise poison for every other test in this
-// run) to pin the fix in buildSharedShippedPluginBinaries: a build failing
-// partway through the list must still leave dir set to where the binaries
-// built before it live, so a caller (TestMain here) can clean up the
-// partial result rather than leaking it.
 func TestOnceBuiltBinaries_RecordsDirBeforeBuildsFinish(t *testing.T) {
 	var o onceBuiltBinaries
 	root := repoRootForE2E(t)

@@ -21,13 +21,8 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// onceBuiltBinaries builds a fixed list of Go binaries into a shared temp
-// directory exactly once per test binary run, recording the directory
-// before any build in the list runs — so a build partway through the list
-// failing still leaves dir set to something a caller can clean up, not just
-// the all-succeeded path. Declared here, without the integration tag its
-// only caller (eventdriven_e2e_test.go) carries, so TestMain's cleanup
-// below runs identically whether or not that tag is set.
+// onceBuiltBinaries mirrors app/internal/service's own type of the same
+// name (see its doc comment) — duplicated here because it is unexported.
 type onceBuiltBinaries struct {
 	once sync.Once
 	dir  string

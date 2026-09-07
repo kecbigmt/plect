@@ -157,13 +157,8 @@ func TestBuildWorkspaceProviderBinaries_BuildsOnce(t *testing.T) {
 	}
 }
 
-// TestOnceBuiltBinaries_RecordsDirBeforeBuildsFinish uses its own
-// onceBuiltBinaries value (not the package's shared singleton, which a
-// forced failure here would otherwise poison for every other test in this
-// run) to pin the fix in buildSharedWorkspaceProviderBinaries: a build
-// failing partway through the list must still leave dir set to where the
-// binaries built before it live, so a caller (TestMain here) can clean up
-// the partial result rather than leaking it.
+// A throwaway onceBuiltBinaries, not the package's shared singleton: a
+// forced failure there would poison it for every other test in this run.
 func TestOnceBuiltBinaries_RecordsDirBeforeBuildsFinish(t *testing.T) {
 	var o onceBuiltBinaries
 	root := repoRoot(t)
