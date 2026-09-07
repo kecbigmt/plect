@@ -72,12 +72,20 @@ FROM sessions WHERE alias = ? AND status <> 'destroyed' ORDER BY name;
 SELECT name FROM sessions WHERE parent_session_id = ? AND status <> 'destroyed' ORDER BY name;
 
 -- name: ListLiveChildSessionNamesForSessions :many
-SELECT parent_session_id, name FROM sessions
-WHERE parent_session_id IN (sqlc.slice(parent_ids)) AND status <> 'destroyed'
+SELECT
+    parent_session_id,
+    name
+FROM sessions
+WHERE parent_session_id IN (sqlc.slice(parent_ids))
+  AND status <> 'destroyed'
 ORDER BY parent_session_id, name;
 
 -- name: SessionNamesByIDs :many
-SELECT id, name FROM sessions WHERE id IN (sqlc.slice(ids));
+SELECT
+    id,
+    name
+FROM sessions
+WHERE id IN (sqlc.slice(ids));
 
 -- name: SessionIDByLiveName :one
 SELECT id FROM sessions WHERE name = ? AND status <> 'destroyed';

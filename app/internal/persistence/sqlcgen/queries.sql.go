@@ -777,8 +777,12 @@ func (q *Queries) ListLiveChildSessionNames(ctx context.Context, parentSessionID
 }
 
 const listLiveChildSessionNamesForSessions = `-- name: ListLiveChildSessionNamesForSessions :many
-SELECT parent_session_id, name FROM sessions
-WHERE parent_session_id IN (/*SLICE:parent_ids*/?) AND status <> 'destroyed'
+SELECT
+    parent_session_id,
+    name
+FROM sessions
+WHERE parent_session_id IN (/*SLICE:parent_ids*/?)
+  AND status <> 'destroyed'
 ORDER BY parent_session_id, name
 `
 
@@ -1934,7 +1938,11 @@ func (q *Queries) SessionNameByID(ctx context.Context, id string) (string, error
 }
 
 const sessionNamesByIDs = `-- name: SessionNamesByIDs :many
-SELECT id, name FROM sessions WHERE id IN (/*SLICE:ids*/?)
+SELECT
+    id,
+    name
+FROM sessions
+WHERE id IN (/*SLICE:ids*/?)
 `
 
 type SessionNamesByIDsRow struct {
