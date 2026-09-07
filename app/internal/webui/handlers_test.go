@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -39,6 +40,8 @@ type fakeService struct {
 	gotResumeName   string
 	gotResumeCursor string
 	resumeFn        func(name, cursor string) (string, int64, error)
+
+	tailAllFn func(ctx context.Context, f event.Filter, fn func(event.Event)) error
 
 	createResult  *service.CreateResult
 	upResult      *service.UpResult
@@ -82,6 +85,14 @@ func (f *fakeService) EventStreamResume(name, cursor string) (string, int64, err
 		return f.resumeFn(name, cursor)
 	}
 	return f.resumeGen, f.resumeOffset, f.resumeErr
+}
+
+func (f *fakeService) EventTailAll(ctx context.Context, filt event.Filter, fn func(event.Event)) error {
+	if f.tailAllFn != nil {
+		return f.tailAllFn(ctx, filt, fn)
+	}
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 func (f *fakeService) PublishEvent(name string, p service.EventPublishParams) (event.Event, error) {

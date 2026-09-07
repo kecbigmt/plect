@@ -5,6 +5,7 @@ package webui
 
 import (
 	"bytes"
+	"context"
 	"embed"
 	"errors"
 	"fmt"
@@ -102,6 +103,10 @@ type SessionService interface {
 	// reads never needed cursor-based paging for.
 	EventPage(name string, p service.EventPageParams) (service.EventPageResult, error)
 	EventStreamResume(name, cursor string) (gen string, offset int64, err error)
+	// EventTailAll backs the cross-session facts stream (events_stream_all.go):
+	// unlike every other method here, this one runs until ctx ends rather than
+	// returning a single result.
+	EventTailAll(ctx context.Context, f event.Filter, fn func(event.Event)) error
 	PublishEvent(name string, p service.EventPublishParams) (event.Event, error)
 	Create(service.CreateParams) (*service.CreateResult, error)
 	Up(service.UpParams) (*service.UpResult, error)
@@ -171,6 +176,10 @@ func (s *Server) Routes() http.Handler {
 	// Generated contracts do not own SSE replay semantics, so this route
 	// remains hand-written.
 	mux.HandleFunc("GET /api/v1/events/stream", s.handleSessionEventsStreamJSON)
+	// The list's cross-session facts stream (events_stream_all.go) — a
+	// distinct fixed path, not a "session" value on the route above, since it
+	// follows every session rather than one.
+	mux.HandleFunc("GET /api/v1/events/stream/all", s.handleAllSessionsEventsStreamJSON)
 
 	// Lifecycle mutations. A {name...} wildcard must be the final path segment,
 	// so the action can't be a suffix after the (slash-containing) name; the

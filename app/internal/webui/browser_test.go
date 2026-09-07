@@ -21,6 +21,7 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/service"
 	"github.com/kecbigmt/plecture/app/internal/state"
 	"github.com/kecbigmt/plecture/contracts/event"
+	contract "github.com/kecbigmt/plecture/contracts/state"
 	"github.com/mxschmitt/playwright-go"
 )
 
@@ -604,5 +605,52 @@ func TestBrowserAcceptance_SessionListFetchesOnceDespiteEventStorm(t *testing.T)
 		t.Fatalf("a burst of lifecycle events should coalesce into exactly one more session-list request, got %d total", got)
 	}
 
+	requireNoConsoleErrors(t, errs)
+}
+
+// Acceptance: a lifecycle event on a session that is not selected still
+// refreshes its own row in the tree — the selected session's own live
+// stream cannot observe it, so the list needs its own, session-independent
+// source (useSessionListLiveFacts).
+func TestBrowserAcceptance_UnselectedSessionRowUpdatesLive(t *testing.T) {
+	store := state.NewStore(t.TempDir())
+	seedSession(t, store, &domain.Session{Name: "browser-cross-selected"})
+	seedSession(t, store, &domain.Session{Name: "browser-cross-other"})
+	origin, svc := browserOrigin(t, store, &Config{})
+
+	page := newBrowserPage(t)
+	errs := consoleErrors(t, page)
+	if _, err := page.Goto(origin + "/app/"); err != nil {
+		t.Fatalf("goto /app/: %v", err)
+	}
+	if err := page.GetByRole("treeitem", playwright.PageGetByRoleOptions{Name: "browser-cross-selected"}).Click(); err != nil {
+		t.Fatalf("select a session other than the one that will change: %v", err)
+	}
+
+	otherDot := page.GetByRole("treeitem", playwright.PageGetByRoleOptions{Name: "browser-cross-other"}).Locator("[aria-hidden='true']")
+	if err := expect.Locator(otherDot).ToHaveClass(regexp.MustCompile(`bg-muted-foreground/40`)); err != nil {
+		t.Fatalf("unselected session should render its seeded down state: %v", err)
+	}
+
+	// Run is derived from a produced run-scoped task-state entry (RunScopeUp),
+	// not a stored field; a real `up` records both this and the event below,
+	// so publish() alone would record the event but not the fact the list
+	// actually renders.
+	sess, err := store.GetE("browser-cross-other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.Tasks = map[string]*contract.TaskState{
+		"runtime": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced},
+	}
+	if err := store.Put(sess); err != nil {
+		t.Fatal(err)
+	}
+	publish(t, svc, "browser-cross-other", service.EventPublishParams{Type: event.TypeLifecyclePrefix + "up", Summary: "up"})
+
+	longWait := playwright.LocatorAssertionsToHaveClassOptions{Timeout: playwright.Float(5000)}
+	if err := expect.Locator(otherDot).ToHaveClass(regexp.MustCompile(`bg-green-500`), longWait); err != nil {
+		t.Fatalf("a lifecycle event for an unselected session should still refresh its row: %v", err)
+	}
 	requireNoConsoleErrors(t, errs)
 }

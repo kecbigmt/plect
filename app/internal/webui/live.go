@@ -1,6 +1,8 @@
 package webui
 
 import (
+	"context"
+
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/service"
 	"github.com/kecbigmt/plecture/app/internal/state"
@@ -79,6 +81,11 @@ func (l *LiveService) EventPage(name string, p service.EventPageParams) (service
 
 func (l *LiveService) EventStreamResume(name, cursor string) (string, int64, error) {
 	return service.EventStreamResume(l.cfg, l.store, name, cursor)
+}
+
+// EventTailAll follows every session's log live, filtered by f, until ctx ends.
+func (l *LiveService) EventTailAll(ctx context.Context, f event.Filter, fn func(event.Event)) error {
+	return service.EventTailAll(ctx, l.store, f, fn)
 }
 
 // PublishEvent appends an event to the session's log. The bus tailer fans the

@@ -3,11 +3,11 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/eventStream", () => ({ openEventStream: vi.fn() }));
+vi.mock("@/lib/eventStream", () => ({ openEventStream: vi.fn(), openAllSessionsEventStream: vi.fn() }));
 
-import { openEventStream } from "@/lib/eventStream";
+import { openAllSessionsEventStream, openEventStream } from "@/lib/eventStream";
 import type { SessionEvent } from "@/lib/eventsApi";
-import { isLifecycleEvent, useLiveEvents } from "@/lib/useEvents";
+import { isLifecycleEvent, useLiveEvents, useSessionListLiveFacts } from "@/lib/useEvents";
 import { sessionDetailQueryKey, sessionListQueryKey, useSessionList } from "@/lib/useSessions";
 
 function makeWrapper() {
@@ -33,6 +33,7 @@ function stubEvent(overrides: Partial<SessionEvent> = {}): SessionEvent {
 
 afterEach(() => {
   vi.mocked(openEventStream).mockReset();
+  vi.mocked(openAllSessionsEventStream).mockReset();
 });
 
 describe("isLifecycleEvent", () => {
@@ -73,7 +74,7 @@ describe("useLiveEvents", () => {
     expect(invalidateSpy).not.toHaveBeenCalled();
   });
 
-  it("invalidates the session list and detail on a lifecycle event, after a debounce", () => {
+  it("invalidates the session detail (not the list) on a lifecycle event, after a debounce", () => {
     vi.useFakeTimers();
     try {
       const { queryClient, wrapper } = makeWrapper();
@@ -88,8 +89,11 @@ describe("useLiveEvents", () => {
 
       vi.runAllTimers();
 
+      // The list has its own invalidation source (useSessionListLiveFacts,
+      // below) so a selected session's own lifecycle event never schedules
+      // a second, redundant list refetch here.
+      expect(invalidateSpy).toHaveBeenCalledTimes(1);
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: sessionDetailQueryKey("team/a") });
-      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: sessionListQueryKey() });
     } finally {
       vi.useRealTimers();
     }
@@ -110,8 +114,8 @@ describe("useLiveEvents", () => {
       handlers.onEvent(stubEvent({ id: "evt-3", type: "lifecycle.up" }));
       vi.runAllTimers();
 
-      // One invalidateQueries call per key (detail, list), not one per event.
-      expect(invalidateSpy).toHaveBeenCalledTimes(2);
+      // One invalidateQueries call, not one per event.
+      expect(invalidateSpy).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
@@ -189,27 +193,36 @@ describe("useLiveEvents", () => {
     }
   });
 
-  it("falls back to a coalesced refetch when a status-message event arrives before the detail is cached", () => {
-    vi.useFakeTimers();
-    try {
-      const { queryClient, wrapper } = makeWrapper();
-      const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
-      renderHook(() => useLiveEvents("team/a", true, ""), { wrapper });
+  it("buffers a status-message event that arrives before the detail is cached, applying it once the detail resolves", () => {
+    const { queryClient, wrapper } = makeWrapper();
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+    renderHook(() => useLiveEvents("team/a", true, ""), { wrapper });
 
-      const handlers = vi.mocked(openEventStream).mock.calls[0][2];
-      handlers.onEvent(stubEvent({ type: "plect.status_message", metadata: { text: "hi", cleared: "false", previous: "" } }));
+    const handlers = vi.mocked(openEventStream).mock.calls[0][2];
+    handlers.onEvent(
+      stubEvent({ type: "plect.status_message", metadata: { text: "hi", cleared: "false", previous: "" } }),
+    );
 
-      expect(invalidateSpy).not.toHaveBeenCalled();
-      vi.runAllTimers();
+    // No cached detail yet: nothing to patch, and no network fallback either.
+    expect(invalidateSpy).not.toHaveBeenCalled();
+    expect(queryClient.getQueryData(sessionDetailQueryKey("team/a"))).toBeUndefined();
 
-      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: sessionDetailQueryKey("team/a") });
-      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: sessionListQueryKey() });
-    } finally {
-      vi.useRealTimers();
-    }
+    // The detail query's own fetch lands independently of the live stream.
+    queryClient.setQueryData(sessionDetailQueryKey("team/a"), {
+      sessionName: "team/a",
+      run: "up",
+      resourceId: "",
+      createdAt: "2026-01-01T00:00:00Z",
+      workspaceDirExists: false,
+    });
+
+    expect(invalidateSpy).not.toHaveBeenCalled();
+    expect(queryClient.getQueryData(sessionDetailQueryKey("team/a"))).toMatchObject({
+      message: { text: "hi" },
+    });
   });
 
-  it("flushes a pending debounced invalidation on unmount instead of dropping it", () => {
+  it("keeps a pending debounced invalidation alive after unmount instead of dropping it", () => {
     vi.useFakeTimers();
     try {
       const { queryClient, wrapper } = makeWrapper();
@@ -221,15 +234,18 @@ describe("useLiveEvents", () => {
       expect(invalidateSpy).not.toHaveBeenCalled();
 
       unmount();
+      // Unmounting must not cancel it outright...
+      expect(invalidateSpy).not.toHaveBeenCalled();
 
+      // ...it still fires on its own original schedule.
+      vi.runAllTimers();
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: sessionDetailQueryKey("team/a") });
-      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: sessionListQueryKey() });
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("flushes a pending debounced invalidation for the outgoing session when the selection changes", () => {
+  it("keeps a pending debounced invalidation for the outgoing session alive when the selection changes", () => {
     vi.useFakeTimers();
     try {
       const { queryClient, wrapper } = makeWrapper();
@@ -244,11 +260,85 @@ describe("useLiveEvents", () => {
       expect(invalidateSpy).not.toHaveBeenCalled();
 
       rerender({ sessionName: "team/b" });
+      expect(invalidateSpy).not.toHaveBeenCalled();
 
+      vi.runAllTimers();
+      // Still keyed to "team/a", the session that actually observed the event.
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: sessionDetailQueryKey("team/a") });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("coalesces lifecycle events across rapid session switches into one invalidation, not one per hop", () => {
+    vi.useFakeTimers();
+    try {
+      const { queryClient, wrapper } = makeWrapper();
+      const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+      const { rerender } = renderHook(
+        ({ sessionName }: { sessionName: string }) => useLiveEvents(sessionName, true, ""),
+        { wrapper, initialProps: { sessionName: "team/a" } },
+      );
+      vi.mocked(openEventStream).mock.calls[0][2].onEvent(stubEvent({ type: "lifecycle.up" }));
+
+      rerender({ sessionName: "team/b" });
+      vi.mocked(openEventStream).mock.calls[1][2].onEvent(stubEvent({ type: "lifecycle.up" }));
+
+      rerender({ sessionName: "team/c" });
+      vi.mocked(openEventStream).mock.calls[2][2].onEvent(stubEvent({ type: "lifecycle.up" }));
+
+      expect(invalidateSpy).not.toHaveBeenCalled();
+      vi.runAllTimers();
+
+      // Only the last hop's debounce survives; the earlier two were superseded.
+      expect(invalidateSpy).toHaveBeenCalledTimes(1);
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: sessionDetailQueryKey("team/c") });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("useSessionListLiveFacts", () => {
+  it("invalidates the list, coalesced, on a lifecycle event for any session", () => {
+    vi.useFakeTimers();
+    try {
+      const { queryClient, wrapper } = makeWrapper();
+      const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+      renderHook(() => useSessionListLiveFacts(), { wrapper });
+
+      const handlers = vi.mocked(openAllSessionsEventStream).mock.calls[0][0];
+      handlers.onEvent(stubEvent({ sessionName: "team/z", type: "lifecycle.up" }));
+
+      expect(invalidateSpy).not.toHaveBeenCalled();
+      vi.runAllTimers();
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: sessionListQueryKey() });
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("patches a non-selected session's cached list row from a status-message event, with no refetch", () => {
+    const { queryClient, wrapper } = makeWrapper();
+    queryClient.setQueryData(sessionListQueryKey(), [
+      { sessionName: "team/z", displayStatus: "up", run: "up", resourceId: "" },
+    ]);
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+    renderHook(() => useSessionListLiveFacts(), { wrapper });
+
+    const handlers = vi.mocked(openAllSessionsEventStream).mock.calls[0][0];
+    handlers.onEvent(
+      stubEvent({
+        sessionName: "team/z",
+        type: "plect.status_message",
+        metadata: { text: "reviewing", cleared: "false", previous: "" },
+      }),
+    );
+
+    expect(invalidateSpy).not.toHaveBeenCalled();
+    const list = queryClient.getQueryData<{ sessionName: string; message?: { text: string } }[]>(
+      sessionListQueryKey(),
+    );
+    expect(list?.[0].message).toMatchObject({ text: "reviewing" });
   });
 });

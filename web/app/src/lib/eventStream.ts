@@ -25,13 +25,20 @@ export interface EventStreamHandlers {
   onStateChange: (state: EventStreamState) => void;
 }
 
-function streamUrl(sessionName: string, cursor: string): string {
+function sessionStreamUrl(sessionName: string, cursor: string): string {
   const url = new URL("/api/v1/events/stream", window.location.origin);
   url.searchParams.set("session", sessionName);
   if (cursor) {
     url.searchParams.set("cursor", cursor);
   }
   return url.toString();
+}
+
+// No session, no cursor: the list's cross-session facts source
+// (events_stream_all.go) has no resume token — a reconnect just replays its
+// filtered history again rather than continuing from where it left off.
+function allSessionsStreamUrl(): string {
+  return new URL("/api/v1/events/stream/all", window.location.origin).toString();
 }
 
 function isAbortError(err: unknown): boolean {
@@ -68,7 +75,7 @@ function dispatchFrame(raw: string, onEvent: (event: SessionEvent) => void): voi
 }
 
 async function connectOnce(
-  sessionName: string,
+  urlFor: (cursor: string) => string,
   cursor: { value: string },
   handlers: EventStreamHandlers,
   signal: AbortSignal,
@@ -76,7 +83,7 @@ async function connectOnce(
 ): Promise<ConnectOutcome> {
   let response: Response;
   try {
-    response = await fetch(streamUrl(sessionName, cursor.value), {
+    response = await fetch(urlFor(cursor.value), {
       signal,
       credentials: "same-origin",
     });
@@ -142,8 +149,8 @@ async function connectOnce(
   return { kind: "retry" };
 }
 
-export function openEventStream(
-  sessionName: string,
+function openStream(
+  urlFor: (cursor: string) => string,
   initialCursor: string,
   handlers: EventStreamHandlers,
   signal: AbortSignal,
@@ -153,7 +160,7 @@ export function openEventStream(
     let attempt = 0;
     handlers.onStateChange("connecting");
     while (!signal.aborted) {
-      const outcome = await connectOnce(sessionName, cursor, handlers, signal, () => {
+      const outcome = await connectOnce(urlFor, cursor, handlers, signal, () => {
         attempt = 0;
       });
       if (signal.aborted || outcome.kind === "aborted") {
@@ -172,4 +179,20 @@ export function openEventStream(
       await sleep(backoffDelayMs(attempt), signal);
     }
   })();
+}
+
+export function openEventStream(
+  sessionName: string,
+  initialCursor: string,
+  handlers: EventStreamHandlers,
+  signal: AbortSignal,
+): void {
+  openStream((cursor) => sessionStreamUrl(sessionName, cursor), initialCursor, handlers, signal);
+}
+
+// The list's cross-session facts source: same reconnect/backoff/parsing
+// engine as openEventStream, over the one unchanging all-sessions URL
+// instead of one session's.
+export function openAllSessionsEventStream(handlers: EventStreamHandlers, signal: AbortSignal): void {
+  openStream(allSessionsStreamUrl, "", handlers, signal);
 }

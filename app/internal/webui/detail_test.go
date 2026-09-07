@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"testing"
@@ -121,6 +122,10 @@ func (n nameCapture) EventPage(string, service.EventPageParams) (service.EventPa
 	return service.EventPageResult{}, nil
 }
 func (n nameCapture) EventStreamResume(string, string) (string, int64, error) { return "", 0, nil }
+func (n nameCapture) EventTailAll(ctx context.Context, _ event.Filter, _ func(event.Event)) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
 func (n nameCapture) PublishEvent(string, service.EventPublishParams) (event.Event, error) {
 	return event.Event{}, nil
 }

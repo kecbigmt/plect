@@ -1,8 +1,11 @@
 package service
 
 import (
+	"context"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/domain"
@@ -581,5 +584,109 @@ func TestEventPageSubtreeUnknownRootErrors(t *testing.T) {
 	var svcErr *Error
 	if !errors.As(err, &svcErr) || svcErr.Code != ErrSessionNotFound {
 		t.Fatalf("want ErrSessionNotFound for unknown root, got %v", err)
+	}
+}
+
+// EventTailAll has no root: it follows every session in state (unlike
+// EventTailSubtree, which needs one to resolve), matching only the events
+// the caller's filter names, never replaying a session's history from
+// before the follow began, and picks up a session created after the follow
+// already started.
+func TestEventTailAllFollowsEverySessionAndPicksUpNewOnes(t *testing.T) {
+	store := state.NewStore(t.TempDir())
+	for _, n := range []string{"team/a", "team/b"} {
+		if err := store.Put(&domain.Session{Name: n}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Pre-existing history, published before the follow starts: a real
+	// browser reconnect must not resurface these as if they just happened.
+	if _, err := EventPublish(nil, store, "team/a", EventPublishParams{Type: event.TypeLifecyclePrefix + "created", Summary: "a-created"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EventPublish(nil, store, "team/b", EventPublishParams{Type: event.TypeLifecyclePrefix + "created", Summary: "b-created"}); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var mu sync.Mutex
+	var got []event.Event
+	done := make(chan struct{})
+	go func() {
+		_ = EventTailAll(ctx, store, event.Filter{Types: []string{"lifecycle.*", event.TypeStatusMessage}}, func(ev event.Event) {
+			mu.Lock()
+			got = append(got, ev)
+			mu.Unlock()
+		})
+		close(done)
+	}()
+
+	// Lets the follow's first tick prime team/a and team/b at their current
+	// tail before either publishes below, so priming can't race a publish
+	// and mistake it for pre-existing history.
+	time.Sleep(150 * time.Millisecond)
+
+	if _, err := EventPublish(nil, store, "team/a", EventPublishParams{Type: event.TypeLifecyclePrefix + "up", Summary: "a-up"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EventPublish(nil, store, "team/b", EventPublishParams{Type: event.TypeStatusMessage, Summary: "b-status"}); err != nil {
+		t.Fatal(err)
+	}
+	// Not a matching type: must never reach fn below.
+	if _, err := EventPublish(nil, store, "team/a", EventPublishParams{Type: event.TypeUserNote, Summary: "a-note"}); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		mu.Lock()
+		n := len(got)
+		mu.Unlock()
+		if n >= 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for the two matching events, got %d", n)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// A session that joins after the follow started is picked up automatically.
+	if err := store.Put(&domain.Session{Name: "team/c"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EventPublish(nil, store, "team/c", EventPublishParams{Type: event.TypeLifecyclePrefix + "created", Summary: "c-created"}); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(5 * time.Second)
+	for {
+		mu.Lock()
+		n := len(got)
+		mu.Unlock()
+		if n >= 3 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for the newly-created session's event, got %d", n)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	cancel()
+	<-done
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, ev := range got {
+		if ev.Type == event.TypeUserNote {
+			t.Fatalf("filter must exclude a non-matching type, got %+v", ev)
+		}
+		if ev.Summary == "a-created" || ev.Summary == "b-created" {
+			t.Fatalf("must not replay history from before the follow started, got %+v", ev)
+		}
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d events, want exactly 3 (a-up, b-status, c-created)", len(got))
 	}
 }

@@ -4,6 +4,7 @@ import { PanelLeftIcon, PanelRightIcon } from "lucide-react";
 import type { BootstrapInfo } from "@/lib/bootstrap";
 import { useMediaQuery } from "@/lib/useMediaQuery";
 import { useSessionList } from "@/lib/useSessions";
+import { useSessionListLiveFacts } from "@/lib/useEvents";
 import { ancestorNames } from "@/lib/sessionTree";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -37,6 +38,9 @@ export function AppShell({ bootstrap }: { bootstrap: BootstrapInfo }) {
   // its cache rather than issuing a second fetch; only used here to compute
   // the ancestor chain to expand on selection.
   const sessionList = useSessionList();
+  // Owned here, not per selection: it must keep every row's facts current
+  // regardless of which session (if any) is selected.
+  useSessionListLiveFacts();
 
   function selectSession(name: string) {
     setSelectedName(name);
