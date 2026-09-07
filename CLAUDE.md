@@ -254,6 +254,13 @@ pointing at another module in this repository, e.g. `app`'s pin on
 is reachable from `main` before merging — an unreachable commit breaks
 resolution for every downstream `go install`.
 
+### Before every push
+
+Run `scripts/check-all.sh` and fix anything it reports before pushing. It
+runs `gofmt`, `go vet`, `go test`, and every `scripts/check-*.sh` CI runs,
+in the same order and with the same arguments CI uses. A push that fails a
+check CI would fail costs a full review round.
+
 ### Definition of done
 
 A PR is done when:

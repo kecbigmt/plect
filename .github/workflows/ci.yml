@@ -1,5 +1,8 @@
 name: CI
 
+# scripts/check-all.sh runs the gofmt/go vet/go test/check-*.sh subset of
+# this file's jobs locally, so a push can be pre-checked before CI sees it.
+
 on:
   pull_request:
   push:
