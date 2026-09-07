@@ -218,6 +218,33 @@ describe("useLiveEvents", () => {
     });
   });
 
+  it("still applies a buffered status-message event if the keyed instance unmounts before the detail fetch resolves", () => {
+    const { queryClient, wrapper } = makeWrapper();
+    const { unmount } = renderHook(() => useLiveEvents("team/a", true, ""), { wrapper });
+
+    const handlers = vi.mocked(openEventStream).mock.calls[0][2];
+    handlers.onEvent(
+      stubEvent({ type: "plect.status_message", metadata: { text: "hi", cleared: "false", previous: "" } }),
+    );
+
+    // A session switch unmounts this keyed instance while the detail
+    // fetch that started before the switch is still in flight.
+    unmount();
+
+    // The fetch resolves after the switch.
+    queryClient.setQueryData(sessionDetailQueryKey("team/a"), {
+      sessionName: "team/a",
+      run: "up",
+      resourceId: "",
+      createdAt: "2026-01-01T00:00:00Z",
+      workspaceDirExists: false,
+    });
+
+    expect(queryClient.getQueryData(sessionDetailQueryKey("team/a"))).toMatchObject({
+      message: { text: "hi" },
+    });
+  });
+
   it("keeps a pending debounced invalidation alive after unmount instead of dropping it", () => {
     vi.useFakeTimers();
     try {
@@ -291,7 +318,6 @@ describe("useLiveEvents", () => {
       expect(invalidateSpy).not.toHaveBeenCalled();
       vi.runAllTimers();
 
-      // All three survive: each was its own keyed instance's own timer.
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: sessionDetailQueryKey("team/a") });
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: sessionDetailQueryKey("team/b") });
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: sessionDetailQueryKey("team/c") });

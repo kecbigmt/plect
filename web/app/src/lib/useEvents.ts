@@ -118,22 +118,25 @@ export function useLiveEvents(sessionName: string | null, historyReady: boolean,
       }, INVALIDATE_COALESCE_MS);
     }
 
-    // Applies a buffered status patch once this session's detail actually
-    // has data, covering a fetch that was already in flight when it arrived.
+    // Applies a buffered status patch once this session's detail settles.
     const unsubscribe = queryClient.getQueryCache().subscribe((cacheEvent) => {
-      if (cacheEvent.type !== "updated" || cacheEvent.query.state.status !== "success") {
+      if (cacheEvent.type !== "updated") {
         return;
       }
       const [kind, name] = cacheEvent.query.queryKey;
       if (kind !== "session" || name !== session) {
         return;
       }
-      const pending = pendingStatusPatchRef.current;
-      if (pending === null) {
+      const { status } = cacheEvent.query.state;
+      if (status !== "success" && status !== "error") {
         return;
       }
+      const pending = pendingStatusPatchRef.current;
       pendingStatusPatchRef.current = null;
-      applyStatusMessagePatch(queryClient, session, pending);
+      if (pending !== null && status === "success") {
+        applyStatusMessagePatch(queryClient, session, pending);
+      }
+      unsubscribe();
     });
 
     openEventStream(
@@ -159,8 +162,9 @@ export function useLiveEvents(sessionName: string | null, historyReady: boolean,
     );
     return () => {
       controller.abort();
-      unsubscribe();
-      pendingStatusPatchRef.current = null;
+      // A detail fetch in flight at unmount must still get its buffered
+      // patch applied once it resolves, so the subscription is deliberately
+      // kept alive rather than torn down here.
     };
   }, [sessionName, historyReady, resumeCursor, queryClient]);
 
