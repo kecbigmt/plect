@@ -342,9 +342,7 @@ func recreateSessionRuntime(cfg *config.Config, store *state.Store, sessionName 
 		}
 	}
 
-	session.Branch = ""
 	session.WorkspaceDirPath = ""
-	session.Message = nil
 	session.Tasks = make(map[string]*contract.TaskState)
 	session.Health = nil
 	session.LastTickAt = time.Time{}
@@ -360,9 +358,9 @@ func recreateSessionRuntime(cfg *config.Config, store *state.Store, sessionName 
 		if workspaceDir, ok := outputs[contract.OutputKeyWorkspaceDir].(string); ok {
 			session.WorkspaceDirPath = workspaceDir
 		}
-		if branch, ok := outputs["branch"].(string); ok && branch != "" {
-			session.Branch = branch
-		}
+		// A git-backed provider's own "branch" output (domain.SessionBranch)
+		// needs no mirroring here: it already lives in this @workflow node's
+		// Outputs, persisted by replaceRuntimeState below.
 	}
 	if err := replaceRuntimeState(store, sessionName, session); err != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to save session state: %v", err)}

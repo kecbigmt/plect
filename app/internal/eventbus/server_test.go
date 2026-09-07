@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/eventlog"
+	"github.com/kecbigmt/plecture/app/internal/eventlog/eventlogtest"
 	"github.com/kecbigmt/plecture/app/internal/sessionhub"
 	"github.com/kecbigmt/plecture/contracts/event"
 )
@@ -189,7 +190,7 @@ func TestBus_StreamSurvivesRotation(t *testing.T) {
 		t.Fatalf("replay = %q, want before", ev.Summary)
 	}
 
-	if _, err := store.NewStream("o/r-1"); err != nil {
+	if err := eventlogtest.NewIncarnation(store.Dir(), "o/r-1"); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := c.Publish(ctx, event.Event{SessionName: "o/r-1", Type: "user.note", Summary: "after-1", Direction: event.Internal}); err != nil {

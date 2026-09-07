@@ -66,15 +66,15 @@ func Destroy(cfg *config.Config, store *state.Store, params DestroyParams) (*Des
 
 	result := &DestroyResult{SessionName: sessionName}
 
-	// Fail-closed before any teardown side effect: store.Delete unconditionally
-	// clears ParentSession on every child, and plect up never re-adopts an
-	// orphan, so a silent destroy permanently severs the tree. --force makes
-	// that orphaning an explicit, reported choice instead.
+	// Fail-closed before any teardown side effect: destroying the parent
+	// removes it from the live tree while a child's ParentSession keeps
+	// naming it, and plect up never re-adopts a child onto a new live
+	// session under that name, so a silent destroy permanently strands the
+	// child. --force makes that an explicit, reported choice instead.
 	allSessions, err := store.AllE()
 	if err != nil {
-		// An unreadable store must never read as "no children": store.Delete
-		// unconditionally clears ParentSession on every child, so proceeding
-		// on a fabricated empty child list would silently orphan a real one.
+		// An unreadable store must never read as "no children": proceeding on
+		// a fabricated empty child list would silently strand a real one.
 		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("read session state: %v", err)}
 	}
 	if children := childNames(allSessions, sessionName); len(children) > 0 {
@@ -159,8 +159,8 @@ func Destroy(cfg *config.Config, store *state.Store, params DestroyParams) (*Des
 	// leave a lifecycle event claiming the session was destroyed.
 	recordLifecycle(store, sessionName, "destroyed", "session destroyed")
 
-	if err := store.Delete(sessionName); err != nil {
-		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to delete state entry: %v", err)}
+	if err := store.Destroy(sessionName); err != nil {
+		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to destroy state entry: %v", err)}
 	}
 
 	if err := eventlog.NewStore(store.Dir()).ClearChainAttempts(sessionName); err != nil {

@@ -537,7 +537,11 @@ include     = ["plect.instruction"]
 	// a freshly-resolved Config on its next periodic refresh.
 	currentCfg := &config.Config{}
 
-	stateStore := state.NewStore(t.TempDir())
+	// state.Store and eventlog.Store share one directory (and so one
+	// database): a session Put below must be visible to log's own reads,
+	// since a session row now is one incarnation.
+	dir := t.TempDir()
+	stateStore := state.NewStore(dir)
 	sock, recv := startFakeSocket(t)
 	if err := stateStore.Put(&domain.Session{
 		Name: "o/r-1", Workflow: "coding", WorkspaceDirPath: t.TempDir(),
@@ -548,10 +552,7 @@ include     = ["plect.instruction"]
 		t.Fatal(err)
 	}
 
-	log := eventlog.NewStore(t.TempDir())
-	if _, err := log.NewStream("o/r-1"); err != nil {
-		t.Fatal(err)
-	}
+	log := eventlog.NewStore(dir)
 	hub := sessionhub.NewRegistry(log, sessionhub.WithPollInterval(2*time.Millisecond))
 	defer hub.Close()
 	sup := NewSupervisor(func() *config.Config { return currentCfg }, stateStore, log, hub)

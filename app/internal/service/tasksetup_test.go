@@ -123,8 +123,11 @@ args    = ["-c", 'printf "%s" "$1" > "$2"', "provider", { from = "session.branch
 		t.Fatal(err)
 	}
 	store := testStore(t)
-	// seedSession stamps Branch "issue/1" on every session it creates.
-	seedSession(t, store, "o/r-1", "o/r", 1, "coding", map[string]*contract.TaskState{})
+	// seedSession stamps "issue/1" onto an @workflow node's branch output
+	// when the caller's own tasks map already includes one.
+	seedSession(t, store, "o/r-1", "o/r", 1, "coding", map[string]*contract.TaskState{
+		contract.WorkflowPseudoNodeID: {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced},
+	})
 
 	result, err := TaskSetup(cfg, store, TaskSetupParams{TaskID: "work", SessionName: "o/r-1", Name: "pr", Resource: "https://github.com/o/r/pull/9"})
 	if err != nil {

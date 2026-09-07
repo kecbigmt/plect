@@ -40,7 +40,6 @@ CREATE TABLE `sessions` (
   `root_session_id` text NULL,
   `resource_id` text NULL,
   `alias` text NULL,
-  `branch` text NULL,
   `workflow` text NOT NULL,
   `workspace_dir` text NULL,
   `population_workflow` text NULL,
@@ -84,6 +83,20 @@ SELECT
   o.name, 'down', o.resource_id, o.alias, o.workflow, o.workspace_dir,
   o.population_workflow, o.population_name, o.created_at, o.updated_at
 FROM `old_sessions` o;
+
+-- A name can carry event_streams rows with no old_sessions row at all
+-- (event_streams deliberately had no foreign key to sessions): its latest
+-- incarnation still becomes a live row here (minimal, workflow unknown so
+-- it takes the empty string), so its events keep resolving by name exactly
+-- as the old model's independent event_streams table let them.
+INSERT INTO `sessions` (`id`, `name`, `status`, `workflow`, `created_at`, `updated_at`)
+SELECT
+  (SELECT es.id FROM `event_streams` es WHERE es.session_name = names.session_name ORDER BY es.created_at DESC LIMIT 1),
+  names.session_name, 'down', '',
+  (SELECT es.created_at FROM `event_streams` es WHERE es.session_name = names.session_name ORDER BY es.created_at DESC LIMIT 1),
+  (SELECT es.created_at FROM `event_streams` es WHERE es.session_name = names.session_name ORDER BY es.created_at DESC LIMIT 1)
+FROM (SELECT DISTINCT session_name FROM `event_streams`) names
+WHERE NOT EXISTS (SELECT 1 FROM `old_sessions` o WHERE o.name = names.session_name);
 
 -- Backfill parent/root by resolving the recorded name against the id just minted for it.
 UPDATE `sessions`

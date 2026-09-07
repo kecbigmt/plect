@@ -6,7 +6,6 @@ import (
 
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/domain"
-	"github.com/kecbigmt/plecture/app/internal/eventlog"
 	"github.com/kecbigmt/plecture/app/internal/state"
 	"github.com/kecbigmt/plecture/contracts/event"
 )
@@ -262,12 +261,11 @@ func TestEventPageRejectsCursorAcrossSessionDeleteAndRecreateUnderSameName(t *te
 		t.Fatalf("setup page: err=%v cursor=%q", err, page.NextCursor)
 	}
 
-	if err := store.Delete(session); err != nil {
-		t.Fatalf("delete: %v", err)
+	if err := store.Destroy(session); err != nil {
+		t.Fatalf("destroy: %v", err)
 	}
-	if _, err := eventlog.NewStore(store.Dir()).NewStream(session); err != nil {
-		t.Fatalf("new stream on recreate: %v", err)
-	}
+	// EventPublish's own Append lazily mints the recreated incarnation (see
+	// eventlog.Store.Append); no separate stream-start call is needed.
 	if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote}); err != nil {
 		t.Fatalf("publish after recreate: %v", err)
 	}

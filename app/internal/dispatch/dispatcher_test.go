@@ -49,16 +49,15 @@ func runTestDispatcher(t *testing.T, log *eventlog.Store, sock string) (*session
 	t.Helper()
 	hub := sessionhub.NewRegistry(log, sessionhub.WithPollInterval(2*time.Millisecond))
 	t.Cleanup(hub.Close)
-	st := state.NewStore(t.TempDir())
+	// state.Store and log must share one directory (and so one database):
+	// dispatch itself reads log's own session row.
+	st := state.NewStore(log.Dir())
 	if err := st.Put(&domain.Session{
 		Name: "o/r-1",
 		Tasks: map[string]*contract.TaskState{
 			"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Outputs: map[string]any{"socket_path": sock}},
 		},
 	}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := log.NewStream("o/r-1"); err != nil {
 		t.Fatal(err)
 	}
 	d := &sessionDispatcher{
@@ -215,18 +214,18 @@ func runtimeDispatcher(t *testing.T, session string, log *eventlog.Store, socket
 			"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Outputs: map[string]any{"socket_path": socketPath}},
 		},
 	}
-	st := state.NewStore(t.TempDir())
-	if err := st.Put(s); err != nil {
+	// state.Store and log must share one directory (and so one database):
+	// dispatch itself reads log's own session row. Callers rebuild a
+	// dispatcher over the same log/session to simulate a restart
+	// (TestDispatcher_ReplaysFromCursorAcrossRestart), so only Put the
+	// first time — a second Put would still update the same live row (it
+	// does not mint a new incarnation), but skipping it when one already
+	// exists keeps this helper's intent explicit.
+	st := state.NewStore(log.Dir())
+	if existing, err := st.GetE(session); err != nil {
 		t.Fatal(err)
-	}
-	// Callers rebuild a dispatcher over the same log/session to simulate a
-	// restart (TestDispatcher_ReplaysFromCursorAcrossRestart), so only mint
-	// a stream the first time — a second mint would give the rebuilt
-	// dispatcher a different current stream than the one its cursor names.
-	if id, err := log.StreamID(session); err != nil {
-		t.Fatal(err)
-	} else if id == "" {
-		if _, err := log.NewStream(session); err != nil {
+	} else if existing == nil {
+		if err := st.Put(s); err != nil {
 			t.Fatal(err)
 		}
 	}

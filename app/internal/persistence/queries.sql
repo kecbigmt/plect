@@ -1,51 +1,56 @@
 -- Sessions
 
--- UpsertSession preserves the existing id when a live row (status <>
--- 'destroyed') already has this name — an ordinary Put/Update, or the
--- destroy transition itself (setting status = 'destroyed' on that same
--- row) — and keeps the freshly minted candidate id only when no live row
--- has this name yet (a genuinely new session, including a same-name
--- create after a prior destroy). RETURNING id reports whichever one now
--- applies.
--- name: UpsertSession :one
+-- InsertSession creates a genuinely new session row (no live row has this
+-- name yet -- a fresh session, including a same-name create after a prior
+-- destroy). The caller mints id itself; a name collision with another live
+-- row fails the write (sessions_live_name), which cannot happen when the
+-- caller has already confirmed no live row exists.
+-- name: InsertSession :exec
 INSERT INTO sessions (
     id, name, status, destroyed_at, parent_session_id, root_session_id,
-    resource_id, alias, branch, workflow, workspace_dir,
+    resource_id, alias, workflow, workspace_dir,
     population_workflow, population_name, inputs_json,
     health_last_checked_at, health_last_activity_at, health_last_fingerprint,
     health_last_state, health_last_reason, health_last_notified_at, health_notify_count,
     tick_consecutive_unchanged, tick_last_fingerprint, last_tick_at,
     created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(name) WHERE status <> 'destroyed' DO UPDATE SET
-    status = excluded.status,
-    destroyed_at = excluded.destroyed_at,
-    parent_session_id = excluded.parent_session_id,
-    root_session_id = excluded.root_session_id,
-    resource_id = excluded.resource_id,
-    alias = excluded.alias,
-    branch = excluded.branch,
-    workflow = excluded.workflow,
-    workspace_dir = excluded.workspace_dir,
-    population_workflow = excluded.population_workflow,
-    population_name = excluded.population_name,
-    inputs_json = excluded.inputs_json,
-    health_last_checked_at = excluded.health_last_checked_at,
-    health_last_activity_at = excluded.health_last_activity_at,
-    health_last_fingerprint = excluded.health_last_fingerprint,
-    health_last_state = excluded.health_last_state,
-    health_last_reason = excluded.health_last_reason,
-    health_last_notified_at = excluded.health_last_notified_at,
-    health_notify_count = excluded.health_notify_count,
-    tick_consecutive_unchanged = excluded.tick_consecutive_unchanged,
-    tick_last_fingerprint = excluded.tick_last_fingerprint,
-    last_tick_at = excluded.last_tick_at,
-    updated_at = excluded.updated_at
-RETURNING id;
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- UpdateSessionByID updates an existing row in place by its own id,
+-- including the destroy transition itself (setting status = 'destroyed'
+-- on that same row) -- never re-inserting id, which the sessions_live_name
+-- partial index cannot arbitrate a conflict on (it indexes name, not id;
+-- id already exists as this row's own primary key).
+-- name: UpdateSessionByID :exec
+UPDATE sessions SET
+    name = ?,
+    status = ?,
+    destroyed_at = ?,
+    parent_session_id = ?,
+    root_session_id = ?,
+    resource_id = ?,
+    alias = ?,
+    workflow = ?,
+    workspace_dir = ?,
+    population_workflow = ?,
+    population_name = ?,
+    inputs_json = ?,
+    health_last_checked_at = ?,
+    health_last_activity_at = ?,
+    health_last_fingerprint = ?,
+    health_last_state = ?,
+    health_last_reason = ?,
+    health_last_notified_at = ?,
+    health_notify_count = ?,
+    tick_consecutive_unchanged = ?,
+    tick_last_fingerprint = ?,
+    last_tick_at = ?,
+    updated_at = ?
+WHERE id = ?;
 
 -- name: GetLiveSession :one
 SELECT id, name, status, destroyed_at, parent_session_id, root_session_id,
-       resource_id, alias, branch, workflow, workspace_dir,
+       resource_id, alias, workflow, workspace_dir,
        population_workflow, population_name, inputs_json,
        health_last_checked_at, health_last_activity_at, health_last_fingerprint,
        health_last_state, health_last_reason, health_last_notified_at, health_notify_count,
@@ -55,7 +60,7 @@ FROM sessions WHERE name = ? AND status <> 'destroyed';
 
 -- name: ListLiveSessions :many
 SELECT id, name, status, destroyed_at, parent_session_id, root_session_id,
-       resource_id, alias, branch, workflow, workspace_dir,
+       resource_id, alias, workflow, workspace_dir,
        population_workflow, population_name, inputs_json,
        health_last_checked_at, health_last_activity_at, health_last_fingerprint,
        health_last_state, health_last_reason, health_last_notified_at, health_notify_count,
@@ -65,7 +70,7 @@ FROM sessions WHERE status <> 'destroyed' ORDER BY name;
 
 -- name: ListLiveSessionsByAlias :many
 SELECT id, name, status, destroyed_at, parent_session_id, root_session_id,
-       resource_id, alias, branch, workflow, workspace_dir,
+       resource_id, alias, workflow, workspace_dir,
        population_workflow, population_name, inputs_json,
        health_last_checked_at, health_last_activity_at, health_last_fingerprint,
        health_last_state, health_last_reason, health_last_notified_at, health_notify_count,
@@ -76,7 +81,7 @@ FROM sessions WHERE alias = ? AND status <> 'destroyed' ORDER BY name;
 -- name: ListLiveChildSessionNames :many
 SELECT name FROM sessions WHERE parent_session_id = ? AND status <> 'destroyed' ORDER BY name;
 
--- SessionIDByLiveName resolves a live row's id by name -- the same
+-- SessionIDByLiveName resolves a live row's id by name, the same
 -- resolution UpsertSession's own conflict target applies, exposed as a
 -- plain lookup for callers (parent/root linkage, event/cursor writes) that
 -- need just the id.
@@ -93,9 +98,18 @@ SELECT parent_session_id FROM sessions WHERE id = ?;
 SELECT COUNT(*) FROM sessions WHERE name = ? AND status <> 'destroyed';
 
 -- Every incarnation (live or destroyed) that ever had this name, oldest
--- first -- for walking forward through superseded incarnations.
+-- first, for walking forward through superseded incarnations.
 -- name: ListSessionIDsByName :many
 SELECT id FROM sessions WHERE name = ? ORDER BY created_at ASC;
+
+-- MostRecentSessionIDByName resolves a parent/root reference to id
+-- regardless of live status: a name always names its live row while one
+-- exists, but a parent/root reference set before that row was destroyed
+-- must keep resolving to it (see docs/design/sqlite-persistence.md's
+-- "Session identity and lifecycle") rather than reading as broken the
+-- moment the referenced session is no longer live.
+-- name: MostRecentSessionIDByName :one
+SELECT id FROM sessions WHERE name = ? ORDER BY created_at DESC LIMIT 1;
 
 -- Every name that has ever named a session, live or destroyed.
 -- name: ListEverSessionNames :many
@@ -180,6 +194,9 @@ RETURNING id;
 DELETE FROM task_instances WHERE session_id = ? AND instance_name = ?;
 
 -- Task instance layers
+
+-- name: DeleteTaskInstanceLayersByInstanceID :exec
+DELETE FROM task_instance_layers WHERE task_instance_id = ?;
 
 -- name: InsertTaskInstanceLayer :exec
 INSERT INTO task_instance_layers (

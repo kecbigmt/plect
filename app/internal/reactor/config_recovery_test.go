@@ -38,10 +38,14 @@ func TestSessionReactor_ReArmsHeartbeatAfterWorkflowLoadRecovers(t *testing.T) {
 	writeFile(t, workflowPath, "this is not valid toml")
 	cfg := &config.Config{BaseDir: base, WorkspaceDirsRoot: t.TempDir()}
 
-	log := eventlog.NewStore(t.TempDir())
+	dir := t.TempDir()
+	log := eventlog.NewStore(dir)
 	hub := sessionhub.NewRegistry(log, sessionhub.WithPollInterval(2*time.Millisecond))
 	t.Cleanup(hub.Close)
-	st := state.NewStore(t.TempDir())
+	// state.Store and eventlog.Store share one directory (and so one
+	// database): a session Put below must be visible to log's own reads,
+	// since a session row now is one incarnation.
+	st := state.NewStore(dir)
 	session := &domain.Session{
 		Name:     "o/r-1",
 		Workflow: "wf",
@@ -50,9 +54,6 @@ func TestSessionReactor_ReArmsHeartbeatAfterWorkflowLoadRecovers(t *testing.T) {
 		},
 	}
 	if err := st.Put(session); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := log.NewStream("o/r-1"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -104,10 +105,14 @@ func TestSessionReactor_KeepsLastGoodTickConfigWhenWorkflowLoadFails(t *testing.
 	writeFile(t, workflowPath, heartbeatWorkflow)
 	cfg := &config.Config{BaseDir: base, WorkspaceDirsRoot: t.TempDir()}
 
-	log := eventlog.NewStore(t.TempDir())
+	dir := t.TempDir()
+	log := eventlog.NewStore(dir)
 	hub := sessionhub.NewRegistry(log, sessionhub.WithPollInterval(2*time.Millisecond))
 	t.Cleanup(hub.Close)
-	st := state.NewStore(t.TempDir())
+	// state.Store and eventlog.Store share one directory (and so one
+	// database): a session Put below must be visible to log's own reads,
+	// since a session row now is one incarnation.
+	st := state.NewStore(dir)
 	session := &domain.Session{
 		Name:     "o/r-1",
 		Workflow: "wf",
@@ -116,9 +121,6 @@ func TestSessionReactor_KeepsLastGoodTickConfigWhenWorkflowLoadFails(t *testing.
 		},
 	}
 	if err := st.Put(session); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := log.NewStream("o/r-1"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -171,10 +173,14 @@ func newRefreshFixture(t *testing.T, body string) (*sessionReactor, string) {
 	workflowPath := filepath.Join(base, "workflows", "wf.toml")
 	writeFile(t, workflowPath, body)
 	cfg := &config.Config{BaseDir: base, WorkspaceDirsRoot: t.TempDir()}
-	log := eventlog.NewStore(t.TempDir())
+	dir := t.TempDir()
+	log := eventlog.NewStore(dir)
 	hub := sessionhub.NewRegistry(log, sessionhub.WithPollInterval(2*time.Millisecond))
 	t.Cleanup(hub.Close)
-	st := state.NewStore(t.TempDir())
+	// state.Store and eventlog.Store share one directory (and so one
+	// database): a session Put below must be visible to log's own reads,
+	// since a session row now is one incarnation.
+	st := state.NewStore(dir)
 	session := &domain.Session{
 		Name:     "o/r-1",
 		Workflow: "wf",
@@ -183,9 +189,6 @@ func newRefreshFixture(t *testing.T, body string) (*sessionReactor, string) {
 		},
 	}
 	if err := st.Put(session); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := log.NewStream("o/r-1"); err != nil {
 		t.Fatal(err)
 	}
 	return NewSupervisor(func() *config.Config { return cfg }, st, log, hub).buildReactor("o/r-1", session), workflowPath

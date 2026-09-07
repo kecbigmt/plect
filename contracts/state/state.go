@@ -12,10 +12,12 @@ import (
 	"time"
 )
 
-// Message is a session-level, self-reported free-text status line: the
-// session's current activity, or empty when the session is idle. plect does
-// not interpret Text; it is a slot for external updaters, not a plect
-// concept.
+// Message is a session's self-reported free-text status line: the session's
+// current activity, or empty when the session is idle. plect does not
+// interpret Text; it is a slot for external updaters, not a plect concept.
+// It is not a Session field: the fact lives in the session's
+// plect.status_message event stream (its most recent such event, or none),
+// and this type is only the shape a reader derives from that event.
 type Message struct {
 	Text      string    `json:"text"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -79,6 +81,19 @@ const (
 const (
 	TaskScopeSession = "session"
 	TaskScopeRun     = "run"
+)
+
+// Session lifecycle status values for Session.Status. Status is a lifecycle
+// phase, not health or run-scope liveness (domain.HealthState and
+// RunScopeUp answer those separately): create leaves a session `down`;
+// `plect up` moves it to `up`; `plect down` moves it back to `down`; `plect
+// destroy` moves it to `destroyed`, which is terminal — a destroyed
+// session's row is retained (never deleted), but a later create under the
+// same name starts a new row with a new Session.ID rather than reviving it.
+const (
+	SessionStatusDown      = "down"
+	SessionStatusUp        = "up"
+	SessionStatusDestroyed = "destroyed"
 )
 
 // WorkflowPseudoNodeID is the reserved Session.Tasks key for the
@@ -210,14 +225,19 @@ type LayerState struct {
 // repository, a number, a permalink) is a workspace provider setup output,
 // not a session field.
 type Session struct {
+	// ID is the durable surrogate identity minted once when a session is
+	// first created (or recreated under a reused name after a prior
+	// destroy) and never changed thereafter; unlike Name, it survives
+	// destroy. See the Status constants below.
+	ID               string                `json:"id,omitempty"`
 	Name             string                `json:"session_name"`
+	Status           string                `json:"status,omitempty"`
+	DestroyedAt      time.Time             `json:"destroyed_at,omitzero"`
 	ResourceID       string                `json:"resource_id,omitempty"`
 	ParentSession    string                `json:"parent_session,omitempty"`
 	Children         []string              `json:"children,omitempty"`
 	Alias            string                `json:"alias,omitempty"`
-	Branch           string                `json:"branch"`
 	WorkspaceDirPath string                `json:"workspace_dir_path"`
-	Message          *Message              `json:"message,omitempty"`
 	Workflow         string                `json:"workflow,omitempty"`
 	Population       *PopulationProvenance `json:"population,omitempty"`
 	Inputs           map[string]any        `json:"inputs,omitempty"`
@@ -307,9 +327,6 @@ type TickBackoff struct {
 	// LastFingerprint is the composite done_when fingerprint (across every
 	// instance) as of the last heartbeat sweep; a change resets ConsecutiveUnchanged.
 	LastFingerprint string `json:"last_fingerprint,omitempty"`
-	// LastLogPosition is the event-log byte offset up to which inbound events
-	// have been scanned; an inbound event past it resets ConsecutiveUnchanged.
-	LastLogPosition int64 `json:"last_log_position,omitempty"`
 	// ConsecutiveUnchanged counts heartbeat sweeps in a row with neither a
 	// fingerprint change nor an inbound event; interval = heartbeat * 2^n.
 	ConsecutiveUnchanged int `json:"consecutive_unchanged,omitempty"`

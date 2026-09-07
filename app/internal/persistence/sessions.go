@@ -3,7 +3,6 @@ package persistence
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -14,22 +13,23 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// PutSession upserts one session and replaces its task and completion rows,
-// in one write transaction. It never touches an unrelated session's rows.
+// PutSession upserts one session and replaces its task, layer, and channel
+// health rows, in one write transaction. It never touches an unrelated
+// session's rows.
 func (db *DB) PutSession(ctx context.Context, s *domain.Session) error {
 	return db.WithImmediateTx(ctx, func(tx *sql.Tx) error {
 		return db.writeSessionTx(ctx, tx, s)
 	})
 }
 
-// GetSession returns a session by name, or (nil, nil) if it does not exist.
-// The base row and its children/tasks are read inside one transaction, so a
-// concurrent Put or Update can never be interleaved into a single logical
-// session value that never existed as such.
+// GetSession returns a session's live (non-destroyed) row by name, or (nil,
+// nil) if none exists. The base row and its children/tasks are read inside
+// one transaction, so a concurrent Put or Update can never be interleaved
+// into a single logical session value that never existed as such.
 func (db *DB) GetSession(ctx context.Context, name string) (*domain.Session, error) {
 	var s *domain.Session
 	err := db.WithReadTx(ctx, func(tx *sql.Tx) error {
-		row, err := sqlcgen.New(tx).GetSession(ctx, name)
+		row, err := sqlcgen.New(tx).GetLiveSession(ctx, name)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return nil
@@ -52,12 +52,12 @@ func (db *DB) GetSession(ctx context.Context, name string) (*domain.Session, err
 	return s, nil
 }
 
-// AllSessions returns every session, keyed by name, as of one consistent
-// snapshot (see GetSession).
+// AllSessions returns every live (non-destroyed) session, keyed by name, as
+// of one consistent snapshot (see GetSession).
 func (db *DB) AllSessions(ctx context.Context) (map[string]*domain.Session, error) {
 	result := make(map[string]*domain.Session)
 	err := db.WithReadTx(ctx, func(tx *sql.Tx) error {
-		rows, err := sqlcgen.New(tx).ListSessions(ctx)
+		rows, err := sqlcgen.New(tx).ListLiveSessions(ctx)
 		if err != nil {
 			return fmt.Errorf("list sessions: %w", err)
 		}
@@ -79,19 +79,19 @@ func (db *DB) AllSessions(ctx context.Context) (map[string]*domain.Session, erro
 	return result, nil
 }
 
-// FindSessionsByAlias returns every session whose create-time alias equals
-// alias, as of one consistent snapshot (see GetSession). An empty alias is
-// rejected before querying: an alias-less session stores NULL, not "", so
-// alias = "" would simply match no row, but a caller passing "" almost
-// certainly means "unset" and this makes that a guaranteed empty result
-// rather than an incidental one.
+// FindSessionsByAlias returns every live session whose create-time alias
+// equals alias, as of one consistent snapshot (see GetSession). An empty
+// alias is rejected before querying: an alias-less session stores NULL,
+// not "", so alias = "" would simply match no row, but a caller passing ""
+// almost certainly means "unset" and this makes that a guaranteed empty
+// result rather than an incidental one.
 func (db *DB) FindSessionsByAlias(ctx context.Context, alias string) ([]*domain.Session, error) {
 	if alias == "" {
 		return nil, nil
 	}
 	var result []*domain.Session
 	err := db.WithReadTx(ctx, func(tx *sql.Tx) error {
-		rows, err := sqlcgen.New(tx).ListSessionsByAlias(ctx, sql.NullString{String: alias, Valid: true})
+		rows, err := sqlcgen.New(tx).ListLiveSessionsByAlias(ctx, sql.NullString{String: alias, Valid: true})
 		if err != nil {
 			return fmt.Errorf("find sessions by alias %q: %w", alias, err)
 		}
@@ -113,12 +113,15 @@ func (db *DB) FindSessionsByAlias(ctx context.Context, alias string) ([]*domain.
 	return result, nil
 }
 
-// UpdateSession reads the named session (with its task and completion
-// rows), runs fn against it, and writes the result back — all inside one
-// write transaction. fn returning an error aborts without writing.
+// UpdateSession reads the named session's live row (with its task and
+// layer rows), runs fn against it, and writes the result back — all inside
+// one write transaction. fn returning an error aborts without writing.
+// This is also how a session is destroyed: fn sets Status to
+// SessionStatusDestroyed (and DestroyedAt), and the same upsert path
+// records that transition on the same row without minting a new id.
 func (db *DB) UpdateSession(ctx context.Context, name string, fn func(*domain.Session) error) error {
 	return db.WithImmediateTx(ctx, func(tx *sql.Tx) error {
-		row, err := sqlcgen.New(tx).GetSession(ctx, name)
+		row, err := sqlcgen.New(tx).GetLiveSession(ctx, name)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return fmt.Errorf("no state entry for session %q", name)
@@ -141,18 +144,48 @@ func (db *DB) UpdateSession(ctx context.Context, name string, fn func(*domain.Se
 	})
 }
 
-// DeleteSession removes a session, its task/completion rows (cascaded by
-// the schema's foreign keys), and its up-slot reservation if any. Sessions
-// that named it as their parent are detached (parent_session_name set to
-// NULL), also by the schema's ON DELETE SET NULL — event history for the
-// deleted session is untouched.
-func (db *DB) DeleteSession(ctx context.Context, name string) error {
+// EnsureLiveSession returns name's live session id, minting a minimal
+// placeholder row (workflow "") first if none exists yet. This is the
+// append path's entry point for a session name with no formal session
+// (e.g. a cross-session event.publish notice) -- the one place a session
+// row is still started lazily, mirroring the retired event_streams
+// table's own independence from sessions. Every other write (AppendEvent,
+// SetEventCursor) requires a live session to already exist and errors
+// instead.
+func (db *DB) EnsureLiveSession(ctx context.Context, name string) (string, error) {
+	id, err := db.EventStreamID(ctx, name)
+	if err != nil {
+		return "", fmt.Errorf("ensure live session %q: %w", name, err)
+	}
+	if id != "" {
+		return id, nil
+	}
+	now := time.Now().UTC()
+	if err := db.PutSession(ctx, &domain.Session{Name: name, Status: contract.SessionStatusDown, CreatedAt: now, UpdatedAt: now}); err != nil {
+		return "", fmt.Errorf("ensure live session %q: %w", name, err)
+	}
+	id, err = db.EventStreamID(ctx, name)
+	if err != nil {
+		return "", fmt.Errorf("ensure live session %q: %w", name, err)
+	}
+	return id, nil
+}
+
+// DestroySession transitions name's live row to SessionStatusDestroyed
+// (retaining the row and its task/event history) and releases its
+// up-slot reservation, if any — the persistence-layer counterpart of the
+// old hard DeleteSession, kept as one call since every caller needs both
+// steps together.
+func (db *DB) DestroySession(ctx context.Context, name string, destroyedAt time.Time) error {
+	if err := db.UpdateSession(ctx, name, func(s *domain.Session) error {
+		s.Status = contract.SessionStatusDestroyed
+		s.DestroyedAt = destroyedAt
+		return nil
+	}); err != nil {
+		return fmt.Errorf("destroy session %q: %w", name, err)
+	}
 	return db.WithImmediateTx(ctx, func(tx *sql.Tx) error {
-		q := sqlcgen.New(tx)
-		if err := q.DeleteSession(ctx, name); err != nil {
-			return fmt.Errorf("delete session %q: %w", name, err)
-		}
-		if err := q.DeleteUpReservation(ctx, name); err != nil {
+		if err := sqlcgen.New(tx).DeleteUpReservation(ctx, name); err != nil {
 			return fmt.Errorf("delete up-slot reservation for %q: %w", name, err)
 		}
 		return nil
@@ -160,14 +193,24 @@ func (db *DB) DeleteSession(ctx context.Context, name string) error {
 }
 
 func (db *DB) writeSessionTx(ctx context.Context, tx *sql.Tx, s *domain.Session) error {
-	parentCol, rootCol, err := resolveParentColumns(ctx, tx, s.Name, s.ParentSession)
-	if err != nil {
-		return fmt.Errorf("resolve parent for session %q: %w", s.Name, err)
+	q := sqlcgen.New(tx)
+
+	existingID, err := q.SessionIDByLiveName(ctx, s.Name)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		existingID = ""
+	case err != nil:
+		return fmt.Errorf("resolve existing id for session %q: %w", s.Name, err)
 	}
 
-	recordJSON, err := marshalSessionRecord(s)
+	candidateID := existingID
+	if candidateID == "" {
+		candidateID = newULID()
+	}
+
+	parentCol, rootCol, err := resolveParentColumns(ctx, q, existingID, s.ParentSession)
 	if err != nil {
-		return fmt.Errorf("marshal session %q: %w", s.Name, err)
+		return fmt.Errorf("resolve parent for session %q: %w", s.Name, err)
 	}
 
 	var populationWorkflow, populationName sql.NullString
@@ -176,87 +219,215 @@ func (db *DB) writeSessionTx(ctx context.Context, tx *sql.Tx, s *domain.Session)
 		populationName = sql.NullString{String: s.Population.Name, Valid: true}
 	}
 
-	if err := sqlcgen.New(tx).UpsertSession(ctx, sqlcgen.UpsertSessionParams{
-		Name:               s.Name,
-		ParentSessionName:  parentCol,
-		RootSessionName:    rootCol,
-		ResourceID:         nullString(s.ResourceID),
-		Alias:              nullString(s.Alias),
-		Workflow:           s.Workflow,
-		WorkspaceDir:       nullString(s.WorkspaceDirPath),
-		PopulationWorkflow: populationWorkflow,
-		PopulationName:     populationName,
-		CreatedAt:          formatTime(s.CreatedAt),
-		UpdatedAt:          formatTime(s.UpdatedAt),
-		RecordJson:         recordJSON,
-	}); err != nil {
-		return fmt.Errorf("upsert session %q: %w", s.Name, err)
+	status := s.Status
+	if status == "" {
+		status = contract.SessionStatusDown
 	}
 
-	return db.writeTasksTx(ctx, tx, s.Name, s.Tasks)
+	health := sessionHealthColumns(s.Health)
+	tickConsecutiveUnchanged, tickLastFingerprint := sessionTickColumns(s.TickBackoff)
+
+	inputsJSON, err := marshalJSONMap(s.Inputs)
+	if err != nil {
+		return fmt.Errorf("marshal session %q inputs: %w", s.Name, err)
+	}
+
+	if existingID == "" {
+		if err := q.InsertSession(ctx, sqlcgen.InsertSessionParams{
+			ID:                       candidateID,
+			Name:                     s.Name,
+			Status:                   status,
+			DestroyedAt:              formatTimeNull(s.DestroyedAt),
+			ParentSessionID:          parentCol,
+			RootSessionID:            rootCol,
+			ResourceID:               nullString(s.ResourceID),
+			Alias:                    nullString(s.Alias),
+			Workflow:                 s.Workflow,
+			WorkspaceDir:             nullString(s.WorkspaceDirPath),
+			PopulationWorkflow:       populationWorkflow,
+			PopulationName:           populationName,
+			InputsJson:               inputsJSON,
+			HealthLastCheckedAt:      health.lastCheckedAt,
+			HealthLastActivityAt:     health.lastActivityAt,
+			HealthLastFingerprint:    health.lastFingerprint,
+			HealthLastState:          health.lastState,
+			HealthLastReason:         health.lastReason,
+			HealthLastNotifiedAt:     health.lastNotifiedAt,
+			HealthNotifyCount:        health.notifyCount,
+			TickConsecutiveUnchanged: tickConsecutiveUnchanged,
+			TickLastFingerprint:      tickLastFingerprint,
+			LastTickAt:               formatTimeNull(s.LastTickAt),
+			CreatedAt:                formatTime(s.CreatedAt),
+			UpdatedAt:                formatTime(s.UpdatedAt),
+		}); err != nil {
+			return fmt.Errorf("insert session %q: %w", s.Name, err)
+		}
+	} else if err := q.UpdateSessionByID(ctx, sqlcgen.UpdateSessionByIDParams{
+		ID:                       candidateID,
+		Name:                     s.Name,
+		Status:                   status,
+		DestroyedAt:              formatTimeNull(s.DestroyedAt),
+		ParentSessionID:          parentCol,
+		RootSessionID:            rootCol,
+		ResourceID:               nullString(s.ResourceID),
+		Alias:                    nullString(s.Alias),
+		Workflow:                 s.Workflow,
+		WorkspaceDir:             nullString(s.WorkspaceDirPath),
+		PopulationWorkflow:       populationWorkflow,
+		PopulationName:           populationName,
+		InputsJson:               inputsJSON,
+		HealthLastCheckedAt:      health.lastCheckedAt,
+		HealthLastActivityAt:     health.lastActivityAt,
+		HealthLastFingerprint:    health.lastFingerprint,
+		HealthLastState:          health.lastState,
+		HealthLastReason:         health.lastReason,
+		HealthLastNotifiedAt:     health.lastNotifiedAt,
+		HealthNotifyCount:        health.notifyCount,
+		TickConsecutiveUnchanged: tickConsecutiveUnchanged,
+		TickLastFingerprint:      tickLastFingerprint,
+		LastTickAt:               formatTimeNull(s.LastTickAt),
+		UpdatedAt:                formatTime(s.UpdatedAt),
+	}); err != nil {
+		return fmt.Errorf("update session %q: %w", s.Name, err)
+	}
+
+	if err := db.writeTasksTx(ctx, tx, candidateID, s.Tasks); err != nil {
+		return err
+	}
+	return writeChannelHealthTx(ctx, q, candidateID, s.ChannelValidationHealth, s.ChannelDeliveryHealth)
+}
+
+// healthColumns is sessionHealthColumns' result: the sessions table's
+// health_* column values for one *HealthState (possibly nil).
+type healthColumns struct {
+	lastCheckedAt   sql.NullString
+	lastActivityAt  sql.NullString
+	lastFingerprint sql.NullString
+	lastState       sql.NullString
+	lastReason      sql.NullString
+	lastNotifiedAt  sql.NullString
+	notifyCount     sql.NullInt64
+}
+
+// sessionHealthColumns flattens a possibly-nil *HealthState into its
+// column values, so writeSessionTx's column list needs no defensive nil
+// check per field. NotifyCount stays NULL only when h itself is nil (its
+// own zero value, 0, is a real, meaningful count once a session has been
+// evaluated at all).
+func sessionHealthColumns(h *contract.HealthState) healthColumns {
+	if h == nil {
+		return healthColumns{}
+	}
+	return healthColumns{
+		lastCheckedAt:   formatTimeNull(h.LastCheckedAt),
+		lastActivityAt:  formatTimeNull(h.LastActivityAt),
+		lastFingerprint: nullString(h.LastFingerprint),
+		lastState:       nullString(h.LastState),
+		lastReason:      nullString(h.LastReason),
+		lastNotifiedAt:  formatTimeNull(h.LastNotifiedAt),
+		notifyCount:     sql.NullInt64{Int64: int64(h.NotifyCount), Valid: true},
+	}
+}
+
+// sessionTickColumns flattens a possibly-nil *TickBackoff into its column
+// values; see sessionHealthColumns for the same nil-safety rationale.
+func sessionTickColumns(tb *contract.TickBackoff) (consecutiveUnchanged sql.NullInt64, lastFingerprint sql.NullString) {
+	if tb == nil {
+		return sql.NullInt64{}, sql.NullString{}
+	}
+	return sql.NullInt64{Int64: int64(tb.ConsecutiveUnchanged), Valid: true}, nullString(tb.LastFingerprint)
+}
+
+// resolveSessionIDByName resolves name to a session id, preferring the live
+// row (the common case: a currently-existing parent) but falling back to
+// the most recent row under that name when none is live. A parent/root
+// reference set while its target was still live must keep resolving to it
+// after that target is destroyed (destroy retains the row and its
+// children's history, see docs/design/sqlite-persistence.md's "Session
+// identity and lifecycle") — resolving only against live rows would
+// silently drop the link on the next write to the referencing session,
+// exactly the case this exists to avoid.
+func resolveSessionIDByName(ctx context.Context, q *sqlcgen.Queries, name string) (string, error) {
+	id, err := q.SessionIDByLiveName(ctx, name)
+	if err == nil {
+		return id, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", err
+	}
+	return q.MostRecentSessionIDByName(ctx, name)
 }
 
 // resolveParentColumns translates a Session.ParentSession value into the
-// sessions table's parent_session_name / root_session_name columns,
-// silently clearing (rather than rejecting) a self-reference, a cycle, or a
-// reference to a session that does not exist — mirroring the JSON store's
-// normalizeSessionTree, which dropped exactly these cases instead of
-// failing the write they arrived in.
-func resolveParentColumns(ctx context.Context, tx *sql.Tx, name, parentSession string) (parent, root sql.NullString, err error) {
+// sessions table's parent_session_id / root_session_id columns, silently
+// clearing (rather than rejecting) a self-reference, a cycle, or a
+// reference to a session that has never existed under that name at all —
+// mirroring the JSON store's normalizeSessionTree, which dropped exactly
+// these cases instead of failing the write they arrived in. A reference to
+// a name that once existed but is now destroyed is not one of those cases:
+// see resolveSessionIDByName. selfID is the writing session's own existing
+// live id, or "" for a session with no live row yet (a brand new session
+// can never already be part of an existing chain, so cycle detection is
+// only meaningful once selfID is known).
+func resolveParentColumns(ctx context.Context, q *sqlcgen.Queries, selfID, parentSession string) (parent, root sql.NullString, err error) {
 	if parentSession == "" {
 		return sql.NullString{}, sql.NullString{}, nil
 	}
-	q := sqlcgen.New(tx)
 
 	if target, ok := strings.CutPrefix(parentSession, "root:"); ok {
-		if target == "" || target == name {
+		if target == "" {
 			return sql.NullString{}, sql.NullString{}, nil
 		}
-		count, err := q.CountSessionsNamed(ctx, target)
+		id, err := resolveSessionIDByName(ctx, q, target)
+		if errors.Is(err, sql.ErrNoRows) {
+			return sql.NullString{}, sql.NullString{}, nil
+		}
 		if err != nil {
 			return sql.NullString{}, sql.NullString{}, err
 		}
-		if count == 0 {
+		if id == selfID {
 			return sql.NullString{}, sql.NullString{}, nil
 		}
-		return sql.NullString{}, sql.NullString{String: target, Valid: true}, nil
+		return sql.NullString{}, sql.NullString{String: id, Valid: true}, nil
 	}
 
-	if parentSession == name {
+	id, err := resolveSessionIDByName(ctx, q, parentSession)
+	if errors.Is(err, sql.ErrNoRows) {
 		return sql.NullString{}, sql.NullString{}, nil
 	}
-	count, err := q.CountSessionsNamed(ctx, parentSession)
 	if err != nil {
 		return sql.NullString{}, sql.NullString{}, err
 	}
-	if count == 0 {
+	if id == selfID {
 		return sql.NullString{}, sql.NullString{}, nil
 	}
-	cyclic, err := wouldCreateCycle(ctx, q, name, parentSession)
-	if err != nil {
-		return sql.NullString{}, sql.NullString{}, err
+	if selfID != "" {
+		cyclic, err := wouldCreateCycle(ctx, q, selfID, id)
+		if err != nil {
+			return sql.NullString{}, sql.NullString{}, err
+		}
+		if cyclic {
+			return sql.NullString{}, sql.NullString{}, nil
+		}
 	}
-	if cyclic {
-		return sql.NullString{}, sql.NullString{}, nil
-	}
-	return sql.NullString{String: parentSession, Valid: true}, sql.NullString{}, nil
+	return sql.NullString{String: id, Valid: true}, sql.NullString{}, nil
 }
 
-// wouldCreateCycle walks parentName's real-parent chain looking for
-// childName; a chain that reaches it (or repeats a name, defensively)
-// means assigning parentName as childName's parent would create a cycle.
-func wouldCreateCycle(ctx context.Context, q *sqlcgen.Queries, childName, parentName string) (bool, error) {
+// wouldCreateCycle walks parentID's real-parent chain looking for childID; a
+// chain that reaches it (or repeats an id, defensively) means assigning
+// parentID as childID's parent would create a cycle.
+func wouldCreateCycle(ctx context.Context, q *sqlcgen.Queries, childID, parentID string) (bool, error) {
 	seen := map[string]bool{}
-	cur := parentName
+	cur := parentID
 	for cur != "" {
-		if cur == childName {
+		if cur == childID {
 			return true, nil
 		}
 		if seen[cur] {
 			return true, nil
 		}
 		seen[cur] = true
-		next, err := q.SessionParent(ctx, cur)
+		next, err := q.LiveSessionParentID(ctx, cur)
 		if err != nil {
 			return false, fmt.Errorf("walk parent chain from %q: %w", cur, err)
 		}
@@ -268,34 +439,83 @@ func wouldCreateCycle(ctx context.Context, q *sqlcgen.Queries, childName, parent
 	return false, nil
 }
 
-func deriveParentSession(parent, root sql.NullString) string {
-	if parent.Valid {
-		return parent.String
+// deriveParentSession is resolveParentColumns' inverse for reads: it names
+// parentID/rootID by their session name rather than id, since
+// Session.ParentSession is a name-shaped value throughout the rest of core.
+// A dangling reference (the named row no longer resolvable — should not
+// happen, since sessions are never deleted) reads as no parent rather than
+// erroring a read for a write-time concern.
+func deriveParentSession(ctx context.Context, q *sqlcgen.Queries, parent, root sql.NullString) (string, error) {
+	switch {
+	case parent.Valid:
+		name, err := q.SessionNameByID(ctx, parent.String)
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		if err != nil {
+			return "", fmt.Errorf("resolve parent session name: %w", err)
+		}
+		return name, nil
+	case root.Valid:
+		name, err := q.SessionNameByID(ctx, root.String)
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		if err != nil {
+			return "", fmt.Errorf("resolve root session name: %w", err)
+		}
+		return "root:" + name, nil
+	default:
+		return "", nil
 	}
-	if root.Valid {
-		return "root:" + root.String
-	}
-	return ""
 }
 
-// sessionFromRow decodes record_json and overlays it with the row's
-// relational columns; it does not populate Children or Tasks — callers
-// needing those call loadSessionExtras.
+// sessionFromRow decodes a sessions row into a domain.Session; it does not
+// populate Children or Tasks — callers needing those call loadSessionExtras
+// (which also resolves ParentSession, since that requires another query).
 func sessionFromRow(row sqlcgen.Session) (*domain.Session, error) {
-	s, err := unmarshalSessionRecord(row.RecordJson)
-	if err != nil {
-		return nil, fmt.Errorf("parse session %q record: %w", row.Name, err)
+	s := &domain.Session{
+		ID:               row.ID,
+		Name:             row.Name,
+		Status:           row.Status,
+		ResourceID:       row.ResourceID.String,
+		Alias:            row.Alias.String,
+		Workflow:         row.Workflow,
+		WorkspaceDirPath: row.WorkspaceDir.String,
 	}
-	s.Name = row.Name
-	s.ResourceID = row.ResourceID.String
-	s.Alias = row.Alias.String
-	s.Workflow = row.Workflow
-	s.WorkspaceDirPath = row.WorkspaceDir.String
-	s.ParentSession = deriveParentSession(row.ParentSessionName, row.RootSessionName)
-	s.Population = nil
 	if row.PopulationWorkflow.Valid && row.PopulationName.Valid {
 		s.Population = &contract.PopulationProvenance{Workflow: row.PopulationWorkflow.String, Name: row.PopulationName.String}
 	}
+
+	inputs, err := unmarshalJSONMap(row.InputsJson)
+	if err != nil {
+		return nil, fmt.Errorf("parse session %q inputs_json: %w", row.Name, err)
+	}
+	s.Inputs = inputs
+
+	destroyedAt, err := parseTimeNull(row.DestroyedAt)
+	if err != nil {
+		return nil, fmt.Errorf("parse session %q destroyed_at: %w", row.Name, err)
+	}
+	s.DestroyedAt = destroyedAt
+
+	health, err := healthFromRow(row)
+	if err != nil {
+		return nil, fmt.Errorf("parse session %q health: %w", row.Name, err)
+	}
+	s.Health = health
+
+	if row.TickConsecutiveUnchanged.Valid || row.TickLastFingerprint.Valid {
+		s.TickBackoff = &contract.TickBackoff{
+			LastFingerprint:      row.TickLastFingerprint.String,
+			ConsecutiveUnchanged: int(row.TickConsecutiveUnchanged.Int64),
+		}
+	}
+	lastTickAt, err := parseTimeNull(row.LastTickAt)
+	if err != nil {
+		return nil, fmt.Errorf("parse session %q last_tick_at: %w", row.Name, err)
+	}
+	s.LastTickAt = lastTickAt
 
 	createdAt, err := parseTime(row.CreatedAt)
 	if err != nil {
@@ -310,11 +530,54 @@ func sessionFromRow(row sqlcgen.Session) (*domain.Session, error) {
 	return s, nil
 }
 
+// healthFromRow reconstructs *HealthState from its columns, or nil if none
+// of them were ever populated (no healthcheck sweep has run yet).
+func healthFromRow(row sqlcgen.Session) (*contract.HealthState, error) {
+	if !row.HealthLastCheckedAt.Valid && !row.HealthLastActivityAt.Valid && !row.HealthLastFingerprint.Valid &&
+		!row.HealthLastState.Valid && !row.HealthLastReason.Valid && !row.HealthLastNotifiedAt.Valid && !row.HealthNotifyCount.Valid {
+		return nil, nil
+	}
+	lastCheckedAt, err := parseTimeNull(row.HealthLastCheckedAt)
+	if err != nil {
+		return nil, fmt.Errorf("last_checked_at: %w", err)
+	}
+	lastActivityAt, err := parseTimeNull(row.HealthLastActivityAt)
+	if err != nil {
+		return nil, fmt.Errorf("last_activity_at: %w", err)
+	}
+	lastNotifiedAt, err := parseTimeNull(row.HealthLastNotifiedAt)
+	if err != nil {
+		return nil, fmt.Errorf("last_notified_at: %w", err)
+	}
+	return &contract.HealthState{
+		LastCheckedAt:   lastCheckedAt,
+		LastActivityAt:  lastActivityAt,
+		LastFingerprint: row.HealthLastFingerprint.String,
+		LastState:       row.HealthLastState.String,
+		LastReason:      row.HealthLastReason.String,
+		LastNotifiedAt:  lastNotifiedAt,
+		NotifyCount:     int(row.HealthNotifyCount.Int64),
+	}, nil
+}
+
 // loadSessionExtras populates the fields sessionFromRow leaves unset:
-// Children (derived from other rows' parent_session_name, never stored)
-// and Tasks (assembled from task_instances/task_done_when/judges).
+// ParentSession (a name, resolved from the row's id-based columns),
+// Children (derived from other rows' parent_session_id, never stored),
+// channel health, and Tasks (assembled from node/task instance rows).
 func (db *DB) loadSessionExtras(ctx context.Context, q sqlcgen.DBTX, s *domain.Session) error {
-	children, err := sqlcgen.New(q).ListChildSessionNames(ctx, sql.NullString{String: s.Name, Valid: true})
+	queries := sqlcgen.New(q)
+
+	row, err := queries.GetLiveSession(ctx, s.Name)
+	if err != nil {
+		return fmt.Errorf("re-read session %q for parent resolution: %w", s.Name, err)
+	}
+	parentSession, err := deriveParentSession(ctx, queries, row.ParentSessionID, row.RootSessionID)
+	if err != nil {
+		return err
+	}
+	s.ParentSession = parentSession
+
+	children, err := queries.ListLiveChildSessionNames(ctx, sql.NullString{String: s.ID, Valid: true})
 	if err != nil {
 		return fmt.Errorf("list children of %q: %w", s.Name, err)
 	}
@@ -324,67 +587,17 @@ func (db *DB) loadSessionExtras(ctx context.Context, q sqlcgen.DBTX, s *domain.S
 		s.Children = nil
 	}
 
-	tasks, err := loadTasks(ctx, q, s.Name)
+	validationHealth, deliveryHealth, err := loadChannelHealth(ctx, queries, s.ID)
+	if err != nil {
+		return err
+	}
+	s.ChannelValidationHealth = validationHealth
+	s.ChannelDeliveryHealth = deliveryHealth
+
+	tasks, err := loadTasks(ctx, q, s.ID)
 	if err != nil {
 		return err
 	}
 	s.Tasks = tasks
 	return nil
-}
-
-// sessionPayload is record_json's actual on-disk shape: every Session field
-// with no relational column of its own. Unlike contract.Session, every field
-// here can genuinely be absent, so each carries omitempty/omitzero — a fresh
-// session's blob is "{}" rather than a page of zero-valued columns
-// (session_name, branch, workspace_dir_path, year-1 timestamps) that would
-// read as a second, disagreeing copy of the relational row to anyone
-// inspecting the blob directly (the importer included). contract.Session
-// itself is unchanged; this type exists only at the persistence boundary.
-type sessionPayload struct {
-	Branch                  string                  `json:"branch,omitempty"`
-	Message                 *contract.Message       `json:"message,omitempty"`
-	Inputs                  map[string]any          `json:"inputs,omitempty"`
-	Health                  *contract.HealthState   `json:"health,omitempty"`
-	ChannelValidationHealth *contract.ChannelHealth `json:"channel_validation_health,omitempty"`
-	ChannelDeliveryHealth   *contract.ChannelHealth `json:"channel_delivery_health,omitempty"`
-	LastTickAt              time.Time               `json:"last_tick_at,omitzero"`
-	TickBackoff             *contract.TickBackoff   `json:"tick_backoff,omitempty"`
-}
-
-// marshalSessionRecord serializes every Session field not already carried by
-// a relational column (name, resource_id, alias, workflow, workspace_dir,
-// population_workflow/name, parent/root_session_name, created_at,
-// updated_at) or derived at read time (children, tasks).
-func marshalSessionRecord(s *domain.Session) (string, error) {
-	data, err := json.Marshal(sessionPayload{
-		Branch:                  s.Branch,
-		Message:                 s.Message,
-		Inputs:                  s.Inputs,
-		Health:                  s.Health,
-		ChannelValidationHealth: s.ChannelValidationHealth,
-		ChannelDeliveryHealth:   s.ChannelDeliveryHealth,
-		LastTickAt:              s.LastTickAt,
-		TickBackoff:             s.TickBackoff,
-	})
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
-}
-
-func unmarshalSessionRecord(recordJSON string) (*domain.Session, error) {
-	var p sessionPayload
-	if err := json.Unmarshal([]byte(recordJSON), &p); err != nil {
-		return nil, err
-	}
-	return &contract.Session{
-		Branch:                  p.Branch,
-		Message:                 p.Message,
-		Inputs:                  p.Inputs,
-		Health:                  p.Health,
-		ChannelValidationHealth: p.ChannelValidationHealth,
-		ChannelDeliveryHealth:   p.ChannelDeliveryHealth,
-		LastTickAt:              p.LastTickAt,
-		TickBackoff:             p.TickBackoff,
-	}, nil
 }

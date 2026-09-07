@@ -23,6 +23,16 @@ import (
 // over the same log.
 const reactorConsumer = "tick"
 
+// heartbeatConsumer is the heartbeat sweep's own durable read position: how
+// far it has scanned for an Inbound event since the last sweep. It is a
+// separate cursor from reactorConsumer's own event-driven drain loop —
+// narrower (Inbound events only) and read for a different purpose (backoff
+// reset, not triggering a tick) — replacing the old
+// Session.TickBackoff.LastLogPosition column now that event_cursors already
+// holds exactly this shape of per-session read position for the delivery
+// and tick consumers.
+const heartbeatConsumer = "heartbeat"
+
 // fallbackDrain re-drains even if a wake was missed/coalesced, mirroring
 // dispatch's fallback ticker: correctness rests on the durable cursor, so
 // this only bounds worst-case latency, not delivery.
@@ -340,10 +350,12 @@ func (r *sessionReactor) checkHeartbeat(ctx context.Context) {
 	}
 	if !s.LastTickAt.IsZero() {
 		n := 0
-		var lastLogPosition int64
 		if s.TickBackoff != nil {
 			n = s.TickBackoff.ConsecutiveUnchanged
-			lastLogPosition = s.TickBackoff.LastLogPosition
+		}
+		lastLogPosition, err := r.log.ReadCursor(r.session, heartbeatConsumer)
+		if err != nil {
+			slog.Default().Warn("reactor: read heartbeat cursor failed; treating as unset", "session", r.session, "error", err)
 		}
 		// Peek for inbound before gating: inbound is otherwise only observed
 		// inside updateBackoff, which runs only after a tick fires — so a
@@ -416,16 +428,22 @@ func (r *sessionReactor) updateBackoff(ctx context.Context) {
 	if ctx.Err() != nil {
 		return
 	}
+	previousPosition, err := r.log.ReadCursor(r.session, heartbeatConsumer)
+	if err != nil {
+		slog.Default().Warn("reactor: read heartbeat cursor failed; treating as unset", "session", r.session, "error", err)
+	}
 	fingerprint := r.compositeFingerprint()
-	inbound, next := r.hasInboundSince(r.lastLogPosition())
+	inbound, next := r.hasInboundSince(previousPosition)
 	prev := r.lastFingerprint()
 	changed := inbound || fingerprint != prev
+	if err := r.log.CommitCursor(r.session, heartbeatConsumer, next); err != nil {
+		r.effectiveLogger().Warn("reactor: commit heartbeat cursor failed", "session", r.session, "error", err)
+	}
 	if err := r.state.Update(r.session, func(s *domain.Session) error {
 		if s.TickBackoff == nil {
 			s.TickBackoff = &contract.TickBackoff{}
 		}
 		s.TickBackoff.LastFingerprint = fingerprint
-		s.TickBackoff.LastLogPosition = next
 		if changed {
 			s.TickBackoff.ConsecutiveUnchanged = 0
 		} else {
@@ -447,18 +465,6 @@ func (r *sessionReactor) lastFingerprint() string {
 		return s.TickBackoff.LastFingerprint
 	}
 	return ""
-}
-
-func (r *sessionReactor) lastLogPosition() int64 {
-	s, err := r.state.GetE(r.session)
-	if err != nil {
-		slog.Default().Warn("reactor: read session state failed; treating last log position as unset", "session", r.session, "error", err)
-		return 0
-	}
-	if s != nil && s.TickBackoff != nil {
-		return s.TickBackoff.LastLogPosition
-	}
-	return 0
 }
 
 // hasInboundSince reports whether any Inbound event was appended past since,

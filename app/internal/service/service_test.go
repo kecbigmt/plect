@@ -39,13 +39,6 @@ func testStore(t *testing.T) *state.Store {
 	return state.NewStore(t.TempDir())
 }
 
-func mustNewStream(t *testing.T, store *state.Store, sessionName string) {
-	t.Helper()
-	if _, err := eventlog.NewStore(store.Dir()).NewStream(sessionName); err != nil {
-		t.Fatalf("new stream for %q: %v", sessionName, err)
-	}
-}
-
 // List ranges store.All() (a map), so without sorting its order is random and
 // the web UI's auto-refresh reshuffles. Sessions must come back sorted by name.
 func TestList_SortsTrackedByName(t *testing.T) {
@@ -600,7 +593,11 @@ func TestStatus_ProjectsTree_ExplicitRootGroupSiblings(t *testing.T) {
 	}
 }
 
-func TestStatus_ProjectsTree_OrphanedAfterParentDeleted(t *testing.T) {
+// TestStatus_ProjectsTree_KeepsParentLinkAfterParentDestroyed proves destroy
+// no longer orphans children the way a hard delete once did: the parent's
+// row (and its name) is retained, so its child's ParentSession still names
+// it, even though the parent itself no longer appears in a live listing.
+func TestStatus_ProjectsTree_KeepsParentLinkAfterParentDestroyed(t *testing.T) {
 	cfg := &config.Config{}
 	store := testStore(t)
 	now := time.Now()
@@ -612,8 +609,8 @@ func TestStatus_ProjectsTree_OrphanedAfterParentDeleted(t *testing.T) {
 	}
 	setParent(t, store, "org/child-q", "org/parent-p")
 
-	if err := store.Delete("org/parent-p"); err != nil {
-		t.Fatalf("Delete(parent): %v", err)
+	if err := store.Destroy("org/parent-p"); err != nil {
+		t.Fatalf("Destroy(parent): %v", err)
 	}
 
 	entries, err := List(cfg, store)
@@ -626,20 +623,25 @@ func TestStatus_ProjectsTree_OrphanedAfterParentDeleted(t *testing.T) {
 			continue
 		}
 		found = true
-		if e.ParentSession != "" {
-			t.Errorf("orphaned child ParentSession = %q, want empty", e.ParentSession)
+		if e.ParentSession != "org/parent-p" {
+			t.Errorf("child ParentSession = %q, want %q (a destroyed parent keeps its children's history intact)", e.ParentSession, "org/parent-p")
 		}
 	}
 	if !found {
-		t.Fatal("List no longer includes the orphaned child")
+		t.Fatal("List no longer includes the child")
+	}
+	for _, e := range entries {
+		if e.SessionName == "org/parent-p" {
+			t.Error("List includes the destroyed parent, want it hidden by default")
+		}
 	}
 
 	status, err := Status(cfg, store, "org/child-q")
 	if err != nil {
-		t.Fatalf("Status(orphaned child): %v", err)
+		t.Fatalf("Status(child): %v", err)
 	}
-	if status.Identity.ParentSession != "" {
-		t.Errorf("Status ParentSession = %q, want empty", status.Identity.ParentSession)
+	if status.Identity.ParentSession != "org/parent-p" {
+		t.Errorf("Status ParentSession = %q, want %q", status.Identity.ParentSession, "org/parent-p")
 	}
 }
 
@@ -651,20 +653,19 @@ func TestSetMessage(t *testing.T) {
 		CreatedAt: now,
 		UpdatedAt: now,
 	})
-	mustNewStream(t, store, "owner/repo-1")
 
 	if err := SetMessage(nil, store, "owner/repo-1", "working"); err != nil {
 		t.Fatalf("SetMessage() error: %v", err)
 	}
 
-	got := store.Get("owner/repo-1")
-	if got.Message == nil {
+	got := LatestStatusMessage(store, "owner/repo-1")
+	if got == nil {
 		t.Fatal("Message should be set")
 	}
-	if got.Message.Text != "working" {
-		t.Errorf("Text = %q, want %q", got.Message.Text, "working")
+	if got.Text != "working" {
+		t.Errorf("Text = %q, want %q", got.Text, "working")
 	}
-	if got.Message.UpdatedAt.IsZero() {
+	if got.UpdatedAt.IsZero() {
 		t.Error("UpdatedAt should be set")
 	}
 
@@ -672,7 +673,7 @@ func TestSetMessage(t *testing.T) {
 	if err := SetMessage(nil, store, "owner/repo-1", ""); err != nil {
 		t.Fatalf("SetMessage(\"\") error: %v", err)
 	}
-	if store.Get("owner/repo-1").Message != nil {
+	if LatestStatusMessage(store, "owner/repo-1") != nil {
 		t.Error("empty text should clear Message")
 	}
 }
@@ -681,7 +682,6 @@ func TestSetMessage_EmitsStatusMessageEventsOnlyWhenTextChanges(t *testing.T) {
 	store := testStore(t)
 	now := time.Now()
 	store.Put(&domain.Session{Name: "owner/repo-1", CreatedAt: now, UpdatedAt: now})
-	mustNewStream(t, store, "owner/repo-1")
 
 	if err := SetMessage(nil, store, "owner/repo-1", "working"); err != nil {
 		t.Fatalf("SetMessage(working) error: %v", err)
@@ -747,7 +747,6 @@ func TestSetMessage_FirstExplicitEmptyReportEmitsClearEvent(t *testing.T) {
 	store := testStore(t)
 	now := time.Now()
 	store.Put(&domain.Session{Name: "owner/repo-1", CreatedAt: now, UpdatedAt: now})
-	mustNewStream(t, store, "owner/repo-1")
 
 	if err := SetMessage(nil, store, "owner/repo-1", ""); err != nil {
 		t.Fatalf("SetMessage(empty) error: %v", err)
@@ -820,8 +819,8 @@ func TestSetMessage_SessionGuardBlocksCrossOwner(t *testing.T) {
 	if !ok || svcErr.Code != ErrRepoNotAllowed {
 		t.Errorf("want ErrRepoNotAllowed, got %v", err)
 	}
-	if store.Get("exampleorg/repo-26").Message != nil {
-		t.Error("blocked SetMessage must not mutate the session")
+	if LatestStatusMessage(store, "exampleorg/repo-26") != nil {
+		t.Error("blocked SetMessage must not append a status_message event")
 	}
 }
 

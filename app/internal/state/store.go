@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/persistence"
@@ -182,14 +183,19 @@ func (s *Store) ReleaseUpSlot(childName string) error {
 	return nil
 }
 
-// Delete removes a session by name.
-func (s *Store) Delete(name string) error {
+// Destroy transitions a session's live row to SessionStatusDestroyed
+// (retaining the row and its task/event history) and releases its up-slot
+// reservation. This is the persistence-backed session lifecycle's terminal
+// transition, not a physical row delete: sessions are retained across
+// destroy so a later create under the same name starts a new row with a
+// new id rather than reviving this one.
+func (s *Store) Destroy(name string) error {
 	db, err := s.dbHandle()
 	if err != nil {
-		return fmt.Errorf("state: delete %q: %w", name, err)
+		return fmt.Errorf("state: destroy %q: %w", name, err)
 	}
-	if err := db.DeleteSession(context.Background(), name); err != nil {
-		return fmt.Errorf("state: delete %q: %w", name, err)
+	if err := db.DestroySession(context.Background(), name, time.Now()); err != nil {
+		return fmt.Errorf("state: destroy %q: %w", name, err)
 	}
 	return nil
 }

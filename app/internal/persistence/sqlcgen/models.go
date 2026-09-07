@@ -106,7 +106,6 @@ type Session struct {
 	RootSessionID            sql.NullString
 	ResourceID               sql.NullString
 	Alias                    sql.NullString
-	Branch                   sql.NullString
 	Workflow                 string
 	WorkspaceDir             sql.NullString
 	PopulationWorkflow       sql.NullString

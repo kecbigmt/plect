@@ -37,9 +37,7 @@ func mergeTasks(store *state.Store, sessionName string, session *domain.Session)
 
 func replaceRuntimeState(store *state.Store, sessionName string, session *domain.Session) error {
 	return store.Update(sessionName, func(s *domain.Session) error {
-		s.Branch = session.Branch
 		s.WorkspaceDirPath = session.WorkspaceDirPath
-		s.Message = session.Message
 		s.Tasks = session.Tasks
 		s.Health = session.Health
 		s.LastTickAt = session.LastTickAt
@@ -100,7 +98,7 @@ func sessionVars(cfg *config.Config, s *domain.Session, plan *task.Plan) task.Se
 		ResourceID:       s.ResourceID,
 		ParentSession:    s.ParentSession,
 		WorkspaceDirPath: s.WorkspaceDirPath,
-		Branch:           s.Branch,
+		Branch:           domain.SessionBranch(s),
 		Inputs:           s.Inputs,
 		Plugins:          cfg.Plugins,
 		Terminal:         terminalBinding(plan, s),

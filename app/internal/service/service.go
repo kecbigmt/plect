@@ -19,6 +19,25 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
+// LatestStatusMessage returns a session's current self-reported status
+// line, or nil if it has none. Session.Message is not a stored field: the
+// fact lives in the session's plect.status_message event stream, so this
+// derives it from the most recent such event (none, or one that cleared
+// the message, both read as nil). A read error also reads as nil, matching
+// this package's other best-effort display projections (e.g.
+// sessionHealthState): a status line is not worth failing plect ls/status
+// over.
+func LatestStatusMessage(store *state.Store, sessionName string) *domain.Message {
+	ev, ok, err := eventlog.NewStore(store.Dir()).LatestByType(sessionName, event.TypeStatusMessage)
+	if err != nil || !ok {
+		return nil
+	}
+	if ev.Metadata["cleared"] == "true" || ev.Summary == "" {
+		return nil
+	}
+	return &domain.Message{Text: ev.Summary, UpdatedAt: ev.Time}
+}
+
 var validTag = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 // validateTagFormat returns ErrInvalidTag for non-empty tags that don't match
@@ -356,8 +375,8 @@ func buildListEntry(cfg *config.Config, displayWorkflows map[string]config.Workf
 		ResourceID:       s.ResourceID,
 		Tracked:          true,
 		LastActiveAt:     &s.UpdatedAt,
-		Message:          s.Message,
-		Branch:           s.Branch,
+		Message:          LatestStatusMessage(store, s.Name),
+		Branch:           domain.SessionBranch(s),
 		WorkspaceDirPath: s.WorkspaceDirPath,
 		ParentSession:    s.ParentSession,
 		Tasks:            taskViews(cfg, displayTasks, s, sessions),
@@ -485,41 +504,31 @@ func workflowDisplayOutputs(s *domain.Session) map[string]any {
 	return out
 }
 
-// SetMessage updates the session-level self-reported status message. An empty
-// text unsets it (Session.Message becomes nil) rather than persisting a
-// blank, since a blank line would look identical to "message never set" in
-// display but consume a stored object.
+// SetMessage updates the session's self-reported status line. An empty text
+// clears it (a later reader sees none) rather than persisting a blank,
+// since a blank line would look identical to "never set" in display. The
+// fact is not a stored Session field: it lives entirely in the session's
+// plect.status_message event stream, so change detection reads that
+// stream's latest event rather than an in-memory value, and a no-op update
+// appends nothing.
 func SetMessage(cfg *config.Config, store *state.Store, identifier string, text string) error {
-	sessionName, session, err := resolveSession(cfg, store, identifier)
+	sessionName, _, err := resolveSession(cfg, store, identifier)
 	if err != nil {
 		return err
 	}
 	if guardErr := checkSessionGuard(cfg, sessionName); guardErr != nil {
 		return guardErr
 	}
+	log := eventlog.NewStore(store.Dir())
+	latest, ok, err := log.LatestByType(sessionName, event.TypeStatusMessage)
+	if err != nil {
+		return &Error{Code: ErrExecutionFailed, Message: err.Error()}
+	}
 	previous := ""
-	if session.Message != nil {
-		previous = session.Message.Text
+	if ok && latest.Metadata["cleared"] != "true" {
+		previous = latest.Metadata["text"]
 	}
-	reported := session.Message != nil
-	if !reported {
-		events, tailErr := eventlog.NewStore(store.Dir()).Tail(sessionName, event.Filter{Types: []string{event.TypeStatusMessage}}, 1)
-		if tailErr != nil {
-			return &Error{Code: ErrExecutionFailed, Message: tailErr.Error()}
-		}
-		reported = len(events) > 0
-	}
-	changed := previous != text || !reported
-	now := time.Now()
-	if text == "" {
-		session.Message = nil
-	} else {
-		session.Message = &domain.Message{Text: text, UpdatedAt: now}
-	}
-	session.UpdatedAt = now
-	if err := store.Put(session); err != nil {
-		return err
-	}
+	changed := previous != text || !ok
 	if !changed {
 		return nil
 	}
@@ -527,7 +536,7 @@ func SetMessage(cfg *config.Config, store *state.Store, identifier string, text 
 	if text == "" {
 		cleared = "true"
 	}
-	_, _, _, err = eventlog.NewStore(store.Dir()).Append(event.Event{
+	if _, _, _, err := log.Append(event.Event{
 		SessionName: sessionName,
 		Type:        event.TypeStatusMessage,
 		Source:      event.SourcePlect,
@@ -538,8 +547,7 @@ func SetMessage(cfg *config.Config, store *state.Store, identifier string, text 
 			"cleared":  cleared,
 			"previous": previous,
 		},
-	})
-	if err != nil {
+	}); err != nil {
 		return &Error{Code: ErrExecutionFailed, Message: err.Error()}
 	}
 	return nil

@@ -39,7 +39,7 @@ func channelInputs(s *domain.Session, ch config.EventChannel, def config.Channel
 		Name:             s.Name,
 		ResourceID:       s.ResourceID,
 		WorkspaceDirPath: s.WorkspaceDirPath,
-		Branch:           s.Branch,
+		Branch:           domain.SessionBranch(s),
 		Inputs:           s.Inputs,
 	})
 	if err != nil {

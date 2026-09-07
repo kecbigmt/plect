@@ -6,6 +6,9 @@ import (
 	"time"
 
 	"github.com/pressly/goose/v3"
+
+	"github.com/kecbigmt/plecture/app/internal/domain"
+	"github.com/kecbigmt/plecture/contracts/event"
 )
 
 // eventTablesVersion is the goose version immediately before this package's
@@ -110,17 +113,29 @@ func TestMigrate_DropsDeliveryModeColumnWithoutLosingExistingRows(t *testing.T) 
 // regression: Atlas's own generated Down for this drop referenced the
 // table's pre-rename temporary name, which no longer exists once Up
 // finishes, so stepping back would error rather than restore the column.
+// It stops one migration short of current (UpByOne past eventTablesVersion,
+// not all the way to current) because the record_json-dissolution
+// migration on top re-keys events by session_id, which this test's own
+// raw-SQL assertions predate; see
+// TestMigrate_DownRestoresPreDissolutionSchemaWithoutError for that newer
+// migration's own dedicated Down regression.
 func TestMigrate_DownRestoresDeliveryModeColumnWithoutError(t *testing.T) {
-	db := migratedTestDB(t)
+	db := openTestDB(t)
 	ctx := context.Background()
 	when := time.Now().UTC().Truncate(time.Second)
-
-	seedEventRow(t, db, ctx, "01STREAM0000000000000001", "s2", "01EVENT0000000000000001", when, false)
 
 	provider, err := goose.NewProvider(goose.DialectSQLite3, db.write, db.migrations)
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
 	}
+	if _, err := provider.UpTo(ctx, eventTablesVersion); err != nil {
+		t.Fatalf("UpTo(%d): %v", eventTablesVersion, err)
+	}
+	if _, err := provider.UpByOne(ctx); err != nil {
+		t.Fatalf("UpByOne (apply delivery-mode drop): %v", err)
+	}
+	seedEventRow(t, db, ctx, "01STREAM0000000000000001", "s2", "01EVENT0000000000000001", when, false)
+
 	if _, err := provider.Down(ctx); err != nil {
 		t.Fatalf("Down: %v", err)
 	}
@@ -135,5 +150,70 @@ func TestMigrate_DownRestoresDeliveryModeColumnWithoutError(t *testing.T) {
 	if deliveryMode != "" {
 		t.Errorf("delivery_mode = %q, want the added column's default empty value for a row that predates Down", deliveryMode)
 	}
-	assertEventRowIntact(t, db, ctx, "s2", "01EVENT0000000000000001", when)
+	// Raw SQL, not assertEventRowIntact/ListEventsFrom: this database is one
+	// migration short of current, so the generated queries' session_id
+	// column does not exist here yet.
+	var gotType, gotSummary, gotBody string
+	if err := db.write.QueryRowContext(ctx, `SELECT type, summary, body FROM events WHERE id = ?`, "01EVENT0000000000000001").Scan(&gotType, &gotSummary, &gotBody); err != nil {
+		t.Fatalf("read restored event row: %v", err)
+	}
+	if gotType != "widget.message" || gotSummary != "hello" || gotBody != "hello body" {
+		t.Fatalf("restored event = (%q, %q, %q), want the seeded values intact", gotType, gotSummary, gotBody)
+	}
+}
+
+// TestMigrate_DownRestoresPreDissolutionSchemaWithoutError proves the
+// record_json-dissolution/session-lifecycle migration's own hand-written
+// Down runs without error and leaves an identifiable event row reachable
+// under the restored pre-dissolution schema (event_streams/events.stream_id
+// TEXT, sessions.record_json). It does not assert the Down path is
+// lossless: see that migration's own header comment and
+// docs/migrations/record-json-dissolution-and-session-lifecycle-migration.md
+// for why full data reconstruction on the way back down is out of scope.
+func TestMigrate_DownRestoresPreDissolutionSchemaWithoutError(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	if err := db.PutSession(ctx, &domain.Session{Name: "s3", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+	if _, err := db.AppendEvent(ctx, event.Event{ID: "01EVENT0000000000000002", SessionName: "s3", Time: now, Type: "widget.message", Source: "widget", Direction: event.Inbound, Summary: "hello"}); err != nil {
+		t.Fatalf("seed event: %v", err)
+	}
+
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db.write, db.migrations)
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+	if _, err := provider.Down(ctx); err != nil {
+		t.Fatalf("Down: %v", err)
+	}
+
+	var count int
+	if err := db.write.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'event_streams'`).Scan(&count); err != nil {
+		t.Fatalf("check event_streams table: %v", err)
+	}
+	if count != 1 {
+		t.Fatal("Down did not restore the event_streams table")
+	}
+	var recordJSONCount int
+	if err := db.write.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'record_json'`).Scan(&recordJSONCount); err != nil {
+		t.Fatalf("check sessions.record_json column: %v", err)
+	}
+	if recordJSONCount != 1 {
+		t.Fatal("Down did not restore sessions.record_json")
+	}
+
+	var gotID, gotType, gotSummary string
+	if err := db.write.QueryRowContext(ctx,
+		`SELECT e.id, e.type, e.summary FROM events e
+		 JOIN event_streams es ON es.id = e.stream_id
+		 WHERE es.session_name = ?`, "s3",
+	).Scan(&gotID, &gotType, &gotSummary); err != nil {
+		t.Fatalf("read restored event row: %v", err)
+	}
+	if gotID != "01EVENT0000000000000002" || gotType != "widget.message" || gotSummary != "hello" {
+		t.Fatalf("restored event = (%q, %q, %q), want the seeded values intact", gotID, gotType, gotSummary)
+	}
 }

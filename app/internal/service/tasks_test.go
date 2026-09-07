@@ -52,10 +52,31 @@ func seedSession(t *testing.T, store interface {
 }, sessionName, ownerRepo string, number int, workflow string, tasks map[string]*contract.TaskState) {
 	t.Helper()
 	now := time.Now()
+	if tasks == nil {
+		tasks = map[string]*contract.TaskState{}
+	}
+	// domain.SessionBranch reads "branch" off the @workflow pseudo-node's
+	// own outputs (Session.Branch was retired: a checked-out branch is git
+	// vocabulary, and core stays version-control-agnostic by identity). A
+	// caller whose tasks already include that node, with no branch output
+	// of its own, gets it stamped with "issue/1" as a default; seedSession
+	// never synthesizes the node itself, since Destroy treats its mere
+	// presence as "workflow setup ran, its own cleanup must run too" --
+	// callers not exercising that path (most of them) must not be given a
+	// fake one just to carry a branch value, and a caller that already set
+	// its own branch output keeps it.
+	if wf := tasks[contract.WorkflowPseudoNodeID]; wf != nil {
+		if wf.Outputs == nil {
+			wf.Outputs = map[string]any{}
+		}
+		if _, ok := wf.Outputs["branch"]; !ok {
+			wf.Outputs["branch"] = "issue/1"
+		}
+	}
+
 	session := &domain.Session{
 		Name:       sessionName,
 		ResourceID: fmt.Sprintf("https://github.com/%s/issues/%d", ownerRepo, number),
-		Branch:     "issue/1",
 		Workflow:   workflow,
 		Tasks:      tasks,
 		CreatedAt:  now,
@@ -63,12 +84,6 @@ func seedSession(t *testing.T, store interface {
 	}
 	if err := store.Put(session); err != nil {
 		t.Fatalf("seed: %v", err)
-	}
-	// A real session create mints its event stream (createsetup.go); a test
-	// that seeds state directly, bypassing Create, needs the same so
-	// AppendEvent/SetEventCursor find a current stream instead of erroring.
-	if _, err := eventlog.NewStore(store.Dir()).NewStream(sessionName); err != nil {
-		t.Fatalf("seed: new stream: %v", err)
 	}
 }
 
@@ -802,8 +817,6 @@ func TestUp_ForceRecreateResetsRuntimeWithoutPrev(t *testing.T) {
 		s.ParentSession = "org/repo-parent"
 		s.Alias = "resource-alias"
 		s.WorkspaceDirPath = oldWorkdirPath
-		s.Branch = "old-branch"
-		s.Message = &contract.Message{Text: "old", UpdatedAt: time.Now()}
 		s.Health = &contract.HealthState{LastCheckedAt: time.Now(), LastReason: "old"}
 		s.LastTickAt = time.Now()
 		s.TickBackoff = &contract.TickBackoff{LastFingerprint: "old"}
@@ -857,10 +870,10 @@ func TestUp_ForceRecreateResetsRuntimeWithoutPrev(t *testing.T) {
 	if !fileExists(newWorkdirPath) {
 		t.Fatalf("new workdir %q was not created", newWorkdirPath)
 	}
-	if persisted.Branch != "new-branch" {
-		t.Fatalf("Branch = %q, want provider output", persisted.Branch)
+	if domain.SessionBranch(persisted) != "new-branch" {
+		t.Fatalf("Branch = %q, want provider output", domain.SessionBranch(persisted))
 	}
-	if persisted.Message != nil || persisted.Health != nil || !persisted.LastTickAt.IsZero() || persisted.TickBackoff != nil {
+	if persisted.Health != nil || !persisted.LastTickAt.IsZero() || persisted.TickBackoff != nil {
 		t.Fatalf("runtime observation fields were not cleared: %+v", persisted)
 	}
 	evs, _, _, err := logStore.List(sessionName, 0, event.Filter{})
@@ -953,8 +966,6 @@ func TestUp_ForceRecreateCleanupFailurePreservesInspectableState(t *testing.T) {
 	if err := store.Update(sessionName, func(s *domain.Session) error {
 		s.ParentSession = "org/repo-parent"
 		s.WorkspaceDirPath = oldWorkdirPath
-		s.Branch = "old-branch"
-		s.Message = &contract.Message{Text: "old", UpdatedAt: time.Now()}
 		s.Health = &contract.HealthState{LastCheckedAt: time.Now(), LastReason: "old"}
 		s.LastTickAt = time.Now()
 		s.TickBackoff = &contract.TickBackoff{LastFingerprint: "old"}
@@ -991,10 +1002,10 @@ func TestUp_ForceRecreateCleanupFailurePreservesInspectableState(t *testing.T) {
 	if persisted.ResourceID != "https://github.com/org/repo/issues/15" {
 		t.Fatalf("ResourceID = %q, want preserved binding", persisted.ResourceID)
 	}
-	if persisted.WorkspaceDirPath != oldWorkdirPath || persisted.Branch != "old-branch" {
-		t.Fatalf("runtime session state = (%q, %q), want preserved before reset", persisted.WorkspaceDirPath, persisted.Branch)
+	if persisted.WorkspaceDirPath != oldWorkdirPath || domain.SessionBranch(persisted) != "old-branch" {
+		t.Fatalf("runtime session state = (%q, %q), want preserved before reset", persisted.WorkspaceDirPath, domain.SessionBranch(persisted))
 	}
-	if persisted.Message == nil || persisted.Health == nil || persisted.LastTickAt.IsZero() || persisted.TickBackoff == nil {
+	if persisted.Health == nil || persisted.LastTickAt.IsZero() || persisted.TickBackoff == nil {
 		t.Fatalf("runtime observation fields were reset after cleanup failure: %+v", persisted)
 	}
 	if !fileExists(oldWorkdirPath) {
@@ -1086,7 +1097,6 @@ func TestUp_ForceRecreateProviderSetupFailurePersistsInspectableState(t *testing
 	if err := store.Update(sessionName, func(s *domain.Session) error {
 		s.ParentSession = "org/repo-parent"
 		s.WorkspaceDirPath = oldWorkdirPath
-		s.Branch = "old-branch"
 		return nil
 	}); err != nil {
 		t.Fatalf("update session: %v", err)
@@ -1120,8 +1130,8 @@ func TestUp_ForceRecreateProviderSetupFailurePersistsInspectableState(t *testing
 	if persisted.ResourceID != "https://github.com/org/repo/issues/13" {
 		t.Fatalf("ResourceID = %q, want preserved binding", persisted.ResourceID)
 	}
-	if persisted.WorkspaceDirPath != "" || persisted.Branch != "" {
-		t.Fatalf("runtime session state = (%q, %q), want cleared after cleanup", persisted.WorkspaceDirPath, persisted.Branch)
+	if persisted.WorkspaceDirPath != "" || domain.SessionBranch(persisted) != "" {
+		t.Fatalf("runtime session state = (%q, %q), want cleared after cleanup", persisted.WorkspaceDirPath, domain.SessionBranch(persisted))
 	}
 	workflow := persisted.Tasks[contract.WorkflowPseudoNodeID]
 	if workflow == nil || workflow.Status != contract.TaskStatusFailed {
@@ -1170,6 +1180,7 @@ func TestRecreateSessionRuntimeTeardownListFailureLeavesStateUntouched(t *testin
 	}
 	sessionName := "org/repo-20"
 	seedSession(t, store, sessionName, "org/repo", 20, "default", map[string]*contract.TaskState{
+		contract.WorkflowPseudoNodeID: {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced},
 		"runtime": {
 			Scope:   contract.TaskScopeRun,
 			Status:  contract.TaskStatusProduced,
@@ -1179,7 +1190,7 @@ func TestRecreateSessionRuntimeTeardownListFailureLeavesStateUntouched(t *testin
 	})
 	session := store.Get(sessionName)
 	session.WorkspaceDirPath = oldWorkdirPath
-	session.Branch = "old-branch"
+	session.Tasks[contract.WorkflowPseudoNodeID].Outputs["branch"] = "old-branch"
 
 	_, err := recreateSessionRuntime(cfg, store, sessionName, session, config.WorkflowFile{ID: "default"}, &taskpkg.Plan{
 		Run: []taskpkg.Resolved{{
@@ -1201,8 +1212,8 @@ func TestRecreateSessionRuntimeTeardownListFailureLeavesStateUntouched(t *testin
 	if persisted == nil {
 		t.Fatal("session must remain inspectable after teardown list failure")
 	}
-	if persisted.WorkspaceDirPath != "" || persisted.Branch != "issue/1" {
-		t.Fatalf("persisted session state = (%q, %q), want original stored values", persisted.WorkspaceDirPath, persisted.Branch)
+	if persisted.WorkspaceDirPath != "" || domain.SessionBranch(persisted) != "issue/1" {
+		t.Fatalf("persisted session state = (%q, %q), want original stored values", persisted.WorkspaceDirPath, domain.SessionBranch(persisted))
 	}
 	runtime := persisted.Tasks["runtime"]
 	if runtime == nil || runtime.Status != contract.TaskStatusProduced || runtime.Outputs["session_id"] != "old-runtime" {
@@ -1388,7 +1399,6 @@ func TestUp_ForceRecreateFailureStagesPersistInspectableState(t *testing.T) {
 			if err := store.Update(sessionName, func(s *domain.Session) error {
 				s.ParentSession = "org/repo-parent"
 				s.WorkspaceDirPath = oldWorkdirPath
-				s.Branch = "old-branch"
 				return nil
 			}); err != nil {
 				t.Fatalf("update session: %v", err)
@@ -1423,8 +1433,8 @@ func TestUp_ForceRecreateFailureStagesPersistInspectableState(t *testing.T) {
 				t.Fatalf("ResourceID = %q, want preserved binding", persisted.ResourceID)
 			}
 			want := tc.want(oldWorkdirPath, newWorkdirPath)
-			if persisted.WorkspaceDirPath != want.workdirPath || persisted.Branch != want.branch {
-				t.Fatalf("runtime session state = (%q, %q), want (%q, %q)", persisted.WorkspaceDirPath, persisted.Branch, want.workdirPath, want.branch)
+			if persisted.WorkspaceDirPath != want.workdirPath || domain.SessionBranch(persisted) != want.branch {
+				t.Fatalf("runtime session state = (%q, %q), want (%q, %q)", persisted.WorkspaceDirPath, domain.SessionBranch(persisted), want.workdirPath, want.branch)
 			}
 			if fileExists(oldWorkdirPath) != want.oldExists {
 				t.Fatalf("old workdir exists = %v, want %v", fileExists(oldWorkdirPath), want.oldExists)
@@ -1707,10 +1717,12 @@ func TestDestroy_FailsClosedWhenStoreUnreadable(t *testing.T) {
 	}
 }
 
-// TestDestroy_ForceOrphansChildrenWithWarning covers the --force path: the
-// parent is destroyed as before, but the now-orphaned child is called out in
-// CleanupWarnings instead of vanishing silently.
-func TestDestroy_ForceOrphansChildrenWithWarning(t *testing.T) {
+// TestDestroy_ForceKeepsChildrensParentLinkWithWarning covers the --force
+// path: the parent is destroyed as before, and the now-parentless-in-effect
+// child is called out in CleanupWarnings instead of vanishing silently, but
+// its ParentSession keeps naming the destroyed parent (destroy retains the
+// row rather than deleting it, so the lineage stays inspectable).
+func TestDestroy_ForceKeepsChildrensParentLinkWithWarning(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
 	}
@@ -1741,8 +1753,8 @@ func TestDestroy_ForceOrphansChildrenWithWarning(t *testing.T) {
 	if got == nil {
 		t.Fatal("expected child session to still exist (orphaned, not deleted)")
 	}
-	if got.ParentSession != "" {
-		t.Errorf("expected child ParentSession cleared after orphaning, got %q", got.ParentSession)
+	if got.ParentSession != parentName {
+		t.Errorf("expected child ParentSession to keep naming destroyed parent %q, got %q", parentName, got.ParentSession)
 	}
 }
 

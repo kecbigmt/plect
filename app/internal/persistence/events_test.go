@@ -5,19 +5,47 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/contracts/event"
+	contract "github.com/kecbigmt/plecture/contracts/state"
 )
+
+// createSessionForTest mints a fresh, live session row (a genuinely new
+// incarnation, since no live row exists yet for name) and returns it — the
+// event-log tests' replacement for the retired CreateEventStream: a
+// session row now is one incarnation, so starting one means creating a
+// session.
+func createSessionForTest(t *testing.T, db *DB, name string) {
+	t.Helper()
+	now := time.Now().UTC()
+	if err := db.PutSession(context.Background(), &domain.Session{Name: name, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("create session %q: %v", name, err)
+	}
+}
+
+// destroyAndRecreateSessionForTest transitions name's live row to destroyed
+// and then creates a fresh one under the same name, mirroring `plect
+// destroy` followed by `plect up`/`plect create` — the only way a session
+// name gets a second, distinct incarnation.
+func destroyAndRecreateSessionForTest(t *testing.T, db *DB, name string) {
+	t.Helper()
+	ctx := context.Background()
+	if err := db.UpdateSession(ctx, name, func(s *domain.Session) error {
+		s.Status = contract.SessionStatusDestroyed
+		s.DestroyedAt = time.Now().UTC()
+		return nil
+	}); err != nil {
+		t.Fatalf("destroy session %q: %v", name, err)
+	}
+	createSessionForTest(t, db, name)
+}
 
 func TestAppendEvent_AssignsIncreasingPerStreamSequence(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
 	const session = "s1"
-	if _, err := db.CreateEventStream(ctx, session); err != nil {
-		t.Fatalf("create stream: %v", err)
-	}
-	if _, err := db.CreateEventStream(ctx, "s2"); err != nil {
-		t.Fatalf("create stream s2: %v", err)
-	}
+	createSessionForTest(t, db, session)
+	createSessionForTest(t, db, "s2")
 
 	first, err := db.AppendEvent(ctx, event.Event{ID: "e1", SessionName: session, Time: time.Now().UTC(), Type: "a", Source: "test", Direction: event.Internal})
 	if err != nil {
@@ -35,7 +63,7 @@ func TestAppendEvent_AssignsIncreasingPerStreamSequence(t *testing.T) {
 		t.Fatalf("second sequence = %d, want 2", second)
 	}
 
-	// A different session's stream starts its own sequence at 1.
+	// A different session's incarnation starts its own sequence at 1.
 	other, err := db.AppendEvent(ctx, event.Event{ID: "e3", SessionName: "s2", Time: time.Now().UTC(), Type: "a", Source: "test", Direction: event.Internal})
 	if err != nil {
 		t.Fatalf("append other session: %v", err)
@@ -50,9 +78,7 @@ func TestAppendEvent_RoundTripsEveryField(t *testing.T) {
 	ctx := context.Background()
 	const session = "s1"
 	when := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
-	if _, err := db.CreateEventStream(ctx, session); err != nil {
-		t.Fatalf("create stream: %v", err)
-	}
+	createSessionForTest(t, db, session)
 
 	want := event.Event{
 		ID:          "01JXAMPLE",
@@ -94,9 +120,7 @@ func TestAppendEvent_EmptyMetadataRoundTripsAsNil(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
 	const session = "s1"
-	if _, err := db.CreateEventStream(ctx, session); err != nil {
-		t.Fatalf("create stream: %v", err)
-	}
+	createSessionForTest(t, db, session)
 
 	if _, err := db.AppendEvent(ctx, event.Event{ID: "e1", SessionName: session, Time: time.Now().UTC(), Type: "a", Source: "test", Direction: event.Internal}); err != nil {
 		t.Fatalf("append: %v", err)
@@ -114,21 +138,19 @@ func TestAppendEvent_RejectsEmptyDirection(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
 	const session = "s1"
-	if _, err := db.CreateEventStream(ctx, session); err != nil {
-		t.Fatalf("create stream: %v", err)
-	}
+	createSessionForTest(t, db, session)
 
 	if _, err := db.AppendEvent(ctx, event.Event{ID: "e1", SessionName: session, Time: time.Now().UTC(), Type: "a"}); err == nil {
 		t.Fatal("append with empty direction succeeded, want error")
 	}
 }
 
-func TestAppendEvent_RejectsMissingCurrentStream(t *testing.T) {
+func TestAppendEvent_RejectsMissingLiveSession(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
 
 	if _, err := db.AppendEvent(ctx, event.Event{ID: "e1", SessionName: "never/created", Time: time.Now().UTC(), Type: "a", Direction: event.Internal}); err == nil {
-		t.Fatal("append to a session with no current stream succeeded, want error")
+		t.Fatal("append to a session with no live row succeeded, want error")
 	}
 }
 
@@ -136,9 +158,7 @@ func TestListEventsFrom_ResumesAfterAGivenSequence(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
 	const session = "s1"
-	if _, err := db.CreateEventStream(ctx, session); err != nil {
-		t.Fatalf("create stream: %v", err)
-	}
+	createSessionForTest(t, db, session)
 
 	for i := range 3 {
 		if _, err := db.AppendEvent(ctx, event.Event{ID: string(rune('a' + i)), SessionName: session, Time: time.Now().UTC(), Type: "t", Direction: event.Internal}); err != nil {
@@ -155,13 +175,13 @@ func TestListEventsFrom_ResumesAfterAGivenSequence(t *testing.T) {
 	}
 }
 
-func TestListEventsFrom_MissingStreamIsEmptyNotError(t *testing.T) {
+func TestListEventsFrom_MissingSessionIsEmptyNotError(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
 
 	evs, seqs, err := db.ListEventsFrom(ctx, "never/created", 0)
 	if err != nil || len(evs) != 0 || len(seqs) != 0 {
-		t.Fatalf("list on missing stream = (%v, %v, %v), want empty/no error", evs, seqs, err)
+		t.Fatalf("list on missing session = (%v, %v, %v), want empty/no error", evs, seqs, err)
 	}
 }
 
@@ -175,13 +195,10 @@ func TestEventStreamID_EmptyUntilCreatedThenStableAcrossAppends(t *testing.T) {
 		t.Fatalf("stream id before create = %q (err=%v), want empty", gen, err)
 	}
 
-	created, err := db.CreateEventStream(ctx, session)
-	if err != nil || created == "" {
-		t.Fatalf("create stream: id=%q err=%v", created, err)
-	}
+	createSessionForTest(t, db, session)
 	g1, err := db.EventStreamID(ctx, session)
-	if err != nil || g1 != created {
-		t.Fatalf("stream id after create = %q (err=%v), want %q", g1, err, created)
+	if err != nil || g1 == "" {
+		t.Fatalf("stream id after create = %q (err=%v), want non-empty", g1, err)
 	}
 
 	if _, err := db.AppendEvent(ctx, event.Event{ID: "e1", SessionName: session, Time: time.Now().UTC(), Type: "a", Direction: event.Internal}); err != nil {
@@ -196,30 +213,27 @@ func TestEventStreamID_EmptyUntilCreatedThenStableAcrossAppends(t *testing.T) {
 	}
 }
 
-func TestEventStreamID_RecreateMintsANewCurrentIncarnation(t *testing.T) {
+func TestEventStreamID_DestroyAndRecreateMintsANewCurrentIncarnation(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
 	const session = "s1"
 
-	first, err := db.CreateEventStream(ctx, session)
-	if err != nil {
-		t.Fatalf("create stream (first): %v", err)
+	createSessionForTest(t, db, session)
+	first, err := db.EventStreamID(ctx, session)
+	if err != nil || first == "" {
+		t.Fatalf("stream id after create: %q, err=%v", first, err)
 	}
 	if _, err := db.AppendEvent(ctx, event.Event{ID: "e1", SessionName: session, Time: time.Now().UTC(), Type: "a", Direction: event.Internal}); err != nil {
 		t.Fatalf("append to first incarnation: %v", err)
 	}
 
-	second, err := db.CreateEventStream(ctx, session)
+	destroyAndRecreateSessionForTest(t, db, session)
+	second, err := db.EventStreamID(ctx, session)
 	if err != nil {
-		t.Fatalf("create stream (second): %v", err)
+		t.Fatalf("stream id after recreate: %v", err)
 	}
 	if second == first {
-		t.Fatalf("second incarnation's stream id = %q, want distinct from first %q", second, first)
-	}
-
-	current, err := db.EventStreamID(ctx, session)
-	if err != nil || current != second {
-		t.Fatalf("current stream id = %q (err=%v), want the second incarnation %q", current, err, second)
+		t.Fatalf("second incarnation's id = %q, want distinct from first %q", second, first)
 	}
 
 	seq, err := db.AppendEvent(ctx, event.Event{ID: "e2", SessionName: session, Time: time.Now().UTC(), Type: "b", Direction: event.Internal})
@@ -227,7 +241,72 @@ func TestEventStreamID_RecreateMintsANewCurrentIncarnation(t *testing.T) {
 		t.Fatalf("append to second incarnation: %v", err)
 	}
 	if seq != 1 {
-		t.Fatalf("second incarnation's first sequence = %d, want 1 (its own stream, not continuing the first's)", seq)
+		t.Fatalf("second incarnation's first sequence = %d, want 1 (its own row, not continuing the first's)", seq)
+	}
+
+	// The destroyed first incarnation's own events remain readable by its id.
+	firstEvs, _, err := db.ListEventsFromStreamID(ctx, first, session, 0)
+	if err != nil {
+		t.Fatalf("list first incarnation's events by id: %v", err)
+	}
+	if len(firstEvs) != 1 || firstEvs[0].ID != "e1" {
+		t.Fatalf("first incarnation's events = %+v, want exactly [e1]", firstEvs)
+	}
+}
+
+// TestEventCursor_DestroyAndRecreateResetsNameBasedReaderWithoutLoss proves
+// the clause a per-incarnation session_id makes possible: a reader that
+// only ever addresses a session by name (ReadCursor/ListEventsFrom, exactly
+// how the reactor and dispatch consumers work) picks up the new
+// incarnation's events from its own beginning rather than skipping past
+// them. event_cursors and events both key off session_id, and a new
+// incarnation mints a new id with no cursor row of its own yet, so a
+// cursor left at the old incarnation's last-read sequence can never be
+// misread as "already past" the new incarnation's low sequence numbers —
+// there is no shared sequence space for it to be stale against.
+func TestEventCursor_DestroyAndRecreateResetsNameBasedReaderWithoutLoss(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+	const session, cursorName = "s1", "delivery"
+
+	createSessionForTest(t, db, session)
+	if _, err := db.AppendEvent(ctx, event.Event{ID: "e1", SessionName: session, Time: time.Now().UTC(), Type: "a", Direction: event.Internal}); err != nil {
+		t.Fatalf("append e1: %v", err)
+	}
+	if _, err := db.AppendEvent(ctx, event.Event{ID: "e2", SessionName: session, Time: time.Now().UTC(), Type: "a", Direction: event.Internal}); err != nil {
+		t.Fatalf("append e2: %v", err)
+	}
+	// A reader caught up to the first incarnation's last event.
+	if err := db.SetEventCursor(ctx, session, cursorName, 2); err != nil {
+		t.Fatalf("set cursor: %v", err)
+	}
+
+	destroyAndRecreateSessionForTest(t, db, session)
+	if _, err := db.AppendEvent(ctx, event.Event{ID: "e3", SessionName: session, Time: time.Now().UTC(), Type: "b", Direction: event.Internal}); err != nil {
+		t.Fatalf("append e3 to second incarnation: %v", err)
+	}
+
+	has, err := db.HasEventCursor(ctx, session, cursorName)
+	if err != nil {
+		t.Fatalf("has event cursor: %v", err)
+	}
+	if has {
+		t.Fatal("second incarnation reads an existing cursor, want none (its own id has never been committed)")
+	}
+	pos, err := db.EventCursor(ctx, session, cursorName)
+	if err != nil {
+		t.Fatalf("event cursor: %v", err)
+	}
+	if pos != 0 {
+		t.Fatalf("cursor position for the new incarnation = %d, want 0 (unread from its own start)", pos)
+	}
+
+	evs, _, err := db.ListEventsFrom(ctx, session, pos)
+	if err != nil {
+		t.Fatalf("list events from %d: %v", pos, err)
+	}
+	if len(evs) != 1 || evs[0].ID != "e3" {
+		t.Fatalf("events from the reported cursor position = %+v, want exactly [e3]", evs)
 	}
 }
 
@@ -235,9 +314,7 @@ func TestEventCursor_RoundTripAndHasDistinguishesNeverFromZero(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
 	const session, cursorName = "s1", "delivery"
-	if _, err := db.CreateEventStream(ctx, session); err != nil {
-		t.Fatalf("create stream: %v", err)
-	}
+	createSessionForTest(t, db, session)
 
 	has, err := db.HasEventCursor(ctx, session, cursorName)
 	if err != nil || has {
@@ -265,12 +342,12 @@ func TestEventCursor_RoundTripAndHasDistinguishesNeverFromZero(t *testing.T) {
 	}
 }
 
-func TestSetEventCursor_RejectsMissingCurrentStream(t *testing.T) {
+func TestSetEventCursor_RejectsMissingLiveSession(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
 
 	if err := db.SetEventCursor(ctx, "never/created", "delivery", 0); err == nil {
-		t.Fatal("set cursor on a session with no current stream succeeded, want error")
+		t.Fatal("set cursor on a session with no live row succeeded, want error")
 	}
 }
 
@@ -278,19 +355,47 @@ func TestListEventsFromStreamID_RejectsAStreamBelongingToAnotherSession(t *testi
 	db := migratedTestDB(t)
 	ctx := context.Background()
 
-	victimStream, err := db.CreateEventStream(ctx, "victim/session")
-	if err != nil {
-		t.Fatalf("create victim stream: %v", err)
+	createSessionForTest(t, db, "victim/session")
+	victimStream, err := db.EventStreamID(ctx, "victim/session")
+	if err != nil || victimStream == "" {
+		t.Fatalf("victim stream id: %q, err=%v", victimStream, err)
 	}
 	if _, err := db.AppendEvent(ctx, event.Event{ID: "e1", SessionName: "victim/session", Time: time.Now().UTC(), Type: "secret", Source: "test", Direction: event.Internal}); err != nil {
 		t.Fatalf("append to victim: %v", err)
 	}
-	if _, err := db.CreateEventStream(ctx, "attacker/session"); err != nil {
-		t.Fatalf("create attacker stream: %v", err)
-	}
+	createSessionForTest(t, db, "attacker/session")
 
 	evs, _, err := db.ListEventsFromStreamID(ctx, victimStream, "attacker/session", 0)
 	if err == nil {
 		t.Fatalf("reading another session's stream by id succeeded, want an ownership error; got events %+v", evs)
+	}
+}
+
+func TestLatestSessionEventByType_ReturnsMostRecentOfThatType(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+	const session = "s1"
+	createSessionForTest(t, db, session)
+
+	if _, ok, err := db.LatestSessionEventByType(ctx, session, event.TypeStatusMessage); err != nil || ok {
+		t.Fatalf("latest before any event: ok=%v err=%v, want ok=false", ok, err)
+	}
+
+	if _, err := db.AppendEvent(ctx, event.Event{ID: "e1", SessionName: session, Time: time.Now().UTC(), Type: event.TypeStatusMessage, Direction: event.Outbound, Summary: "first"}); err != nil {
+		t.Fatalf("append e1: %v", err)
+	}
+	if _, err := db.AppendEvent(ctx, event.Event{ID: "e2", SessionName: session, Time: time.Now().UTC(), Type: "other.type", Direction: event.Internal, Summary: "unrelated"}); err != nil {
+		t.Fatalf("append e2: %v", err)
+	}
+	if _, err := db.AppendEvent(ctx, event.Event{ID: "e3", SessionName: session, Time: time.Now().UTC(), Type: event.TypeStatusMessage, Direction: event.Outbound, Summary: "second"}); err != nil {
+		t.Fatalf("append e3: %v", err)
+	}
+
+	got, ok, err := db.LatestSessionEventByType(ctx, session, event.TypeStatusMessage)
+	if err != nil || !ok {
+		t.Fatalf("latest: ok=%v err=%v, want ok=true", ok, err)
+	}
+	if got.ID != "e3" || got.Summary != "second" {
+		t.Fatalf("latest = %+v, want the most recent status_message event (e3)", got)
 	}
 }
