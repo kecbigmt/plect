@@ -159,7 +159,7 @@ func TestBuildWorkspaceProviderBinaries_BuildsOnce(t *testing.T) {
 
 // A throwaway onceBuiltBinaries, not the package's shared singleton: a
 // forced failure there would poison it for every other test in this run.
-func TestOnceBuiltBinaries_RecordsDirBeforeBuildsFinish(t *testing.T) {
+func TestOnceBuiltBinaries_CleanupRemovesDirAfterAFailedBuild(t *testing.T) {
 	var o onceBuiltBinaries
 	root := repoRoot(t)
 	binaries := []struct{ moduleDir, pkg, name string }{
@@ -171,12 +171,14 @@ func TestOnceBuiltBinaries_RecordsDirBeforeBuildsFinish(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error building a nonexistent package")
 	}
-	if dir == "" {
-		t.Fatal("dir must be recorded even though a later build failed, so it can be cleaned up")
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
 	if _, statErr := os.Stat(filepath.Join(dir, "plect")); statErr != nil {
-		t.Errorf("the binary built before the failure should exist: %v", statErr)
+		t.Fatalf("the binary built before the failure should exist: %v", statErr)
+	}
+
+	o.cleanup()
+
+	if _, statErr := os.Stat(dir); !os.IsNotExist(statErr) {
+		t.Errorf("cleanup should have removed %s, stat err = %v", dir, statErr)
 	}
 }
 

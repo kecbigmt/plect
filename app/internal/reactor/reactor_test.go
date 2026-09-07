@@ -21,8 +21,13 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// onceBuiltBinaries mirrors app/internal/service's own type of the same
-// name (see its doc comment) — duplicated here because it is unexported.
+// onceBuiltBinaries is app/internal/service's identically-named type,
+// duplicated in this package because the original is unexported. build
+// compiles binaries into one shared directory the first time it is called
+// and returns that same directory (and any error) on every later call; the
+// directory is set as soon as it exists, before any build in the list
+// starts, so a build failing partway through still leaves a directory for
+// cleanup to find.
 type onceBuiltBinaries struct {
 	once sync.Once
 	dir  string
@@ -52,13 +57,17 @@ func (o *onceBuiltBinaries) build(root string, binaries []struct{ moduleDir, pkg
 	return o.dir, o.err
 }
 
+func (o *onceBuiltBinaries) cleanup() {
+	if o.dir != "" {
+		os.RemoveAll(o.dir)
+	}
+}
+
 var sharedShippedPluginBinaries onceBuiltBinaries
 
 func TestMain(m *testing.M) {
 	code := m.Run()
-	if sharedShippedPluginBinaries.dir != "" {
-		os.RemoveAll(sharedShippedPluginBinaries.dir)
-	}
+	sharedShippedPluginBinaries.cleanup()
 	os.Exit(code)
 }
 

@@ -26,9 +26,8 @@ import (
 
 // onceBuiltBinaries builds a fixed list of Go binaries into a shared temp
 // directory exactly once, recording dir before any build runs so a partial
-// failure still leaves something a caller can clean up. Declared here,
-// without the integration tag its only caller carries, so TestMain's
-// cleanup below applies whether or not that tag is set.
+// failure still leaves something cleanup can find. Declared without the
+// integration tag its caller carries, so TestMain applies either way.
 type onceBuiltBinaries struct {
 	once sync.Once
 	dir  string
@@ -58,6 +57,14 @@ func (o *onceBuiltBinaries) build(root string, binaries []struct{ moduleDir, pkg
 	return o.dir, o.err
 }
 
+// cleanup removes o.dir, including after a failed build (build records dir
+// before any build in the list runs).
+func (o *onceBuiltBinaries) cleanup() {
+	if o.dir != "" {
+		os.RemoveAll(o.dir)
+	}
+}
+
 var sharedWorkspaceProviderBinaries onceBuiltBinaries
 
 // PLECT_CONFIG_HOME and XDG_CONFIG_HOME both outrank HOME in
@@ -69,9 +76,7 @@ func TestMain(m *testing.M) {
 	os.Unsetenv(confighome.EnvVar)
 	os.Unsetenv(confighome.XDGEnvVar)
 	code := m.Run()
-	if sharedWorkspaceProviderBinaries.dir != "" {
-		os.RemoveAll(sharedWorkspaceProviderBinaries.dir)
-	}
+	sharedWorkspaceProviderBinaries.cleanup()
 	os.Exit(code)
 }
 
