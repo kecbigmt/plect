@@ -84,8 +84,6 @@ func TestUp_SuccessfulLaunchSetsStatusUp(t *testing.T) {
 	}
 }
 
-// The runtime failure model's failure-atomic guarantee extends to the
-// persisted status, not just task state.
 func TestUp_FailedLaunchLeavesStatusDown(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -134,10 +132,8 @@ func TestDown_SetsStatusDown(t *testing.T) {
 	}
 }
 
-// A force-recreate tears its existing runtime down before rebuilding it,
-// so a failure anywhere in that rebuild (here: the fixture workflow
-// declares no workspace provider, so provider setup fails every time)
-// must not leave status stuck at its pre-recreate up.
+// The fixture workflow declares no workspace provider, so force-recreate's
+// own rebuild fails at provider setup every time.
 func TestUp_FailedForceRecreateFromUpSessionSetsStatusDown(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -164,9 +160,7 @@ func TestUp_FailedForceRecreateFromUpSessionSetsStatusDown(t *testing.T) {
 	}
 }
 
-// Down commits to tearing its runtime down before attempting to, so even
-// a failure building its own plan (here: a broken sibling task
-// declaration) must not leave status stuck at its pre-Down up.
+// The broken sibling task declaration fails plan construction specifically.
 func TestDown_PlanConstructionFailureSetsStatusDown(t *testing.T) {
 	store := testStore(t)
 	sessionName := "work-24"

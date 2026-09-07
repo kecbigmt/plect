@@ -42,13 +42,6 @@ func Down(cfg *config.Config, store *state.Store, params DownParams) (*DownResul
 		session.Tasks = make(map[string]*contract.TaskState)
 	}
 
-	// Once past its own guards, Down commits to tearing the run-scoped
-	// runtime down, so status moves to down here, before that teardown is
-	// even attempted: every failure return from this point on (building
-	// the plan or the teardown list, running it, or persisting the
-	// result) must not leave a stale up behind, whether or not the
-	// teardown itself fully succeeds. A guard rejection above this point
-	// is not an attempt at all, so it leaves status untouched.
 	if err := setSessionStatus(store, sessionName, contract.SessionStatusDown); err != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to record session status: %v", err)}
 	}

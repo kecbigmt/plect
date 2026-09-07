@@ -216,10 +216,6 @@ func Up(cfg *config.Config, store *state.Store, params UpParams) (*UpResult, err
 	} else if refreshed != nil {
 		session = refreshed
 	}
-	// Status only ever moves to up here, once setup has already fully
-	// succeeded (every earlier return above leaves it exactly as it was —
-	// down from creation, or destroyed — matching the runtime failure
-	// model's own failure-atomic guarantee for a launch that fails).
 	if err := setSessionStatus(store, sessionName, contract.SessionStatusUp); err != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to record session status: %v", err)}
 	}
@@ -324,12 +320,6 @@ func staleProducedWorkflowNodes(cfg *config.Config, session *domain.Session, pla
 }
 
 func recreateSessionRuntime(cfg *config.Config, store *state.Store, sessionName string, session *domain.Session, wf config.WorkflowFile, teardownPlan *task.Plan, observer task.Observer) (*task.Plan, error) {
-	// Status moves to down before this function attempts anything: a
-	// force-recreate commits to tearing its runtime down and rebuilding
-	// it, so every one of its failure returns from here on -- including
-	// one that never reaches the teardown itself -- must not leave a
-	// stale up behind. Up's own final success gate is the only place
-	// that moves it back to up, once the whole rebuild has succeeded.
 	if err := setSessionStatus(store, sessionName, contract.SessionStatusDown); err != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to record session status: %v", err)}
 	}
