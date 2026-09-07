@@ -31,8 +31,9 @@ afterEach(() => {
   onlineManager.setOnline(true);
 });
 
-// A stream-driven invalidation is the only thing that should ever re-fetch
-// the list or a session's detail.
+// Window refocus and network reconnect never trigger a refetch on their
+// own; only the selected session's stream (or, for the list, the periodic
+// poll below) invalidates either query.
 describe("useSessionList", () => {
   it("does not refetch on window refocus or network reconnect", async () => {
     const { wrapper } = makeWrapper();
