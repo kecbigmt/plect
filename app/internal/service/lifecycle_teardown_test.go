@@ -2,6 +2,11 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/kecbigmt/plecture/app/internal/domain"
@@ -66,6 +71,55 @@ func TestDown_ReleasesRunScopedNodeRemovedFromWorkflow(t *testing.T) {
 	}
 	if s.Nodes["review"].Status != contract.TaskStatusProduced {
 		t.Errorf("session-scoped review should survive down: %+v", s.Nodes["review"])
+	}
+}
+
+// TestUp_FailedSetupRetainsCleanupContractAcrossARestart proves issue #496's
+// acceptance case 4: a failed/partial setup's attempt record and its
+// retained cleanup contract survive being read back fresh -- state.Store
+// holds nothing in Go memory across calls, so a later, independent read is
+// exactly what a restarted process's own first read would see -- and a
+// later Destroy can still release it using that retained contract alone,
+// with no live task definition required (LoadTaskDefinitions never runs a
+// cleanup script's own definition through it).
+func TestUp_FailedSetupRetainsCleanupContractAcrossARestart(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	cleanupLog := filepath.Join(t.TempDir(), "cleanup.log")
+	cfg := writeWorkflowFixture(t, t.TempDir(), "coding",
+		[]taskFixture{{
+			id:      "flaky",
+			scope:   "run",
+			setup:   `echo 'partial allocation' >&2; exit 1`,
+			cleanup: fmt.Sprintf(`printf 'flaky-cleaned\n' >> %s`, cleanupLog),
+		}},
+		[]nodeFixture{{id: "flaky"}},
+	)
+	store := testStore(t)
+	seedSessionWithNodes(t, store, "o/r-1", "o/r", 1, "coding", map[string]*contract.TaskState{})
+
+	if _, err := Up(cfg, store, UpParams{Identifier: "o/r-1"}); err == nil {
+		t.Fatal("Up: want the flaky setup's failure surfaced, got nil error")
+	}
+
+	s := store.Get("o/r-1")
+	if s == nil || s.Nodes["flaky"] == nil || s.Nodes["flaky"].Status != contract.TaskStatusFailed {
+		t.Fatalf("after Up failure, flaky = %+v, want a retained failed attempt", s.Nodes["flaky"])
+	}
+	if len(s.Nodes["flaky"].Cleanup) == 0 {
+		t.Fatal("after Up failure, flaky has no retained cleanup contract")
+	}
+
+	if _, err := Destroy(cfg, store, DestroyParams{Identifier: "o/r-1"}); err != nil {
+		t.Fatalf("Destroy: %v", err)
+	}
+	data, err := os.ReadFile(cleanupLog)
+	if err != nil {
+		t.Fatalf("read cleanup log: %v", err)
+	}
+	if !strings.Contains(string(data), "flaky-cleaned") {
+		t.Fatalf("cleanup log = %q, want the retained cleanup contract to have run", data)
 	}
 }
 

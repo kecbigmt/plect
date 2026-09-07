@@ -703,16 +703,17 @@ func reportCleanupFailure(obs Observer, r Resolved, elapsed time.Duration, err e
 // "produced" is verified before it is reused, not blindly skipped — see
 // verifyLiveness and invalidateProducedNode. Tasks in any other state
 // (absent, "failed", "cleaned") are re-run with a fresh setup attempt, under
-// the SAME declaration (task id and scope unchanged) as the existing record.
-// Task authors must make their setup scripts cope with retry by verifying
-// the desired state rather than blindly recreating; see README "Task model"
-// section.
+// the SAME declaration (task id, scope, and nesting-chain shape all
+// unchanged) as the existing record. Task authors must make their setup
+// scripts cope with retry by verifying the desired state rather than
+// blindly recreating; see README "Task model" section.
 //
 // A node whose existing, unreleased (not yet "cleaned") record names a
 // DIFFERENT declaration — a workflow revision remapped this node id onto a
-// different task/effect — is refused rather than silently overwritten: an
-// unreleased allocation's own release recipe must not be discarded just
-// because the node id it lived under now means something else. Release it
+// different task/effect, or edited its nesting chain's shape — is refused
+// rather than silently overwritten: an unreleased allocation's own release
+// recipe must not be discarded just because the node id it lived under now
+// means something else. Release it
 // first (`plect down`/`plect destroy`) and retry. This is deliberately not
 // gated by a force flag yet — no caller needs one — see issue #496.
 func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, tasks map[string]*contract.TaskState, observer Observer) error {
@@ -932,7 +933,24 @@ func taskIDFor(r Resolved) string {
 // a different declaration than existing's own recorded one -- the case
 // RunSetup refuses to silently overwrite while existing is unreleased.
 func declarationChanged(r Resolved, existing *contract.TaskState) bool {
-	return existing.Scope != r.Scope || existing.TaskID != taskIDFor(r)
+	if existing.Scope != r.Scope || existing.TaskID != taskIDFor(r) {
+		return true
+	}
+	// A nesting chain edit under the SAME task id/scope (a layer added,
+	// removed, reordered, or swapped) is also a different declaration: the
+	// existing, retained per-layer release recipe (contract.LayerState.
+	// Cleanup) belongs to the OLD chain shape and must not be silently
+	// reused against a differently-shaped one. See issue #496's acceptance
+	// case 3.
+	if len(r.Layers) != len(existing.Layers) {
+		return true
+	}
+	for i, l := range r.Layers {
+		if l.EffectID != existing.Layers[i].EffectID {
+			return true
+		}
+	}
+	return false
 }
 
 // describeTaskID renders a task_id column's stored value (empty means "same

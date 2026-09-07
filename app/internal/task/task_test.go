@@ -322,6 +322,35 @@ func TestRunSetup_RetainsCleanupContractAndExecutionDir(t *testing.T) {
 // effect.RunLayers) -- schema-free, since cleanup never needs the compiled
 // input/locals/outputs schemas a layer's setup answers to (see
 // effect.CleanupLayers, which never sets them either).
+// TestRunSetup_RefusesUnreleasedNodeWhenNestingChainShapeChanges is issue
+// #496's acceptance case 3: a node whose task id and scope are unchanged
+// but whose nesting chain shape was revised (a different inner effect) is
+// still a different declaration -- the old chain's own retained per-layer
+// release recipe must survive untouched until something explicitly
+// releases it, not be silently discarded because the composed identity
+// looked the same.
+func TestRunSetup_RefusesUnreleasedNodeWhenNestingChainShapeChanges(t *testing.T) {
+	withScriptedExecutor(t, &scriptedExecutor{stdout: map[string]string{"inner-a-setup": `{"pid":1}`}})
+	outer := config.TaskDefinition{ID: "outer", Scope: "run", Cleanup: shellStub("outer-cleanup")}
+	innerA := config.TaskDefinition{ID: "inner-a", Scope: "run", Setup: shellStub("inner-a-setup"), Cleanup: shellStub("inner-a-cleanup")}
+	tasks := map[string]*contract.TaskState{}
+	if err := RunSetup(context.Background(), nestedPlan(t, outer, innerA), SessionVars{Name: "s"}, tasks, nil); err != nil {
+		t.Fatalf("initial setup: %v", err)
+	}
+	if tasks["outer"].Status != contract.TaskStatusProduced || len(tasks["outer"].Layers) != 2 {
+		t.Fatalf("initial state = %+v", tasks["outer"])
+	}
+
+	innerB := config.TaskDefinition{ID: "inner-b", Scope: "run", Setup: shellStub("inner-b-setup"), Cleanup: shellStub("inner-b-cleanup")}
+	err := RunSetup(context.Background(), nestedPlan(t, outer, innerB), SessionVars{Name: "s"}, tasks, nil)
+	if err == nil {
+		t.Fatal("RunSetup: want refusal for a revised nesting chain, got nil error")
+	}
+	if got := tasks["outer"].Layers; len(got) != 2 || got[1].EffectID != "inner-a" {
+		t.Fatalf("retained layers = %+v, want the old chain (inner-a) left untouched", got)
+	}
+}
+
 func TestRunSetup_NestedNodeRetainsCleanupPerLayerNotOnTheComposedState(t *testing.T) {
 	withScriptedExecutor(t, &scriptedExecutor{stdout: map[string]string{"inner-setup": `{"pid":42}`}})
 	outer := config.TaskDefinition{ID: "outer", Scope: "run", Cleanup: shellStub("outer-cleanup")}
