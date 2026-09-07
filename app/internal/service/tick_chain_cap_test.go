@@ -208,7 +208,10 @@ func TestTickSession_ChainCapAttemptEventRecordsNewStreakAfterSpawnAndDestroy(t 
 	}
 
 	if err := store.Update("sibling", func(s *domain.Session) error {
+		// Simulates what a real RunSetup would do reviving a cleaned node:
+		// mint a fresh execution identity rather than reuse the released one.
 		s.Nodes["run_node"].Status = contract.TaskStatusProduced
+		s.Nodes["run_node"].ExecutionID = ""
 		return nil
 	}); err != nil {
 		t.Fatalf("bring sibling back up: %v", err)

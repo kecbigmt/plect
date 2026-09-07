@@ -551,13 +551,49 @@ func TestPutSession_NodeInstanceDoneWhenRoundTripsAsEmbeddedJSON(t *testing.T) {
 	}
 }
 
-func TestPutSession_ReplacesNodesRatherThanAccumulating(t *testing.T) {
+// A dropped-but-unreleased node must not lose the execution record
+// `plect down`/`destroy` still needs.
+func TestPutSession_UnreleasedNodeSurvivesBeingDroppedFromTheMap(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
 
 	session := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Nodes: map[string]*contract.TaskState{
-		"a": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced},
+		"a": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusFailed, TaskID: "work", Error: "boom"},
+	}}
+	if err := db.PutSession(ctx, session); err != nil {
+		t.Fatalf("PutSession: %v", err)
+	}
+	session.Nodes = map[string]*contract.TaskState{
+		"b": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced},
+	}
+	if err := db.PutSession(ctx, session); err != nil {
+		t.Fatalf("PutSession (2nd): %v", err)
+	}
+
+	got, err := db.GetSession(ctx, "s1")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	nodeA := got.Nodes["a"]
+	if nodeA == nil {
+		t.Fatalf("node %q was discarded by a Put that stopped declaring it while unreleased", "a")
+	}
+	if nodeA.Status != contract.TaskStatusFailed || nodeA.TaskID != "work" || nodeA.Error != "boom" {
+		t.Errorf("retained node %q = %+v, want its unreleased fields intact", "a", nodeA)
+	}
+	if _, ok := got.Nodes["b"]; !ok {
+		t.Errorf("node %q missing after Put", "b")
+	}
+}
+
+func TestPutSession_ReleasedNodeIsPrunedWhenDroppedFromTheMap(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	session := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Nodes: map[string]*contract.TaskState{
+		"a": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusCleaned},
 	}}
 	if err := db.PutSession(ctx, session); err != nil {
 		t.Fatalf("PutSession: %v", err)
@@ -574,17 +610,15 @@ func TestPutSession_ReplacesNodesRatherThanAccumulating(t *testing.T) {
 		t.Fatalf("GetSession: %v", err)
 	}
 	if _, ok := got.Nodes["a"]; ok {
-		t.Errorf("node %q survived a Put that no longer declared it", "a")
+		t.Errorf("released node %q survived a Put that no longer declared it", "a")
 	}
 	if _, ok := got.Nodes["b"]; !ok {
 		t.Errorf("node %q missing after Put", "b")
 	}
 }
 
-// TestPutSession_ReplacesTasksRatherThanAccumulating covers the task_instances
-// reconciliation path (upsert current, delete any instance_name no longer
-// present), which is a different write strategy from node_instances' full
-// delete-then-insert (see TestPutSession_ReplacesNodesRatherThanAccumulating).
+// Unlike node_instances' released-only pruning, task_instances deletes any
+// instance_name no longer present unconditionally, regardless of status.
 func TestPutSession_ReplacesTasksRatherThanAccumulating(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()

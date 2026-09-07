@@ -54,58 +54,52 @@ func runWorkflowCleanupForDestroy(cfg *config.Config, session *domain.Session, f
 	return task.RunWorkflowCleanup(prov, vars, session.Nodes, observer)
 }
 
-// unifiedTeardownList builds the single cleanup-ordered Resolved list for a
-// teardown phase: static plan nodes and dynamic instances merged into one
-// slice sorted by ascending instantiation Seq. RunCleanup reclaims in
-// reverse, so the result is strictly the reverse of the instantiation stack —
-// a static node instantiated after a dynamic one (e.g. a re-`up` that re-stamps
-// run nodes) is still cleaned first. The @workflow pseudo-node is excluded; it
-// is released last via the workspace provider cleanup hook.
-//
-// runOnly restricts to run-scoped tasks (the `down` lifecycle); destroy
-// passes false to reclaim every task regardless of scope. Static nodes are
-// enumerated session-then-run so legacy state (Seq all zero) preserves the old
-// run-before-session reverse order through the stable sort. A dynamic instance
-// whose task definition has since disappeared is reclaimed with an empty
-// cleanup (best-effort, since there is no definition left to run against).
-func unifiedTeardownList(cfg *config.Config, session *domain.Session, plan *task.Plan, runOnly bool) ([]task.Resolved, error) {
-	type seqResolved struct {
-		seq int
-		r   task.Resolved
-	}
-	var items []seqResolved
-	static := make(map[string]bool)
+// teardownItem pairs one teardown-eligible node or dynamic instance with its
+// own instantiation Seq, the fallback tie-break orderTeardownItems uses.
+type teardownItem struct {
+	seq int
+	r   task.Resolved
+}
 
-	appendStatic := func(nodes []task.Resolved) {
-		for _, r := range nodes {
-			if runOnly && r.Scope != contract.TaskScopeRun {
-				continue
-			}
-			if st := session.Tasks[r.NodeID]; st != nil {
-				// A `--name` collides only against existing state, so an
-				// uninstantiated node leaves its id free for a dynamic
-				// instance to take. What the key holds is then that instance,
-				// not this node, and tearing it down as the node would run a
-				// cleanup belonging to another declaration entirely.
-				continue
-			}
-			seq := 0
-			if st := session.Nodes[r.NodeID]; st != nil {
-				seq = st.Seq
-			}
-			items = append(items, seqResolved{seq: seq, r: r})
-			static[r.NodeID] = true
-		}
-	}
-	appendStatic(plan.Session)
-	appendStatic(plan.Run)
-
+// unifiedTeardownList merges every unreleased node execution with every
+// dynamic instance into one dependency-ordered Resolved list (see
+// orderTeardownItems); the @workflow pseudo-node releases last, via the
+// workspace provider cleanup hook. Static nodes are enumerated from
+// session.Nodes, not plan, so a dropped node is still torn down.
+func unifiedTeardownList(cfg *config.Config, session *domain.Session, runOnly bool) ([]task.Resolved, error) {
 	defs, err := cfg.LoadTaskDefinitions(session.WorkspaceDirPath)
 	if err != nil {
 		return nil, fmt.Errorf("load task definitions: %w", err)
 	}
-	// Sort dynamic keys for a deterministic input order before the stable sort
-	// (map iteration is random; equal-seq legacy entries would otherwise vary).
+	nodes := nodeAddresses(cfg, session)
+
+	var items []teardownItem
+	static := make(map[string]bool, len(session.Nodes))
+
+	for _, key := range sortedTaskKeys(session.Nodes) {
+		if key == contract.WorkflowPseudoNodeID {
+			continue
+		}
+		st := session.Nodes[key]
+		if st == nil || st.Status == contract.TaskStatusCleaned {
+			continue
+		}
+		if session.Tasks[key] != nil {
+			// key holds a dynamic instance, not this node; deliberately not
+			// marked static, so the dynamic branch below enumerates it.
+			continue
+		}
+		if runOnly && st.Scope != contract.TaskScopeRun {
+			continue
+		}
+		taskID := instanceDefinitionAddress(key, st, true, nodes)
+		r := task.Resolved{NodeID: key, TaskID: taskID, Scope: st.Scope, DependsOn: st.DependsOn}
+		r.Unresolved = !resolveNodeCleanup(&r, defs)
+		items = append(items, teardownItem{seq: st.Seq, r: r})
+		static[key] = true
+	}
+
+	// Deterministic input order; map iteration is random.
 	dynKeys := make([]string, 0, len(session.Tasks))
 	for key, st := range session.Tasks {
 		if st == nil || static[key] {
@@ -117,30 +111,94 @@ func unifiedTeardownList(cfg *config.Config, session *domain.Session, plan *task
 		dynKeys = append(dynKeys, key)
 	}
 	sort.Strings(dynKeys)
-	nodes := nodeAddresses(cfg, session)
 	for _, key := range dynKeys {
 		st := session.Tasks[key]
 		taskID := instanceDefinitionAddress(key, st, true, nodes)
-		// Build only the cleanup-relevant fields straight from the definition —
-		// no schema / requires / done_when validation (that runs at create / up /
-		// task run). Teardown must stay resilient to a def whose config drifted
-		// to invalid after the instance was created: a present-but-invalid def
-		// must be no more fatal than a disappeared one, so `plect destroy --force`
-		// can still reclaim the session. Cleanup needs only the script plus the
-		// persisted inputs/outputs.
+		// Only the cleanup-relevant fields, so a def drifted invalid since
+		// creation is no more fatal than a disappeared one.
 		r := task.Resolved{NodeID: key, TaskID: taskID, Scope: st.Scope}
 		if def, ok := defs[taskID]; ok {
 			r.Cleanup = def.Cleanup
 			r.SourcePath = def.SourcePath
 			r.Layers = effect.CleanupLayers(def)
 		}
-		items = append(items, seqResolved{seq: st.Seq, r: r})
+		items = append(items, teardownItem{seq: st.Seq, r: r})
 	}
 
-	sort.SliceStable(items, func(i, j int) bool { return items[i].seq < items[j].seq })
-	out := make([]task.Resolved, len(items))
-	for i, it := range items {
-		out[i] = it.r
+	return orderTeardownItems(items), nil
+}
+
+// resolveNodeCleanup resolves r's cleanup recipe fresh from config by
+// r.TaskID. ok is false when no such definition exists any more.
+func resolveNodeCleanup(r *task.Resolved, defs map[string]config.TaskDefinition) bool {
+	def, ok := defs[r.TaskID]
+	if !ok {
+		return false
 	}
-	return out, nil
+	r.Cleanup = def.Cleanup
+	r.SourcePath = def.SourcePath
+	r.Layers = effect.CleanupLayers(def)
+	return true
+}
+
+// orderTeardownItems orders each dependent before its prerequisite (per
+// DependsOn); ties, unrecorded edges, and any cycle fall back to Seq.
+func orderTeardownItems(items []teardownItem) []task.Resolved {
+	n := len(items)
+	if n == 0 {
+		return nil
+	}
+	indexByKey := make(map[string]int, n)
+	for i, it := range items {
+		indexByKey[it.r.NodeID] = i
+	}
+	inDegree := make([]int, n)
+	dependents := make([][]int, n)
+	for i, it := range items {
+		for _, dep := range it.r.DependsOn {
+			j, ok := indexByKey[dep]
+			if !ok {
+				continue
+			}
+			inDegree[i]++
+			dependents[j] = append(dependents[j], i)
+		}
+	}
+
+	bySeq := func(idx []int) {
+		sort.SliceStable(idx, func(a, b int) bool { return items[idx[a]].seq < items[idx[b]].seq })
+	}
+	var ready []int
+	for i := range items {
+		if inDegree[i] == 0 {
+			ready = append(ready, i)
+		}
+	}
+	order := make([]int, 0, n)
+	for len(ready) > 0 {
+		bySeq(ready)
+		i := ready[0]
+		ready = ready[1:]
+		order = append(order, i)
+		for _, d := range dependents[i] {
+			inDegree[d]--
+			if inDegree[d] == 0 {
+				ready = append(ready, d)
+			}
+		}
+	}
+
+	out := make([]task.Resolved, n)
+	if len(order) != n {
+		sorted := append([]teardownItem(nil), items...)
+		sort.SliceStable(sorted, func(a, b int) bool { return sorted[a].seq < sorted[b].seq })
+		for i, it := range sorted {
+			out[i] = it.r
+		}
+		return out
+	}
+	for i, idx := range order {
+		out[i] = items[idx].r
+	}
+	return out
 }

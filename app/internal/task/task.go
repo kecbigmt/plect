@@ -72,6 +72,11 @@ type Resolved struct {
 	// definition declares `inner`. Empty for a plain task, which is the one
 	// distinction the lifecycle runners make between the two.
 	Layers []effect.Layer
+	// Unresolved marks a teardown-only entry whose current definition could
+	// not be found by TaskID, so there is no cleanup recipe to run at all.
+	// RunCleanup reports it as an error and leaves the record unreleased,
+	// rather than treating a nil Cleanup as "nothing to do."
+	Unresolved bool
 }
 
 // Plan groups tasks by scope, in topo-sorted order.
@@ -698,18 +703,20 @@ func reportCleanupFailure(obs Observer, r Resolved, elapsed time.Duration, err e
 // merge the session's Nodes and Tasks, since Seq allocation is shared across
 // both. Stops at the first failure; subsequent tasks in the slice are not run.
 //
-// RunSetup is idempotent: a task whose persisted state is already
-// "produced" is verified before it is reused, not blindly skipped — see
-// verifyLiveness and invalidateProducedNode. Tasks in any other state
-// (absent, "failed", "cleaned") are re-run with a fresh setup attempt. Task
-// authors must make their setup scripts cope with this by verifying the
-// desired state rather than blindly recreating; see README "Task model"
-// section.
+// RunSetup is idempotent: a "produced" task is verified before reuse (see
+// verifyLiveness/invalidateProducedNode); other states re-run under the SAME
+// declaration. A node whose unreleased record names a DIFFERENT declaration
+// is refused rather than overwritten -- release it first (`plect
+// down`/`plect destroy`) and retry.
 func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, tasks map[string]*contract.TaskState, observer Observer) error {
 	obs := observerOr(observer)
 	terminalOwner := terminalOwnerIn(ordered)
 	for _, r := range ordered {
 		session = withFreshTerminalOutputs(session, terminalOwner, tasks)
+		if existing, ok := tasks[r.NodeID]; ok && existing != nil && existing.Status != contract.TaskStatusCleaned && declarationChanged(r, existing) {
+			return fmt.Errorf("node %q: an unreleased setup attempt for a different declaration (task %q) still exists; release it with `plect down` or `plect destroy` before setting up %q",
+				r.NodeID, describeTaskID(existing.TaskID, r.NodeID), describeTaskID(taskIDFor(r), r.NodeID))
+		}
 		if existing, ok := tasks[r.NodeID]; ok && existing != nil && existing.Status == contract.TaskStatusProduced {
 			aliveStart := time.Now()
 			aliveErr := verifyLiveness(goCtx, r, session, existing)
@@ -734,19 +741,23 @@ func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, ta
 		// from a previous run (an agent's own --resume flag, say) lose their
 		// handle on retry.
 		var prev map[string]any
+		var continuingExecID string
 		if existing, ok := tasks[r.NodeID]; ok && existing != nil {
 			prev = existing.Outputs
+			if existing.Status != contract.TaskStatusCleaned {
+				continuingExecID = existing.ExecutionID
+			}
 		}
 		deps := dependencyOutputs(r.DependsOn, tasks)
 		resolvedInputs, inputErr := ResolveNodeInputs(r.Inputs, deps, workflowOutputs(tasks), session)
 		if inputErr != nil {
-			tasks[r.NodeID] = failedState(r, now, inputErr.Error(), prev, nil)
+			tasks[r.NodeID] = failedState(r, now, inputErr.Error(), prev, nil, continuingExecID)
 			wrapped := fmt.Errorf("node %q input: %w", r.NodeID, inputErr)
 			return reportSetupFailure(obs, r, time.Since(now), wrapped, nil)
 		}
 		if r.InputsSchema != nil {
 			if vErr := r.InputsSchema.Validate(toJSONShape(resolvedInputs)); vErr != nil {
-				tasks[r.NodeID] = failedState(r, now, vErr.Error(), prev, resolvedInputs)
+				tasks[r.NodeID] = failedState(r, now, vErr.Error(), prev, resolvedInputs, continuingExecID)
 				wrapped := fmt.Errorf("node %q input schema: %w", r.NodeID, vErr)
 				return reportSetupFailure(obs, r, time.Since(now), wrapped, nil)
 			}
@@ -765,7 +776,7 @@ func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, ta
 			if nestErr != nil {
 				// The layers that did produce are persisted with the
 				// failure: the next cleanup has to unwind exactly those.
-				failed := failedState(r, now, nestErr.Error(), prev, resolvedInputs)
+				failed := failedState(r, now, nestErr.Error(), prev, resolvedInputs, continuingExecID)
 				failed.Layers = layers
 				tasks[r.NodeID] = failed
 				wrapped := fmt.Errorf("task %q: %w", r.NodeID, nestErr)
@@ -773,21 +784,23 @@ func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, ta
 			}
 			outputs, projErr := projectNestedOutputs(r, layers, session)
 			if projErr != nil {
-				failed := failedState(r, now, projErr.Error(), prev, resolvedInputs)
+				failed := failedState(r, now, projErr.Error(), prev, resolvedInputs, continuingExecID)
 				failed.Layers = layers
 				tasks[r.NodeID] = failed
 				wrapped := fmt.Errorf("task %q: %w", r.NodeID, projErr)
 				return reportSetupFailure(obs, r, time.Since(now), wrapped, stderr)
 			}
 			tasks[r.NodeID] = &contract.TaskState{
-				Scope:   r.Scope,
-				TaskID:  taskIDFor(r),
-				Status:  contract.TaskStatusProduced,
-				Inputs:  resolvedInputs,
-				Outputs: outputs,
-				Layers:  layers,
-				Seq:     nextSeq(tasks),
-				SetupAt: now,
+				Scope:       r.Scope,
+				TaskID:      taskIDFor(r),
+				Status:      contract.TaskStatusProduced,
+				Inputs:      resolvedInputs,
+				Outputs:     outputs,
+				Layers:      layers,
+				DependsOn:   append([]string(nil), r.DependsOn...),
+				ExecutionID: continuingExecID,
+				Seq:         nextSeq(tasks),
+				SetupAt:     now,
 			}
 			reportSetupSuccess(obs, r, time.Since(now), stderr)
 			continue
@@ -797,7 +810,7 @@ func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, ta
 		if r.Setup != nil {
 			resolved, resolveErr := resolveEffect(r.Setup, setupRoots(ctx), ctx, r.From, nil)
 			if resolveErr != nil {
-				tasks[r.NodeID] = failedState(r, now, resolveErr.Error(), prev, resolvedInputs)
+				tasks[r.NodeID] = failedState(r, now, resolveErr.Error(), prev, resolvedInputs, continuingExecID)
 				wrapped := fmt.Errorf("effect %q setup: %w", r.NodeID, resolveErr)
 				return reportSetupFailure(obs, r, time.Since(now), wrapped, nil)
 			}
@@ -805,33 +818,35 @@ func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, ta
 			resolved.Close()
 			stderrCaptured = stderr
 			if runErr != nil {
-				tasks[r.NodeID] = failedState(r, now, runErr.Error(), prev, resolvedInputs)
+				tasks[r.NodeID] = failedState(r, now, runErr.Error(), prev, resolvedInputs, continuingExecID)
 				wrapped := fmt.Errorf("task %q setup: %w", r.NodeID, runErr)
 				return reportSetupFailure(obs, r, time.Since(now), wrapped, stderr)
 			}
 			var parseErr error
 			outputs, parseErr = lang.ParseOutputs(stdout)
 			if parseErr != nil {
-				tasks[r.NodeID] = failedState(r, now, parseErr.Error(), prev, resolvedInputs)
+				tasks[r.NodeID] = failedState(r, now, parseErr.Error(), prev, resolvedInputs, continuingExecID)
 				wrapped := fmt.Errorf("task %q setup: %w", r.NodeID, parseErr)
 				return reportSetupFailure(obs, r, time.Since(now), wrapped, stderr)
 			}
 		}
 		if r.OutputsSchema != nil {
 			if vErr := r.OutputsSchema.Validate(outputs); vErr != nil {
-				tasks[r.NodeID] = failedState(r, now, vErr.Error(), prev, resolvedInputs)
+				tasks[r.NodeID] = failedState(r, now, vErr.Error(), prev, resolvedInputs, continuingExecID)
 				wrapped := fmt.Errorf("task %q setup: outputs schema: %w", r.NodeID, vErr)
 				return reportSetupFailure(obs, r, time.Since(now), wrapped, stderrCaptured)
 			}
 		}
 		tasks[r.NodeID] = &contract.TaskState{
-			Scope:   r.Scope,
-			TaskID:  taskIDFor(r),
-			Status:  contract.TaskStatusProduced,
-			Inputs:  resolvedInputs,
-			Outputs: outputs,
-			Seq:     nextSeq(tasks),
-			SetupAt: now,
+			Scope:       r.Scope,
+			TaskID:      taskIDFor(r),
+			Status:      contract.TaskStatusProduced,
+			Inputs:      resolvedInputs,
+			Outputs:     outputs,
+			DependsOn:   append([]string(nil), r.DependsOn...),
+			ExecutionID: continuingExecID,
+			Seq:         nextSeq(tasks),
+			SetupAt:     now,
 		}
 		reportSetupSuccess(obs, r, time.Since(now), stderrCaptured)
 	}
@@ -906,15 +921,42 @@ func taskIDFor(r Resolved) string {
 	return r.TaskID
 }
 
-func failedState(r Resolved, now time.Time, errMsg string, prev, inputs map[string]any) *contract.TaskState {
+func declarationChanged(r Resolved, existing *contract.TaskState) bool {
+	if existing.Scope != r.Scope || existing.TaskID != taskIDFor(r) {
+		return true
+	}
+	// A nesting chain edit under the same task id/scope is also a different
+	// declaration: the old chain's retained per-layer release recipe must
+	// not be reused against a differently-shaped one.
+	if len(r.Layers) != len(existing.Layers) {
+		return true
+	}
+	for i, l := range r.Layers {
+		if l.EffectID != existing.Layers[i].EffectID {
+			return true
+		}
+	}
+	return false
+}
+
+func describeTaskID(taskID, nodeID string) string {
+	if taskID == "" {
+		return nodeID
+	}
+	return taskID
+}
+
+func failedState(r Resolved, now time.Time, errMsg string, prev, inputs map[string]any, continuingExecID string) *contract.TaskState {
 	return &contract.TaskState{
-		Scope:    r.Scope,
-		TaskID:   taskIDFor(r),
-		Status:   contract.TaskStatusFailed,
-		Inputs:   inputs,
-		Outputs:  prev,
-		FailedAt: now,
-		Error:    errMsg,
+		Scope:       r.Scope,
+		TaskID:      taskIDFor(r),
+		Status:      contract.TaskStatusFailed,
+		Inputs:      inputs,
+		Outputs:     prev,
+		DependsOn:   append([]string(nil), r.DependsOn...),
+		ExecutionID: continuingExecID,
+		FailedAt:    now,
+		Error:       errMsg,
 	}
 }
 
@@ -954,6 +996,18 @@ func RunCleanup(goCtx context.Context, ordered []Resolved, session SessionVars, 
 		}
 		if state.Status == contract.TaskStatusCleaned {
 			obs.OnSkip(r.Scope, r.NodeID, "already cleaned")
+			continue
+		}
+		if r.Unresolved {
+			obs.OnStart(r.Scope, r.NodeID)
+			wrapped := fmt.Errorf("node %q: current definition not found; record left unreleased", r.NodeID)
+			state.Status = contract.TaskStatusFailed
+			state.Error = wrapped.Error()
+			state.FailedAt = now
+			if firstErr == nil {
+				firstErr = wrapped
+			}
+			reportCleanupFailure(obs, r, time.Since(now), wrapped, nil)
 			continue
 		}
 		if len(state.Layers) > 0 {
@@ -1023,7 +1077,7 @@ func RunCleanup(goCtx context.Context, ordered []Resolved, session SessionVars, 
 			reportCleanupFailure(obs, r, time.Since(now), wrapped, nil)
 			continue
 		}
-		_, stderr, runErr := resolved.Run(goCtx, session.WorkspaceDirPath)
+		_, stderr, runErr := resolved.Run(goCtx, sess.WorkspaceDirPath)
 		resolved.Close()
 		if runErr != nil {
 			state.Status = contract.TaskStatusFailed

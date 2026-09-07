@@ -62,34 +62,37 @@ provider schema, and the database stores it opaquely, enforcing only
 well-formedness (`CHECK (col IS NULL OR json_valid(col))`, or `CHECK
 (json_valid(col))` for a `NOT NULL` one like `events.metadata_json`), never
 its internal structure. Core-owned structure is never stored as JSON — it
-gets relational columns or a child table instead. The one narrow exception is
-`node_instances.done_when_json`: a static workflow node's `done_when` is
-core-owned shape, but declaring one is rare (no shipped workflow node relies
-on it) and it is never relationally queried, so splitting it into the same
-`task_done_when_states`/`task_done_when_judges` shape `task_instances` gets
-would add relational structure with no query that uses it. This is a
-one-off carve-out for that reason alone, not a general license for
-core-owned structure to hide in a `_json` column. The table below
+gets relational columns or a child table instead. One narrow exception
+exists: `node_executions.done_when_json`, a static workflow node's
+`done_when`, is core-owned shape, but declaring one is rare (no shipped
+workflow node relies on it) and never relationally queried, so it is never
+split into the `task_done_when_states`/`task_done_when_judges` shape
+`task_instances` gets.
+
+This is a one-off carve-out for that reason alone, not a general license
+for core-owned structure to hide in a `_json` column. The table below
 classifies every `_json` column by its owning declaration:
 
 | Column | Owning declaration |
 | --- | --- |
 | `sessions.inputs_json` | the session's `inputs_schema` (config language) |
-| `node_instances`/`task_instances`.`inputs_json`, `.outputs_json` | the task/effect's `inputs_schema`/`outputs_schema` |
-| `node_instances`/`task_instances`.`state_json` | consumer-defined keys a reviewer or another session records; no declared schema |
-| `node_instances`/`task_instances`.`resource_observation_json` | the resource observer's `state_schema` |
-| `node_instances`/`task_instances`.`extra_done_when_json` | the config-language `done_when` schema (a `--done-when-json` instance override; see `service.judge.go`'s `effectiveDoneWhen`) |
-| `node_instances.done_when_json` | core-owned shape, embedded as a narrow, documented exception (see above) rather than declaration-owned |
-| `node_instance_layers`/`task_instance_layers`.`inputs_json`, `.locals_json`, `.outputs_json` | the nesting layer's own effect declaration |
-| `node_instance_layers`/`task_instance_layers`.`env_json` | the workflow/effect's declared process environment for that layer |
+| `node_executions`/`task_instances`.`inputs_json`, `.outputs_json` | the task/effect's `inputs_schema`/`outputs_schema` |
+| `node_executions`/`task_instances`.`state_json` | consumer-defined keys a reviewer or another session records; no declared schema |
+| `node_executions`/`task_instances`.`resource_observation_json` | the resource observer's `state_schema` |
+| `node_executions`/`task_instances`.`extra_done_when_json` | the config-language `done_when` schema (a `--done-when-json` instance override; see `service.judge.go`'s `effectiveDoneWhen`) |
+| `node_executions.done_when_json` | core-owned shape, embedded as a narrow, documented exception (see above) rather than declaration-owned |
+| `node_execution_layers`/`task_instance_layers`.`inputs_json`, `.locals_json`, `.outputs_json` | the nesting layer's own effect declaration |
+| `node_execution_layers`/`task_instance_layers`.`env_json` | the workflow/effect's declared process environment for that layer |
 | `population_members.item_json` | the workspace provider's own resource-item map |
 | `events.metadata_json` | the event producer's own map (a provider's change-type payload, a channel's delivery detail, ...) |
 
 | Table | Key and relational columns | JSON or scalar payload | Source |
 | --- | --- | --- | --- |
 | `sessions` | `id` (ULID) primary key; `name` (unique only among live rows — see "Session identity and lifecycle"); `status`, nullable `destroyed_at`; nullable `parent_session_id` and `root_session_id`, each referencing `sessions(id)`; nullable `resource_id`, `alias`, `workspace_dir`, `population_workflow`, `population_name` (the pair also references `populations(workflow, name)`); `workflow`, `created_at`, `updated_at` | inputs, health, tick backoff | `state.json` `sessions` entries |
-| `node_instances` | `(session_id, node_id)` primary key; session foreign key; nullable `task_id`, `name`, `resource`; `scope`, `status`, `sequence`, nullable `finalized_at` | inputs, outputs, state, observed value, `done_when` (rare, not relationally queried), extra completion data, error, lifecycle timestamps | `state.json` `sessions.*.tasks` entries with `dynamic` unset |
-| `node_instance_layers` | `(session_id, node_id, position)` primary key; `(session_id, node_id)` foreign key to `node_instances` | inputs, locals, outputs, env, heartbeat counters, lifecycle timestamps, error | `TaskState.Layers` (static node instances) |
+| `node_instances` | `(session_id, node_id)` primary key; session foreign key; no other columns | none — purely the logical node's identity | `state.json` `sessions.*.tasks` entries with `dynamic` unset (keys only) |
+| `node_executions` | `id` (ULID, minted per setup attempt) primary key; `(session_id, node_id)` foreign key to `node_instances`; `sequence`; nullable `task_id`, `name`, `resource`; `scope`, `status`, nullable `finalized_at`; at most one unreleased (`status <> 'cleaned'`) row per `(session_id, node_id)` — see "Node execution identity" | inputs, outputs, state, observed value, `done_when` (rare, not relationally queried), extra completion data, error, lifecycle timestamps | `state.json` `sessions.*.tasks` entries with `dynamic` unset (per-attempt facts) |
+| `node_execution_layers` | `(execution_id, position)` primary key; execution foreign key (`ON DELETE CASCADE`) | inputs, locals, outputs, env, heartbeat counters, lifecycle timestamps, error | `TaskState.Layers` (static node instances) |
+| `node_execution_dependencies` | `(execution_id, depends_on_execution_id)` primary key; both reference `node_executions(id)` (`ON DELETE CASCADE`) | none — the edge itself is the payload | snapshotted from `task.Resolved.DependsOn` at the dependent's own setup time — see "Node execution identity" |
 | `task_instances` | `id` (ULID, stable across every write that still names the same `(session_id, instance_name)`; re-minted only when a cleanup removes the row before a later setup recreates it) primary key; `(session_id, instance_name)` unique; session foreign key; `task_id`, `scope`, `status`, `sequence`, nullable `resource`, `named`, nullable `finalized_at` | inputs, outputs, state, observed value, extra completion data, error, lifecycle timestamps | `state.json` `sessions.*.tasks` entries with `dynamic: true` |
 | `task_instance_layers` | `(task_instance_id, position)` primary key; task-instance foreign key | inputs, locals, outputs, env, heartbeat counters, lifecycle timestamps, error | `TaskState.Layers` (dynamic instances) |
 | `task_done_when_states` | `task_instance_id` primary key and foreign key | counters, fingerprints, reason/body, escalation data | `TaskState.DoneWhen` (dynamic instances only) |
@@ -126,7 +129,7 @@ self-reported status line is derived from the most recent
 special table), read via one indexed query — see "Status message" below.
 `Session.Branch` is likewise not a stored field: a checked-out branch is git
 vocabulary, and core stays version-control-agnostic by identity, so the fact
-lives only in the `@workflow` pseudo-node's own `node_instances.outputs_json`
+lives only in the `@workflow` pseudo-node's own `node_executions.outputs_json`
 (a git-backed workspace provider's own setup output), read through
 `domain.SessionBranch` by the handful of call sites that want it.
 
@@ -166,7 +169,7 @@ rather than storing it as an identity.
 instance-identity string: a `--name` a caller gave the instance is always
 either empty or exactly `instance_name`, so `named` is the only bit that
 does not already live in `instance_name` itself. `finalized_at` on both
-`node_instances` and `task_instances` is nullable and orthogonal to
+`node_executions` and `task_instances` is nullable and orthogonal to
 `status`: `plect task finalize` can record completion while status stays
 `produced`, awaiting a later `plect task cleanup`, so it is a timestamp
 fact rather than a state folded into `status`'s CHECK.
@@ -183,8 +186,10 @@ from these two columns only inside the persistence package.
 
 `Session.Nodes` (static workflow-DAG nodes, including the `@workflow`
 pseudo-node) and `Session.Tasks` (dynamic instances created at runtime via
-`plect task setup`) map directly onto `node_instances` and `task_instances`
-respectively — one table per domain collection, with no composition or
+`plect task setup`) map onto `node_instances`/`node_executions` and
+`task_instances` respectively — one domain collection per identity table
+(plus, for nodes, the per-attempt `node_executions` child it now owns; see
+"Node execution identity" below), with no composition or
 `Dynamic`-discriminated derivation at the persistence boundary.
 `task_instances.id` is a ULID minted once when a dynamic instance's row is
 first created and preserved by every later write that still names the same
@@ -195,7 +200,7 @@ new setup under the same `instance_name` mints a fresh id, which is what
 gives that recreated instance a fresh `task_done_when_states`/
 `task_done_when_judges` history rather than resurfacing the retired
 instance's. `TaskState.Layers` (a nested effect/task chain's per-layer
-record, ordered outermost-first) splits into `node_instance_layers`/
+record, ordered outermost-first) splits into `node_execution_layers`/
 `task_instance_layers` by the same static/dynamic distinction, each row's
 `position` column preserving that order — there is no shared polymorphic
 layer table, since the two parents key differently.
@@ -220,6 +225,138 @@ The database does not contain plugin-owned configuration or plugin-private
 state. In particular, plugin catalog and lock files remain configuration, and
 the Slack adapter's subscriber file remains adapter-owned data. These files
 are not part of the runtime import.
+
+## Node execution identity
+
+A workflow node and one of its setup attempts are different things.
+`node_instances` is the logical node's identity within a session —
+`(session_id, node_id)`, and nothing else. `node_executions` holds one row
+per setup attempt, with its own ULID `id`, `sequence` (the same
+monotonically increasing instantiation counter `TaskState.Seq` always was),
+and every other per-attempt fact: `task_id`, `name`, `scope`, `resource`,
+`status`, inputs, outputs, state, resource observation, `done_when`, extra
+`done_when`, error, and lifecycle timestamps. A node_id can outlive several
+execution generations across a session's lifetime — a workflow revision
+remaps it onto a different task, or a failed setup is retried after an
+operator releases the old allocation — and each generation gets its own
+`node_executions` row rather than overwriting the last one in place.
+
+At most one row per `(session_id, node_id)` may be unreleased (`status <>
+'cleaned'`) at a time (`node_executions_one_unreleased_idx`, a partial
+unique index). `task.RunSetup` enforces this at the point a setup would
+otherwise begin: if a node's existing, unreleased record names a different
+declaration — a different `task_id`/`scope`, or a nesting chain whose layer
+count or effect ids differ — the setup is refused with an actionable error
+naming both the retained and requested declarations, rather than silently
+discarding the old record. This is deliberately not gated by a force flag:
+no caller needs one yet, and refusal (pointing the operator at `plect
+down`/`plect destroy`) is a complete, correct answer to "an unreleased
+allocation must not be silently replaced." A retry of the *same*
+declaration (a failed setup re-run, or an already-produced node whose
+liveness check failed and was invalidated) is not a new declaration, so it
+updates the existing unreleased row in place, preserving its id.
+
+Persistence enforces the identity side of this independent of the gate
+above: `writeTasksTx`'s node reconciliation looks up the current unreleased
+execution for `(session_id, node_id)` and updates it in place when one
+exists, or inserts a fresh row when none does. A node absent from an
+incoming write's `Nodes` map is pruned only when its latest execution has
+already reached `cleaned` — an absent-but-unreleased node is left
+untouched, so a workflow revision that simply stops declaring a node (or
+any other caller that happens to omit it from one write) can never discard
+its execution record or outstanding release obligation merely by omission.
+
+Looking up "the current unreleased execution" by node_id alone is not
+sufficient to protect a specific generation once more than one writer can
+touch the same session: `contracts/state.TaskState.ExecutionID` names the
+row a loaded state actually came from, and `task.RunSetup` carries it
+forward only when a fresh attempt continues that exact row (a
+same-declaration retry) — a genuinely new attempt (first setup, or one
+reviving a node this same call already released via a liveness-triggered
+cleanup) leaves it empty. When `ExecutionID` is set, `upsertNodeExecutionTx`
+resolves and updates exactly that row by id, regardless of its current
+status, refusing the write instead if the row is gone or if it has since
+been released (`status = 'cleaned'`) while the incoming write's own status
+has not — the one status combination this does not refuse is both sides
+already `'cleaned'`, which is a caller re-persisting a checkpoint it already
+wrote, not a conflict. Resolving by id rather than "current unreleased" is
+also what lets that re-persist target the same row instead of minting a
+duplicate cleaned one, since the "current unreleased" query would no longer
+see it.
+
+A write whose `ExecutionID` is empty makes no claim about continuing a
+specific row, so it instead falls back to "the current unreleased row for
+this node_id, if any" — update in place, or insert a fresh row when none
+exists. Two identity gaps live in this fallback: a same-pass
+liveness-invalidate-then-rebuild's intermediate release is never itself
+persisted (`task.RunSetup` operates on one in-memory state per node id and
+cannot represent "old row now cleaned" and "new row just produced" at
+once), so it collapses onto an update of the released row instead of
+minting a fresh generation; and a genuinely new first attempt racing a
+different writer's concurrent setup of the same node lands on the same
+fallback and cannot tell the two cases apart either. Both are accepted,
+documented limitations rather than something this fallback can resolve
+from the information available to it alone.
+
+Release is the only thing that clears a node: `service.unifiedTeardownList`
+enumerates every unreleased execution directly from `session.Nodes` — not
+from the *current* plan, which has nothing to say about a node it no
+longer declares — and resolves each one's cleanup by looking up its current
+task definition by the execution's own retained `task_id`. Cleanup code is
+always resolved fresh from the current, project-trusted configuration tree;
+it is never read back from the database and replayed. A node whose
+definition can no longer be found this way is marked unresolved:
+`task.RunCleanup` reports it as an error and leaves its record unreleased
+rather than treating "no cleanup to run" as trivial success.
+`persistence.PruneReleasedNode`/`ResetNodes` are the two explicit ways a row
+is actually removed (a caller, such as `persistStaleWorkflowCleanup`, that
+already knows a specific node's cleanup just succeeded; or
+`--force-recreate`'s own deliberate whole-runtime wipe, which discards every
+node's history on purpose instead of retaining it).
+
+### Alternatives considered
+
+A `generation` counter bumped in place on the existing `node_instances` row
+was considered instead of a separate `node_executions` row per attempt; it
+would preserve the current status but not the outputs of a superseded,
+still-unreleased attempt — exactly the data an interrupted release needs. A
+force-flag-gated reconstruction (releasing an old unreleased execution and
+immediately proceeding with a new declaration in one step) was also
+considered; no caller needs it, since `plect down`/`plect destroy` already
+exist as the explicit two-step release path.
+
+### Release ordering
+
+`node_execution_dependencies` snapshots, at a node's own setup time, which
+other nodes' *currently unreleased* executions `task.Resolved.DependsOn`
+named (itself derived from node input bindings, not authored directly) —
+`execution_id` is the dependent, `depends_on_execution_id` the
+prerequisite. A dependency with no currently unreleased execution (already
+cleaned, or never set up) is simply not recorded; there is nothing left to
+order release against. Because the edge is stamped once, at creation, it
+survives a later config change that rewires or entirely drops the node
+that originally expressed it — release ordering never re-derives edges
+from the *current* plan.
+
+`service.orderTeardownItems` uses these edges (Kahn's algorithm: a
+dependent is released before its recorded prerequisites) instead of
+ascending `Seq` alone, falling back to `Seq` to break ties and, for the
+whole list, if a cycle is ever found (which retained, previously-valid
+edges should never produce). Plain `Seq` order already gets this right in
+the common case — a prerequisite's `Seq` is always lower, since it was
+necessarily created first — but not once an old, still-unreleased
+execution's own recorded dependency needs to be honored regardless of
+what has been instantiated more recently elsewhere in the session.
+
+Because a node write is topologically ordered within `writeTasksTx` itself
+(`orderNodesByDependency`, prerequisites before dependents), a dependency
+edge to another node in the *same* write is always resolvable: the
+prerequisite's row already exists by the time the dependent looks up its
+current execution id.
+
+The migration from the prior single-row `node_instances` shape
+(`app/internal/persistence/migrations/20260907085032_add_node_execution_identity.sql`)
+carries its own reasoning for how it preserves existing rows.
 
 ## Session identity and lifecycle
 
@@ -356,8 +493,9 @@ Migrations are Atlas-generated from `schema.sql` (see
 as-is; a structural change Atlas cannot safely diff against a database
 already holding rows (see `app/internal/persistence/migrations/`'s own
 `20260907002408_...` migration for the case this design's own session-id
-rework hit) is hand-written instead, reaching the identical structural end
-state `schema.sql` declares. Either way the migration file's exact SQL
+rework hit, and its `20260907085032_...` migration for the node execution
+identity split) is hand-written instead, reaching the identical structural
+end state `schema.sql` declares. Either way the migration file's exact SQL
 text — quoting, per-index `CREATE` statements — is authoritative over any
 excerpt here.
 
@@ -395,7 +533,7 @@ upgrade.
 
 | Existing callback or append path | SQLite transaction | Behavioral contract |
 | --- | --- | --- |
-| `Put` | Replace the session's `node_instances` rows outright; reconcile its `task_instances` rows against the current `Tasks` map instead (upserting each current dynamic instance, preserving its `id` across an ordinary update, then deleting any instance no longer present), replacing each surviving instance's completion rows; normalize the parent relation — all in one write transaction. | Preserves one durable checkpoint for the supplied session; it no longer rewrites unrelated sessions, and a dynamic instance's `id` and completion history survive an ordinary update instead of resetting on every write. |
+| `Put` | Reconcile `Nodes` against `node_instances`/`node_executions`: a node absent from `Nodes` is pruned only once its latest execution already reached `cleaned` (see "Node execution identity"); a node present is upserted into its current unreleased execution, or a fresh one when none exists. Reconcile `Tasks` against `task_instances` unconditionally on absence instead (upserting each current dynamic instance, preserving its `id` across an ordinary update, then deleting any instance no longer present), replacing each surviving instance's completion rows; normalize the parent relation — all in one write transaction. | Preserves one durable checkpoint for the supplied session; it no longer rewrites unrelated sessions; an unreleased node execution's own record and cleanup obligation survive a write that merely stops mentioning it; and a dynamic instance's `id` and completion history survive an ordinary update instead of resetting on every write. |
 | `Update` | Read the named session and its workflow-node/task-instance/completion rows, run the in-process callback, then write that session's changed rows in one write transaction. | Preserves read-modify-write atomicity and the missing-session error. The callback remains local and must not perform external work. |
 | `UpdatePopulation` | Read or create one population and its members, run the callback, then replace that population's members in one write transaction. | Preserves an atomic population snapshot without serializing unrelated sessions. |
 | `ReserveUpSlot` | Delete reservations whose recorded PID is no longer live, read the parent’s active children and reservations, enforce the cap, and insert the child reservation in one write transaction. | Preserves the live-holder rule and the rejection for an already-reserved child. |
@@ -560,10 +698,14 @@ heartbeat position imports under `heartbeat`.
 ## One-time importer inventory
 
 The one-time importer targets every `sessions`/`node_instances`/
-`task_instances` destination column below as this design's own
-named-column schema (no `record_json`), with a legacy incarnation
-reference resolving to a minted `sessions.id`. This table records the
-source-side validation contract; the exact per-column legacy-JSON-field
+`node_executions`/`task_instances` destination column below as this
+design's own named-column schema (no `record_json`), with a legacy
+incarnation reference resolving to a minted `sessions.id`. Each legacy
+node produces exactly one `node_executions` row (its first recorded
+execution), the same rule the node-execution-identity migration itself
+applies when it carries an already-cut-over database's own pre-change
+rows forward — see "Node execution identity" below. This table records
+the source-side validation contract; the exact per-column legacy-JSON-field
 mapping is a separate concern from that contract.
 
 The import command runs only against an operator-created backup while writers

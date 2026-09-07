@@ -388,7 +388,10 @@ body = { json = { from = "event" } }
 path = { type = "string", required = true }
 `)
 	if err := stateStore.Update("o/r-1", func(s *domain.Session) error {
+		// Bypassing RunSetup, so clear ExecutionID by hand the way a real
+		// fresh setup attempt would, rather than reusing the released one.
 		s.Nodes["claude"].Status = contract.TaskStatusProduced
+		s.Nodes["claude"].ExecutionID = ""
 		return nil
 	}); err != nil {
 		t.Fatal(err)

@@ -27,14 +27,15 @@ type EventCursor struct {
 	NextSequence int64
 }
 
-type NodeInstance struct {
+type NodeExecution struct {
+	ID                      string
 	SessionID               string
 	NodeID                  string
+	Sequence                int64
 	TaskID                  sql.NullString
 	Name                    sql.NullString
 	Scope                   string
 	Status                  string
-	Sequence                int64
 	Resource                sql.NullString
 	InputsJson              sql.NullString
 	OutputsJson             sql.NullString
@@ -50,9 +51,13 @@ type NodeInstance struct {
 	FinalizedAt             sql.NullString
 }
 
-type NodeInstanceLayer struct {
-	SessionID            string
-	NodeID               string
+type NodeExecutionDependency struct {
+	ExecutionID          string
+	DependsOnExecutionID string
+}
+
+type NodeExecutionLayer struct {
+	ExecutionID          string
 	Position             int64
 	EffectID             string
 	Status               string
@@ -66,6 +71,11 @@ type NodeInstanceLayer struct {
 	FailedAt             sql.NullString
 	CleanedAt            sql.NullString
 	Error                sql.NullString
+}
+
+type NodeInstance struct {
+	SessionID string
+	NodeID    string
 }
 
 type Population struct {
