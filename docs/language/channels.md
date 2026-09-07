@@ -4,8 +4,9 @@ A channel definition binds an event delivery to a primitive. Trusted config
 fixes the primitive and the message shape; a workflow supplies only the
 author-declared parameters. Event data never chooses what runs.
 
-Channels are trusted plugin or machine-owned configuration: an `exec` or
-`shell` channel runs a process, so a repository checkout may not declare one.
+Channels are trusted plugin, machine-owned, or selected trusted-project
+configuration: an `exec` or `shell` channel runs a process, so an untrusted
+repository checkout may not declare one.
 
 ## Primitives
 
