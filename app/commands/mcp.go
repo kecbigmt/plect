@@ -88,9 +88,7 @@ var mcpListenCmd = &cobra.Command{
 	},
 }
 
-// resolveSessionSocket bundles the fallback decision with hardening its
-// root, so a caller can't re-derive one from $XDG_RUNTIME_DIR independently
-// and let the two drift apart.
+// resolveSessionSocket bundles the fallback decision with hardening its root.
 func resolveSessionSocket(sessionName, fallbackRoot string) (string, error) {
 	path, needsPrivateRoot := defaultSessionMcpListenSocket(sessionName, fallbackRoot)
 	if needsPrivateRoot {
@@ -111,8 +109,7 @@ func defaultSessionMcpListenSocket(sessionName, fallbackRoot string) (path strin
 	return filepath.Join(fallbackRoot, sessionName+".sock"), true
 }
 
-// fallbackRuntimeSocketRoot embeds the current uid: unlike $XDG_RUNTIME_DIR,
-// a bare shared path has no OS-enforced privacy guarantee.
+// fallbackRuntimeSocketRoot embeds the current uid; a bare shared path has no OS-enforced privacy guarantee.
 func fallbackRuntimeSocketRoot() string {
 	return fmt.Sprintf("/tmp/plect-mcp-%d", os.Getuid())
 }
@@ -146,8 +143,7 @@ func ensurePrivateFallbackRoot(root string) error {
 	return checkPrivateDirOwner(root, stat.Uid)
 }
 
-// checkPrivateDirOwner is split out for testability: chown-ing a directory
-// to another uid needs privileges a test does not have.
+// checkPrivateDirOwner is split out for testability: chown needs privileges a test lacks.
 func checkPrivateDirOwner(root string, ownerUID uint32) error {
 	if ownerUID != uint32(os.Getuid()) {
 		return fmt.Errorf("private socket directory %s is owned by uid %d, not the current user", root, ownerUID)
