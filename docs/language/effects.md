@@ -18,6 +18,7 @@ name, and a workflow with no `workdir` is valid.
 |---|---|
 | `scope` | `run` or `session`, defaulting to `run`. |
 | `setup`, `cleanup` | The lifecycle actions. See [`actions.md`](actions.md). |
+| `[cleanup.inputs_schema]` | Optional JSON Schema for plugin-owned destruction inputs. |
 | `inputs_schema`, `outputs_schema` | The effect's contracts. |
 | `[health]` | The `alive` and `activity` probes. |
 | `[terminal]` | The interactive endpoint, if this effect owns one. |
@@ -72,11 +73,51 @@ uses = "pane"
 
 A nested effect that declares no `scope` takes the innermost layer's scope.
 
+## Cleanup inputs
+
+Cleanup receives destruction-time intent separately from setup inputs.
+`plect down` and `plect destroy` supply the core boolean `force` and an
+invocation cleanup-input object. An effect declaring `[cleanup.inputs_schema]`
+receives its validated plugin-owned keys as `cleanup.inputs.*`; an effect with
+no cleanup input schema receives no such keys. An invocation key that no
+cleanup effect declares is an error, and a key supplied to more than one effect
+must have the same schema. Creation-time `inputs.*` never substitutes for this
+object.
+
+```toml
+[checkout_effect]
+kind  = "effect"
+scope = "session"
+
+[checkout_effect.cleanup]
+type   = "shell"
+script = 'checkout-tool remove --force="$force" --delete-branch="$delete_branch"'
+
+[checkout_effect.cleanup.bind]
+force         = { from = "force" }
+delete_branch = { from = "cleanup.inputs.delete_branch", default = false }
+
+[checkout_effect.cleanup.inputs_schema]
+type = "object"
+
+[checkout_effect.cleanup.inputs_schema.properties]
+delete_branch = { type = "boolean" }
+```
+
+Population-driven destruction supplies its declared force policy and no
+plugin-owned cleanup input unless the population explicitly supplies that
+effect's cleanup-input object. A caller may use the same surface for an
+explicit `down` or `destroy`; cleanup intent is not inferred from resource or
+workflow creation.
+
 When a workflow declares `workdir`, graph-derived preparation nodes execute
-setup, liveness, and cleanup in the invocation process directory and all other
-nodes execute setup and liveness in that declared directory. Effects cannot
-override it per node or action. Cleanup uses the directory its setup used; a
-vanished directory is a cleanup failure, not an invitation to run elsewhere.
+setup, liveness, and cleanup in the session's recorded preparation directory.
+A direct invocation records its caller directory; a chain inherits it from its
+triggering session; and a population inherits the resident's recorded value.
+All other nodes execute setup and liveness in the declared directory. Effects
+cannot override either directory per node or action. Cleanup uses the directory
+its setup used; a vanished directory is a cleanup failure, not an invitation to
+run elsewhere.
 
 ## Outputs are production records
 

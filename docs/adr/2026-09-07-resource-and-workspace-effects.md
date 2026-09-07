@@ -58,9 +58,11 @@ such a path omits `workdir`. Its
 producer and that producer's transitive prerequisites are preparation nodes;
 the set is derived before default-workdir edges are added. Every other node
 executes its setup and liveness actions in the declared directory and depends
-on its producer. Preparation setup, liveness, and cleanup actions execute in
-the invocation process directory; this gives setup no unstated dependency on
-a directory it is creating. A workflow without
+on its producer. Preparation setup, liveness, and cleanup actions use a
+recorded preparation directory: a direct invocation records its caller
+directory, a chain inherits its triggering session's value, and a population
+inherits its resident's value. This gives setup no unstated dependency on a
+directory it is creating or a daemon's cwd. A workflow without
 `workdir` has no default directory. Cleanup uses the directory selected for
 that node's setup; if it has disappeared, cleanup fails and records that fact.
 It never falls back to the invocation directory or another node's directory.

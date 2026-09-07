@@ -123,7 +123,7 @@ receiving everything and relying on a later check to reject the rest.
 | Channel `args`, `path`, `body`, `bind` | `event.*`, `event.metadata.<key>`, `inputs.<key>`, and the terminal capability |
 | Channel `timeout` | `inputs.<key>` only |
 | Effect `setup` | `inputs.<key>`, `prev.<key>`, `nodes.<id>.outputs.<key>`, `workflow.outputs.<key>`, `session.*`, `session.inputs.<key>`, `resource.id` |
-| Effect `cleanup` | `self.outputs.<key>`, `inputs.<key>`, `nodes.<id>.outputs.<key>`, `workflow.outputs.<key>`, `session.*` |
+| Effect `cleanup` | `self.outputs.<key>`, `inputs.<key>`, `cleanup.inputs.<key>`, `force`, `nodes.<id>.outputs.<key>`, `workflow.outputs.<key>`, `session.*` |
 | Effect `health` probes | `self.outputs.<key>`, `inputs.<key>`, `session.*` |
 | Effect `terminal` verbs | `self.outputs.<key>`, `session.*` |
 | Effect `inner.inputs`, `inner.env` | `inputs.<key>`, `locals.<key>`, `nodes.<id>.outputs.<key>`, `workflow.outputs.<key>`, `session.*` |
