@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/pprof"
 	"slices"
 	"strconv"
 	"time"
@@ -63,7 +64,23 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "ok")
 	})
+	registerPprofRoutes(mux)
 	return s.auth(mux)
+}
+
+// registerPprofRoutes exposes net/http/pprof's handlers under /debug/pprof/
+// on this server's own mux, not on net/http/pprof's package-level
+// DefaultServeMux, so every pprof route stays behind s.auth like the rest of
+// the bus API rather than bypassing it.
+func registerPprofRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /debug/pprof/", pprof.Index)
+	mux.HandleFunc("GET /debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("GET /debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("GET /debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("GET /debug/pprof/trace", pprof.Trace)
+	for _, name := range []string{"goroutine", "heap", "allocs", "block", "mutex", "threadcreate"} {
+		mux.Handle("GET /debug/pprof/"+name, pprof.Handler(name))
+	}
 }
 
 func (s *Server) auth(next http.Handler) http.Handler {

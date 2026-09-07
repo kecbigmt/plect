@@ -104,7 +104,7 @@ func Destroy(cfg *config.Config, store *state.Store, params DestroyParams) (*Des
 	// stack, so a static node instantiated after a dynamic one is still
 	// cleaned first regardless of scope. @workflow (workspace) is released
 	// last, below.
-	teardown, teardownErr := unifiedTeardownList(cfg, session, plan, false)
+	teardown, teardownErr := unifiedTeardownList(cfg, session, false)
 	if teardownErr != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: teardownErr.Error()}
 	}

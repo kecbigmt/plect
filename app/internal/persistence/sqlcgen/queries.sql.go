@@ -22,6 +22,67 @@ func (q *Queries) CountLiveSessionsNamed(ctx context.Context, name string) (int6
 	return count, err
 }
 
+const currentNodeExecution = `-- name: CurrentNodeExecution :one
+SELECT id, session_id, node_id, sequence, task_id, name, scope, status, resource,
+       inputs_json, outputs_json, state_json,
+       resource_observation_json, resource_observed_at, done_when_json,
+       extra_done_when_json, error, setup_at,
+       failed_at, cleaned_at, finalized_at
+FROM node_executions WHERE session_id = ? AND node_id = ? AND status <> 'cleaned'
+`
+
+type CurrentNodeExecutionParams struct {
+	SessionID string
+	NodeID    string
+}
+
+func (q *Queries) CurrentNodeExecution(ctx context.Context, arg CurrentNodeExecutionParams) (NodeExecution, error) {
+	row := q.db.QueryRowContext(ctx, currentNodeExecution, arg.SessionID, arg.NodeID)
+	var i NodeExecution
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.NodeID,
+		&i.Sequence,
+		&i.TaskID,
+		&i.Name,
+		&i.Scope,
+		&i.Status,
+		&i.Resource,
+		&i.InputsJson,
+		&i.OutputsJson,
+		&i.StateJson,
+		&i.ResourceObservationJson,
+		&i.ResourceObservedAt,
+		&i.DoneWhenJson,
+		&i.ExtraDoneWhenJson,
+		&i.Error,
+		&i.SetupAt,
+		&i.FailedAt,
+		&i.CleanedAt,
+		&i.FinalizedAt,
+	)
+	return i, err
+}
+
+const deleteNodeExecutionDependencies = `-- name: DeleteNodeExecutionDependencies :exec
+DELETE FROM node_execution_dependencies WHERE execution_id = ?
+`
+
+func (q *Queries) DeleteNodeExecutionDependencies(ctx context.Context, executionID string) error {
+	_, err := q.db.ExecContext(ctx, deleteNodeExecutionDependencies, executionID)
+	return err
+}
+
+const deleteNodeExecutionLayers = `-- name: DeleteNodeExecutionLayers :exec
+DELETE FROM node_execution_layers WHERE execution_id = ?
+`
+
+func (q *Queries) DeleteNodeExecutionLayers(ctx context.Context, executionID string) error {
+	_, err := q.db.ExecContext(ctx, deleteNodeExecutionLayers, executionID)
+	return err
+}
+
 const deleteNodeInstancesForSession = `-- name: DeleteNodeInstancesForSession :exec
 DELETE FROM node_instances WHERE session_id = ?
 `
@@ -43,6 +104,30 @@ type DeletePopulationMembersForPopulationParams struct {
 func (q *Queries) DeletePopulationMembersForPopulation(ctx context.Context, arg DeletePopulationMembersForPopulationParams) error {
 	_, err := q.db.ExecContext(ctx, deletePopulationMembersForPopulation, arg.Workflow, arg.Name)
 	return err
+}
+
+const deleteReleasedNodeInstance = `-- name: DeleteReleasedNodeInstance :execrows
+DELETE FROM node_instances
+WHERE session_id = ? AND node_id = ?
+AND NOT EXISTS (
+    SELECT 1 FROM node_executions
+    WHERE node_executions.session_id = node_instances.session_id
+      AND node_executions.node_id = node_instances.node_id
+      AND node_executions.status <> 'cleaned'
+)
+`
+
+type DeleteReleasedNodeInstanceParams struct {
+	SessionID string
+	NodeID    string
+}
+
+func (q *Queries) DeleteReleasedNodeInstance(ctx context.Context, arg DeleteReleasedNodeInstanceParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteReleasedNodeInstance, arg.SessionID, arg.NodeID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const deleteSessionChannelHealth = `-- name: DeleteSessionChannelHealth :exec
@@ -115,6 +200,24 @@ DELETE FROM up_reservations WHERE child_session_name = ?
 
 func (q *Queries) DeleteUpReservation(ctx context.Context, childSessionName string) error {
 	_, err := q.db.ExecContext(ctx, deleteUpReservation, childSessionName)
+	return err
+}
+
+const ensureNodeInstance = `-- name: EnsureNodeInstance :exec
+
+INSERT INTO node_instances (session_id, node_id)
+VALUES (?, ?)
+ON CONFLICT (session_id, node_id) DO NOTHING
+`
+
+type EnsureNodeInstanceParams struct {
+	SessionID string
+	NodeID    string
+}
+
+// Workflow nodes (static; Session.Nodes entries)
+func (q *Queries) EnsureNodeInstance(ctx context.Context, arg EnsureNodeInstanceParams) error {
+	_, err := q.db.ExecContext(ctx, ensureNodeInstance, arg.SessionID, arg.NodeID)
 	return err
 }
 
@@ -246,24 +349,26 @@ func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) error 
 	return err
 }
 
-const insertNodeInstance = `-- name: InsertNodeInstance :exec
-
-INSERT INTO node_instances (
-    session_id, node_id, task_id, name, scope, status, sequence, resource,
-    inputs_json, outputs_json, state_json, resource_observation_json,
-    resource_observed_at, done_when_json, extra_done_when_json, error,
-    setup_at, failed_at, cleaned_at, finalized_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+const insertNodeExecution = `-- name: InsertNodeExecution :one
+INSERT INTO node_executions (
+    id, session_id, node_id, sequence, task_id, name, scope, status, resource,
+    inputs_json, outputs_json, state_json,
+    resource_observation_json, resource_observed_at, done_when_json,
+    extra_done_when_json, error, setup_at,
+    failed_at, cleaned_at, finalized_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+RETURNING id
 `
 
-type InsertNodeInstanceParams struct {
+type InsertNodeExecutionParams struct {
+	ID                      string
 	SessionID               string
 	NodeID                  string
+	Sequence                int64
 	TaskID                  sql.NullString
 	Name                    sql.NullString
 	Scope                   string
 	Status                  string
-	Sequence                int64
 	Resource                sql.NullString
 	InputsJson              sql.NullString
 	OutputsJson             sql.NullString
@@ -279,16 +384,16 @@ type InsertNodeInstanceParams struct {
 	FinalizedAt             sql.NullString
 }
 
-// Workflow nodes (static; Session.Nodes entries)
-func (q *Queries) InsertNodeInstance(ctx context.Context, arg InsertNodeInstanceParams) error {
-	_, err := q.db.ExecContext(ctx, insertNodeInstance,
+func (q *Queries) InsertNodeExecution(ctx context.Context, arg InsertNodeExecutionParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, insertNodeExecution,
+		arg.ID,
 		arg.SessionID,
 		arg.NodeID,
+		arg.Sequence,
 		arg.TaskID,
 		arg.Name,
 		arg.Scope,
 		arg.Status,
-		arg.Sequence,
 		arg.Resource,
 		arg.InputsJson,
 		arg.OutputsJson,
@@ -303,20 +408,37 @@ func (q *Queries) InsertNodeInstance(ctx context.Context, arg InsertNodeInstance
 		arg.CleanedAt,
 		arg.FinalizedAt,
 	)
+	var id string
+	err := row.Scan(&id)
+	return id, err
+}
+
+const insertNodeExecutionDependency = `-- name: InsertNodeExecutionDependency :exec
+INSERT INTO node_execution_dependencies (execution_id, depends_on_execution_id)
+VALUES (?, ?)
+ON CONFLICT (execution_id, depends_on_execution_id) DO NOTHING
+`
+
+type InsertNodeExecutionDependencyParams struct {
+	ExecutionID          string
+	DependsOnExecutionID string
+}
+
+func (q *Queries) InsertNodeExecutionDependency(ctx context.Context, arg InsertNodeExecutionDependencyParams) error {
+	_, err := q.db.ExecContext(ctx, insertNodeExecutionDependency, arg.ExecutionID, arg.DependsOnExecutionID)
 	return err
 }
 
-const insertNodeInstanceLayer = `-- name: InsertNodeInstanceLayer :exec
-INSERT INTO node_instance_layers (
-    session_id, node_id, position, effect_id, status, inputs_json,
-    locals_json, outputs_json, env_json, heartbeat_ticks,
-    heartbeat_escalations, setup_at, failed_at, cleaned_at, error
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+const insertNodeExecutionLayer = `-- name: InsertNodeExecutionLayer :exec
+INSERT INTO node_execution_layers (
+    execution_id, position, effect_id, status, inputs_json, locals_json,
+    outputs_json, env_json, heartbeat_ticks, heartbeat_escalations,
+    setup_at, failed_at, cleaned_at, error
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
-type InsertNodeInstanceLayerParams struct {
-	SessionID            string
-	NodeID               string
+type InsertNodeExecutionLayerParams struct {
+	ExecutionID          string
 	Position             int64
 	EffectID             string
 	Status               string
@@ -332,10 +454,9 @@ type InsertNodeInstanceLayerParams struct {
 	Error                sql.NullString
 }
 
-func (q *Queries) InsertNodeInstanceLayer(ctx context.Context, arg InsertNodeInstanceLayerParams) error {
-	_, err := q.db.ExecContext(ctx, insertNodeInstanceLayer,
-		arg.SessionID,
-		arg.NodeID,
+func (q *Queries) InsertNodeExecutionLayer(ctx context.Context, arg InsertNodeExecutionLayerParams) error {
+	_, err := q.db.ExecContext(ctx, insertNodeExecutionLayer,
+		arg.ExecutionID,
 		arg.Position,
 		arg.EffectID,
 		arg.Status,
@@ -667,6 +788,140 @@ func (q *Queries) LatestEventByType(ctx context.Context, arg LatestEventByTypePa
 	return i, err
 }
 
+const listCurrentNodeExecutions = `-- name: ListCurrentNodeExecutions :many
+SELECT ne.id, ne.session_id, ne.node_id, ne.sequence, ne.task_id, ne.name,
+       ne.scope, ne.status, ne.resource, ne.inputs_json,
+       ne.outputs_json, ne.state_json, ne.resource_observation_json,
+       ne.resource_observed_at, ne.done_when_json, ne.extra_done_when_json,
+       ne.error, ne.setup_at, ne.failed_at,
+       ne.cleaned_at, ne.finalized_at
+FROM node_executions ne
+WHERE ne.session_id = ?
+AND NOT EXISTS (
+    SELECT 1 FROM node_executions newer
+    WHERE newer.session_id = ne.session_id AND newer.node_id = ne.node_id
+      AND (newer.sequence > ne.sequence OR (newer.sequence = ne.sequence AND newer.id > ne.id))
+)
+ORDER BY ne.node_id
+`
+
+func (q *Queries) ListCurrentNodeExecutions(ctx context.Context, sessionID string) ([]NodeExecution, error) {
+	rows, err := q.db.QueryContext(ctx, listCurrentNodeExecutions, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []NodeExecution
+	for rows.Next() {
+		var i NodeExecution
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.NodeID,
+			&i.Sequence,
+			&i.TaskID,
+			&i.Name,
+			&i.Scope,
+			&i.Status,
+			&i.Resource,
+			&i.InputsJson,
+			&i.OutputsJson,
+			&i.StateJson,
+			&i.ResourceObservationJson,
+			&i.ResourceObservedAt,
+			&i.DoneWhenJson,
+			&i.ExtraDoneWhenJson,
+			&i.Error,
+			&i.SetupAt,
+			&i.FailedAt,
+			&i.CleanedAt,
+			&i.FinalizedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCurrentNodeExecutionsForSessions = `-- name: ListCurrentNodeExecutionsForSessions :many
+SELECT ne.id, ne.session_id, ne.node_id, ne.sequence, ne.task_id, ne.name,
+       ne.scope, ne.status, ne.resource, ne.inputs_json,
+       ne.outputs_json, ne.state_json, ne.resource_observation_json,
+       ne.resource_observed_at, ne.done_when_json, ne.extra_done_when_json,
+       ne.error, ne.setup_at, ne.failed_at,
+       ne.cleaned_at, ne.finalized_at
+FROM node_executions ne
+WHERE ne.session_id IN (/*SLICE:session_ids*/?)
+AND NOT EXISTS (
+    SELECT 1 FROM node_executions newer
+    WHERE newer.session_id = ne.session_id AND newer.node_id = ne.node_id
+      AND (newer.sequence > ne.sequence OR (newer.sequence = ne.sequence AND newer.id > ne.id))
+)
+ORDER BY ne.session_id, ne.node_id
+`
+
+func (q *Queries) ListCurrentNodeExecutionsForSessions(ctx context.Context, sessionIds []string) ([]NodeExecution, error) {
+	query := listCurrentNodeExecutionsForSessions
+	var queryParams []interface{}
+	if len(sessionIds) > 0 {
+		for _, v := range sessionIds {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:session_ids*/?", strings.Repeat(",?", len(sessionIds))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:session_ids*/?", "NULL", 1)
+	}
+	rows, err := q.db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []NodeExecution
+	for rows.Next() {
+		var i NodeExecution
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.NodeID,
+			&i.Sequence,
+			&i.TaskID,
+			&i.Name,
+			&i.Scope,
+			&i.Status,
+			&i.Resource,
+			&i.InputsJson,
+			&i.OutputsJson,
+			&i.StateJson,
+			&i.ResourceObservationJson,
+			&i.ResourceObservedAt,
+			&i.DoneWhenJson,
+			&i.ExtraDoneWhenJson,
+			&i.Error,
+			&i.SetupAt,
+			&i.FailedAt,
+			&i.CleanedAt,
+			&i.FinalizedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listEventsFromBySession = `-- name: ListEventsFromBySession :many
 SELECT id, sequence, time, type, source, direction, summary, body, metadata_json
 FROM events WHERE session_id = ? AND sequence >= ? ORDER BY sequence
@@ -944,25 +1199,112 @@ func (q *Queries) ListLiveSessionsByAlias(ctx context.Context, alias sql.NullStr
 	return items, nil
 }
 
-const listNodeInstanceLayers = `-- name: ListNodeInstanceLayers :many
-SELECT session_id, node_id, position, effect_id, status, inputs_json,
-       locals_json, outputs_json, env_json, heartbeat_ticks,
-       heartbeat_escalations, setup_at, failed_at, cleaned_at, error
-FROM node_instance_layers WHERE session_id = ? ORDER BY node_id, position
+const listNodeExecutionDependenciesForSession = `-- name: ListNodeExecutionDependenciesForSession :many
+SELECT dependent.node_id AS node_id, ned.execution_id AS execution_id, prereq.node_id AS depends_on_node_id
+FROM node_execution_dependencies ned
+INNER JOIN node_executions dependent ON dependent.id = ned.execution_id
+INNER JOIN node_executions prereq ON prereq.id = ned.depends_on_execution_id
+WHERE dependent.session_id = ?
 `
 
-func (q *Queries) ListNodeInstanceLayers(ctx context.Context, sessionID string) ([]NodeInstanceLayer, error) {
-	rows, err := q.db.QueryContext(ctx, listNodeInstanceLayers, sessionID)
+type ListNodeExecutionDependenciesForSessionRow struct {
+	NodeID          string
+	ExecutionID     string
+	DependsOnNodeID string
+}
+
+func (q *Queries) ListNodeExecutionDependenciesForSession(ctx context.Context, sessionID string) ([]ListNodeExecutionDependenciesForSessionRow, error) {
+	rows, err := q.db.QueryContext(ctx, listNodeExecutionDependenciesForSession, sessionID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []NodeInstanceLayer
+	var items []ListNodeExecutionDependenciesForSessionRow
 	for rows.Next() {
-		var i NodeInstanceLayer
+		var i ListNodeExecutionDependenciesForSessionRow
+		if err := rows.Scan(&i.NodeID, &i.ExecutionID, &i.DependsOnNodeID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNodeExecutionDependenciesForSessions = `-- name: ListNodeExecutionDependenciesForSessions :many
+SELECT dependent.node_id AS node_id, ned.execution_id AS execution_id, prereq.node_id AS depends_on_node_id
+FROM node_execution_dependencies ned
+INNER JOIN node_executions dependent ON dependent.id = ned.execution_id
+INNER JOIN node_executions prereq ON prereq.id = ned.depends_on_execution_id
+WHERE dependent.session_id IN (/*SLICE:session_ids*/?)
+`
+
+type ListNodeExecutionDependenciesForSessionsRow struct {
+	NodeID          string
+	ExecutionID     string
+	DependsOnNodeID string
+}
+
+func (q *Queries) ListNodeExecutionDependenciesForSessions(ctx context.Context, sessionIds []string) ([]ListNodeExecutionDependenciesForSessionsRow, error) {
+	query := listNodeExecutionDependenciesForSessions
+	var queryParams []interface{}
+	if len(sessionIds) > 0 {
+		for _, v := range sessionIds {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:session_ids*/?", strings.Repeat(",?", len(sessionIds))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:session_ids*/?", "NULL", 1)
+	}
+	rows, err := q.db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListNodeExecutionDependenciesForSessionsRow
+	for rows.Next() {
+		var i ListNodeExecutionDependenciesForSessionsRow
+		if err := rows.Scan(&i.NodeID, &i.ExecutionID, &i.DependsOnNodeID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNodeExecutionLayersForSession = `-- name: ListNodeExecutionLayersForSession :many
+SELECT nel.execution_id, nel.position, nel.effect_id, nel.status,
+       nel.inputs_json, nel.locals_json, nel.outputs_json, nel.env_json,
+       nel.heartbeat_ticks, nel.heartbeat_escalations, nel.setup_at,
+       nel.failed_at, nel.cleaned_at, nel.error
+FROM node_execution_layers nel
+INNER JOIN node_executions ne ON ne.id = nel.execution_id
+WHERE ne.session_id = ?
+ORDER BY nel.execution_id, nel.position
+`
+
+func (q *Queries) ListNodeExecutionLayersForSession(ctx context.Context, sessionID string) ([]NodeExecutionLayer, error) {
+	rows, err := q.db.QueryContext(ctx, listNodeExecutionLayersForSession, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []NodeExecutionLayer
+	for rows.Next() {
+		var i NodeExecutionLayer
 		if err := rows.Scan(
-			&i.SessionID,
-			&i.NodeID,
+			&i.ExecutionID,
 			&i.Position,
 			&i.EffectID,
 			&i.Status,
@@ -990,16 +1332,19 @@ func (q *Queries) ListNodeInstanceLayers(ctx context.Context, sessionID string) 
 	return items, nil
 }
 
-const listNodeInstanceLayersForSessions = `-- name: ListNodeInstanceLayersForSessions :many
-SELECT session_id, node_id, position, effect_id, status, inputs_json,
-       locals_json, outputs_json, env_json, heartbeat_ticks,
-       heartbeat_escalations, setup_at, failed_at, cleaned_at, error
-FROM node_instance_layers WHERE session_id IN (/*SLICE:session_ids*/?)
-ORDER BY session_id, node_id, position
+const listNodeExecutionLayersForSessions = `-- name: ListNodeExecutionLayersForSessions :many
+SELECT nel.execution_id, nel.position, nel.effect_id, nel.status,
+       nel.inputs_json, nel.locals_json, nel.outputs_json, nel.env_json,
+       nel.heartbeat_ticks, nel.heartbeat_escalations, nel.setup_at,
+       nel.failed_at, nel.cleaned_at, nel.error
+FROM node_execution_layers nel
+INNER JOIN node_executions ne ON ne.id = nel.execution_id
+WHERE ne.session_id IN (/*SLICE:session_ids*/?)
+ORDER BY nel.execution_id, nel.position
 `
 
-func (q *Queries) ListNodeInstanceLayersForSessions(ctx context.Context, sessionIds []string) ([]NodeInstanceLayer, error) {
-	query := listNodeInstanceLayersForSessions
+func (q *Queries) ListNodeExecutionLayersForSessions(ctx context.Context, sessionIds []string) ([]NodeExecutionLayer, error) {
+	query := listNodeExecutionLayersForSessions
 	var queryParams []interface{}
 	if len(sessionIds) > 0 {
 		for _, v := range sessionIds {
@@ -1014,12 +1359,11 @@ func (q *Queries) ListNodeInstanceLayersForSessions(ctx context.Context, session
 		return nil, err
 	}
 	defer rows.Close()
-	var items []NodeInstanceLayer
+	var items []NodeExecutionLayer
 	for rows.Next() {
-		var i NodeInstanceLayer
+		var i NodeExecutionLayer
 		if err := rows.Scan(
-			&i.SessionID,
-			&i.NodeID,
+			&i.ExecutionID,
 			&i.Position,
 			&i.EffectID,
 			&i.Status,
@@ -1033,120 +1377,6 @@ func (q *Queries) ListNodeInstanceLayersForSessions(ctx context.Context, session
 			&i.FailedAt,
 			&i.CleanedAt,
 			&i.Error,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listNodeInstances = `-- name: ListNodeInstances :many
-SELECT session_id, node_id, task_id, name, scope, status, sequence, resource,
-       inputs_json, outputs_json, state_json, resource_observation_json,
-       resource_observed_at, done_when_json, extra_done_when_json, error,
-       setup_at, failed_at, cleaned_at, finalized_at
-FROM node_instances WHERE session_id = ? ORDER BY node_id
-`
-
-func (q *Queries) ListNodeInstances(ctx context.Context, sessionID string) ([]NodeInstance, error) {
-	rows, err := q.db.QueryContext(ctx, listNodeInstances, sessionID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []NodeInstance
-	for rows.Next() {
-		var i NodeInstance
-		if err := rows.Scan(
-			&i.SessionID,
-			&i.NodeID,
-			&i.TaskID,
-			&i.Name,
-			&i.Scope,
-			&i.Status,
-			&i.Sequence,
-			&i.Resource,
-			&i.InputsJson,
-			&i.OutputsJson,
-			&i.StateJson,
-			&i.ResourceObservationJson,
-			&i.ResourceObservedAt,
-			&i.DoneWhenJson,
-			&i.ExtraDoneWhenJson,
-			&i.Error,
-			&i.SetupAt,
-			&i.FailedAt,
-			&i.CleanedAt,
-			&i.FinalizedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listNodeInstancesForSessions = `-- name: ListNodeInstancesForSessions :many
-SELECT session_id, node_id, task_id, name, scope, status, sequence, resource,
-       inputs_json, outputs_json, state_json, resource_observation_json,
-       resource_observed_at, done_when_json, extra_done_when_json, error,
-       setup_at, failed_at, cleaned_at, finalized_at
-FROM node_instances WHERE session_id IN (/*SLICE:session_ids*/?) ORDER BY session_id, node_id
-`
-
-func (q *Queries) ListNodeInstancesForSessions(ctx context.Context, sessionIds []string) ([]NodeInstance, error) {
-	query := listNodeInstancesForSessions
-	var queryParams []interface{}
-	if len(sessionIds) > 0 {
-		for _, v := range sessionIds {
-			queryParams = append(queryParams, v)
-		}
-		query = strings.Replace(query, "/*SLICE:session_ids*/?", strings.Repeat(",?", len(sessionIds))[1:], 1)
-	} else {
-		query = strings.Replace(query, "/*SLICE:session_ids*/?", "NULL", 1)
-	}
-	rows, err := q.db.QueryContext(ctx, query, queryParams...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []NodeInstance
-	for rows.Next() {
-		var i NodeInstance
-		if err := rows.Scan(
-			&i.SessionID,
-			&i.NodeID,
-			&i.TaskID,
-			&i.Name,
-			&i.Scope,
-			&i.Status,
-			&i.Sequence,
-			&i.Resource,
-			&i.InputsJson,
-			&i.OutputsJson,
-			&i.StateJson,
-			&i.ResourceObservationJson,
-			&i.ResourceObservedAt,
-			&i.DoneWhenJson,
-			&i.ExtraDoneWhenJson,
-			&i.Error,
-			&i.SetupAt,
-			&i.FailedAt,
-			&i.CleanedAt,
-			&i.FinalizedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1912,6 +2142,44 @@ func (q *Queries) NextEventSequence(ctx context.Context, sessionID string) (int6
 	return column_1, err
 }
 
+const nodeExecutionByID = `-- name: NodeExecutionByID :one
+SELECT id, session_id, node_id, sequence, task_id, name, scope, status, resource,
+       inputs_json, outputs_json, state_json,
+       resource_observation_json, resource_observed_at, done_when_json,
+       extra_done_when_json, error, setup_at,
+       failed_at, cleaned_at, finalized_at
+FROM node_executions WHERE id = ?
+`
+
+func (q *Queries) NodeExecutionByID(ctx context.Context, id string) (NodeExecution, error) {
+	row := q.db.QueryRowContext(ctx, nodeExecutionByID, id)
+	var i NodeExecution
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.NodeID,
+		&i.Sequence,
+		&i.TaskID,
+		&i.Name,
+		&i.Scope,
+		&i.Status,
+		&i.Resource,
+		&i.InputsJson,
+		&i.OutputsJson,
+		&i.StateJson,
+		&i.ResourceObservationJson,
+		&i.ResourceObservedAt,
+		&i.DoneWhenJson,
+		&i.ExtraDoneWhenJson,
+		&i.Error,
+		&i.SetupAt,
+		&i.FailedAt,
+		&i.CleanedAt,
+		&i.FinalizedAt,
+	)
+	return i, err
+}
+
 const sessionEverExistedByName = `-- name: SessionEverExistedByName :one
 SELECT EXISTS(SELECT 1 FROM sessions WHERE name = ?)
 `
@@ -1989,6 +2257,63 @@ func (q *Queries) SessionNamesByIDs(ctx context.Context, ids []string) ([]Sessio
 		return nil, err
 	}
 	return items, nil
+}
+
+const updateNodeExecution = `-- name: UpdateNodeExecution :exec
+UPDATE node_executions SET
+    sequence = ?, task_id = ?, name = ?, scope = ?, status = ?, resource = ?,
+    inputs_json = ?, outputs_json = ?, state_json = ?,
+    resource_observation_json = ?, resource_observed_at = ?, done_when_json = ?,
+    extra_done_when_json = ?, error = ?,
+    setup_at = ?, failed_at = ?, cleaned_at = ?, finalized_at = ?
+WHERE id = ?
+`
+
+type UpdateNodeExecutionParams struct {
+	Sequence                int64
+	TaskID                  sql.NullString
+	Name                    sql.NullString
+	Scope                   string
+	Status                  string
+	Resource                sql.NullString
+	InputsJson              sql.NullString
+	OutputsJson             sql.NullString
+	StateJson               sql.NullString
+	ResourceObservationJson sql.NullString
+	ResourceObservedAt      sql.NullString
+	DoneWhenJson            sql.NullString
+	ExtraDoneWhenJson       sql.NullString
+	Error                   sql.NullString
+	SetupAt                 sql.NullString
+	FailedAt                sql.NullString
+	CleanedAt               sql.NullString
+	FinalizedAt             sql.NullString
+	ID                      string
+}
+
+func (q *Queries) UpdateNodeExecution(ctx context.Context, arg UpdateNodeExecutionParams) error {
+	_, err := q.db.ExecContext(ctx, updateNodeExecution,
+		arg.Sequence,
+		arg.TaskID,
+		arg.Name,
+		arg.Scope,
+		arg.Status,
+		arg.Resource,
+		arg.InputsJson,
+		arg.OutputsJson,
+		arg.StateJson,
+		arg.ResourceObservationJson,
+		arg.ResourceObservedAt,
+		arg.DoneWhenJson,
+		arg.ExtraDoneWhenJson,
+		arg.Error,
+		arg.SetupAt,
+		arg.FailedAt,
+		arg.CleanedAt,
+		arg.FinalizedAt,
+		arg.ID,
+	)
+	return err
 }
 
 const updateSessionByID = `-- name: UpdateSessionByID :exec

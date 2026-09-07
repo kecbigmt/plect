@@ -4,21 +4,24 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/kecbigmt/plecture/app/internal/persistence/sqlcgen"
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// loadTasks assembles a session's Nodes (from node_instances) and Tasks
-// (from task_instances) maps, joined in Go with their layer/done_when/judge
-// child tables. sessionID is the session's surrogate id, not its name.
+// loadTasks assembles a session's Nodes (from node_instances/node_executions)
+// and Tasks (from task_instances) maps, joined in Go with their
+// layer/dependency/done_when/judge child tables. sessionID is the session's
+// surrogate id, not its name.
 func loadTasks(ctx context.Context, q sqlcgen.DBTX, sessionID string) (nodes, tasks map[string]*contract.TaskState, err error) {
 	queries := sqlcgen.New(q)
 
-	nodeRows, err := queries.ListNodeInstances(ctx, sessionID)
+	nodeRows, err := queries.ListCurrentNodeExecutions(ctx, sessionID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("list node instances for %q: %w", sessionID, err)
+		return nil, nil, fmt.Errorf("list node executions for %q: %w", sessionID, err)
 	}
 	instanceRows, err := queries.ListTaskInstances(ctx, sessionID)
 	if err != nil {
@@ -28,13 +31,25 @@ func loadTasks(ctx context.Context, q sqlcgen.DBTX, sessionID string) (nodes, ta
 		return nil, nil, nil
 	}
 
-	nodeLayerRows, err := queries.ListNodeInstanceLayers(ctx, sessionID)
+	nodeLayerRows, err := queries.ListNodeExecutionLayersForSession(ctx, sessionID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("list node instance layers for %q: %w", sessionID, err)
+		return nil, nil, fmt.Errorf("list node execution layers for %q: %w", sessionID, err)
 	}
-	nodeLayersByNodeID := map[string][]sqlcgen.NodeInstanceLayer{}
+	nodeLayersByExecutionID := map[string][]sqlcgen.NodeExecutionLayer{}
 	for _, r := range nodeLayerRows {
-		nodeLayersByNodeID[r.NodeID] = append(nodeLayersByNodeID[r.NodeID], r)
+		nodeLayersByExecutionID[r.ExecutionID] = append(nodeLayersByExecutionID[r.ExecutionID], r)
+	}
+
+	nodeDepRows, err := queries.ListNodeExecutionDependenciesForSession(ctx, sessionID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list node execution dependencies for %q: %w", sessionID, err)
+	}
+	nodeDepsByNodeID := map[string][]string{}
+	for _, r := range nodeDepRows {
+		nodeDepsByNodeID[r.NodeID] = append(nodeDepsByNodeID[r.NodeID], r.DependsOnNodeID)
+	}
+	for _, deps := range nodeDepsByNodeID {
+		sort.Strings(deps)
 	}
 
 	taskLayerRows, err := queries.ListTaskInstanceLayersForSession(ctx, sessionID)
@@ -84,15 +99,16 @@ func loadTasks(ctx context.Context, q sqlcgen.DBTX, sessionID string) (nodes, ta
 
 	nodes = make(map[string]*contract.TaskState, len(nodeRows))
 	for _, row := range nodeRows {
-		ts, err := nodeInstanceFromRow(row)
+		ts, err := nodeExecutionFromRow(row)
 		if err != nil {
-			return nil, nil, fmt.Errorf("parse node instance %q/%q: %w", sessionID, row.NodeID, err)
+			return nil, nil, fmt.Errorf("parse node execution %q/%q: %w", sessionID, row.NodeID, err)
 		}
-		layers, err := layersFromNodeRows(nodeLayersByNodeID[row.NodeID])
+		layers, err := layersFromNodeExecutionRows(nodeLayersByExecutionID[row.ID])
 		if err != nil {
-			return nil, nil, fmt.Errorf("parse node instance %q/%q layers: %w", sessionID, row.NodeID, err)
+			return nil, nil, fmt.Errorf("parse node execution %q/%q layers: %w", sessionID, row.NodeID, err)
 		}
 		ts.Layers = layers
+		ts.DependsOn = nodeDepsByNodeID[row.NodeID]
 		nodes[row.NodeID] = ts
 	}
 	tasks = make(map[string]*contract.TaskState, len(instanceRows))
@@ -122,18 +138,19 @@ func loadTasks(ctx context.Context, q sqlcgen.DBTX, sessionID string) (nodes, ta
 // loadTasksBatch pre-seeds both maps (possibly empty) for a session with a
 // row in either input table, rather than leaving one nil: a caller
 // comparing this against loadTasks' own per-session output for equality
-// would otherwise see a nil map and an empty map as different values. Layer
-// rows key on (session_id, node_id), since node_id alone is not globally
-// unique the way a task_instances.id is.
+// would otherwise see a nil map and an empty map as different values. Node
+// layer and dependency rows key on execution_id, not node_id: node_id is a
+// workflow-declared identifier, not unique across sessions, but an
+// execution_id is generated fresh per row the way a task_instances.id is.
 func loadTasksBatch(ctx context.Context, q sqlcgen.DBTX, sessionIDs []string) (nodesBySession, tasksBySession map[string]map[string]*contract.TaskState, err error) {
 	if len(sessionIDs) == 0 {
 		return nil, nil, nil
 	}
 	queries := sqlcgen.New(q)
 
-	nodeRows, err := queries.ListNodeInstancesForSessions(ctx, sessionIDs)
+	nodeRows, err := queries.ListCurrentNodeExecutionsForSessions(ctx, sessionIDs)
 	if err != nil {
-		return nil, nil, fmt.Errorf("list node instances: %w", err)
+		return nil, nil, fmt.Errorf("list node executions: %w", err)
 	}
 	instanceRows, err := queries.ListTaskInstancesForSessions(ctx, sessionIDs)
 	if err != nil {
@@ -143,15 +160,25 @@ func loadTasksBatch(ctx context.Context, q sqlcgen.DBTX, sessionIDs []string) (n
 		return nil, nil, nil
 	}
 
-	type nodeKey struct{ sessionID, nodeID string }
-	nodeLayerRows, err := queries.ListNodeInstanceLayersForSessions(ctx, sessionIDs)
+	nodeLayerRows, err := queries.ListNodeExecutionLayersForSessions(ctx, sessionIDs)
 	if err != nil {
-		return nil, nil, fmt.Errorf("list node instance layers: %w", err)
+		return nil, nil, fmt.Errorf("list node execution layers: %w", err)
 	}
-	nodeLayersByKey := map[nodeKey][]sqlcgen.NodeInstanceLayer{}
+	nodeLayersByExecutionID := map[string][]sqlcgen.NodeExecutionLayer{}
 	for _, r := range nodeLayerRows {
-		key := nodeKey{r.SessionID, r.NodeID}
-		nodeLayersByKey[key] = append(nodeLayersByKey[key], r)
+		nodeLayersByExecutionID[r.ExecutionID] = append(nodeLayersByExecutionID[r.ExecutionID], r)
+	}
+
+	nodeDepRows, err := queries.ListNodeExecutionDependenciesForSessions(ctx, sessionIDs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list node execution dependencies: %w", err)
+	}
+	nodeDepsByExecutionID := map[string][]string{}
+	for _, r := range nodeDepRows {
+		nodeDepsByExecutionID[r.ExecutionID] = append(nodeDepsByExecutionID[r.ExecutionID], r.DependsOnNodeID)
+	}
+	for _, deps := range nodeDepsByExecutionID {
+		sort.Strings(deps)
 	}
 
 	taskLayerRows, err := queries.ListTaskInstanceLayersForSessions(ctx, sessionIDs)
@@ -214,15 +241,16 @@ func loadTasksBatch(ctx context.Context, q sqlcgen.DBTX, sessionIDs []string) (n
 	}
 
 	for _, row := range nodeRows {
-		ts, err := nodeInstanceFromRow(row)
+		ts, err := nodeExecutionFromRow(row)
 		if err != nil {
-			return nil, nil, fmt.Errorf("parse node instance %q/%q: %w", row.SessionID, row.NodeID, err)
+			return nil, nil, fmt.Errorf("parse node execution %q/%q: %w", row.SessionID, row.NodeID, err)
 		}
-		layers, err := layersFromNodeRows(nodeLayersByKey[nodeKey{row.SessionID, row.NodeID}])
+		layers, err := layersFromNodeExecutionRows(nodeLayersByExecutionID[row.ID])
 		if err != nil {
-			return nil, nil, fmt.Errorf("parse node instance %q/%q layers: %w", row.SessionID, row.NodeID, err)
+			return nil, nil, fmt.Errorf("parse node execution %q/%q layers: %w", row.SessionID, row.NodeID, err)
 		}
 		ts.Layers = layers
+		ts.DependsOn = nodeDepsByExecutionID[row.ID]
 		nodesBySession[row.SessionID][row.NodeID] = ts
 	}
 
@@ -250,23 +278,37 @@ func loadTasksBatch(ctx context.Context, q sqlcgen.DBTX, sessionIDs []string) (n
 	return nodesBySession, tasksBySession, nil
 }
 
-// writeTasksTx replaces every node-instance row for sessionID (that table
-// has no identity worth preserving across a write) from nodes, and
-// reconciles task_instances against tasks instead: each current dynamic
-// instance is upserted (preserving its id across an ordinary update; see
-// UpsertTaskInstance), and any instance_name no longer present is then
-// explicitly deleted, which is what mints a fresh id on a later cleanup +
-// setup under the same name. It never touches another session's rows.
+// writeTasksTx reconciles node_instances/node_executions against nodes and
+// task_instances against tasks. A node absent from nodes is pruned only once
+// its latest execution has already reached "cleaned"; an absent but
+// unreleased one is left untouched -- see docs/design/sqlite-persistence.md's
+// "Node execution identity" section. task_instances instead upserts every
+// current instance and deletes any instance_name no longer present
+// unconditionally, minting a fresh id on a later setup under the same name.
 func (db *DB) writeTasksTx(ctx context.Context, tx *sql.Tx, sessionID string, nodes, tasks map[string]*contract.TaskState) error {
 	q := sqlcgen.New(tx)
-	if err := q.DeleteNodeInstancesForSession(ctx, sessionID); err != nil {
-		return fmt.Errorf("clear node instances for %q: %w", sessionID, err)
+
+	existingNodes, err := q.ListCurrentNodeExecutions(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("list existing node executions for %q: %w", sessionID, err)
 	}
-	for key, ts := range nodes {
+	for _, row := range existingNodes {
+		if _, present := nodes[row.NodeID]; present {
+			continue
+		}
+		if row.Status != contract.TaskStatusCleaned {
+			continue
+		}
+		if _, err := q.DeleteReleasedNodeInstance(ctx, sqlcgen.DeleteReleasedNodeInstanceParams{SessionID: sessionID, NodeID: row.NodeID}); err != nil {
+			return fmt.Errorf("prune released node instance %q/%q: %w", sessionID, row.NodeID, err)
+		}
+	}
+	for _, nodeID := range orderNodesByDependency(nodes) {
+		ts := nodes[nodeID]
 		if ts == nil {
 			continue
 		}
-		if err := insertNodeInstanceTx(ctx, q, sessionID, key, ts); err != nil {
+		if err := upsertNodeExecutionTx(ctx, q, sessionID, nodeID, ts); err != nil {
 			return err
 		}
 	}
@@ -348,55 +390,242 @@ func rawJSONFromColumn(s sql.NullString) json.RawMessage {
 	return json.RawMessage(s.String)
 }
 
-func insertNodeInstanceTx(ctx context.Context, q *sqlcgen.Queries, sessionID, nodeID string, ts *contract.TaskState) error {
+// orderNodesByDependency returns nodes' keys with every prerequisite (per
+// TaskState.DependsOn) ordered before its dependent, restricted to edges
+// between two keys both present in nodes -- a dependency already persisted
+// from an earlier write is resolved directly against the database instead
+// (see upsertNodeExecutionTx). This guarantees a dependency's row exists
+// before its dependent's write looks it up within the same transaction.
+// Ties and cycles fall back to sorted key order.
+func orderNodesByDependency(nodes map[string]*contract.TaskState) []string {
+	keys := make([]string, 0, len(nodes))
+	for k, ts := range nodes {
+		if ts == nil {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	inDegree := make(map[string]int, len(keys))
+	dependents := map[string][]string{}
+	for _, k := range keys {
+		inDegree[k] = 0
+	}
+	for _, k := range keys {
+		for _, dep := range nodes[k].DependsOn {
+			if _, ok := nodes[dep]; !ok {
+				continue
+			}
+			inDegree[k]++
+			dependents[dep] = append(dependents[dep], k)
+		}
+	}
+
+	var ready []string
+	for _, k := range keys {
+		if inDegree[k] == 0 {
+			ready = append(ready, k)
+		}
+	}
+	order := make([]string, 0, len(keys))
+	for len(ready) > 0 {
+		sort.Strings(ready)
+		k := ready[0]
+		ready = ready[1:]
+		order = append(order, k)
+		for _, d := range dependents[k] {
+			inDegree[d]--
+			if inDegree[d] == 0 {
+				ready = append(ready, d)
+			}
+		}
+	}
+	if len(order) != len(keys) {
+		return keys
+	}
+	return order
+}
+
+// upsertNodeExecutionTx reconciles nodeID's execution row. When ts carries a
+// non-empty ExecutionID (a same-declaration retry continuing a row this
+// write's caller already read), it updates exactly that row, refusing the
+// write if it no longer exists rather than silently retargeting whatever
+// generation happens to be current. Otherwise it falls back to the current
+// unreleased execution (see CurrentNodeExecution), updating it in place or
+// inserting a fresh one when none exists. Layers and dependency edges are
+// always replaced wholesale for whichever execution id this resolves to.
+func upsertNodeExecutionTx(ctx context.Context, q *sqlcgen.Queries, sessionID, nodeID string, ts *contract.TaskState) error {
 	inputsJSON, err := marshalJSONMap(ts.Inputs)
 	if err != nil {
-		return fmt.Errorf("marshal node instance %q/%q inputs: %w", sessionID, nodeID, err)
+		return fmt.Errorf("marshal node %q/%q inputs: %w", sessionID, nodeID, err)
 	}
 	outputsJSON, err := marshalJSONMap(ts.Outputs)
 	if err != nil {
-		return fmt.Errorf("marshal node instance %q/%q outputs: %w", sessionID, nodeID, err)
+		return fmt.Errorf("marshal node %q/%q outputs: %w", sessionID, nodeID, err)
 	}
 	stateJSON, err := marshalJSONMap(ts.State)
 	if err != nil {
-		return fmt.Errorf("marshal node instance %q/%q state: %w", sessionID, nodeID, err)
+		return fmt.Errorf("marshal node %q/%q state: %w", sessionID, nodeID, err)
 	}
 	observationJSON, observedAt, err := resourceObservationColumns(ts.Observed)
 	if err != nil {
-		return fmt.Errorf("marshal node instance %q/%q observed: %w", sessionID, nodeID, err)
+		return fmt.Errorf("marshal node %q/%q observed: %w", sessionID, nodeID, err)
 	}
 	doneWhenJSON, err := marshalJSONValue(ts.DoneWhen)
 	if err != nil {
-		return fmt.Errorf("marshal node instance %q/%q done_when: %w", sessionID, nodeID, err)
+		return fmt.Errorf("marshal node %q/%q done_when: %w", sessionID, nodeID, err)
 	}
-	if err := q.InsertNodeInstance(ctx, sqlcgen.InsertNodeInstanceParams{
-		SessionID:               sessionID,
-		NodeID:                  nodeID,
-		TaskID:                  nullString(ts.TaskID),
-		Name:                    nullString(ts.Name),
-		Scope:                   ts.Scope,
-		Status:                  ts.Status,
-		Sequence:                int64(ts.Seq),
-		Resource:                nullString(ts.Resource),
-		InputsJson:              inputsJSON,
-		OutputsJson:             outputsJSON,
-		StateJson:               stateJSON,
-		ResourceObservationJson: observationJSON,
-		ResourceObservedAt:      observedAt,
-		DoneWhenJson:            doneWhenJSON,
-		ExtraDoneWhenJson:       nullRawJSON(ts.ExtraDoneWhen),
-		Error:                   nullString(ts.Error),
-		SetupAt:                 formatTimeNull(ts.SetupAt),
-		FailedAt:                formatTimeNull(ts.FailedAt),
-		CleanedAt:               formatTimeNull(ts.CleanedAt),
-		FinalizedAt:             formatTimeNull(ts.FinalizedAt),
-	}); err != nil {
-		return fmt.Errorf("insert node instance %q/%q: %w", sessionID, nodeID, err)
+
+	if err := q.EnsureNodeInstance(ctx, sqlcgen.EnsureNodeInstanceParams{SessionID: sessionID, NodeID: nodeID}); err != nil {
+		return fmt.Errorf("ensure node instance %q/%q: %w", sessionID, nodeID, err)
 	}
-	return insertNodeInstanceLayersTx(ctx, q, sessionID, nodeID, ts.Layers)
+
+	var executionID string
+	if ts.ExecutionID != "" {
+		// Resolved by exact id, not "current unreleased", so a re-persisted
+		// already-cleaned state updates its own row instead of minting a
+		// duplicate; row.Status == cleaned && ts.Status != cleaned means a
+		// different writer already released what this write still thinks
+		// is active.
+		row, err := q.NodeExecutionByID(ctx, ts.ExecutionID)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return fmt.Errorf("node %q/%q: execution %q was released by another writer since this write's setup ran", sessionID, nodeID, ts.ExecutionID)
+		case err != nil:
+			return fmt.Errorf("find node execution %q/%q: %w", sessionID, nodeID, err)
+		case row.SessionID != sessionID || row.NodeID != nodeID:
+			return fmt.Errorf("node %q/%q: execution %q now belongs to %q/%q", sessionID, nodeID, ts.ExecutionID, row.SessionID, row.NodeID)
+		case row.Status == contract.TaskStatusCleaned && ts.Status != contract.TaskStatusCleaned:
+			return fmt.Errorf("node %q/%q: execution %q was released by another writer since this write's setup ran", sessionID, nodeID, ts.ExecutionID)
+		}
+		executionID = row.ID
+		if err := q.UpdateNodeExecution(ctx, sqlcgen.UpdateNodeExecutionParams{
+			ID:                      executionID,
+			Sequence:                int64(ts.Seq),
+			TaskID:                  nullString(ts.TaskID),
+			Name:                    nullString(ts.Name),
+			Scope:                   ts.Scope,
+			Status:                  ts.Status,
+			Resource:                nullString(ts.Resource),
+			InputsJson:              inputsJSON,
+			OutputsJson:             outputsJSON,
+			StateJson:               stateJSON,
+			ResourceObservationJson: observationJSON,
+			ResourceObservedAt:      observedAt,
+			DoneWhenJson:            doneWhenJSON,
+			ExtraDoneWhenJson:       nullRawJSON(ts.ExtraDoneWhen),
+			Error:                   nullString(ts.Error),
+			SetupAt:                 formatTimeNull(ts.SetupAt),
+			FailedAt:                formatTimeNull(ts.FailedAt),
+			CleanedAt:               formatTimeNull(ts.CleanedAt),
+			FinalizedAt:             formatTimeNull(ts.FinalizedAt),
+		}); err != nil {
+			return fmt.Errorf("update node execution %q/%q: %w", sessionID, nodeID, err)
+		}
+	} else {
+		// No claimed identity: insert if nothing unreleased exists, else
+		// update the one that does -- see docs/design/sqlite-persistence.md's
+		// "Node execution identity" section for the one case (a same-pass
+		// liveness-invalidate-then-rebuild) this cannot fully resolve.
+		current, err := q.CurrentNodeExecution(ctx, sqlcgen.CurrentNodeExecutionParams{SessionID: sessionID, NodeID: nodeID})
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			executionID, err = q.InsertNodeExecution(ctx, sqlcgen.InsertNodeExecutionParams{
+				ID:                      newULID(),
+				SessionID:               sessionID,
+				NodeID:                  nodeID,
+				Sequence:                int64(ts.Seq),
+				TaskID:                  nullString(ts.TaskID),
+				Name:                    nullString(ts.Name),
+				Scope:                   ts.Scope,
+				Status:                  ts.Status,
+				Resource:                nullString(ts.Resource),
+				InputsJson:              inputsJSON,
+				OutputsJson:             outputsJSON,
+				StateJson:               stateJSON,
+				ResourceObservationJson: observationJSON,
+				ResourceObservedAt:      observedAt,
+				DoneWhenJson:            doneWhenJSON,
+				ExtraDoneWhenJson:       nullRawJSON(ts.ExtraDoneWhen),
+				Error:                   nullString(ts.Error),
+				SetupAt:                 formatTimeNull(ts.SetupAt),
+				FailedAt:                formatTimeNull(ts.FailedAt),
+				CleanedAt:               formatTimeNull(ts.CleanedAt),
+				FinalizedAt:             formatTimeNull(ts.FinalizedAt),
+			})
+			if err != nil {
+				return fmt.Errorf("insert node execution %q/%q: %w", sessionID, nodeID, err)
+			}
+		case err != nil:
+			return fmt.Errorf("find current node execution %q/%q: %w", sessionID, nodeID, err)
+		default:
+			executionID = current.ID
+			if err := q.UpdateNodeExecution(ctx, sqlcgen.UpdateNodeExecutionParams{
+				ID:                      executionID,
+				Sequence:                int64(ts.Seq),
+				TaskID:                  nullString(ts.TaskID),
+				Name:                    nullString(ts.Name),
+				Scope:                   ts.Scope,
+				Status:                  ts.Status,
+				Resource:                nullString(ts.Resource),
+				InputsJson:              inputsJSON,
+				OutputsJson:             outputsJSON,
+				StateJson:               stateJSON,
+				ResourceObservationJson: observationJSON,
+				ResourceObservedAt:      observedAt,
+				DoneWhenJson:            doneWhenJSON,
+				ExtraDoneWhenJson:       nullRawJSON(ts.ExtraDoneWhen),
+				Error:                   nullString(ts.Error),
+				SetupAt:                 formatTimeNull(ts.SetupAt),
+				FailedAt:                formatTimeNull(ts.FailedAt),
+				CleanedAt:               formatTimeNull(ts.CleanedAt),
+				FinalizedAt:             formatTimeNull(ts.FinalizedAt),
+			}); err != nil {
+				return fmt.Errorf("update node execution %q/%q: %w", sessionID, nodeID, err)
+			}
+		}
+	}
+
+	if err := q.DeleteNodeExecutionLayers(ctx, executionID); err != nil {
+		return fmt.Errorf("clear layers %q/%q: %w", sessionID, nodeID, err)
+	}
+	if err := insertNodeExecutionLayersTx(ctx, q, executionID, ts.Layers); err != nil {
+		return err
+	}
+
+	if err := q.DeleteNodeExecutionDependencies(ctx, executionID); err != nil {
+		return fmt.Errorf("clear dependencies %q/%q: %w", sessionID, nodeID, err)
+	}
+	seen := make(map[string]bool, len(ts.DependsOn))
+	for _, depNodeID := range ts.DependsOn {
+		if seen[depNodeID] {
+			continue
+		}
+		seen[depNodeID] = true
+		dep, err := q.CurrentNodeExecution(ctx, sqlcgen.CurrentNodeExecutionParams{SessionID: sessionID, NodeID: depNodeID})
+		if errors.Is(err, sql.ErrNoRows) {
+			// The dependency has no unreleased execution (already cleaned, or
+			// never set up) -- nothing to order this execution's release against.
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("resolve dependency %q for node %q/%q: %w", depNodeID, sessionID, nodeID, err)
+		}
+		if dep.ID == executionID {
+			continue
+		}
+		if err := q.InsertNodeExecutionDependency(ctx, sqlcgen.InsertNodeExecutionDependencyParams{
+			ExecutionID:          executionID,
+			DependsOnExecutionID: dep.ID,
+		}); err != nil {
+			return fmt.Errorf("insert node execution dependency %q/%q -> %q: %w", sessionID, nodeID, depNodeID, err)
+		}
+	}
+	return nil
 }
 
-func nodeInstanceFromRow(row sqlcgen.NodeInstance) (*contract.TaskState, error) {
+func nodeExecutionFromRow(row sqlcgen.NodeExecution) (*contract.TaskState, error) {
 	inputs, err := unmarshalJSONMap(row.InputsJson)
 	if err != nil {
 		return nil, fmt.Errorf("inputs: %w", err)
@@ -440,6 +669,7 @@ func nodeInstanceFromRow(row sqlcgen.NodeInstance) (*contract.TaskState, error) 
 		Status:        row.Status,
 		Seq:           int(row.Sequence),
 		Resource:      row.Resource.String,
+		ExecutionID:   row.ID,
 		Inputs:        inputs,
 		Outputs:       outputs,
 		State:         state,
@@ -675,7 +905,7 @@ func doneWhenFromRow(dw sqlcgen.TaskDoneWhenState, unsatisfied []string, judges 
 
 // Layers
 
-func insertNodeInstanceLayersTx(ctx context.Context, q *sqlcgen.Queries, sessionID, nodeID string, layers []contract.LayerState) error {
+func insertNodeExecutionLayersTx(ctx context.Context, q *sqlcgen.Queries, executionID string, layers []contract.LayerState) error {
 	for i, l := range layers {
 		inputsJSON, err := marshalJSONMap(l.Inputs)
 		if err != nil {
@@ -693,9 +923,8 @@ func insertNodeInstanceLayersTx(ctx context.Context, q *sqlcgen.Queries, session
 		if err != nil {
 			return fmt.Errorf("marshal layer %d env: %w", i, err)
 		}
-		if err := q.InsertNodeInstanceLayer(ctx, sqlcgen.InsertNodeInstanceLayerParams{
-			SessionID:            sessionID,
-			NodeID:               nodeID,
+		if err := q.InsertNodeExecutionLayer(ctx, sqlcgen.InsertNodeExecutionLayerParams{
+			ExecutionID:          executionID,
 			Position:             int64(i),
 			EffectID:             l.EffectID,
 			Status:               l.Status,
@@ -710,7 +939,7 @@ func insertNodeInstanceLayersTx(ctx context.Context, q *sqlcgen.Queries, session
 			CleanedAt:            formatTimeNull(l.CleanedAt),
 			Error:                nullString(l.Error),
 		}); err != nil {
-			return fmt.Errorf("insert node instance layer %d: %w", i, err)
+			return fmt.Errorf("insert node execution layer %d: %w", i, err)
 		}
 	}
 	return nil
@@ -763,7 +992,7 @@ func marshalEnv(env map[string]string) (sql.NullString, error) {
 	return marshalJSONValue(env)
 }
 
-func layersFromNodeRows(rows []sqlcgen.NodeInstanceLayer) ([]contract.LayerState, error) {
+func layersFromNodeExecutionRows(rows []sqlcgen.NodeExecutionLayer) ([]contract.LayerState, error) {
 	if len(rows) == 0 {
 		return nil, nil
 	}

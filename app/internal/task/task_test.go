@@ -273,6 +273,30 @@ func TestRunCleanup_RequiredSelfOutputAbsenceFailsTheRelease(t *testing.T) {
 	}
 }
 
+// A revised inner effect under the same task id/scope is still a different
+// declaration; the old chain's retained per-layer recipe must survive.
+func TestRunSetup_RefusesUnreleasedNodeWhenNestingChainShapeChanges(t *testing.T) {
+	withScriptedExecutor(t, &scriptedExecutor{stdout: map[string]string{"inner-a-setup": `{"pid":1}`}})
+	outer := config.TaskDefinition{ID: "outer", Scope: "run", Cleanup: shellStub("outer-cleanup")}
+	innerA := config.TaskDefinition{ID: "inner-a", Scope: "run", Setup: shellStub("inner-a-setup"), Cleanup: shellStub("inner-a-cleanup")}
+	tasks := map[string]*contract.TaskState{}
+	if err := RunSetup(context.Background(), nestedPlan(t, outer, innerA), SessionVars{Name: "s"}, tasks, nil); err != nil {
+		t.Fatalf("initial setup: %v", err)
+	}
+	if tasks["outer"].Status != contract.TaskStatusProduced || len(tasks["outer"].Layers) != 2 {
+		t.Fatalf("initial state = %+v", tasks["outer"])
+	}
+
+	innerB := config.TaskDefinition{ID: "inner-b", Scope: "run", Setup: shellStub("inner-b-setup"), Cleanup: shellStub("inner-b-cleanup")}
+	err := RunSetup(context.Background(), nestedPlan(t, outer, innerB), SessionVars{Name: "s"}, tasks, nil)
+	if err == nil {
+		t.Fatal("RunSetup: want refusal for a revised nesting chain, got nil error")
+	}
+	if got := tasks["outer"].Layers; len(got) != 2 || got[1].EffectID != "inner-a" {
+		t.Fatalf("retained layers = %+v, want the old chain (inner-a) left untouched", got)
+	}
+}
+
 func TestRunSetup_CapturesOutputsAndRespectsDeps(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -303,6 +327,32 @@ func TestRunSetup_CapturesOutputsAndRespectsDeps(t *testing.T) {
 	}
 	if tasks["a"].Status != contract.TaskStatusProduced {
 		t.Fatalf("a.Status = %q", tasks["a"].Status)
+	}
+}
+
+func TestRunSetup_StampsDependsOnFromResolvedNode(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	plan := buildPlan(t,
+		[]taskStub{
+			{id: "a", scope: "run", setup: `echo '{"k":"first"}'`},
+			{id: "b", scope: "run", setup: `echo '{}'`},
+		},
+		[]nodeStub{
+			{id: "a"},
+			{id: "b", inputs: depInput("a")},
+		},
+	)
+	tasks := map[string]*contract.TaskState{}
+	if err := RunSetup(context.Background(), plan.Run, SessionVars{Name: "x"}, tasks, nil); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if got := tasks["b"].DependsOn; len(got) != 1 || got[0] != "a" {
+		t.Fatalf("b.DependsOn = %v, want [a]", got)
+	}
+	if got := tasks["a"].DependsOn; len(got) != 0 {
+		t.Fatalf("a.DependsOn = %v, want none", got)
 	}
 }
 
@@ -392,6 +442,57 @@ func TestRunSetup_RetriesFailed(t *testing.T) {
 	}
 	if tasks["a"].Outputs["value"] != "second" {
 		t.Fatalf("outputs not refreshed: %v", tasks["a"].Outputs)
+	}
+}
+
+// TestRunSetup_RefusesUnreleasedNodeUnderADifferentDeclaration proves a
+// node whose recorded, unreleased (here "failed") attempt names a
+// different task than the one about to be set up is refused rather than
+// silently overwritten -- the old attempt's own release recipe (task
+// "old", not "new") would otherwise be discarded with no way to release it
+// later.
+func TestRunSetup_RefusesUnreleasedNodeUnderADifferentDeclaration(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	plan := buildPlan(t,
+		[]taskStub{{id: "new", scope: "run", setup: `echo '{}'`}},
+		[]nodeStub{{id: "a", uses: "new"}},
+	)
+	tasks := map[string]*contract.TaskState{
+		"a": {Scope: "run", Status: contract.TaskStatusFailed, TaskID: "old", Error: "boom"},
+	}
+	err := RunSetup(context.Background(), plan.Run, SessionVars{}, tasks, nil)
+	if err == nil {
+		t.Fatal("RunSetup: want refusal, got nil error")
+	}
+	if !strings.Contains(err.Error(), "old") || !strings.Contains(err.Error(), "new") {
+		t.Fatalf("error = %q, want it to name both the retained (%q) and requested (%q) declarations", err, "old", "new")
+	}
+	if got := tasks["a"]; got.Status != contract.TaskStatusFailed || got.TaskID != "old" || got.Error != "boom" {
+		t.Fatalf("retained state = %+v, want the unreleased attempt left untouched", got)
+	}
+}
+
+// Without the refusal, a "produced" node whose new declaration has no
+// alive probe at all would vacuously "pass" liveness.
+func TestRunSetup_RefusesUnreleasedProducedNodeUnderADifferentDeclaration(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	plan := buildPlan(t,
+		[]taskStub{{id: "new", scope: "run", setup: `echo '{}'`}},
+		[]nodeStub{{id: "a", uses: "new"}},
+	)
+	tasks := map[string]*contract.TaskState{
+		"a": {Scope: "run", Status: contract.TaskStatusProduced, TaskID: "old", Outputs: map[string]any{"x": "y"}},
+	}
+	err := RunSetup(context.Background(), plan.Run, SessionVars{}, tasks, nil)
+	if err == nil {
+		t.Fatal("RunSetup: want refusal, got nil error")
+	}
+	if got := tasks["a"]; got.Status != contract.TaskStatusProduced || got.TaskID != "old" || got.Outputs["x"] != "y" {
+		t.Fatalf("retained state = %+v, want the unreleased attempt left untouched", got)
 	}
 }
 

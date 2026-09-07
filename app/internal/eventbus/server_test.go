@@ -411,3 +411,82 @@ func firstFrame(t *testing.T, baseURL, session, lastEventID string) (string, eve
 	t.Fatal("no frame received")
 	return "", event.Event{}
 }
+
+func TestBus_PprofIndexServed(t *testing.T) {
+	_, baseURL, _ := newTestBus(t, "")
+	resp, err := http.Get(baseURL + "/debug/pprof/")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "goroutine") {
+		t.Errorf("pprof index body = %q, want it to list the goroutine profile", body)
+	}
+}
+
+func TestBus_PprofGoroutineDump(t *testing.T) {
+	_, baseURL, _ := newTestBus(t, "")
+	resp, err := http.Get(baseURL + "/debug/pprof/goroutine?debug=1")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "goroutine profile") {
+		t.Errorf("goroutine profile body = %q, want a goroutine profile dump", body)
+	}
+}
+
+// One second, not the acceptance criterion's 10, is enough to prove the
+// route captures samples without slowing this test down to match it.
+func TestBus_PprofCPUProfileCaptured(t *testing.T) {
+	_, baseURL, _ := newTestBus(t, "")
+	resp, err := http.Get(baseURL + "/debug/pprof/profile?seconds=1")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if len(body) == 0 {
+		t.Error("CPU profile body is empty, want a non-empty pprof-format profile")
+	}
+}
+
+// pprof must sit behind the same bearer-token boundary as every other route,
+// not skip it and let anyone reaching a token-protected bus dump its state.
+func TestBus_PprofRequiresAuthWhenTokenSet(t *testing.T) {
+	_, baseURL, _ := newTestBus(t, "s3cret")
+
+	resp, err := http.Get(baseURL + "/debug/pprof/")
+	if err != nil {
+		t.Fatalf("get without token: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status without token = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, baseURL+"/debug/pprof/", nil)
+	req.Header.Set("Authorization", "Bearer s3cret")
+	authed, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("get with token: %v", err)
+	}
+	defer authed.Body.Close()
+	if authed.StatusCode != http.StatusOK {
+		t.Fatalf("status with token = %d, want %d", authed.StatusCode, http.StatusOK)
+	}
+}

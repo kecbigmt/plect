@@ -58,7 +58,7 @@ func Down(cfg *config.Config, store *state.Store, params DownParams) (*DownResul
 	// static run nodes and run-scoped dynamic instances merged into one
 	// seq-descending pass, so a static node instantiated after a dynamic
 	// one is still cleaned ahead of it.
-	teardown, teardownErr := unifiedTeardownList(cfg, session, plan, true)
+	teardown, teardownErr := unifiedTeardownList(cfg, session, true)
 	if teardownErr != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: teardownErr.Error()}
 	}
