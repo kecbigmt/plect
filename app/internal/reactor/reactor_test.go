@@ -201,6 +201,18 @@ func TestSessionReactor_JudgeRecordedAlwaysTriggers(t *testing.T) {
 	waitLastTickAt(t, st, "o/r-1", floor)
 }
 
+// TestSessionReactor_ResourceForwardedAlwaysTriggers mirrors the judge
+// builtin above for the down-child resource-forward signal.
+func TestSessionReactor_ResourceForwardedAlwaysTriggers(t *testing.T) {
+	r, st, log := newTestReactor(t, config.TickConfig{})
+	stop := startReactor(t, r)
+	defer stop()
+
+	floor := time.Now()
+	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeResourceForwarded, Direction: event.Inbound})
+	waitLastTickAt(t, st, "o/r-1", floor)
+}
+
 // TestSessionReactor_HeartbeatSweepTicksAfterElapsed proves a session with no
 // `on` declared still ticks once `heartbeat` has elapsed since its last
 // tick, using a shortened heartbeatInterval so the test doesn't wait a full
@@ -488,33 +500,44 @@ func TestSupervisor_StartsAndStopsWithRunScope(t *testing.T) {
 	sup := NewSupervisor(func() *config.Config { return cfg }, st, log, hub)
 	ctx := t.Context()
 	active := map[string]context.CancelFunc{}
+	forwarding := map[string]context.CancelFunc{}
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	defer func() {
 		for _, c := range active {
 			c()
 		}
+		for _, c := range forwarding {
+			c()
+		}
 	}()
 
-	sup.reconcile(ctx, active, &wg)
+	sup.reconcile(ctx, active, forwarding, &wg)
 	if _, ok := active["o/r-1"]; !ok {
 		t.Fatal("reactor not started for an up session")
 	}
-	sup.reconcile(ctx, active, &wg) // idempotent: no duplicate
+	if len(forwarding) != 0 {
+		t.Fatalf("forwarder started for an up session: %+v", forwarding)
+	}
+	sup.reconcile(ctx, active, forwarding, &wg) // idempotent: no duplicate
 	if len(active) != 1 {
 		t.Fatalf("expected exactly one reactor, got %d", len(active))
 	}
 
-	// Run scope goes down → supervisor cancels (suspend, not teardown).
+	// Run scope goes down → supervisor cancels the reactor (suspend, not
+	// teardown) and starts a down-forwarder in its place.
 	if err := st.Update("o/r-1", func(s *domain.Session) error {
 		s.Nodes["claude"].Status = contract.TaskStatusCleaned
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	sup.reconcile(ctx, active, &wg)
+	sup.reconcile(ctx, active, forwarding, &wg)
 	if len(active) != 0 {
 		t.Fatalf("reactor not stopped after run scope down: %d active", len(active))
+	}
+	if _, ok := forwarding["o/r-1"]; !ok {
+		t.Fatal("forwarder not started for a down (not destroyed) session")
 	}
 }
 
@@ -541,15 +564,19 @@ func TestSupervisor_ReconcileDoesNotCancelActiveReactorsWhenStoreUnreadable(t *t
 	sup := NewSupervisor(func() *config.Config { return cfg }, st, log, hub)
 	ctx := t.Context()
 	active := map[string]context.CancelFunc{}
+	forwarding := map[string]context.CancelFunc{}
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	defer func() {
 		for _, c := range active {
 			c()
 		}
+		for _, c := range forwarding {
+			c()
+		}
 	}()
 
-	sup.reconcile(ctx, active, &wg)
+	sup.reconcile(ctx, active, forwarding, &wg)
 	if _, ok := active["o/r-1"]; !ok {
 		t.Fatal("reactor not started for an up session")
 	}
@@ -560,7 +587,7 @@ func TestSupervisor_ReconcileDoesNotCancelActiveReactorsWhenStoreUnreadable(t *t
 	writeFile(t, persistence.PathIn(brokenDir), "not a database")
 	sup.state = state.NewStore(brokenDir)
 
-	sup.reconcile(ctx, active, &wg)
+	sup.reconcile(ctx, active, forwarding, &wg)
 	if _, ok := active["o/r-1"]; !ok {
 		t.Fatal("reconcile cancelled an active reactor when the store became unreadable, treating an error as \"destroyed\"")
 	}

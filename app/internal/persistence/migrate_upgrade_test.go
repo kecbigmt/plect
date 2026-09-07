@@ -162,8 +162,10 @@ func TestMigrate_DownRestoresDeliveryModeColumnWithoutError(t *testing.T) {
 // dissolution migration's Down runs without error and leaves an
 // identifiable event row reachable under the restored pre-dissolution
 // schema. It does not assert losslessness -- see that migration's own
-// header comment. It steps down twice: once for the node-execution-identity
-// migration now on top, then once for the dissolution migration itself.
+// header comment. It steps down three times: once for the
+// resource-forward-cursor-kind migration now on top, once for the
+// node-execution-identity migration under it, then once for the dissolution
+// migration itself.
 func TestMigrate_DownRestoresPreDissolutionSchemaWithoutError(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
@@ -179,6 +181,9 @@ func TestMigrate_DownRestoresPreDissolutionSchemaWithoutError(t *testing.T) {
 	provider, err := goose.NewProvider(goose.DialectSQLite3, db.write, db.migrations)
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
+	}
+	if _, err := provider.Down(ctx); err != nil {
+		t.Fatalf("Down (resource-forward-cursor-kind): %v", err)
 	}
 	if _, err := provider.Down(ctx); err != nil {
 		t.Fatalf("Down (node-execution-identity): %v", err)
@@ -283,7 +288,11 @@ func TestMigrate_AddNodeExecutionIdentityPreservesExistingNodeRows(t *testing.T)
 	}
 }
 
-// Best-effort, not lossless -- see the migration's own Down comment.
+// Best-effort, not lossless -- see the migration's own Down comment. Steps
+// down twice: once for the resource-forward-cursor-kind migration now on
+// top (it touches only event_cursors, so this step leaves node_instances
+// untouched), then once for the node-execution-identity migration whose
+// Down this test actually exercises.
 func TestMigrate_DownRestoresNodeInstancesColumnsWithoutError(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
@@ -301,7 +310,10 @@ func TestMigrate_DownRestoresNodeInstancesColumnsWithoutError(t *testing.T) {
 		t.Fatalf("NewProvider: %v", err)
 	}
 	if _, err := provider.Down(ctx); err != nil {
-		t.Fatalf("Down: %v", err)
+		t.Fatalf("Down (resource-forward-cursor-kind): %v", err)
+	}
+	if _, err := provider.Down(ctx); err != nil {
+		t.Fatalf("Down (node-execution-identity): %v", err)
 	}
 
 	var taskID, scope, status, outputsJSON string

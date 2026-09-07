@@ -250,6 +250,13 @@ func (r *sessionReactor) shouldTrigger(ev event.Event) bool {
 	if ev.Type == event.TypeJudgeRecorded {
 		return true
 	}
+	if ev.Type == event.TypeResourceForwarded {
+		// A down child's relayed resource event is a builtin core signal,
+		// like the judge verdict above — a workflow has no
+		// `[tick].on` pattern of its own to declare for it, so it must
+		// trigger regardless of what is declared.
+		return true
+	}
 	if isSelfEmitted(ev) {
 		return false
 	}

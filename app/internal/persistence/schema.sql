@@ -298,7 +298,7 @@ CREATE INDEX events_session_id_type_sequence_idx ON events(session_id, type, seq
 -- heartbeat is the reactor's resettable quiet-backoff position; next_sequence is exclusive.
 CREATE TABLE event_cursors (
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    kind TEXT NOT NULL CHECK (kind IN ('delivery', 'tick', 'heartbeat')),
+    kind TEXT NOT NULL CHECK (kind IN ('delivery', 'tick', 'heartbeat', 'resourceforward')),
     next_sequence INTEGER NOT NULL CHECK (next_sequence >= 0),
     PRIMARY KEY (session_id, kind)
 );
