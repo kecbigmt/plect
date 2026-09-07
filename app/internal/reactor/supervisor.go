@@ -69,18 +69,38 @@ func NewSupervisor(cfg func() *config.Config, st *state.Store, log *eventlog.Sto
 	return &Supervisor{cfg: cfg, state: st, log: log, hub: hub, logger: slog.Default(), poll: time.Second}
 }
 
+// followerHandle's done signal is what an incoming follower for the same
+// session waits on (predecessorDone) so the two never run concurrently.
+type followerHandle struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+// awaitPredecessor reports false (caller should return) if ctx ends first.
+func awaitPredecessor(ctx context.Context, predecessorDone <-chan struct{}) bool {
+	if predecessorDone == nil {
+		return true
+	}
+	select {
+	case <-predecessorDone:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 // Run polls session state and reconciles the running reactors and
 // down-forwarders until ctx ends, then cancels and joins all of them.
 func (sup *Supervisor) Run(ctx context.Context) {
-	active := map[string]context.CancelFunc{}
-	forwarding := map[string]context.CancelFunc{}
+	active := map[string]followerHandle{}
+	forwarding := map[string]followerHandle{}
 	var wg sync.WaitGroup
 	defer func() {
-		for _, cancel := range active {
-			cancel()
+		for _, h := range active {
+			h.cancel()
 		}
-		for _, cancel := range forwarding {
-			cancel()
+		for _, h := range forwarding {
+			h.cancel()
 		}
 		wg.Wait()
 	}()
@@ -171,9 +191,10 @@ func resolveTickConfig(cfg *config.Config, s *domain.Session) (config.TickConfig
 }
 
 // reconcile starts a sessionReactor per up session, a sessionForwarder per
-// down-but-not-destroyed one (exact complements over RunScopeUp), and stops
-// whichever no longer applies.
-func (sup *Supervisor) reconcile(ctx context.Context, active, forwarding map[string]context.CancelFunc, wg *sync.WaitGroup) {
+// down-but-not-destroyed one (exact complements over RunScopeUp), stopping
+// whichever no longer applies. A reactor->forwarder handoff wires
+// predecessorDone rather than blocking here (see awaitPredecessor).
+func (sup *Supervisor) reconcile(ctx context.Context, active, forwarding map[string]followerHandle, wg *sync.WaitGroup) {
 	cfg := sup.cfg()
 	sessions, err := sup.state.AllE()
 	if err != nil {
@@ -188,25 +209,30 @@ func (sup *Supervisor) reconcile(ctx context.Context, active, forwarding map[str
 		if _, running := active[name]; !running && up {
 			r := sup.buildReactor(name, s)
 			rctx, cancel := context.WithCancel(ctx)
-			active[name] = cancel
-			wg.Go(func() { r.run(rctx) })
+			done := make(chan struct{})
+			active[name] = followerHandle{cancel: cancel, done: done}
+			wg.Go(func() { r.run(rctx); close(done) })
 		}
 		if _, running := forwarding[name]; !running && !up {
 			f := sup.buildForwarder(name)
+			if h, ok := active[name]; ok {
+				f.predecessorDone = h.done
+			}
 			fctx, cancel := context.WithCancel(ctx)
-			forwarding[name] = cancel
-			wg.Go(func() { f.run(fctx) })
+			done := make(chan struct{})
+			forwarding[name] = followerHandle{cancel: cancel, done: done}
+			wg.Go(func() { f.run(fctx); close(done) })
 		}
 	}
-	for name, cancel := range active {
+	for name, h := range active {
 		if s, ok := sessions[name]; !ok || !cfg.RunScopeUp(s) {
-			cancel()
+			h.cancel()
 			delete(active, name)
 		}
 	}
-	for name, cancel := range forwarding {
+	for name, h := range forwarding {
 		if s, ok := sessions[name]; !ok || cfg.RunScopeUp(s) {
-			cancel()
+			h.cancel()
 			delete(forwarding, name)
 		}
 	}

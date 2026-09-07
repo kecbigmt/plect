@@ -499,16 +499,16 @@ func TestSupervisor_StartsAndStopsWithRunScope(t *testing.T) {
 	defer hub.Close()
 	sup := NewSupervisor(func() *config.Config { return cfg }, st, log, hub)
 	ctx := t.Context()
-	active := map[string]context.CancelFunc{}
-	forwarding := map[string]context.CancelFunc{}
+	active := map[string]followerHandle{}
+	forwarding := map[string]followerHandle{}
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	defer func() {
-		for _, c := range active {
-			c()
+		for _, h := range active {
+			h.cancel()
 		}
-		for _, c := range forwarding {
-			c()
+		for _, h := range forwarding {
+			h.cancel()
 		}
 	}()
 
@@ -563,16 +563,16 @@ func TestSupervisor_ReconcileDoesNotCancelActiveReactorsWhenStoreUnreadable(t *t
 	defer hub.Close()
 	sup := NewSupervisor(func() *config.Config { return cfg }, st, log, hub)
 	ctx := t.Context()
-	active := map[string]context.CancelFunc{}
-	forwarding := map[string]context.CancelFunc{}
+	active := map[string]followerHandle{}
+	forwarding := map[string]followerHandle{}
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	defer func() {
-		for _, c := range active {
-			c()
+		for _, h := range active {
+			h.cancel()
 		}
-		for _, c := range forwarding {
-			c()
+		for _, h := range forwarding {
+			h.cancel()
 		}
 	}()
 
@@ -636,6 +636,90 @@ on = ["github.*"]
 	if len(r.tick.On) != 1 || r.tick.On[0] != "github.*" {
 		t.Fatalf("tick config = %+v, want on=[\"github.*\"] resolved from the plugin-only workflow", r.tick)
 	}
+}
+
+// Proves reconcile's own predecessorDone wiring end to end, not just the
+// isolated wait mechanism TestSessionForwarder_WaitsForPredecessorBeforeTouchingTheLog covers.
+func TestSupervisor_ForwarderWaitsWhileTheOutgoingReactorIsStillMidTick(t *testing.T) {
+	pluginDir := t.TempDir()
+	writeClaudeRunTask(t, filepath.Join(pluginDir, "config"))
+	writeFile(t, filepath.Join(pluginDir, "config", "workflows", "reactive.toml"), `
+[reactive]
+kind = "workflow"
+[[reactive.nodes]]
+id   = "claude"
+uses = "claude"
+[reactive.tick]
+on = ["resource.*"]
+`)
+	cfg := &config.Config{PluginDirs: []string{pluginDir}}
+	st := state.NewStore(t.TempDir())
+	if err := st.Put(&domain.Session{
+		Name: "o/r-1", Workflow: "reactive",
+		Nodes: map[string]*contract.TaskState{"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	log := eventlog.NewStore(st.Dir())
+	hub := sessionhub.NewRegistry(log, sessionhub.WithPollInterval(2*time.Millisecond))
+	defer hub.Close()
+	sup := NewSupervisor(func() *config.Config { return cfg }, st, log, hub)
+
+	r := sup.buildReactor("o/r-1", st.Get("o/r-1"))
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	var enterOnce sync.Once
+	r.tickFn = func(*config.Config, *state.Store, service.TickParams) (*service.CheckResult, error) {
+		enterOnce.Do(func() { close(entered) })
+		<-release
+		return &service.CheckResult{}, nil
+	}
+	rctx, rcancel := context.WithCancel(context.Background())
+	rdone := make(chan struct{})
+	go func() { r.run(rctx); close(rdone) }()
+	waitForCursorSeed(t, log, "o/r-1")
+
+	log.Append(event.Event{SessionName: "o/r-1", Type: "resource.updated", Direction: event.Inbound})
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("reactor's tick never entered")
+	}
+
+	if err := st.Update("o/r-1", func(s *domain.Session) error {
+		s.Nodes["claude"].Status = contract.TaskStatusCleaned
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Pre-seeds reconcile's own bookkeeping with this manually-started
+	// reactor, exactly as an earlier real reconcile pass would have
+	// recorded it, so the transition below exercises reconcile's actual
+	// wiring rather than a hand-rolled substitute.
+	active := map[string]followerHandle{"o/r-1": {cancel: rcancel, done: rdone}}
+	forwarding := map[string]followerHandle{}
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	defer func() {
+		for _, h := range forwarding {
+			h.cancel()
+		}
+	}()
+
+	sup.reconcile(context.Background(), active, forwarding, &wg)
+	if _, ok := forwarding["o/r-1"]; !ok {
+		t.Fatal("forwarder not started for the down session")
+	}
+
+	log.Append(event.Event{SessionName: "o/r-1", ID: "during-handoff", Type: "resource.updated", Direction: event.Inbound})
+	time.Sleep(150 * time.Millisecond)
+	if log.HasCursor("o/r-1", forwardConsumer) {
+		t.Fatal("forwarder touched the log before its predecessor's stuck tick finished")
+	}
+
+	close(release)
+	<-rdone
+	waitForFirstDrain(t, log, "o/r-1")
 }
 
 // TestBackoffInterval covers the pure doubling/cap arithmetic the quiet-tick

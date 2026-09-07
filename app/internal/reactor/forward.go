@@ -13,8 +13,7 @@ import (
 	"github.com/kecbigmt/plecture/contracts/event"
 )
 
-// forwardConsumer is the down-forwarder's own cursor kind: it drains only
-// Inbound events, to relay rather than tick or deliver them.
+// forwardConsumer is the down-forwarder's own cursor kind.
 const forwardConsumer = "resourceforward"
 
 // sessionForwarder relays a down-but-not-destroyed session's new Inbound
@@ -29,6 +28,8 @@ type sessionForwarder struct {
 	logger  *slog.Logger
 	// forwardFn defaults to service.ForwardDownSessionEvent; overridable in tests.
 	forwardFn func(*config.Config, *state.Store, string, event.Event) (bool, error)
+	// predecessorDone gates run below via awaitPredecessor (supervisor.go).
+	predecessorDone <-chan struct{}
 }
 
 func (f *sessionForwarder) effectiveLogger() *slog.Logger {
@@ -39,6 +40,9 @@ func (f *sessionForwarder) effectiveLogger() *slog.Logger {
 }
 
 func (f *sessionForwarder) run(ctx context.Context) {
+	if !awaitPredecessor(ctx, f.predecessorDone) {
+		return
+	}
 	startGen, _ := f.log.StreamID(f.session)
 	wake := f.hub.Watch(f.session)
 	defer wake.Close()

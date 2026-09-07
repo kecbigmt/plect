@@ -143,10 +143,6 @@ func TestSessionForwarder_IgnoresNonInboundEvents(t *testing.T) {
 	assertNeverForwarded(t, &mu, &calls)
 }
 
-// TestSessionForwarder_SkipsHistoryTheReactorAlreadyHandled proves the
-// forwarder never replays events the session's own reactor already drained
-// while up: it starts no earlier than reactorConsumer's own persisted
-// cursor, only an event past that position is relayed.
 func TestSessionForwarder_SkipsHistoryTheReactorAlreadyHandled(t *testing.T) {
 	f, _, log := newTestForwarder(t)
 	log.Append(event.Event{SessionName: "down-session", ID: "already-handled", Type: "resource.updated", Direction: event.Inbound})
@@ -177,9 +173,6 @@ func TestSessionForwarder_SkipsHistoryTheReactorAlreadyHandled(t *testing.T) {
 	}
 }
 
-// TestSessionForwarder_DoesNotDropAnEventArrivingBeforeItsFirstDrain: an
-// event arriving in the gap between the down transition and this goroutine's
-// own scheduling must still be relayed once it does start.
 func TestSessionForwarder_DoesNotDropAnEventArrivingBeforeItsFirstDrain(t *testing.T) {
 	f, _, log := newTestForwarder(t)
 	log.Append(event.Event{SessionName: "down-session", ID: "already-handled", Type: "resource.updated", Direction: event.Inbound})
@@ -211,9 +204,6 @@ func TestSessionForwarder_DoesNotDropAnEventArrivingBeforeItsFirstDrain(t *testi
 	}
 }
 
-// TestSessionForwarder_DownUpDownCycleDoesNotReplayTheUpPeriod: a
-// forwardConsumer cursor left stale from an earlier down period must not
-// replay a later up period's already-handled events as newly arrived.
 func TestSessionForwarder_DownUpDownCycleDoesNotReplayTheUpPeriod(t *testing.T) {
 	f, st, log := newTestForwarder(t)
 	var mu sync.Mutex
@@ -253,12 +243,8 @@ func TestSessionForwarder_DownUpDownCycleDoesNotReplayTheUpPeriod(t *testing.T) 
 	}
 }
 
-// TestSessionForwarder_RestartAfterAFailureRetriesFromLastCommittedEvent
-// proves a relay failure leaves the cursor before the failed event, so a
-// fresh forwarder (as the supervisor would start after a resident restart)
-// retries it rather than skipping it — mirroring
-// dispatch.TestDispatcher_ReplaysFromCursorAcrossRestart's equivalent proof
-// for the sibling per-event-commit follower.
+// Mirrors dispatch.TestDispatcher_ReplaysFromCursorAcrossRestart's equivalent
+// proof for the sibling per-event-commit follower.
 func TestSessionForwarder_RestartAfterAFailureRetriesFromLastCommittedEvent(t *testing.T) {
 	f, _, log := newTestForwarder(t)
 	f.forwardFn = func(_ *config.Config, _ *state.Store, _ string, _ event.Event) (bool, error) {
@@ -284,5 +270,41 @@ func TestSessionForwarder_RestartAfterAFailureRetriesFromLastCommittedEvent(t *t
 	got := waitForwardCalls(t, &mu, &calls, 1)
 	if got[0].ID != "ev-1" {
 		t.Fatalf("relayed event after restart = %+v, want ev-1 (not skipped past by the failed attempt)", got)
+	}
+}
+
+// Otherwise a stale predecessor's own in-flight drain could commit
+// reactorConsumer past an event this forwarder should still forward.
+func TestSessionForwarder_WaitsForPredecessorBeforeTouchingTheLog(t *testing.T) {
+	f, _, log := newTestForwarder(t)
+	predecessorDone := make(chan struct{})
+	f.predecessorDone = predecessorDone
+
+	var mu sync.Mutex
+	var calls []event.Event
+	f.forwardFn = func(_ *config.Config, _ *state.Store, _ string, ev event.Event) (bool, error) {
+		mu.Lock()
+		calls = append(calls, ev)
+		mu.Unlock()
+		return true, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { f.run(ctx); close(done) }()
+	defer func() { cancel(); <-done }()
+
+	log.Append(event.Event{SessionName: "down-session", ID: "ev-1", Type: "resource.updated", Direction: event.Inbound})
+	time.Sleep(150 * time.Millisecond)
+	mu.Lock()
+	stillWaiting := len(calls) == 0
+	mu.Unlock()
+	if !stillWaiting {
+		t.Fatal("forwarder relayed before its predecessor's done channel closed")
+	}
+
+	close(predecessorDone)
+	got := waitForwardCalls(t, &mu, &calls, 1)
+	if got[0].ID != "ev-1" {
+		t.Fatalf("relayed event after predecessor closed = %+v, want ev-1", got)
 	}
 }
