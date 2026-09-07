@@ -84,10 +84,7 @@ func TestStorageMigrate_AllowDevBuildFlagStillCreatesAndReportsSchemaVersion(t *
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)
 	t.Setenv("XDG_DATA_HOME", "")
-	// storageMigrateAllowDevBuild is a package-level flag target: it outlives
-	// this Execute() call, unlike the t.Setenv-backed env vars above, unless
-	// reset explicitly (see execRoot's comment on configHomeFlag).
-	t.Cleanup(func() { storageMigrateAllowDevBuild = false })
+	t.Cleanup(func() { storageMigrateAllowDevBuild = false }) // see execRoot's configHomeFlag comment
 
 	out, err := execRoot(t, "storage", "migrate", "--allow-dev-build")
 	if err != nil {
@@ -103,11 +100,9 @@ func TestStorageMigrate_AllowDevBuildFlagStillCreatesAndReportsSchemaVersion(t *
 	}
 }
 
-// seedRealBehindSchemaDatabase brings the database at fakeHome's default
-// storage.db location to one migration short of the real embedded target,
-// self-consistently (by actually running every earlier migration's real Up
-// script), so the tests below exercise the guard against a genuinely
-// behind-schema store rather than a fresh (schema-zero) one.
+// seedRealBehindSchemaDatabase brings fakeHome's storage.db to one real
+// migration short of target, so the guard sees a genuinely behind-schema
+// store rather than a fresh one.
 func seedRealBehindSchemaDatabase(t *testing.T, fakeHome string) {
 	t.Helper()
 	dbPath := persistence.PathIn(filepath.Join(fakeHome, ".local", "share", "plect"))
@@ -116,11 +111,6 @@ func seedRealBehindSchemaDatabase(t *testing.T, fakeHome string) {
 	}
 }
 
-// TestStorageMigrate_RefusesARealBehindSchemaDatabaseWithoutTheFlag is the
-// regression test for a bug this guard shipped with: root's
-// PersistentPreRunE ran the strict, non-allow-dev-build EnsureCurrent for
-// every command, including `storage migrate` itself, so --allow-dev-build
-// never had a chance to take effect against a real existing database.
 func TestStorageMigrate_RefusesARealBehindSchemaDatabaseWithoutTheFlag(t *testing.T) {
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)
@@ -152,10 +142,6 @@ func TestStorageMigrate_AllowDevBuildFlagMigratesARealBehindSchemaDatabase(t *te
 	}
 }
 
-// TestRootPersistentPreRun_RefusesARealBehindSchemaDatabaseForUnrelatedCommands
-// confirms that skipping root's own currency check for `storage migrate`
-// (the fix for the bug above) is scoped to that command alone: every other
-// command still refuses against the same seeded database.
 func TestRootPersistentPreRun_RefusesARealBehindSchemaDatabaseForUnrelatedCommands(t *testing.T) {
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)
