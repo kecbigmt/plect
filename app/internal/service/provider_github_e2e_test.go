@@ -100,6 +100,9 @@ func buildSharedWorkspaceProviderBinaries(root string) (string, error) {
 			sharedWorkspaceProviderBinariesErr = err
 			return
 		}
+		// Recorded before any build runs, so TestMain's cleanup removes a
+		// partially-populated dir too if a later build in this loop fails.
+		sharedWorkspaceProviderBinariesDir = dir
 		for _, b := range workspaceProviderBinaries {
 			cmd := exec.Command("go", "build", "-o", filepath.Join(dir, b.name), b.pkg)
 			cmd.Dir = filepath.Join(root, b.moduleDir)
@@ -111,7 +114,6 @@ func buildSharedWorkspaceProviderBinaries(root string) (string, error) {
 				return
 			}
 		}
-		sharedWorkspaceProviderBinariesDir = dir
 	})
 	return sharedWorkspaceProviderBinariesDir, sharedWorkspaceProviderBinariesErr
 }

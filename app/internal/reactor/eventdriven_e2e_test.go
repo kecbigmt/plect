@@ -104,6 +104,9 @@ func buildSharedGithubPluginBinaries(root string) (string, error) {
 			sharedGithubPluginBinariesErr = err
 			return
 		}
+		// Recorded before any build runs, so TestMain's cleanup removes a
+		// partially-populated dir too if a later build in this loop fails.
+		sharedGithubPluginBinariesDir = dir
 		for _, b := range githubPluginBinaries {
 			cmd := exec.Command("go", "build", "-o", filepath.Join(dir, b.name), b.pkg)
 			cmd.Dir = filepath.Join(root, b.moduleDir)
@@ -115,7 +118,6 @@ func buildSharedGithubPluginBinaries(root string) (string, error) {
 				return
 			}
 		}
-		sharedGithubPluginBinariesDir = dir
 	})
 	return sharedGithubPluginBinariesDir, sharedGithubPluginBinariesErr
 }
