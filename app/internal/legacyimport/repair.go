@@ -23,9 +23,9 @@ type RepairOptions struct {
 
 // RepairReport counts what one RepairImportedSessions call found and did.
 type RepairReport struct {
-	WouldDelete int // WouldDelete counts ghosts this call deleted, or would delete on a dry run.
-	Kept        int // Kept counts sessions the backup's state.json also names.
-	NotInBackup int // NotInBackup counts sessions the backup names nowhere at all; it is reported but left untouched.
+	WouldDelete int
+	Kept        int
+	NotInBackup int
 	BackupPath  string
 }
 
