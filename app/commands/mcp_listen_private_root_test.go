@@ -96,7 +96,7 @@ func TestResolveSessionSocket_FallbackHardensRootBeforeReturning(t *testing.T) {
 func TestResolveSessionSocket_FallbackPropagatesHardeningFailure(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", "")
 	root := filepath.Join(t.TempDir(), "plect-mcp-test")
-	if err := os.Mkdir(root, 0o755); err != nil { // pre-existing, wrong mode
+	if err := os.Mkdir(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := resolveSessionSocket("owner/session", root); err == nil {
