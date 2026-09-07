@@ -81,6 +81,26 @@ normal and forced cleanup paths. Test a vanished work directory: cleanup must
 fail without changing directory. Keep the timestamped copies until sessions
 have been recreated and the migrated state has been observed in normal use.
 
+## Recover a residual allocation
+
+When recorded cleanup cannot run because its directory is gone, automatic
+reconstruction stops and reports operator recovery required. Do not create an
+empty directory as evidence of release: it does not prove that a process or
+external allocation is gone.
+
+1. Inspect the retained execution record, its cleanup information, and failure
+   reason.
+2. Release the residual allocation through its external owner.
+3. Use the implementation's explicit operator-confirmation operation to record
+   that assertion for that execution, including who confirmed it, what was
+   released, when, and its audit event. This is not a successful cleanup and
+   does not release any other allocation.
+4. Retry ordinary `up` after every applicable retained obligation is resolved;
+   it reconstructs under the retained release order.
+
+`--force-recreate` never substitutes for confirmation, and recovery never
+runs cleanup in another directory.
+
 To recover, stop the new release, restore the configuration and state copies,
 and restart the previous release. Do not mix old configuration with migrated
 state or migrated configuration with old state.

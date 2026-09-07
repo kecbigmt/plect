@@ -69,11 +69,20 @@ A probe launch failure there invalidates the node, attempts cleanup in the
 stored directory, and retains the failed record, allocation, and cleanup
 obligation if cleanup also cannot launch. A later explicit `up` may retry that
 stored cleanup, but may not reconstruct the node or its prerequisites until
-successful recorded cleanup confirms release of the old allocation.
-`--force-recreate` does not waive that condition. A missing directory does not
-prove that a process or external allocation is gone. Recovery never falls back
-to the invocation directory or another node's directory. There are no per-node
-or per-action cwd overrides.
+release of the old allocation is explicitly confirmed. Successful recorded
+cleanup is the normal confirmation.
+If cleanup cannot run, automatic reconstruction stops and reports operator
+recovery required while the record, cleanup information, and failure reason
+remain inspectable. After external release, an explicit operator-confirmation
+operation records the operator's assertion rather than a successful cleanup,
+with the execution identity, who, what, when, and an audit event. It resolves
+only that allocation's obligation. After all applicable obligations are
+explicitly resolved, ordinary `up` reconstructs under the latest desired
+workflow in retained release order. `--force-recreate` does not acknowledge an
+obligation implicitly. A missing directory does not prove that a process or
+external allocation is gone. Recovery never falls back to the invocation
+directory or another node's directory. There are no per-node or per-action cwd
+overrides.
 
 `[workflow.outputs]` and `outputs_schema` are the public projection record.
 They bind declared values when their source node outputs exist and are persisted
@@ -98,6 +107,71 @@ queries derive their resource type from their containing workflow and manage
 the desired sessions under declared retention and removal policy. A Slack
 conversation session can consequently retain its directory and conversation
 while it gains an issue-investigation task.
+
+## Database impact map
+
+This map states the persistence invariants the implementation must satisfy. It
+does not prescribe tables, columns, or migration SQL.
+
+### Execution identity and ownership
+
+A logical workflow node and each of its setup attempts have distinct identity.
+A new attempt never overwrites an unreleased attempt's release recipe. The
+execution record owns its nested layers, cleanup contract, inputs, outputs,
+directory, and resolved plugin references, so a changed nesting declaration
+cannot replace an old allocation's cleanup information.
+
+The retained execution plan also owns the dependencies and lifetime information
+for allocations, including default-workdir edges. Release follows those
+recorded dependencies, not the latest desired workflow: an old agent cleans up
+before the old checkout on which it depended is released. The current operation
+supplies `force` and cleanup inputs, validated against the retained cleanup
+contract. Crash recovery preserves partial attempts and treats an execution
+identity as a record identity, not an exactly-once guarantee for external
+effects. Retention is bounded to records needed for unreleased allocations. A
+failed cleanup retains its obligation; reconstruction waits for successful
+recorded cleanup or the explicit, audited operator assertion of external
+release, as specified above. Execution identity and ownership are implemented
+by [#496](https://github.com/kecbigmt/plecture/issues/496).
+
+### Session entry identity
+
+A session records its entry resource type, concrete identifier, derived
+instance name, and optional tag. `sessions.id` remains incarnation identity,
+not the entry identity. Live session names are unique, but finding a live name
+also requires compatibility with its recorded entry resource and tag; name
+equality alone is insufficient.
+
+### Configuration selection
+
+The selected project root and preparation directory are durable session facts.
+The digest is a comparison baseline for change detection and reporting, kept
+separate from execution records. It is neither a foreign key nor an operation
+blocker when desired configuration changes.
+
+### Workflow public outputs
+
+The declaration-owned public projection is stored as session-owned JSON. It is
+refreshed or invalidated when a source execution changes. An execution's
+recorded directory is a historical fact, not a current output or workspace
+authority.
+
+### Resource bindings
+
+Entry-binding inputs and additional task-resource binding inputs are stored
+separately from task and workflow inputs. A global resources table is not
+introduced by default: sharing one would require explicit ownership rules for
+context, credentials, and observations.
+
+### Population identity across project contexts
+
+The existing workflow-address-plus-name identity can collide when two selected
+project roots each define a local workflow and population with the same names.
+Before implementation, either population identity and session provenance must
+include a stable configuration-selection context, or one runtime data store
+must deliberately reject simultaneous colliding contexts. A configuration
+digest is not suitable for this identity because an editable policy must retain
+ownership through a digest change.
 
 ## Consequences
 

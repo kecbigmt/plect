@@ -122,9 +122,14 @@ node, then cleanup attempts the stored directory and records its failure if it
 cannot launch there either. The failed record, allocation, and cleanup
 obligation remain durable. A later `up` may retry that recorded cleanup, but
 cannot set up the invalidated node or its prerequisites until successful
-recorded cleanup confirms release of the old allocation.
-`--force-recreate` does not waive that condition. A missing directory does not
-prove that a process or external allocation is gone.
+recorded cleanup or explicit operator confirmation of external release resolves
+the old allocation's obligation. If cleanup cannot run, automatic
+reconstruction stops with an operator-recovery error; the retained record,
+cleanup information, and failure reason remain inspectable. The confirmation is
+an audited operator assertion for one execution, not a successful cleanup and
+not a release of other allocations. `--force-recreate` does not acknowledge an
+obligation implicitly. A missing directory does not prove that a process or
+external allocation is gone.
 
 ## Outputs are production records
 

@@ -82,10 +82,21 @@ directory fails to launch, invalidates the node, and attempts cleanup in the
 stored setup directory. If that cleanup also fails, its record, allocation, and
 cleanup obligation remain durable. A later explicit `up` may retry that stored
 cleanup, but cannot set up the invalidated node or its prerequisites until the
-old allocation's release is confirmed by successful recorded cleanup.
-`--force-recreate` does not waive that condition. A missing directory does not
-prove that a process or external allocation is gone. No recovery action runs
-cleanup in a substitute directory.
+old allocation's release is explicitly confirmed. Successful recorded cleanup
+is the normal confirmation.
+If cleanup cannot run, automatic reconstruction stops and reports operator
+recovery required. The retained allocation record, cleanup information, and
+failure reason remain inspectable. After externally releasing the allocation,
+an explicit operator-confirmation operation may record that release as the
+operator's assertion, distinct from successful cleanup. It records the
+execution identity, who made the assertion, what was released, when, and an
+audit event. Confirmation resolves only that allocation's obligation; it never
+releases another execution. Once every applicable retained obligation is
+explicitly resolved, ordinary `up` reconstructs using the latest desired
+workflow while respecting retained release order. `--force-recreate` does not
+acknowledge an obligation implicitly. A missing directory does not prove that a
+process or external allocation is gone. No recovery action runs cleanup in a
+substitute directory.
 
 `[<id>.outputs]` is the workflow's explicit public projection record;
 `outputs_schema` declares it. Each binding is evaluable from node outputs as
