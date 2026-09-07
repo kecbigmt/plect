@@ -108,7 +108,7 @@ var (
 // fresh copy, and each was separately rebuilding all four.
 func buildSharedGithubPluginBinaries(root string) (string, error) {
 	sharedGithubPluginBinariesOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "plect-github-plugin-bin-")
+		dir, err := os.MkdirTemp("", "plect-shipped-plugin-bin-")
 		if err != nil {
 			sharedGithubPluginBinariesErr = err
 			return
@@ -141,7 +141,7 @@ func buildGithubPluginBinaries(t *testing.T, root string) []plugins.Mounted {
 	t.Helper()
 	sharedDir, err := buildSharedGithubPluginBinaries(root)
 	if err != nil {
-		t.Fatalf("build github plugin binaries: %v", err)
+		t.Fatalf("build shipped plugin binaries: %v", err)
 	}
 	binDir := filepath.Join(t.TempDir(), "bin")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
@@ -192,7 +192,7 @@ func TestBuildGithubPluginBinaries_BuildsOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !secondInfo.ModTime().Equal(firstInfo.ModTime()) {
-		t.Error("plect was rebuilt on a second mount request; github plugin binaries must build exactly once per test binary run")
+		t.Error("plect was rebuilt on a second mount request; shipped plugin binaries must build exactly once per test binary run")
 	}
 }
 
