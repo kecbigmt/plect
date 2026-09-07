@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/kecbigmt/plecture/app/internal/domain"
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
@@ -160,5 +161,36 @@ func TestUp_FailedForceRecreateFromUpSessionSetsStatusDown(t *testing.T) {
 	}
 	if s := store.Get(sessionName); s.Status != contract.SessionStatusDown {
 		t.Fatalf("Status after failed force-recreate = %q, want %q", s.Status, contract.SessionStatusDown)
+	}
+}
+
+// Down commits to tearing its runtime down before attempting to, so even
+// a failure building its own plan (here: a broken sibling task
+// declaration) must not leave status stuck at its pre-Down up.
+func TestDown_PlanConstructionFailureSetsStatusDown(t *testing.T) {
+	store := testStore(t)
+	sessionName := "work-24"
+	cfg := writeWorkflowFixture(t, t.TempDir(), "default",
+		[]taskFixture{{id: "runtime", scope: "run", cleanup: "true"}},
+		[]nodeFixture{{id: "runtime"}},
+	)
+	if err := os.WriteFile(filepath.Join(cfg.BaseDir, "tasks", "broken.toml"), []byte("scope = \n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	seedSession(t, store, sessionName, "acct", 24, "default", map[string]*contract.TaskState{
+		"runtime": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Outputs: map[string]any{}},
+	})
+	if err := store.Update(sessionName, func(s *domain.Session) error {
+		s.Status = contract.SessionStatusUp
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Down(cfg, store, DownParams{Identifier: sessionName}); err == nil {
+		t.Fatal("Down: want an error when teardown-list construction fails")
+	}
+	if s := store.Get(sessionName); s.Status != contract.SessionStatusDown {
+		t.Fatalf("Status after failed Down = %q, want %q", s.Status, contract.SessionStatusDown)
 	}
 }

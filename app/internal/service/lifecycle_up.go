@@ -324,13 +324,12 @@ func staleProducedWorkflowNodes(cfg *config.Config, session *domain.Session, pla
 }
 
 func recreateSessionRuntime(cfg *config.Config, store *state.Store, sessionName string, session *domain.Session, wf config.WorkflowFile, teardownPlan *task.Plan, observer task.Observer) (*task.Plan, error) {
-	// A force-recreate tears its existing runtime down before rebuilding
-	// it, so status moves to down here, before the teardown itself is
-	// even attempted: whatever this function returns from this point on
-	// (success or one of its several failure paths), the old up runtime
-	// is gone. Up's own final success gate is the only place that moves
-	// it back to up, once the whole rebuild -- this function and the
-	// session-scope setup after it -- has actually succeeded.
+	// Status moves to down before this function attempts anything: a
+	// force-recreate commits to tearing its runtime down and rebuilding
+	// it, so every one of its failure returns from here on -- including
+	// one that never reaches the teardown itself -- must not leave a
+	// stale up behind. Up's own final success gate is the only place
+	// that moves it back to up, once the whole rebuild has succeeded.
 	if err := setSessionStatus(store, sessionName, contract.SessionStatusDown); err != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to record session status: %v", err)}
 	}

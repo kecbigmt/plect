@@ -49,11 +49,12 @@ func replaceRuntimeState(store *state.Store, sessionName string, session *domain
 }
 
 // setSessionStatus durably records a lifecycle-status transition on its
-// own, separate from mergeTasks/replaceRuntimeState's narrower field sets:
-// a caller sets it only once it has already confirmed the outcome the
-// transition depends on (Up's own success, or Down's own completion),
-// which mergeTasks' own unconditional persist-before-checking-the-error
-// cannot express.
+// own, separate from mergeTasks/replaceRuntimeState's narrower field
+// sets. Each call site decides its own timing against what it can
+// already promise at that point: Up sets it to up only once setup has
+// fully succeeded; Down and a force-recreate set it to down as soon as
+// they commit to tearing the runtime down, before attempting to, so
+// every failure after that point already reflects it.
 func setSessionStatus(store *state.Store, sessionName, status string) error {
 	return store.Update(sessionName, func(s *domain.Session) error {
 		s.Status = status

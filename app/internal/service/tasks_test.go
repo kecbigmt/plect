@@ -1157,7 +1157,7 @@ func TestUp_ForceRecreateProviderSetupFailurePersistsInspectableState(t *testing
 	}
 }
 
-func TestRecreateSessionRuntimeTeardownListFailureLeavesStateUntouched(t *testing.T) {
+func TestRecreateSessionRuntimeTeardownListFailurePreservesRuntimeFieldsButMarksStatusDown(t *testing.T) {
 	store := testStore(t)
 	oldWorkdirPath := filepath.Join(t.TempDir(), "old-workdir")
 	if err := os.MkdirAll(oldWorkdirPath, 0o755); err != nil {
@@ -1180,6 +1180,12 @@ func TestRecreateSessionRuntimeTeardownListFailureLeavesStateUntouched(t *testin
 			Seq:     1,
 		},
 	})
+	if err := store.Update(sessionName, func(s *domain.Session) error {
+		s.Status = contract.SessionStatusUp
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	session := store.Get(sessionName)
 	session.WorkspaceDirPath = oldWorkdirPath
 	session.Tasks[contract.WorkflowPseudoNodeID].Outputs["branch"] = "old-branch"
@@ -1210,6 +1216,9 @@ func TestRecreateSessionRuntimeTeardownListFailureLeavesStateUntouched(t *testin
 	runtime := persisted.Tasks["runtime"]
 	if runtime == nil || runtime.Status != contract.TaskStatusProduced || runtime.Outputs["session_id"] != "old-runtime" {
 		t.Fatalf("runtime task = %+v, want untouched produced state", runtime)
+	}
+	if persisted.Status != contract.SessionStatusDown {
+		t.Fatalf("Status = %q, want %q (force-recreate marks it down before its own teardown even runs)", persisted.Status, contract.SessionStatusDown)
 	}
 }
 

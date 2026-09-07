@@ -42,6 +42,16 @@ func Down(cfg *config.Config, store *state.Store, params DownParams) (*DownResul
 		session.Tasks = make(map[string]*contract.TaskState)
 	}
 
+	// Once past its own guards, Down commits to tearing the run-scoped
+	// runtime down, so status moves to down here, before that teardown is
+	// even attempted: every failure return from this point on (building
+	// the plan or the teardown list, running it, or persisting the
+	// result) must not leave a stale up behind, whether or not the
+	// teardown itself fully succeeds. A guard rejection above this point
+	// is not an attempt at all, so it leaves status untouched.
+	if err := setSessionStatus(store, sessionName, contract.SessionStatusDown); err != nil {
+		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to record session status: %v", err)}
+	}
 	plan, err := buildPlanForSession(cfg, session.WorkspaceDirPath, session)
 	if err != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: err.Error()}
@@ -57,10 +67,6 @@ func Down(cfg *config.Config, store *state.Store, params DownParams) (*DownResul
 	}
 	cleanupErr := task.RunCleanup(context.Background(), teardown, sessionVars(cfg, session, plan), session.Tasks, params.Observer)
 	session.UpdatedAt = time.Now()
-	// Status moves to down here regardless of cleanupErr: run-scoped
-	// cleanup was attempted either way, and the session is no longer in
-	// the "up" phase Up's own success declared it in, whether or not that
-	// attempt fully succeeded.
 	session.Status = contract.SessionStatusDown
 	if err := store.Put(session); err != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to save session state: %v", err)}
