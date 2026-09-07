@@ -70,16 +70,20 @@ This builds a temporary SQLite database from the backup, validates it twice
 (SQLite's own `PRAGMA integrity_check`, then a re-read confirming every
 intended session and event is present), and only then:
 
-1. Atomically renames the temporary database into place as
-   `$DATA_DIR/storage.db`.
-2. Overwrites `$DATA_DIR/state.json` with the legacy rejection marker
+1. Overwrites `$DATA_DIR/state.json` with the legacy rejection marker
    (`{"version":0,"sessions":{}}`) — a legacy binary that only understands
    the old envelope refuses to start or mutate against version `0` rather
    than treating an empty session map as a fresh store.
+2. Atomically renames the temporary database into place as
+   `$DATA_DIR/storage.db`.
 
-An interrupted or failed import leaves no `storage.db` at `$DATA_DIR` (the
-temporary file is removed) and never touches `$DATA_DIR/state.json`, so
-re-running the same command is safe and idempotent from the backup.
+The marker is written first deliberately: the only step left that can still
+fail afterward is the rename, which leaves no `storage.db` at `$DATA_DIR` —
+so a legacy binary is already locked out, never a working new database
+sitting next to an unmodified legacy `state.json` that a legacy binary would
+keep trusting. Either way, re-running the same command against the same
+backup finishes the job (the marker overwrite is idempotent, and the
+missing `storage.db` never trips the "already exists" refusal).
 
 `tombstone.json`, `chain_attempts.json`, `pending_delivery.json`,
 `delivery-locks/`, and their lock files are **not** imported into SQLite —

@@ -175,3 +175,65 @@ func TestRootPersistentPreRun_CreatesStorageDBForEveryCommand(t *testing.T) {
 		t.Fatalf("storage.db not created by an unrelated command's PersistentPreRunE: %v", statErr)
 	}
 }
+
+// TestStorageImport_DefaultDataHomeSucceedsWithoutDataHomeFlag is a
+// command-level regression test: the documented default cutover
+// (`plect storage import --from <backup>`, no --data-home) failed every
+// time before this fix, because root's own PersistentPreRunE pre-created an
+// empty storage.db at that same default path before storageImportCmd's RunE
+// ever ran, and Run then refused to promote into a directory that already
+// had one.
+func TestStorageImport_DefaultDataHomeSucceedsWithoutDataHomeFlag(t *testing.T) {
+	fakeHome := t.TempDir()
+	t.Setenv("HOME", fakeHome)
+	t.Setenv("XDG_DATA_HOME", "")
+	t.Setenv(confighome.EnvVar, "")
+	t.Setenv(confighome.XDGEnvVar, "")
+
+	backupDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(backupDir, "state.json"), []byte(`{"version":7,"sessions":{}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := execRoot(t, "storage", "import", "--from", backupDir)
+	if err != nil {
+		t.Fatalf("Execute() error = %v; output:\n%s", err, out)
+	}
+	if !strings.Contains(out, "promoted=true") {
+		t.Errorf("output = %q, want it to report a completed promotion", out)
+	}
+
+	dbPath := persistence.PathIn(filepath.Join(fakeHome, ".local", "share", "plect"))
+	if _, statErr := os.Stat(dbPath); statErr != nil {
+		t.Fatalf("storage.db not created by the import: %v", statErr)
+	}
+}
+
+// TestRootPersistentPreRun_DoesNotPreCreateStorageDBForStorageImport pins
+// the fix directly: storageImportCmd must see no live database at the
+// default path before its own RunE runs, the same carve-out
+// storageMigrateCmd already had.
+func TestRootPersistentPreRun_DoesNotPreCreateStorageDBForStorageImport(t *testing.T) {
+	fakeHome := t.TempDir()
+	t.Setenv("HOME", fakeHome)
+	t.Setenv("XDG_DATA_HOME", "")
+	t.Setenv(confighome.EnvVar, "")
+	t.Setenv(confighome.XDGEnvVar, "")
+
+	backupDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(backupDir, "state.json"), []byte(`{"version":7,"sessions":{}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A command that always fails its own RunE (missing --from) still runs
+	// PersistentPreRunE first; if that pre-run created storage.db, it would
+	// exist here even though the import itself never got a chance to run.
+	if _, err := execRoot(t, "storage", "import"); err == nil {
+		t.Fatal("storage import with no --from unexpectedly succeeded")
+	}
+
+	dbPath := persistence.PathIn(filepath.Join(fakeHome, ".local", "share", "plect"))
+	if _, statErr := os.Stat(dbPath); !os.IsNotExist(statErr) {
+		t.Fatalf("stat %s = %v, want not-exist (PersistentPreRunE must not pre-create it for storage import)", dbPath, statErr)
+	}
+}

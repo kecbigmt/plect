@@ -278,6 +278,47 @@ func TestRun_RefusesWhenDestinationAlreadyHasADatabase(t *testing.T) {
 	}
 }
 
+// TestRun_MarkerWriteFailureLeavesNoStorageDBBehind pins the fix to a real
+// bug: the marker is now written before the database is renamed into
+// place, so a marker-write failure — simulated here by making its path a
+// directory instead of a file, which any rename onto it rejects — never
+// leaves a promoted, working storage.db sitting next to an untouched
+// legacy state.json (the split-brain a legacy binary would not notice).
+func TestRun_MarkerWriteFailureLeavesNoStorageDBBehind(t *testing.T) {
+	sourceDir, _, _ := legacyFixture(t)
+	destDir := t.TempDir()
+	ctx := context.Background()
+
+	markerPath := filepath.Join(destDir, "state.json")
+	if err := os.MkdirAll(markerPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Run(ctx, Options{SourceDir: sourceDir, DestDir: destDir})
+	if err == nil {
+		t.Fatal("Run must fail when the marker path cannot be written")
+	}
+	if report.Promoted {
+		t.Error("report.Promoted = true, want false")
+	}
+	if _, statErr := os.Stat(report.DBPath); !os.IsNotExist(statErr) {
+		t.Errorf("stat %s = %v, want not-exist: a marker-write failure must never leave a promoted database behind", report.DBPath, statErr)
+	}
+
+	// Retrying after fixing the marker path must succeed from the same
+	// backup — an interrupted import stays idempotent, not wedged.
+	if err := os.RemoveAll(markerPath); err != nil {
+		t.Fatal(err)
+	}
+	retry, err := Run(ctx, Options{SourceDir: sourceDir, DestDir: destDir})
+	if err != nil {
+		t.Fatalf("retry after fixing the marker path: %v", err)
+	}
+	if !retry.Promoted {
+		t.Error("retry: report.Promoted = false, want true")
+	}
+}
+
 func TestRun_RejectsUnknownFilesInAnEventSessionDirectory(t *testing.T) {
 	sourceDir, _, _ := legacyFixture(t)
 	if err := os.WriteFile(filepath.Join(sourceDir, "events", encodeSessionDir("root-session"), "mystery.dat"), []byte("?"), 0o644); err != nil {

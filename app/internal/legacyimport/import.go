@@ -96,6 +96,14 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 		}
 	}
 
+	// persistence.Open creates the database file itself but never its parent
+	// directory (unlike persistence.EnsureCurrent); DestDir is often a
+	// brand-new $XDG_DATA_HOME/plect on a fresh install, which has no reason
+	// to exist yet the first time an operator ever runs this command.
+	if err := os.MkdirAll(opts.DestDir, 0o700); err != nil {
+		return report, fmt.Errorf("legacyimport: create %s: %w", opts.DestDir, err)
+	}
+
 	tmpPath := report.DBPath + ".importing"
 	if err := removeDatabaseFiles(tmpPath); err != nil {
 		return report, fmt.Errorf("legacyimport: clear stale temp database: %w", err)
@@ -232,14 +240,23 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 	if err := db.Close(); err != nil {
 		return report, fmt.Errorf("legacyimport: close temporary database: %w", err)
 	}
+
+	// The marker is written before the rename, not after: this way, the
+	// only failure that can happen once any destination file has changed is
+	// the rename itself, which leaves no storage.db at DBPath — so a retry
+	// finds nothing to refuse on and rebuilds from the backup exactly as a
+	// first attempt would. Writing the marker second would instead let a
+	// promoted, working storage.db sit next to an unmodified legacy
+	// state.json — a legacy binary would keep treating that state.json as
+	// current, unaware a cutover ever happened, and a retry would refuse
+	// outright (storage.db already exists) with no path to finish the job.
+	if err := atomicfile.Write(report.MarkerPath, []byte(rejectionMarker)); err != nil {
+		return report, fmt.Errorf("legacyimport: write legacy rejection marker: %w", err)
+	}
 	if err := os.Rename(tmpPath, report.DBPath); err != nil {
 		return report, fmt.Errorf("legacyimport: promote temporary database: %w", err)
 	}
 	report.Promoted = true // the deferred cleanup above still clears tmpPath's now-orphaned gate sidecars
-
-	if err := atomicfile.Write(report.MarkerPath, []byte(rejectionMarker)); err != nil {
-		return report, fmt.Errorf("legacyimport: write legacy rejection marker: %w", err)
-	}
 
 	return report, nil
 }
