@@ -90,11 +90,10 @@ func (l layerDir) scope() layerScope {
 	}
 }
 
-// layerResultCache memoizes discoverLayers' results per workspaceDirPath,
-// reached through a pointer field rather than embedded: Config is copied by
-// value in test fixture tables, and an embedded sync.Mutex would make each
-// copy a lock copy. Only successful results are cached, so a transient read
-// error keeps retrying next call instead of sticking for this Config's life.
+// layerResultCache memoizes discoverLayers by workspaceDirPath. Reached via a
+// pointer field, not embedded, since Config is copied by value in test
+// fixture tables and an embedded sync.Mutex would make each copy a lock
+// copy. Only successful results are cached, so a transient error retries.
 type layerResultCache struct {
 	mu     sync.Mutex
 	byPath map[string][]discoveredLayer
@@ -122,9 +121,8 @@ func (lc *layerResultCache) evict(path string) {
 	delete(lc.byPath, path)
 }
 
-// layerResultCache lazily creates c's cache instance, racing safely via
-// CompareAndSwap: dispatch and reactor supervisors each reach a fresh
-// Config's cache independently, on their own goroutine.
+// layerResultCache lazily creates c's cache instance via CompareAndSwap, so
+// concurrent first callers race safely.
 func (c *Config) layerResultCache() *layerResultCache {
 	if lc := c.layerCache.Load(); lc != nil {
 		return lc
@@ -136,11 +134,9 @@ func (c *Config) layerResultCache() *layerResultCache {
 	return lc
 }
 
-// resolveLayers is discoverLayers with an escape hatch: fresh evicts
-// workspaceDirPath's cache entry first, so the read re-parses from disk and
-// repopulates it. buildDispatcher/buildReactor's session-up transition and
-// refreshTickConfig's wedge-recovery re-read need this; everything else
-// passes false and takes whatever is memoized.
+// resolveLayers is discoverLayers with fresh: true evicting
+// workspaceDirPath's cache entry first, for a caller that must see an
+// on-disk edit immediately (a session-up transition, refreshTickConfig).
 func (c *Config) resolveLayers(workspaceDirPath string, fresh bool) ([]discoveredLayer, error) {
 	if fresh {
 		c.layerResultCache().evict(workspaceDirPath)
@@ -148,13 +144,13 @@ func (c *Config) resolveLayers(workspaceDirPath string, fresh bool) ([]discovere
 	return c.discoverLayers(workspaceDirPath)
 }
 
-// discoverLayers reads every cascade layer's definition root once,
-// shallowest-first; workspaceDirPath selects the ancestor overlays, empty
-// meaning the trusted base layers alone. The result is memoized per
-// workspaceDirPath for this *Config's lifetime — dispatch/reactor Supervisors
-// otherwise re-parse every definition file on disk on every ~1s poll tick per
-// session — invalidated by a new *Config (config.Live's own refresh) or
-// resolveLayers' fresh eviction.
+// discoverLayers reads every cascade layer's definition root once, in
+// shallowest-first order. workspaceDirPath selects the ancestor overlays; an
+// empty one means the trusted base layers alone, which is what a caller
+// outside any workspace directory sees.
+//
+// Memoized per workspaceDirPath for this *Config's lifetime; a new *Config
+// or resolveLayers' fresh eviction invalidates it.
 func (c *Config) discoverLayers(workspaceDirPath string) ([]discoveredLayer, error) {
 	cache := c.layerResultCache()
 	if cached, ok := cache.get(workspaceDirPath); ok {
