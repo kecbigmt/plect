@@ -278,12 +278,6 @@ func TestRun_RefusesWhenDestinationAlreadyHasADatabase(t *testing.T) {
 	}
 }
 
-// TestRun_MarkerWriteFailureLeavesNoStorageDBBehind pins the fix to a real
-// bug: the marker is now written before the database is renamed into
-// place, so a marker-write failure — simulated here by making its path a
-// directory instead of a file, which any rename onto it rejects — never
-// leaves a promoted, working storage.db sitting next to an untouched
-// legacy state.json (the split-brain a legacy binary would not notice).
 func TestRun_MarkerWriteFailureLeavesNoStorageDBBehind(t *testing.T) {
 	sourceDir, _, _ := legacyFixture(t)
 	destDir := t.TempDir()
@@ -305,8 +299,6 @@ func TestRun_MarkerWriteFailureLeavesNoStorageDBBehind(t *testing.T) {
 		t.Errorf("stat %s = %v, want not-exist: a marker-write failure must never leave a promoted database behind", report.DBPath, statErr)
 	}
 
-	// Retrying after fixing the marker path must succeed from the same
-	// backup — an interrupted import stays idempotent, not wedged.
 	if err := os.RemoveAll(markerPath); err != nil {
 		t.Fatal(err)
 	}
