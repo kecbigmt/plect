@@ -64,11 +64,11 @@ func TestPutSession_NodeExecutionRetainedFactsRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 
-	cleanup := json.RawMessage(`{"action":{"Type":"shell","Script":"true"},"from":{"IsPlugin":true,"Alias":"gh"}}`)
+	cleanup := json.RawMessage(`{"action":{"Type":"shell","Script":"true"},"from":{"IsPlugin":true,"Alias":"acme"}}`)
 	session := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Nodes: map[string]*contract.TaskState{
 		"a": {
 			Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "work",
-			ExecutionDir: "/tmp/workdir", Cleanup: cleanup, PluginRef: "gh",
+			ExecutionDir: "/tmp/workdir", Cleanup: cleanup, PluginRef: "acme",
 		},
 	}}
 	if err := db.PutSession(ctx, session); err != nil {
@@ -86,8 +86,8 @@ func TestPutSession_NodeExecutionRetainedFactsRoundTrip(t *testing.T) {
 	if node.ExecutionDir != "/tmp/workdir" {
 		t.Errorf("ExecutionDir = %q, want %q", node.ExecutionDir, "/tmp/workdir")
 	}
-	if node.PluginRef != "gh" {
-		t.Errorf("PluginRef = %q, want %q", node.PluginRef, "gh")
+	if node.PluginRef != "acme" {
+		t.Errorf("PluginRef = %q, want %q", node.PluginRef, "acme")
 	}
 	if string(node.Cleanup) != string(cleanup) {
 		t.Errorf("Cleanup = %s, want %s", node.Cleanup, cleanup)

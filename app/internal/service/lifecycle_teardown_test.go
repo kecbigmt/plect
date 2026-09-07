@@ -25,13 +25,13 @@ func TestDestroy_ReleasesNodeRemovedFromWorkflow(t *testing.T) {
 		[]nodeFixture{{id: "kept"}}, // "retired" is no longer declared
 	)
 	store := testStore(t)
-	seedSessionWithNodes(t, store, "o/r-1", "o/r", 1, "coding", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "sess-1", "acme", 1, "coding", map[string]*contract.TaskState{
 		"retired": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, TaskID: "retired", Seq: 1, Outputs: map[string]any{}},
 		"kept":    {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Seq: 2, Outputs: map[string]any{}},
 	})
 
 	obs := &orderObserver{}
-	if _, err := Destroy(cfg, store, DestroyParams{Identifier: "o/r-1", Observer: obs}); err != nil {
+	if _, err := Destroy(cfg, store, DestroyParams{Identifier: "sess-1", Observer: obs}); err != nil {
 		t.Fatalf("Destroy: %v", err)
 	}
 	if idx(obs.cleaned, "retired") < 0 {
@@ -52,19 +52,19 @@ func TestDown_ReleasesRunScopedNodeRemovedFromWorkflow(t *testing.T) {
 		[]nodeFixture{{id: "review"}}, // "retired" is no longer declared
 	)
 	store := testStore(t)
-	seedSessionWithNodes(t, store, "o/r-1", "o/r", 1, "coding", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "sess-1", "acme", 1, "coding", map[string]*contract.TaskState{
 		"retired": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, TaskID: "retired", Seq: 1, Outputs: map[string]any{}},
 		"review":  {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "review", Seq: 2, Outputs: map[string]any{}},
 	})
 
 	obs := &orderObserver{}
-	if _, err := Down(cfg, store, DownParams{Identifier: "o/r-1", Observer: obs}); err != nil {
+	if _, err := Down(cfg, store, DownParams{Identifier: "sess-1", Observer: obs}); err != nil {
 		t.Fatalf("Down: %v", err)
 	}
 	if idx(obs.cleaned, "retired") < 0 {
 		t.Fatalf("cleaned = %v, want %q (run-scoped) released even though the workflow no longer declares it", obs.cleaned, "retired")
 	}
-	s := store.Get("o/r-1")
+	s := store.Get("sess-1")
 	if s.Nodes["retired"] == nil || s.Nodes["retired"].Status != contract.TaskStatusCleaned {
 		t.Errorf("retired should be persisted as cleaned: %+v", s.Nodes["retired"])
 	}
@@ -96,13 +96,13 @@ func TestUp_FailedSetupRetainsCleanupContractAcrossARestart(t *testing.T) {
 		[]nodeFixture{{id: "flaky"}},
 	)
 	store := testStore(t)
-	seedSessionWithNodes(t, store, "o/r-1", "o/r", 1, "coding", map[string]*contract.TaskState{})
+	seedSessionWithNodes(t, store, "sess-1", "acme", 1, "coding", map[string]*contract.TaskState{})
 
-	if _, err := Up(cfg, store, UpParams{Identifier: "o/r-1"}); err == nil {
+	if _, err := Up(cfg, store, UpParams{Identifier: "sess-1"}); err == nil {
 		t.Fatal("Up: want the flaky setup's failure surfaced, got nil error")
 	}
 
-	s := store.Get("o/r-1")
+	s := store.Get("sess-1")
 	if s == nil || s.Nodes["flaky"] == nil || s.Nodes["flaky"].Status != contract.TaskStatusFailed {
 		t.Fatalf("after Up failure, flaky = %+v, want a retained failed attempt", s.Nodes["flaky"])
 	}
@@ -110,7 +110,7 @@ func TestUp_FailedSetupRetainsCleanupContractAcrossARestart(t *testing.T) {
 		t.Fatal("after Up failure, flaky has no retained cleanup contract")
 	}
 
-	if _, err := Destroy(cfg, store, DestroyParams{Identifier: "o/r-1"}); err != nil {
+	if _, err := Destroy(cfg, store, DestroyParams{Identifier: "sess-1"}); err != nil {
 		t.Fatalf("Destroy: %v", err)
 	}
 	data, err := os.ReadFile(cleanupLog)
