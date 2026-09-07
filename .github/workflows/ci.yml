@@ -419,6 +419,28 @@ jobs:
           }
         working-directory: app
 
+  # Every past darwin-only breakage was first seen in release.yml's
+  # darwin-arm64 job, because this workflow otherwise runs go test on Linux
+  # only; running the same command on every push to main catches it before
+  # a release tag, without paying for a macOS runner on every PR.
+  build-test-darwin:
+    name: build-test-darwin
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      # release.yml's darwin-arm64 build job runs this same `go test ./...`
+      # against the app module before packaging.
+      - name: go test
+        run: go test ./...
+        working-directory: app
+      - name: go vet
+        run: go vet ./...
+        working-directory: app
+
   build-test:
     name: build-test (${{ matrix.module }})
     needs: changes
@@ -530,6 +552,7 @@ jobs:
       - web-browser-acceptance
       - plugin-script-selftests
       - sqlite-persistence-generation
+      - build-test-darwin
       - build-test
       - integration-test
       - readme-verify
