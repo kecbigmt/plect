@@ -317,3 +317,82 @@ func TestPutSession_NodeDependencyEdgeSurvivesDependencyNodeGoingUnreleased(t *t
 		t.Fatalf("node %q DependsOn = %v, want [%q] to survive %q's own status change", "b", b, "a", "a")
 	}
 }
+
+// TestPutSession_RefusesUpdateAgainstAnExecutionSupersededByAnotherWriter
+// proves a write that read one unreleased generation, then tries to update
+// it in place after a different writer released and recreated that node in
+// between, is refused rather than silently overwriting the new generation's
+// own release recipe with the stale writer's data.
+func TestPutSession_RefusesUpdateAgainstAnExecutionSupersededByAnotherWriter(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	seed := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Nodes: map[string]*contract.TaskState{
+		"a": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "work"},
+	}}
+	if err := db.PutSession(ctx, seed); err != nil {
+		t.Fatalf("PutSession (seed): %v", err)
+	}
+	staleID := nodeExecutionIDForTest(t, db, "s1", "a")
+
+	// A different writer releases "a" and starts a brand new attempt.
+	if err := db.PutSession(ctx, &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Nodes: map[string]*contract.TaskState{
+		"a": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusCleaned, TaskID: "work"},
+	}}); err != nil {
+		t.Fatalf("PutSession (release): %v", err)
+	}
+	if err := db.PutSession(ctx, &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Nodes: map[string]*contract.TaskState{
+		"a": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "other-work"},
+	}}); err != nil {
+		t.Fatalf("PutSession (recreate): %v", err)
+	}
+
+	// The stale writer, unaware of the release+recreate, tries to update the
+	// generation it originally read.
+	staleWrite := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Nodes: map[string]*contract.TaskState{
+		"a": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "work", ExecutionID: staleID},
+	}}
+	if err := db.PutSession(ctx, staleWrite); err == nil {
+		t.Fatal("PutSession (stale update): want a conflict error, got nil")
+	}
+
+	got, err := db.GetSession(ctx, "s1")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if node := got.Nodes["a"]; node == nil || node.TaskID != "other-work" {
+		t.Fatalf("node after refused stale write = %+v, want the newer generation left untouched", node)
+	}
+}
+
+// TestPutSession_RefusesUpdateAgainstAnExecutionAlreadyReleasedByAnotherWriter
+// covers the symmetric case: the generation the stale writer read has been
+// released with nothing new set up in its place yet, so no unreleased
+// execution exists at all for the node.
+func TestPutSession_RefusesUpdateAgainstAnExecutionAlreadyReleasedByAnotherWriter(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	seed := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Nodes: map[string]*contract.TaskState{
+		"a": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "work"},
+	}}
+	if err := db.PutSession(ctx, seed); err != nil {
+		t.Fatalf("PutSession (seed): %v", err)
+	}
+	staleID := nodeExecutionIDForTest(t, db, "s1", "a")
+
+	if err := db.PutSession(ctx, &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Nodes: map[string]*contract.TaskState{
+		"a": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusCleaned, TaskID: "work"},
+	}}); err != nil {
+		t.Fatalf("PutSession (release): %v", err)
+	}
+
+	staleWrite := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Nodes: map[string]*contract.TaskState{
+		"a": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusFailed, TaskID: "work", ExecutionID: staleID, Error: "boom"},
+	}}
+	if err := db.PutSession(ctx, staleWrite); err == nil {
+		t.Fatal("PutSession (stale update): want a conflict error, got nil")
+	}
+}

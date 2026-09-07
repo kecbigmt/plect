@@ -737,19 +737,23 @@ func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, ta
 		// from a previous run (an agent's own --resume flag, say) lose their
 		// handle on retry.
 		var prev map[string]any
+		var continuingExecID string
 		if existing, ok := tasks[r.NodeID]; ok && existing != nil {
 			prev = existing.Outputs
+			if existing.Status != contract.TaskStatusCleaned {
+				continuingExecID = existing.ExecutionID
+			}
 		}
 		deps := dependencyOutputs(r.DependsOn, tasks)
 		resolvedInputs, inputErr := ResolveNodeInputs(r.Inputs, deps, workflowOutputs(tasks), session)
 		if inputErr != nil {
-			tasks[r.NodeID] = failedState(r, session, now, inputErr.Error(), prev, nil)
+			tasks[r.NodeID] = failedState(r, session, now, inputErr.Error(), prev, nil, continuingExecID)
 			wrapped := fmt.Errorf("node %q input: %w", r.NodeID, inputErr)
 			return reportSetupFailure(obs, r, time.Since(now), wrapped, nil)
 		}
 		if r.InputsSchema != nil {
 			if vErr := r.InputsSchema.Validate(toJSONShape(resolvedInputs)); vErr != nil {
-				tasks[r.NodeID] = failedState(r, session, now, vErr.Error(), prev, resolvedInputs)
+				tasks[r.NodeID] = failedState(r, session, now, vErr.Error(), prev, resolvedInputs, continuingExecID)
 				wrapped := fmt.Errorf("node %q input schema: %w", r.NodeID, vErr)
 				return reportSetupFailure(obs, r, time.Since(now), wrapped, nil)
 			}
@@ -768,7 +772,7 @@ func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, ta
 			if nestErr != nil {
 				// The layers that did produce are persisted with the
 				// failure: the next cleanup has to unwind exactly those.
-				failed := failedState(r, session, now, nestErr.Error(), prev, resolvedInputs)
+				failed := failedState(r, session, now, nestErr.Error(), prev, resolvedInputs, continuingExecID)
 				failed.Layers = layers
 				tasks[r.NodeID] = failed
 				wrapped := fmt.Errorf("task %q: %w", r.NodeID, nestErr)
@@ -776,7 +780,7 @@ func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, ta
 			}
 			outputs, projErr := projectNestedOutputs(r, layers, session)
 			if projErr != nil {
-				failed := failedState(r, session, now, projErr.Error(), prev, resolvedInputs)
+				failed := failedState(r, session, now, projErr.Error(), prev, resolvedInputs, continuingExecID)
 				failed.Layers = layers
 				tasks[r.NodeID] = failed
 				wrapped := fmt.Errorf("task %q: %w", r.NodeID, projErr)
@@ -790,6 +794,7 @@ func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, ta
 				Outputs:      outputs,
 				Layers:       layers,
 				DependsOn:    append([]string(nil), r.DependsOn...),
+				ExecutionID:  continuingExecID,
 				ExecutionDir: session.WorkspaceDirPath,
 				Cleanup:      retainCleanup(r),
 				PluginRef:    pluginRef(r, session),
@@ -804,7 +809,7 @@ func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, ta
 		if r.Setup != nil {
 			resolved, resolveErr := resolveEffect(r.Setup, setupRoots(ctx), ctx, r.From, nil)
 			if resolveErr != nil {
-				tasks[r.NodeID] = failedState(r, session, now, resolveErr.Error(), prev, resolvedInputs)
+				tasks[r.NodeID] = failedState(r, session, now, resolveErr.Error(), prev, resolvedInputs, continuingExecID)
 				wrapped := fmt.Errorf("effect %q setup: %w", r.NodeID, resolveErr)
 				return reportSetupFailure(obs, r, time.Since(now), wrapped, nil)
 			}
@@ -812,21 +817,21 @@ func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, ta
 			resolved.Close()
 			stderrCaptured = stderr
 			if runErr != nil {
-				tasks[r.NodeID] = failedState(r, session, now, runErr.Error(), prev, resolvedInputs)
+				tasks[r.NodeID] = failedState(r, session, now, runErr.Error(), prev, resolvedInputs, continuingExecID)
 				wrapped := fmt.Errorf("task %q setup: %w", r.NodeID, runErr)
 				return reportSetupFailure(obs, r, time.Since(now), wrapped, stderr)
 			}
 			var parseErr error
 			outputs, parseErr = lang.ParseOutputs(stdout)
 			if parseErr != nil {
-				tasks[r.NodeID] = failedState(r, session, now, parseErr.Error(), prev, resolvedInputs)
+				tasks[r.NodeID] = failedState(r, session, now, parseErr.Error(), prev, resolvedInputs, continuingExecID)
 				wrapped := fmt.Errorf("task %q setup: %w", r.NodeID, parseErr)
 				return reportSetupFailure(obs, r, time.Since(now), wrapped, stderr)
 			}
 		}
 		if r.OutputsSchema != nil {
 			if vErr := r.OutputsSchema.Validate(outputs); vErr != nil {
-				tasks[r.NodeID] = failedState(r, session, now, vErr.Error(), prev, resolvedInputs)
+				tasks[r.NodeID] = failedState(r, session, now, vErr.Error(), prev, resolvedInputs, continuingExecID)
 				wrapped := fmt.Errorf("task %q setup: outputs schema: %w", r.NodeID, vErr)
 				return reportSetupFailure(obs, r, time.Since(now), wrapped, stderrCaptured)
 			}
@@ -838,6 +843,7 @@ func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, ta
 			Inputs:       resolvedInputs,
 			Outputs:      outputs,
 			DependsOn:    append([]string(nil), r.DependsOn...),
+			ExecutionID:  continuingExecID,
 			ExecutionDir: session.WorkspaceDirPath,
 			Cleanup:      retainCleanup(r),
 			PluginRef:    pluginRef(r, session),
@@ -942,7 +948,7 @@ func describeTaskID(taskID, nodeID string) string {
 	return taskID
 }
 
-func failedState(r Resolved, session SessionVars, now time.Time, errMsg string, prev, inputs map[string]any) *contract.TaskState {
+func failedState(r Resolved, session SessionVars, now time.Time, errMsg string, prev, inputs map[string]any, continuingExecID string) *contract.TaskState {
 	return &contract.TaskState{
 		Scope:        r.Scope,
 		TaskID:       taskIDFor(r),
@@ -950,6 +956,7 @@ func failedState(r Resolved, session SessionVars, now time.Time, errMsg string, 
 		Inputs:       inputs,
 		Outputs:      prev,
 		DependsOn:    append([]string(nil), r.DependsOn...),
+		ExecutionID:  continuingExecID,
 		ExecutionDir: session.WorkspaceDirPath,
 		Cleanup:      retainCleanup(r),
 		PluginRef:    pluginRef(r, session),
@@ -1053,6 +1060,9 @@ func RunCleanup(goCtx context.Context, ordered []Resolved, session SessionVars, 
 			if state.Resource != "" {
 				sess.ResourceID = state.Resource
 			}
+			if state.ExecutionDir != "" {
+				sess.WorkspaceDirPath = state.ExecutionDir
+			}
 			base := RenderContext{
 				Tasks:    dependencyOutputs(r.DependsOn, tasks),
 				Workflow: workflowOutputs(tasks),
@@ -1094,6 +1104,22 @@ func RunCleanup(goCtx context.Context, ordered []Resolved, session SessionVars, 
 		if state.Resource != "" {
 			sess.ResourceID = state.Resource
 		}
+		if state.ExecutionDir != "" {
+			sess.WorkspaceDirPath = state.ExecutionDir
+		}
+		if state.PluginRef != "" {
+			if current := pluginRef(r, sess); current != state.PluginRef {
+				wrapped := fmt.Errorf("node %q cleanup: plugin content changed since setup (retained %q, now %q); resolve the mismatch before cleanup runs", r.NodeID, state.PluginRef, current)
+				state.Status = contract.TaskStatusFailed
+				state.Error = wrapped.Error()
+				state.FailedAt = now
+				if firstErr == nil {
+					firstErr = wrapped
+				}
+				reportCleanupFailure(obs, r, time.Since(now), wrapped, nil)
+				continue
+			}
+		}
 		ctx := RenderContext{
 			Self:       state.Outputs,
 			Tasks:      dependencyOutputs(r.DependsOn, tasks),
@@ -1114,7 +1140,7 @@ func RunCleanup(goCtx context.Context, ordered []Resolved, session SessionVars, 
 			reportCleanupFailure(obs, r, time.Since(now), wrapped, nil)
 			continue
 		}
-		_, stderr, runErr := resolved.Run(goCtx, session.WorkspaceDirPath)
+		_, stderr, runErr := resolved.Run(goCtx, sess.WorkspaceDirPath)
 		resolved.Close()
 		if runErr != nil {
 			state.Status = contract.TaskStatusFailed

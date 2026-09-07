@@ -810,6 +810,69 @@ func TestRunCleanup_ReverseOrder(t *testing.T) {
 	}
 }
 
+// A node's cleanup must run in its own retained ExecutionDir, not the
+// session's current WorkspaceDirPath, so a workspace move/rebuild between
+// setup and release does not silently redirect an old attempt's cleanup.
+func TestRunCleanup_RunsInRetainedExecutionDirNotCurrentWorkspace(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	executionDir := t.TempDir()
+	currentWorkspace := t.TempDir()
+	plan := buildPlan(t,
+		[]taskStub{{id: "a", scope: "run", setup: "echo '{}'", cleanup: "pwd > cleanup-cwd.txt"}},
+		[]nodeStub{{id: "a"}},
+	)
+	tasks := map[string]*contract.TaskState{
+		"a": {Scope: "run", Status: contract.TaskStatusProduced, Outputs: map[string]any{}, ExecutionDir: executionDir},
+	}
+	if err := RunCleanup(context.Background(), plan.Run, SessionVars{WorkspaceDirPath: currentWorkspace}, tasks, nil); err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(executionDir, "cleanup-cwd.txt"))
+	if err != nil {
+		t.Fatalf("cleanup did not run in the retained ExecutionDir: %v", err)
+	}
+	if got := strings.TrimSpace(string(data)); got != executionDir {
+		t.Fatalf("cleanup ran in %q, want the retained ExecutionDir %q", got, executionDir)
+	}
+	if _, err := os.Stat(filepath.Join(currentWorkspace, "cleanup-cwd.txt")); err == nil {
+		t.Fatal("cleanup ran in the session's current WorkspaceDirPath instead of the retained ExecutionDir")
+	}
+}
+
+// A retained PluginRef that no longer matches the currently mounted plugin's
+// content revision must block cleanup rather than silently run it against
+// drifted plugin content.
+func TestRunCleanup_RefusesWhenRetainedPluginRefNoLongerMatchesTheMount(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	pluginDir := t.TempDir()
+	plan := buildPlan(t,
+		[]taskStub{{id: "a", scope: "run", setup: "echo '{}'", cleanup: "true"}},
+		[]nodeStub{{id: "a"}},
+	)
+	r := plan.Run[0]
+	r.SourcePath = pluginDir + "/tasks/a.toml"
+	r.From = lang.Ownership{IsPlugin: true}
+	plan.Run[0] = r
+	tasks := map[string]*contract.TaskState{
+		"a": {
+			Scope: "run", Status: contract.TaskStatusProduced, Outputs: map[string]any{},
+			PluginRef: "acme/tools@deadbeef",
+		},
+	}
+	session := SessionVars{Plugins: []plugins.Mounted{{ID: "acme/tools", Dir: pluginDir, Revision: "newcontent"}}}
+	err := RunCleanup(context.Background(), plan.Run, session, tasks, nil)
+	if err == nil {
+		t.Fatal("RunCleanup: want a plugin-content-mismatch error, got nil")
+	}
+	if tasks["a"].Status != contract.TaskStatusFailed {
+		t.Fatalf("a.Status = %q, want failed", tasks["a"].Status)
+	}
+}
+
 // Regression: a setup that exited before populating Self leaves Outputs nil.
 // Cleanup that references Self.* must still run (with empty substitutions)
 // rather than aborting the entire teardown with a template render error.

@@ -306,9 +306,12 @@ func orderNodesByDependency(nodes map[string]*contract.TaskState) []string {
 
 // upsertNodeExecutionTx reconciles nodeID's execution row: it updates the
 // current unreleased execution (see CurrentNodeExecution) in place when one
-// exists, preserving its id, or mints a fresh one otherwise. Layers and
+// exists, preserving its id, or mints a fresh one otherwise. When ts carries
+// a non-empty ExecutionID (a same-declaration retry continuing a row this
+// write's caller already read), the write is refused instead of silently
+// retargeting a since-released or since-superseded generation. Layers and
 // dependency edges are always replaced wholesale for whichever execution id
-// this resolves to, mirroring node_instance_layers' pre-existing convention.
+// this resolves to.
 func upsertNodeExecutionTx(ctx context.Context, q *sqlcgen.Queries, sessionID, nodeID string, ts *contract.TaskState) error {
 	inputsJSON, err := marshalJSONMap(ts.Inputs)
 	if err != nil {
@@ -340,6 +343,12 @@ func upsertNodeExecutionTx(ctx context.Context, q *sqlcgen.Queries, sessionID, n
 	current, err := q.CurrentNodeExecution(ctx, sqlcgen.CurrentNodeExecutionParams{SessionID: sessionID, NodeID: nodeID})
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
+		if ts.ExecutionID != "" && ts.Status != contract.TaskStatusCleaned {
+			// A re-write of a state this same operation already persisted as
+			// cleaned (a later checkpoint in a multi-step Destroy, say) is not
+			// a conflict: nothing unreleased is being silently overwritten.
+			return fmt.Errorf("node %q/%q: execution %q was released by another writer since this write's setup ran", sessionID, nodeID, ts.ExecutionID)
+		}
 		executionID, err = q.InsertNodeExecution(ctx, sqlcgen.InsertNodeExecutionParams{
 			ID:                      newULID(),
 			SessionID:               sessionID,
@@ -372,6 +381,9 @@ func upsertNodeExecutionTx(ctx context.Context, q *sqlcgen.Queries, sessionID, n
 	case err != nil:
 		return fmt.Errorf("find current node execution %q/%q: %w", sessionID, nodeID, err)
 	default:
+		if ts.ExecutionID != "" && ts.ExecutionID != current.ID {
+			return fmt.Errorf("node %q/%q: execution %q was superseded by %q since this write's setup ran", sessionID, nodeID, ts.ExecutionID, current.ID)
+		}
 		executionID = current.ID
 		if err := q.UpdateNodeExecution(ctx, sqlcgen.UpdateNodeExecutionParams{
 			ID:                      executionID,
@@ -483,6 +495,7 @@ func nodeExecutionFromRow(row sqlcgen.NodeExecution) (*contract.TaskState, error
 		Status:        row.Status,
 		Seq:           int(row.Sequence),
 		Resource:      row.Resource.String,
+		ExecutionID:   row.ID,
 		ExecutionDir:  row.ExecutionDir.String,
 		Inputs:        inputs,
 		Outputs:       outputs,
