@@ -35,6 +35,27 @@ func TestActionRunnerPollRequiresAJSONArray(t *testing.T) {
 	}
 }
 
+func TestActionRunnerPollStripsPlectDataHomeButKeepsXDGDataHome(t *testing.T) {
+	t.Setenv("PLECT_DATA_HOME", "/poisoned")
+	t.Setenv("XDG_DATA_HOME", "/still-inherited")
+
+	runner := actionRunner{cfg: &config.Config{}}
+	def := Definition{Observer: config.ResourceDef{Query: &config.ResourceQuery{
+		Poll: &lang.Action{Type: lang.ActionShell, Script: `
+plect_set=no; [ -n "$PLECT_DATA_HOME" ] && plect_set=yes
+xdg_set=no; [ -n "$XDG_DATA_HOME" ] && xdg_set=yes
+printf '[{"resource":"plect=%s xdg=%s"}]' "$plect_set" "$xdg_set"
+`},
+	}}}
+	items, err := runner.Poll(context.Background(), def)
+	if err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	if len(items) != 1 || items[0]["resource"] != "plect=no xdg=yes" {
+		t.Fatalf("poll subprocess env = %v, want PLECT_DATA_HOME stripped and XDG_DATA_HOME kept", items)
+	}
+}
+
 func TestActionRunnerSubscribeEmitsOneItemPerLine(t *testing.T) {
 	runner := actionRunner{cfg: &config.Config{}}
 	def := Definition{Observer: config.ResourceDef{Query: &config.ResourceQuery{

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/config"
+	"github.com/kecbigmt/plecture/app/internal/datahome"
 	"github.com/kecbigmt/plecture/app/internal/lang"
 	protocol "github.com/kecbigmt/plecture/contracts/channel-protocol"
 	"github.com/kecbigmt/plecture/contracts/event"
@@ -190,6 +191,10 @@ func deliverProcess(ctx context.Context, def config.ChannelDefinition, eval lang
 		return fmt.Errorf("channel %s: %w", def.Type, err)
 	}
 	cmd := exec.CommandContext(ctx, execution.Argv[0], execution.Argv[1:]...)
+	// A channel has no way to bind env explicitly, and no known channel
+	// destination depends on inheriting either data-home variable, so this
+	// is a full, unconditional strip.
+	cmd.Env = datahome.IsolatedEnv()
 	if len(execution.Stdin) > 0 {
 		cmd.Stdin = bytes.NewReader(execution.Stdin)
 	}

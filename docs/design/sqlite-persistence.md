@@ -3,9 +3,11 @@
 This design implements [the SQLite durable-storage decision](../adr/2026-09-06-sqlite-durable-storage.md).
 
 Core runtime persistence is one SQLite database at
-`$XDG_DATA_HOME/plect/storage.db`. The `app/internal/persistence` package owns
-opening it, schema checks, the access gate, migrations, and translation between
-database records and domain values. It opens every connection with WAL mode, a
+`<data home>/storage.db`, where `<data home>` is the directory
+`app/internal/datahome.Resolve` returns (see "Data-home resolution" below).
+The `app/internal/persistence` package owns opening the database, schema
+checks, the access gate, migrations, and translation between database
+records and domain values. It opens every connection with WAL mode, a
 non-zero bounded busy timeout, and foreign-key enforcement. Production opens
 the file database; tests use a distinct temporary database file per test so
 WAL, locking, and multiple connections exercise the production configuration.
@@ -15,6 +17,42 @@ is the historical transition authority, and the goose ledger in the same
 database is the sole authority for applied versions. sqlc query results stay
 inside the persistence package; service, Web, MCP, and command packages use
 domain values rather than generated database types.
+
+## Data-home resolution
+
+`app/internal/datahome.Resolve` returns the data directory the database and
+the durable event log both live under: `$PLECT_DATA_HOME` if set, else
+`$XDG_DATA_HOME/plect` if set, else `~/.local/share/plect`. A `--data-home`
+flag on every `plect` command sets `$PLECT_DATA_HOME` for that invocation the
+same way `--config-home` sets `$PLECT_CONFIG_HOME` (see
+`app/commands/root.go`). `PLECT_DATA_HOME` names the data directory itself —
+unlike `XDG_DATA_HOME`, which is a shared root and so still needs the
+`/plect` namespace segment — because the variable already names plect's own
+directory and has no sibling to be namespaced against.
+
+`app/internal/state.NewStore`, `app/internal/eventlog.NewStore`,
+`app/internal/persistence.DefaultPath`, `plect storage import --data-home`'s
+default, and `plect-web` all resolve through this same function, so they
+never disagree about where the store lives.
+
+`datahome` builds a child's base environment two ways: `InheritableEnv`
+removes only `PLECT_DATA_HOME`; `IsolatedEnv` removes both `PLECT_DATA_HOME`
+and `XDG_DATA_HOME`. A declaration-started child builds its environment from
+one of these bases rather than from the raw process environment, appending
+any binding the declaration itself supplies after the base (which wins,
+since a later occurrence of a duplicate key overrides an earlier one).
+Process fan-out that shares the parent's own store (`plect serve` spawning a
+`plect mcp serve` per connection) builds its environment neither way.
+
+`app/internal/effect.ExecHook` (a task's setup/cleanup/health/capture,
+including a terminal-multiplexer pane's long-lived shell) and
+`app/internal/channel` (a channel delivery) use `IsolatedEnv`.
+`app/internal/effect.RunHook` (workspace-provider setup/cleanup/subscribe,
+resource observe/finalize), `app/internal/population`'s resource-observer
+poll/subscribe query, and `app/internal/pluginservice` (a supervised
+service) use `InheritableEnv`: a workspace-provider hook, resource-observer
+query, or service may read `XDG_DATA_HOME` for on-disk state of its own,
+unrelated to plect's store.
 
 ## Version authority and consumers
 
@@ -610,7 +648,7 @@ true for, because the release pipeline never stamped it — additionally
 refuses to advance a database it did not create: a ledger already holding an
 applied migration (schema version greater than zero) behind the embedded
 migration set. The refusal names both schema versions and points at
-`XDG_DATA_HOME` (isolate onto a scratch database) and
+`PLECT_DATA_HOME` (isolate onto a scratch database) and
 `plect storage migrate --allow-dev-build` (migrate this one deliberately) as
 the two ways to proceed, and makes no change, the same as the newer-than-
 supported refusal above. A database at schema zero carries none of that risk

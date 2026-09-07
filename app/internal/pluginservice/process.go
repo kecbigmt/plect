@@ -10,6 +10,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/kecbigmt/plecture/app/internal/datahome"
 )
 
 // runProcess starts decl's executable and blocks until it exits or ctx is
@@ -105,6 +107,11 @@ func (w *serviceLogWriter) logLine(line string) {
 // (e.g. a chat platform's bot token) are expected to already be present in the
 // supervisor's own environment — plugin.toml's `env` field carries only
 // non-secret literals, per the plugin service lifecycle ADR.
+//
+// The supervisor's own PLECT_DATA_HOME is dropped before overrides apply,
+// unless plugin.toml's own `env` table rebinds it explicitly. XDG_DATA_HOME
+// is left alone: an existing service may already depend on inheriting it
+// for its own unrelated on-disk state — see datahome.InheritableEnv.
 func buildEnv(overrides map[string]string) []string {
 	merged := make(map[string]string, len(overrides))
 	for _, kv := range os.Environ() {
@@ -112,6 +119,7 @@ func buildEnv(overrides map[string]string) []string {
 			merged[k] = v
 		}
 	}
+	delete(merged, datahome.EnvVar)
 	for k, v := range overrides {
 		merged[k] = v
 	}

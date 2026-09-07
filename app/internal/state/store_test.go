@@ -50,12 +50,24 @@ func TestStore_PutAndGet(t *testing.T) {
 func TestStore_DefaultDirUsesPlectureDataDir(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
+	t.Setenv("PLECT_DATA_HOME", "")
 	t.Setenv("XDG_DATA_HOME", "")
 
 	store := NewStore("")
 	want := filepath.Join(tmpHome, ".local", "share", "plect")
 	if got := store.Dir(); got != want {
 		t.Fatalf("Dir() = %q, want %q", got, want)
+	}
+}
+
+func TestStore_PlectDataHomeOverridesDefaultDirWithNoPlectSuffix(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	override := filepath.Join(t.TempDir(), "custom-data")
+	t.Setenv("PLECT_DATA_HOME", override)
+
+	store := NewStore("")
+	if got := store.Dir(); got != override {
+		t.Fatalf("Dir() = %q, want %q", got, override)
 	}
 }
 

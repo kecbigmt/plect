@@ -18,6 +18,16 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
+func TestNewStore_HonorsPlectDataHomeLikeStateStore(t *testing.T) {
+	override := filepath.Join(t.TempDir(), "custom-data")
+	t.Setenv("PLECT_DATA_HOME", override)
+
+	store := NewStore("")
+	if got := store.Dir(); got != override {
+		t.Fatalf("Dir() = %q, want %q", got, override)
+	}
+}
+
 // newSessionForTest mints a fresh, live session row for session and
 // returns its id.
 func newSessionForTest(t *testing.T, s *Store, session string) string {

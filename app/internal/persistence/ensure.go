@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/kecbigmt/plecture/app/internal/datahome"
 	"github.com/kecbigmt/plecture/app/internal/version"
 )
 
@@ -22,15 +23,11 @@ func PathIn(dir string) string {
 	return filepath.Join(dir, fileName)
 }
 
-// DefaultPath is the production database location: $XDG_DATA_HOME/plect/storage.db,
-// matching state.NewStore's directory resolution for the sibling state.json.
+// DefaultPath is the production database location: datahome.Resolve()'s
+// directory joined with fileName, matching state.NewStore's directory
+// resolution for the sibling durable state.
 func DefaultPath() string {
-	dataHome := os.Getenv("XDG_DATA_HOME")
-	if dataHome == "" {
-		home, _ := os.UserHomeDir()
-		dataHome = filepath.Join(home, ".local", "share")
-	}
-	return PathIn(filepath.Join(dataHome, "plect"))
+	return PathIn(datahome.Resolve())
 }
 
 // EnsureCurrent is the single entry point every plect process calls before
@@ -90,7 +87,7 @@ func ensureCurrent(ctx context.Context, path string, migrations fs.FS, isDevBuil
 	if current > 0 && isDevBuild && !allowDevBuild {
 		db.Close()
 		return nil, fmt.Errorf("persistence: %s is at schema %d; this development build would migrate it to %d.\n"+
-			"Refusing: point XDG_DATA_HOME at a scratch directory, or run `plect storage migrate --allow-dev-build` deliberately.",
+			"Refusing: point PLECT_DATA_HOME (or XDG_DATA_HOME) at a scratch directory, or run `plect storage migrate --allow-dev-build` deliberately.",
 			filepath.Base(path), current, target)
 	}
 

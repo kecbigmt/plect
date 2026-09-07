@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/kecbigmt/plecture/app/internal/config"
+	"github.com/kecbigmt/plecture/app/internal/datahome"
 	"github.com/kecbigmt/plecture/app/internal/lang"
 )
 
@@ -112,6 +113,12 @@ func (r actionRunner) resolve(def Definition, action *lang.Action) (*lang.Execut
 
 func commandContext(ctx context.Context, execution *lang.Execution) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, execution.Argv[0], execution.Argv[1:]...)
+	// A resource observer's poll/subscribe query is a declaration-driven
+	// child the same way a task's setup/cleanup is: see the datahome
+	// package for why this process's own PLECT_DATA_HOME must not leak
+	// into it (XDG_DATA_HOME is deliberately left alone — an observer may
+	// already depend on inheriting it for its own unrelated on-disk state).
+	cmd.Env = datahome.InheritableEnv()
 	if len(execution.Stdin) > 0 {
 		cmd.Stdin = bytes.NewReader(execution.Stdin)
 	}

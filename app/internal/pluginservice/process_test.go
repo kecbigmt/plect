@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -36,6 +37,30 @@ echo "stderr marker" >&2
 	}
 	if !strings.Contains(out, "stream=stdout") || !strings.Contains(out, "stream=stderr") {
 		t.Fatalf("log output missing stream tags, got:\n%s", out)
+	}
+}
+
+func TestBuildEnv_StripsPlectDataHomeButKeepsXDGDataHomeUnlessRebound(t *testing.T) {
+	t.Setenv("PLECT_DATA_HOME", "/poisoned")
+	t.Setenv("XDG_DATA_HOME", "/still-inherited")
+	t.Setenv("UNRELATED_VAR", "kept")
+
+	env := buildEnv(nil)
+	if slices.ContainsFunc(env, func(kv string) bool {
+		return strings.HasPrefix(kv, "PLECT_DATA_HOME=")
+	}) {
+		t.Fatalf("buildEnv(nil) leaked PLECT_DATA_HOME: %v", env)
+	}
+	if !slices.Contains(env, "XDG_DATA_HOME=/still-inherited") {
+		t.Fatalf("buildEnv(nil) dropped XDG_DATA_HOME, want it still inherited: %v", env)
+	}
+	if !slices.Contains(env, "UNRELATED_VAR=kept") {
+		t.Fatalf("buildEnv(nil) dropped an unrelated variable: %v", env)
+	}
+
+	env = buildEnv(map[string]string{"PLECT_DATA_HOME": "/explicit"})
+	if !slices.Contains(env, "PLECT_DATA_HOME=/explicit") {
+		t.Fatalf("plugin.toml's own env override did not survive the strip: %v", env)
 	}
 }
 

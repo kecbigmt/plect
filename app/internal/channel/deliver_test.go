@@ -189,6 +189,36 @@ out = { type = "string", required = true }
 	}
 }
 
+func TestDeliver_ProcessStripsBothDataHomeVars(t *testing.T) {
+	t.Setenv("PLECT_DATA_HOME", "/poisoned")
+	t.Setenv("XDG_DATA_HOME", "/poisoned-xdg")
+
+	out := filepath.Join(t.TempDir(), "env.out")
+	def := channelDef(t, `
+[c]
+kind   = "channel"
+type   = "shell"
+script = 'env > "$out"'
+
+[c.bind]
+out = { from = "inputs.out" }
+
+[c.input_schema]
+out = { type = "string", required = true }
+`)
+	ev := event.Event{Type: event.TypeUserEmit}
+	if err := Deliver(context.Background(), def, map[string]any{"out": out}, ev); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	raw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "PLECT_DATA_HOME=") || strings.Contains(string(raw), "XDG_DATA_HOME=") {
+		t.Fatalf("channel command's env leaked a data-home variable:\n%s", raw)
+	}
+}
+
 func TestDeliverWithOptions_TerminalCapabilityReachesTheScript(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "out")
 	def := channelDef(t, `
