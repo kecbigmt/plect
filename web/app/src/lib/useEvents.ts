@@ -17,15 +17,13 @@ export function isLifecycleEvent(type: string): boolean {
 // event's own payload below rather than refetched.
 const STATUS_MESSAGE_EVENT_TYPE = "plect.status_message";
 
-// Returns whether a cached detail existed to patch; the caller buffers the
-// event and retries otherwise, rather than losing it.
-function applyStatusMessagePatch(queryClient: QueryClient, sessionName: string, event: SessionEvent): boolean {
-  let patched = false;
+// No-op with no cached detail to patch: an unresolved fetch already reflects
+// any status message that preceded it (docs/design/web-ui.md).
+function applyStatusMessagePatch(queryClient: QueryClient, sessionName: string, event: SessionEvent): void {
   queryClient.setQueryData(sessionDetailQueryKey(sessionName), (prev: SessionDetail | undefined) => {
     if (!prev) {
       return prev;
     }
-    patched = true;
     const cleared = event.metadata?.cleared === "true";
     if (cleared) {
       return { ...prev, message: undefined };
@@ -35,7 +33,6 @@ function applyStatusMessagePatch(queryClient: QueryClient, sessionName: string, 
       message: { text: event.metadata?.text ?? event.summary, updatedAt: event.time },
     };
   });
-  return patched;
 }
 
 // Debounces a burst of lifecycle events into one refetch; never cleared by
@@ -97,8 +94,6 @@ export function useLiveEvents(sessionName: string | null, historyReady: boolean,
   const [liveEvents, setLiveEvents] = useState<SessionEvent[]>([]);
   const [state, setState] = useState<EventStreamState>("connecting");
   const invalidateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // A status-message event this session's detail couldn't patch yet.
-  const pendingStatusPatchRef = useRef<SessionEvent | null>(null);
 
   useEffect(() => {
     if (sessionName === null || !historyReady) {
@@ -118,27 +113,6 @@ export function useLiveEvents(sessionName: string | null, historyReady: boolean,
       }, INVALIDATE_COALESCE_MS);
     }
 
-    // Applies a buffered status patch once this session's detail settles.
-    const unsubscribe = queryClient.getQueryCache().subscribe((cacheEvent) => {
-      if (cacheEvent.type !== "updated") {
-        return;
-      }
-      const [kind, name] = cacheEvent.query.queryKey;
-      if (kind !== "session" || name !== session) {
-        return;
-      }
-      const { status } = cacheEvent.query.state;
-      if (status !== "success" && status !== "error") {
-        return;
-      }
-      const pending = pendingStatusPatchRef.current;
-      pendingStatusPatchRef.current = null;
-      if (pending !== null && status === "success") {
-        applyStatusMessagePatch(queryClient, session, pending);
-      }
-      unsubscribe();
-    });
-
     openEventStream(
       sessionName,
       resumeCursor,
@@ -146,9 +120,7 @@ export function useLiveEvents(sessionName: string | null, historyReady: boolean,
         onEvent: (event) => {
           setLiveEvents((prev) => (prev.some((e) => e.id === event.id) ? prev : [...prev, event]));
           if (event.type === STATUS_MESSAGE_EVENT_TYPE) {
-            if (!applyStatusMessagePatch(queryClient, session, event)) {
-              pendingStatusPatchRef.current = event;
-            }
+            applyStatusMessagePatch(queryClient, session, event);
             return;
           }
           if (!isLifecycleEvent(event.type)) {
@@ -160,12 +132,7 @@ export function useLiveEvents(sessionName: string | null, historyReady: boolean,
       },
       controller.signal,
     );
-    return () => {
-      controller.abort();
-      // A detail fetch in flight at unmount must still get its buffered
-      // patch applied once it resolves, so the subscription is deliberately
-      // kept alive rather than torn down here.
-    };
+    return () => controller.abort();
   }, [sessionName, historyReady, resumeCursor, queryClient]);
 
   return { liveEvents, state };

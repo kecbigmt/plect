@@ -254,8 +254,12 @@ unmount, so quickly navigating through several sessions cannot force it
 early. A self-reported status-message event carries its own new value
 inline and instead patches the cached detail directly, with no request at
 all — necessary since it can fire every few seconds per session and a
-resume backlog can replay dozens at once; one that arrives before the
-detail has ever been fetched is applied once that fetch lands, not dropped.
+resume backlog can replay dozens at once. One that arrives before the
+detail has ever been cached is dropped: an unresolved fetch returns the
+server's current state, which already reflects any status message that
+preceded it, and a message landing during that window is corrected by the
+next status event, the next lifecycle refetch, or the periodic refresh
+below.
 
 The selected session's own stream cannot observe another session's facts, so
 an unselected or newly created session's lifecycle/status change does not

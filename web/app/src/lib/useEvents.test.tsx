@@ -145,10 +145,22 @@ describe("useLiveEvents", () => {
     });
   });
 
+  it("issues no request and mutates nothing for a status-message event with no cached detail", () => {
+    const { queryClient, wrapper } = makeWrapper();
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+    renderHook(() => useLiveEvents("team/a", true, ""), { wrapper });
+
+    const handlers = vi.mocked(openEventStream).mock.calls[0][2];
+    handlers.onEvent(
+      stubEvent({ type: "plect.status_message", metadata: { text: "hi", cleared: "false", previous: "" } }),
+    );
+
+    expect(invalidateSpy).not.toHaveBeenCalled();
+    expect(queryClient.getQueryData(sessionDetailQueryKey("team/a"))).toBeUndefined();
+  });
+
   // A resume backlog or an actively narrating session can replay/emit many
-  // status-message events in a row; none may reach the network once the
-  // detail is already cached (the arrives-before-cache-exists case is its
-  // own test below).
+  // status-message events in a row; none may reach the network.
   it("issues zero session-list requests for a burst of 50 status-message events", async () => {
     const queryClient = new QueryClient();
     function wrapper({ children }: { children: ReactNode }) {
@@ -187,62 +199,6 @@ describe("useLiveEvents", () => {
     } finally {
       vi.unstubAllGlobals();
     }
-  });
-
-  it("buffers a status-message event that arrives before the detail is cached, applying it once the detail resolves", () => {
-    const { queryClient, wrapper } = makeWrapper();
-    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
-    renderHook(() => useLiveEvents("team/a", true, ""), { wrapper });
-
-    const handlers = vi.mocked(openEventStream).mock.calls[0][2];
-    handlers.onEvent(
-      stubEvent({ type: "plect.status_message", metadata: { text: "hi", cleared: "false", previous: "" } }),
-    );
-
-    // No cached detail yet: nothing to patch, and no network fallback either.
-    expect(invalidateSpy).not.toHaveBeenCalled();
-    expect(queryClient.getQueryData(sessionDetailQueryKey("team/a"))).toBeUndefined();
-
-    // The detail query's own fetch lands independently of the live stream.
-    queryClient.setQueryData(sessionDetailQueryKey("team/a"), {
-      sessionName: "team/a",
-      run: "up",
-      resourceId: "",
-      createdAt: "2026-01-01T00:00:00Z",
-      workspaceDirExists: false,
-    });
-
-    expect(invalidateSpy).not.toHaveBeenCalled();
-    expect(queryClient.getQueryData(sessionDetailQueryKey("team/a"))).toMatchObject({
-      message: { text: "hi" },
-    });
-  });
-
-  it("still applies a buffered status-message event if the keyed instance unmounts before the detail fetch resolves", () => {
-    const { queryClient, wrapper } = makeWrapper();
-    const { unmount } = renderHook(() => useLiveEvents("team/a", true, ""), { wrapper });
-
-    const handlers = vi.mocked(openEventStream).mock.calls[0][2];
-    handlers.onEvent(
-      stubEvent({ type: "plect.status_message", metadata: { text: "hi", cleared: "false", previous: "" } }),
-    );
-
-    // A session switch unmounts this keyed instance while the detail
-    // fetch that started before the switch is still in flight.
-    unmount();
-
-    // The fetch resolves after the switch.
-    queryClient.setQueryData(sessionDetailQueryKey("team/a"), {
-      sessionName: "team/a",
-      run: "up",
-      resourceId: "",
-      createdAt: "2026-01-01T00:00:00Z",
-      workspaceDirExists: false,
-    });
-
-    expect(queryClient.getQueryData(sessionDetailQueryKey("team/a"))).toMatchObject({
-      message: { text: "hi" },
-    });
   });
 
   it("keeps a pending debounced invalidation alive after unmount instead of dropping it", () => {
