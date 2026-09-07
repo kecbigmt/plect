@@ -1,8 +1,7 @@
 -- +goose Up
 -- Hand-written under a one-time owner exception to schema.sql's Atlas-only
 -- rule. PRAGMA foreign_keys is a no-op inside goose's transaction, so
--- node_instances is renamed (never dropped) before node_executions' FK
--- names the live table.
+-- node_instances is renamed (never dropped) before node_executions' FK names the live table.
 PRAGMA foreign_keys = off;
 ALTER TABLE `node_instances` RENAME TO `old_node_instances`;
 CREATE TABLE `node_instances` (`session_id` text NOT NULL, `node_id` text NOT NULL, PRIMARY KEY (`session_id`, `node_id`), CONSTRAINT `0` FOREIGN KEY (`session_id`) REFERENCES `sessions` (`id`) ON UPDATE NO ACTION ON DELETE CASCADE);

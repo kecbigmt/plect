@@ -65,8 +65,7 @@ type teardownItem struct {
 // dynamic instance into one dependency-ordered Resolved list (see
 // orderTeardownItems); the @workflow pseudo-node releases last, via the
 // workspace provider cleanup hook. Static nodes are enumerated from
-// session.Nodes, not plan, so a node the current workflow no longer
-// declares is still torn down (resolveNodeCleanup).
+// session.Nodes, not plan, so a dropped node is still torn down.
 func unifiedTeardownList(cfg *config.Config, session *domain.Session, runOnly bool) ([]task.Resolved, error) {
 	defs, err := cfg.LoadTaskDefinitions(session.WorkspaceDirPath)
 	if err != nil {
