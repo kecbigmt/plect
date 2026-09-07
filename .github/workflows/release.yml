@@ -81,6 +81,8 @@ jobs:
           pnpm --dir app test
           pnpm --dir app build
         working-directory: web
+      # ci.yml's build-test-darwin job runs this same `go test ./...`
+      # against the app module on every push to main.
       - name: Test the app module with cgo enabled
         run: go test ./...
         working-directory: app
