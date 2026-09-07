@@ -74,7 +74,7 @@ func TestBrowserAcceptance_LoginNavigatesHierarchyAndShowsHistory(t *testing.T) 
 		Name:          "browser-child",
 		ParentSession: "browser-root",
 		ResourceID:    "https://github.com/browser-accept/issues/2",
-		Tasks: map[string]*contract.TaskState{
+		Nodes: map[string]*contract.TaskState{
 			contract.WorkflowPseudoNodeID: {
 				Scope:   contract.TaskScopeSession,
 				Status:  contract.TaskStatusProduced,
