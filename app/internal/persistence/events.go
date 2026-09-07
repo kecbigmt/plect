@@ -80,6 +80,26 @@ func (db *DB) EventStreamSessions(ctx context.Context) ([]string, error) {
 	return names, err
 }
 
+// ReadSessionNames is EventStreamSessions' own query (every session name
+// ever, live or destroyed), run through a bare read-only connection instead
+// of Open's access gate -- for a caller that wants to preview a database
+// without migrating it or creating gate-lock sidecars next to it. SQLite
+// itself may still create or update path's own -wal/-shm as an ordinary
+// side effect of reading a WAL-mode database; that is the engine's doing,
+// not a write this function performs.
+func ReadSessionNames(ctx context.Context, path string) ([]string, error) {
+	raw, err := sql.Open("sqlite3", fmt.Sprintf("file:%s?mode=ro&_busy_timeout=%d", path, busyTimeoutMillis))
+	if err != nil {
+		return nil, fmt.Errorf("open %s read-only: %w", path, err)
+	}
+	defer raw.Close()
+	names, err := sqlcgen.New(raw).ListEverSessionNames(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list session names: %w", err)
+	}
+	return names, nil
+}
+
 func (db *DB) EventStreamIDsBySession(ctx context.Context, session string) ([]string, error) {
 	var ids []string
 	err := db.WithReadTx(ctx, func(tx *sql.Tx) error {

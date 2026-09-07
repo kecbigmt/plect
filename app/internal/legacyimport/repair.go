@@ -2,12 +2,9 @@ package legacyimport
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"os"
 	"time"
-
-	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/kecbigmt/plecture/app/internal/persistence"
 	"github.com/kecbigmt/plecture/contracts/atomicfile"
@@ -19,7 +16,7 @@ type RepairOptions struct {
 	// are legitimate: storage.db alone cannot tell a ghost row from a real one.
 	SourceDir string
 	DestDir   string // the plect data directory holding the storage.db to repair
-	DryRun    bool   // opens the database read-only, skipping backup and delete entirely
+	DryRun    bool   // previews via persistence.ReadSessionNames, skipping backup and delete entirely
 }
 
 // RepairReport counts what one RepairImportedSessions call found and did.
@@ -61,9 +58,8 @@ func RepairImportedSessions(ctx context.Context, opts RepairOptions) (*RepairRep
 		return report, fmt.Errorf("legacyimport: stat %s: %w", dbPath, statErr)
 	}
 
-	// A bare read-only connection, not Open/EnsureCurrent: both create gate sidecars as a side effect of opening.
 	if opts.DryRun {
-		names, err := listSessionNamesReadOnly(dbPath)
+		names, err := persistence.ReadSessionNames(ctx, dbPath)
 		if err != nil {
 			return report, fmt.Errorf("legacyimport: %w", err)
 		}
@@ -108,34 +104,6 @@ func RepairImportedSessions(ctx context.Context, opts RepairOptions) (*RepairRep
 	}
 
 	return report, nil
-}
-
-// listSessionNamesReadOnly returns every distinct session name in dbPath's
-// sessions table, matching EventStreamSessions' own query, bypassing
-// persistence.Open entirely -- see the DryRun branch above for why.
-func listSessionNamesReadOnly(dbPath string) ([]string, error) {
-	// Not immutable=1: a stopped-but-not-cleanly-shut-down process can leave
-	// committed rows sitting in -wal, uncheckpointed into dbPath itself, and
-	// immutable=1 would silently read only the stale main file and miss them.
-	db, err := sql.Open("sqlite3", "file:"+dbPath+"?mode=ro&_busy_timeout=5000")
-	if err != nil {
-		return nil, fmt.Errorf("open %s read-only: %w", dbPath, err)
-	}
-	defer db.Close()
-	rows, err := db.Query(`SELECT DISTINCT name FROM sessions ORDER BY name`)
-	if err != nil {
-		return nil, fmt.Errorf("query %s: %w", dbPath, err)
-	}
-	defer rows.Close()
-	var names []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, fmt.Errorf("scan session name: %w", err)
-		}
-		names = append(names, name)
-	}
-	return names, rows.Err()
 }
 
 // backupDatabaseFiles copies dbPath and its WAL-mode siblings, if any, to a

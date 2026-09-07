@@ -53,13 +53,12 @@ func buggyImportedFixture(t *testing.T) (sourceDir, destDir string) {
 	return sourceDir, destDir
 }
 
-// TestListSessionNamesReadOnly_SeesUncheckpointedWALContent is the
-// regression test for a real bug: an earlier revision opened with
-// immutable=1, which reads only dbPath's main file and ignores newer
-// committed rows still sitting in -wal -- exactly the state a
-// stopped-but-not-cleanly-shut-down process can leave behind. A dry run
-// must see the same rows the real (WAL-aware) repair pass would.
-func TestListSessionNamesReadOnly_SeesUncheckpointedWALContent(t *testing.T) {
+// TestReadSessionNames_SeesUncheckpointedWALContent is the regression test
+// for a real bug: an earlier revision read dbPath through a
+// mode=ro&immutable=1 connection, which sees only dbPath's main file and
+// ignores newer committed rows still sitting in -wal -- exactly the state a
+// stopped-but-not-cleanly-shut-down process can leave behind.
+func TestReadSessionNames_SeesUncheckpointedWALContent(t *testing.T) {
 	destDir := t.TempDir()
 	ctx := context.Background()
 	dbPath := persistence.PathIn(destDir)
@@ -75,12 +74,12 @@ func TestListSessionNamesReadOnly_SeesUncheckpointedWALContent(t *testing.T) {
 	}
 	// db (and its -wal) stays open and uncheckpointed here deliberately.
 
-	names, err := listSessionNamesReadOnly(dbPath)
+	names, err := persistence.ReadSessionNames(ctx, dbPath)
 	if err != nil {
-		t.Fatalf("listSessionNamesReadOnly: %v", err)
+		t.Fatalf("ReadSessionNames: %v", err)
 	}
 	if !slices.Contains(names, "wal-only-session") {
-		t.Errorf("listSessionNamesReadOnly = %v, want it to include wal-only-session", names)
+		t.Errorf("ReadSessionNames = %v, want it to include wal-only-session", names)
 	}
 }
 
@@ -124,11 +123,13 @@ func TestRepairImportedSessions_DryRunReportsWithoutWriting(t *testing.T) {
 }
 
 // TestRepairImportedSessions_DryRunCreatesNoGateOrBackupFiles is the
-// regression test for a real bug: DryRun read via persistence.Open, which
-// creates this package's own .access.lock/.coordination.lock gate sidecars
-// as a side effect of opening -- see listSessionNamesReadOnly's own doc
-// comment for why a bare connection avoids that. -wal/-shm are excluded
-// from the comparison: any tool reading a WAL-mode database creates those.
+// regression test for a real bug: DryRun read via persistence.Open/
+// EnsureCurrent, both of which create this package's own
+// .access.lock/.coordination.lock gate sidecars (EnsureCurrent can also
+// migrate the schema) as a side effect of opening. -wal/-shm are excluded
+// from the comparison: SQLite itself creates or updates those as an
+// ordinary side effect of reading a WAL-mode database, not a write this
+// command performs.
 func TestRepairImportedSessions_DryRunCreatesNoGateOrBackupFiles(t *testing.T) {
 	sourceDir, destDir := buggyImportedFixture(t)
 	ctx := context.Background()
