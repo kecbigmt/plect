@@ -51,9 +51,9 @@ describe("useSessionList", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
-  // Interim cross-session fallback (docs/design/web-ui.md, #488): nothing
-  // yet tells the list about an unselected session's own change, so it
-  // polls at a low, bounded rate instead of never refetching at all.
+  // Interim cross-session fallback (docs/design/web-ui.md): nothing yet
+  // tells the list about an unselected session's own change, so it polls
+  // at a low, bounded rate instead of never refetching at all.
   it("refetches every 60s while visible, and not sooner", async () => {
     vi.useFakeTimers();
     try {

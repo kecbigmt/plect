@@ -268,30 +268,34 @@ describe("useLiveEvents", () => {
     }
   });
 
-  it("coalesces lifecycle events across rapid session switches into one invalidation, not one per hop", () => {
+  // Conversation.tsx mounts this hook keyed by sessionName, so switching
+  // sessions unmounts the old instance and mounts a brand new one — each
+  // gets its own timer ref, unlike a rerender of the same instance.
+  it("keeps each keyed instance's pending invalidation independent across rapid session switches", () => {
     vi.useFakeTimers();
     try {
       const { queryClient, wrapper } = makeWrapper();
       const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
-      const { rerender } = renderHook(
-        ({ sessionName }: { sessionName: string }) => useLiveEvents(sessionName, true, ""),
-        { wrapper, initialProps: { sessionName: "team/a" } },
-      );
+
+      const a = renderHook(() => useLiveEvents("team/a", true, ""), { wrapper });
       vi.mocked(openEventStream).mock.calls[0][2].onEvent(stubEvent({ type: "lifecycle.up" }));
+      a.unmount();
 
-      rerender({ sessionName: "team/b" });
+      const b = renderHook(() => useLiveEvents("team/b", true, ""), { wrapper });
       vi.mocked(openEventStream).mock.calls[1][2].onEvent(stubEvent({ type: "lifecycle.up" }));
+      b.unmount();
 
-      rerender({ sessionName: "team/c" });
+      renderHook(() => useLiveEvents("team/c", true, ""), { wrapper });
       vi.mocked(openEventStream).mock.calls[2][2].onEvent(stubEvent({ type: "lifecycle.up" }));
 
       expect(invalidateSpy).not.toHaveBeenCalled();
       vi.runAllTimers();
 
-      // Only the last hop's debounce survives; the earlier two were superseded.
-      expect(invalidateSpy).toHaveBeenCalledTimes(2);
+      // All three survive: each was its own keyed instance's own timer.
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: sessionDetailQueryKey("team/a") });
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: sessionDetailQueryKey("team/b") });
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: sessionDetailQueryKey("team/c") });
-      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: sessionListQueryKey() });
+      expect(invalidateSpy).toHaveBeenCalledTimes(6);
     } finally {
       vi.useRealTimers();
     }
