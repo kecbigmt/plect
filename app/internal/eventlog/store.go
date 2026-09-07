@@ -599,11 +599,16 @@ func (s *Store) FollowAcrossLive(ctx context.Context, namesFn func() ([]string, 
 	lf := f
 	lf.Limit = 0
 	offsets := map[string]int64{}
+	tracked := map[string]bool{}
 	first := true
 	for {
 		names, err := namesFn()
 		if err != nil {
 			return err
+		}
+		current := make(map[string]bool, len(names))
+		for _, name := range names {
+			current[name] = true
 		}
 		if first {
 			for _, name := range names {
@@ -615,14 +620,32 @@ func (s *Store) FollowAcrossLive(ctx context.Context, namesFn func() ([]string, 
 			}
 			first = false
 		}
+		// destroy appends lifecycle.destroyed, then deletes the state entry,
+		// so a session gone from membership this tick still gets one more
+		// read at its last offset before this stops tracking it.
+		fetch := append([]string(nil), names...)
+		for name := range tracked {
+			if !current[name] {
+				fetch = append(fetch, name)
+			}
+		}
 		var batch []event.Event
-		for _, name := range names {
+		for _, name := range fetch {
 			evs, _, next, lerr := s.List(name, offsets[name], lf)
 			if lerr != nil {
 				return lerr
 			}
 			batch = append(batch, evs...)
 			offsets[name] = next
+		}
+		for name := range tracked {
+			if !current[name] {
+				delete(tracked, name)
+				delete(offsets, name)
+			}
+		}
+		for _, name := range names {
+			tracked[name] = true
 		}
 		slices.SortFunc(batch, func(a, b event.Event) int { return strings.Compare(a.ID, b.ID) })
 		for i := range batch {

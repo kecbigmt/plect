@@ -341,4 +341,31 @@ describe("useSessionListLiveFacts", () => {
     );
     expect(list?.[0].message).toMatchObject({ text: "reviewing" });
   });
+
+  it("refetches once when the stream reconnects, closing whatever the gap missed", () => {
+    vi.useFakeTimers();
+    try {
+      const { queryClient, wrapper } = makeWrapper();
+      const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+      renderHook(() => useSessionListLiveFacts(), { wrapper });
+
+      const handlers = vi.mocked(openAllSessionsEventStream).mock.calls[0][0];
+      // The initial connect must not itself trigger a refetch (it would
+      // double up with the page-load fetch useSessionList already made).
+      handlers.onStateChange("connecting");
+      handlers.onStateChange("live");
+      vi.runAllTimers();
+      expect(invalidateSpy).not.toHaveBeenCalled();
+
+      // A real reconnect: live -> reconnecting -> live.
+      handlers.onStateChange("reconnecting");
+      handlers.onStateChange("live");
+
+      expect(invalidateSpy).not.toHaveBeenCalled();
+      vi.runAllTimers();
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: sessionListQueryKey() });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

@@ -656,6 +656,73 @@ func TestFollowAcrossLive_SkipsPriorHistoryButNotANewlyAppearingSession(t *testi
 	}
 }
 
+// A session that drops out of membership (the real destroy sequence appends
+// lifecycle.destroyed, then deletes the state entry, so the very next tick
+// can already see it gone) still gets its final event delivered — the log
+// outlives the state entry, and this is the one chance to read it.
+func TestFollowAcrossLive_DeliversADepartedSessionsFinalEvent(t *testing.T) {
+	s := NewStore(t.TempDir())
+	if _, _, _, err := s.Append(event.Event{SessionName: "gone", Type: "t", Direction: event.Internal, Summary: "gone-created"}); err != nil {
+		t.Fatal(err)
+	}
+
+	names := []string{"gone"}
+	var mu sync.Mutex
+	namesFn := func() ([]string, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), names...), nil
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var gotMu sync.Mutex
+	var got []event.Event
+	done := make(chan struct{})
+	go func() {
+		_ = s.FollowAcrossLive(ctx, namesFn, event.Filter{}, func(ev event.Event) {
+			gotMu.Lock()
+			got = append(got, ev)
+			gotMu.Unlock()
+		})
+		close(done)
+	}()
+
+	// Lets the first tick prime "gone" at its current tail.
+	time.Sleep(50 * time.Millisecond)
+
+	// Mirrors the real destroy sequence: append the final event, then drop
+	// the session from membership before the follow's next tick can see it.
+	if _, _, _, err := s.Append(event.Event{SessionName: "gone", Type: "t", Direction: event.Internal, Summary: "gone-destroyed"}); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	names = nil
+	mu.Unlock()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		gotMu.Lock()
+		n := len(got)
+		gotMu.Unlock()
+		if n >= 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for the departed session's final event")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-done
+
+	gotMu.Lock()
+	defer gotMu.Unlock()
+	if len(got) != 1 || got[0].Summary != "gone-destroyed" {
+		t.Fatalf("got %+v, want exactly one event, \"gone-destroyed\"", got)
+	}
+}
+
 func TestReadFromStream_TraversesEveryIntermediateIncarnation(t *testing.T) {
 	store := NewStore(t.TempDir())
 	const session = "o/r-1"

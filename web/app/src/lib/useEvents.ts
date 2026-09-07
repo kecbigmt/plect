@@ -195,6 +195,7 @@ export function useLiveEvents(sessionName: string | null, historyReady: boolean,
 export function useSessionListLiveFacts(): void {
   const queryClient = useQueryClient();
   const invalidateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastStateRef = useRef<EventStreamState>("connecting");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -221,7 +222,15 @@ export function useSessionListLiveFacts(): void {
           }
           scheduleListInvalidate();
         },
-        onStateChange: () => {},
+        onStateChange: (state) => {
+          // No resume cursor, so a gap (network drop, backgrounded tab) is
+          // otherwise invisible; refetch once on the way back from it, not
+          // on the initial connect (never "reconnecting" beforehand).
+          if (state === "live" && lastStateRef.current === "reconnecting") {
+            scheduleListInvalidate();
+          }
+          lastStateRef.current = state;
+        },
       },
       controller.signal,
     );
