@@ -17,11 +17,15 @@ export function isLifecycleEvent(type: string): boolean {
 // event's own payload below rather than refetched.
 const STATUS_MESSAGE_EVENT_TYPE = "plect.status_message";
 
-function applyStatusMessagePatch(queryClient: QueryClient, sessionName: string, event: SessionEvent): void {
+// Returns whether a cached detail existed to patch — the caller falls back
+// to a real refetch otherwise, rather than silently losing the update.
+function applyStatusMessagePatch(queryClient: QueryClient, sessionName: string, event: SessionEvent): boolean {
+  let patched = false;
   queryClient.setQueryData(sessionDetailQueryKey(sessionName), (prev: SessionDetail | undefined) => {
     if (!prev) {
       return prev;
     }
+    patched = true;
     const cleared = event.metadata?.cleared === "true";
     if (cleared) {
       return { ...prev, message: undefined };
@@ -31,6 +35,7 @@ function applyStatusMessagePatch(queryClient: QueryClient, sessionName: string, 
       message: { text: event.metadata?.text ?? event.summary, updatedAt: event.time },
     };
   });
+  return patched;
 }
 
 // Debounces a burst of lifecycle events into one refetch.
@@ -96,7 +101,21 @@ export function useLiveEvents(sessionName: string | null, historyReady: boolean,
     if (sessionName === null || !historyReady) {
       return;
     }
+    const session = sessionName;
     const controller = new AbortController();
+
+    function invalidateNow() {
+      invalidateTimerRef.current = null;
+      queryClient.invalidateQueries({ queryKey: sessionDetailQueryKey(session) });
+      queryClient.invalidateQueries({ queryKey: sessionListQueryKey() });
+    }
+    function scheduleInvalidate() {
+      if (invalidateTimerRef.current !== null) {
+        clearTimeout(invalidateTimerRef.current);
+      }
+      invalidateTimerRef.current = setTimeout(invalidateNow, INVALIDATE_COALESCE_MS);
+    }
+
     openEventStream(
       sessionName,
       resumeCursor,
@@ -104,20 +123,15 @@ export function useLiveEvents(sessionName: string | null, historyReady: boolean,
         onEvent: (event) => {
           setLiveEvents((prev) => (prev.some((e) => e.id === event.id) ? prev : [...prev, event]));
           if (event.type === STATUS_MESSAGE_EVENT_TYPE) {
-            applyStatusMessagePatch(queryClient, sessionName, event);
+            if (!applyStatusMessagePatch(queryClient, sessionName, event)) {
+              scheduleInvalidate();
+            }
             return;
           }
           if (!isLifecycleEvent(event.type)) {
             return;
           }
-          if (invalidateTimerRef.current !== null) {
-            clearTimeout(invalidateTimerRef.current);
-          }
-          invalidateTimerRef.current = setTimeout(() => {
-            invalidateTimerRef.current = null;
-            queryClient.invalidateQueries({ queryKey: sessionDetailQueryKey(sessionName) });
-            queryClient.invalidateQueries({ queryKey: sessionListQueryKey() });
-          }, INVALIDATE_COALESCE_MS);
+          scheduleInvalidate();
         },
         onStateChange: setState,
       },
@@ -125,8 +139,12 @@ export function useLiveEvents(sessionName: string | null, historyReady: boolean,
     );
     return () => {
       controller.abort();
+      // A pending debounce must fire, not vanish, when the session changes
+      // or this unmounts mid-wait — otherwise the last lifecycle/status fact
+      // observed for the outgoing session is silently dropped.
       if (invalidateTimerRef.current !== null) {
         clearTimeout(invalidateTimerRef.current);
+        invalidateNow();
       }
     };
   }, [sessionName, historyReady, resumeCursor, queryClient]);
