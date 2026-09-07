@@ -20,12 +20,9 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// sharedWorkspaceProviderBinariesOnce guards buildSharedWorkspaceProviderBinaries;
-// sharedWorkspaceProviderBinariesDir/Err hold its result for every caller in
-// this test binary run. Left for the OS/CI runner to reclaim rather than
-// removed explicitly: the directory's lifetime is the test binary process's,
-// and every consumer of this package's integration tests (CI, a disposable
-// worktree) is itself torn down at the end of that run.
+// sharedWorkspaceProviderBinariesDir/Err cache
+// buildSharedWorkspaceProviderBinaries's result for this test binary's run;
+// never removed since the run's temp dir is reclaimed along with it.
 var (
 	sharedWorkspaceProviderBinariesOnce sync.Once
 	sharedWorkspaceProviderBinariesDir  string
@@ -95,9 +92,6 @@ func resolveGoToolCaches() []string {
 	return []string{"GOMODCACHE=" + lines[0], "GOCACHE=" + lines[1]}
 }
 
-// workspaceProviderBinaries lists the plect CLI and the executables the
-// GitHub catalog plugin ships (github-worktree, github-watcher,
-// gh-app-token), each built from its own module.
 var workspaceProviderBinaries = []struct{ moduleDir, pkg, name string }{
 	{"app", "./cmd/plect", "plect"},
 	{filepath.Join("plugins", "github", "src"), "./cmd/github-worktree", "github-worktree"},
@@ -105,11 +99,10 @@ var workspaceProviderBinaries = []struct{ moduleDir, pkg, name string }{
 	{filepath.Join("plugins", "github", "src"), "./cmd/gh-app-token", "gh-app-token"},
 }
 
-// buildSharedWorkspaceProviderBinaries compiles workspaceProviderBinaries
-// exactly once per test binary run, into a directory that outlives any
-// single test's t.TempDir(). Every workspace-provider fixture in this
-// package mounts these same four binaries, and a per-test rebuild of all
-// four was this package's dominant integration-test cost.
+// buildSharedWorkspaceProviderBinaries builds workspaceProviderBinaries once
+// per test binary run: dozens of tests each mount a workspace-provider
+// fixture, and a per-test rebuild of all four was this package's dominant
+// integration-test cost.
 func buildSharedWorkspaceProviderBinaries(root string) (string, error) {
 	sharedWorkspaceProviderBinariesOnce.Do(func() {
 		dir, err := os.MkdirTemp("", "plect-workspace-provider-bin-")
@@ -133,15 +126,10 @@ func buildSharedWorkspaceProviderBinaries(root string) (string, error) {
 	return sharedWorkspaceProviderBinariesDir, sharedWorkspaceProviderBinariesErr
 }
 
-// buildWorkspaceProviderBinaries symlinks the shared, once-built binaries
-// (see buildSharedWorkspaceProviderBinaries) into a fresh per-test
-// directory, prepends it to PATH (`plect` itself is still resolved that
-// way), and returns the mounted-plugin entry an
-// effect.WorkflowHookVars/effect.SubscribeHookVars.Plugins needs so the
-// shipped hooks' `{{bin ...}}` references resolve to the code in this
-// working tree. A fresh directory per test (rather than returning the
-// shared one directly) keeps each test's own config/workspaces writes
-// (e.g. shippedGithubWorkspaceProvider) from colliding with another test's.
+// buildWorkspaceProviderBinaries symlinks the shared binaries (see
+// buildSharedWorkspaceProviderBinaries) into a fresh per-test directory and
+// PATH, so a test's own config/workspaces writes don't collide with
+// another test's.
 func buildWorkspaceProviderBinaries(t *testing.T, root string) []plugins.Mounted {
 	t.Helper()
 	sharedDir, err := buildSharedWorkspaceProviderBinaries(root)
@@ -170,10 +158,8 @@ func buildWorkspaceProviderBinaries(t *testing.T, root string) []plugins.Mounted
 	}}
 }
 
-// TestBuildWorkspaceProviderBinaries_BuildsOnce pins the invariant this
-// package's integration-test wall time depends on: two mount requests must
-// share one compiled set of binaries rather than each triggering its own
-// `go build`.
+// TestBuildWorkspaceProviderBinaries_BuildsOnce pins the once-only cache:
+// two mount requests must reuse one build, not each trigger `go build`.
 func TestBuildWorkspaceProviderBinaries_BuildsOnce(t *testing.T) {
 	root := repoRoot(t)
 	buildWorkspaceProviderBinaries(t, root)
