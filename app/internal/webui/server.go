@@ -118,6 +118,8 @@ type Server struct {
 	// busClientFn, when set, overrides how the live-timeline handler reaches the
 	// bus (tests point it at an httptest bus instead of a Unix socket).
 	busClientFn func() *event.Client
+	// webAppFS, when set, lets tests substitute handleWebApp's filesystem.
+	webAppFS fs.FS
 }
 
 // New builds a Server with default config (no auth token — tailnet trust).
@@ -338,9 +340,18 @@ func buttonClass(variant any) string {
 // an error page — the same reason any single-page app's server needs a
 // catch-all.
 func (s *Server) handleWebApp() http.Handler {
-	dist, err := fs.Sub(webapp.FS, "dist")
+	root := s.webAppFS
+	if root == nil {
+		root = webapp.FS
+	}
+	// static/dist/ (Vite's gitignored output) may not exist at all; fs.Sub
+	// tolerates that fine, so only the fs.Stat below needs to check.
+	dist, err := fs.Sub(root, "static/dist")
 	if err != nil {
-		panic(err) // the embedded build always contains dist/; a missing one is a build bug, not a runtime condition.
+		panic(err)
+	}
+	if _, err := fs.Stat(dist, "index.html"); err != nil {
+		return webAppNotBuiltHandler(root)
 	}
 	fileServer := http.StripPrefix("/app/", http.FileServerFS(dist))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -362,5 +373,19 @@ func (s *Server) handleWebApp() http.Handler {
 			req.URL = &url.URL{Path: "/app/" + name, RawQuery: r.URL.RawQuery}
 		}
 		fileServer.ServeHTTP(w, req)
+	})
+}
+
+// webAppNotBuiltHandler serves static/unbuilt.html with HTTP 503 on every
+// /app/ route; other routes (API, login) are unaffected.
+func webAppNotBuiltHandler(root fs.FS) http.Handler {
+	notice, err := fs.ReadFile(root, "static/unbuilt.html")
+	if err != nil {
+		panic(err) // static/unbuilt.html is always embedded; a missing one is a build bug.
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write(notice)
 	})
 }

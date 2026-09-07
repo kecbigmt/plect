@@ -1,0 +1,130 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Main commit or branch to rehearse
+        required: true
+        type: string
+      tag:
+        description: SemVer tag to place in rehearsal archives
+        required: true
+        type: string
+
+# verify-tag and build run verification scripts, go test, and npm lifecycle
+# scripts against untrusted-ish inputs; a write-capable token has no
+# business being visible to any of that. Only publish calls gh release
+# create, so only publish declares contents: write, below.
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.25.6"
+  NODE_VERSION: "22.13"
+
+jobs:
+  verify-tag:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.ref || github.ref }}
+      - name: Fetch main for the reachability check below
+        run: git fetch origin main
+      - name: Prove the checker catches a seeded violation
+        run: ./scripts/verify-release-tag_selftest.sh
+      - name: Verify the release tag
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+          EVENT: ${{ github.event_name }}
+        run: ./scripts/verify-release-tag.sh "$TAG" "$EVENT" origin/main
+
+  build:
+    needs: verify-tag
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: linux-amd64
+            runner: ubuntu-24.04
+            goos: linux
+            goarch: amd64
+          - id: linux-arm64
+            runner: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+          - id: darwin-arm64
+            runner: macos-14
+            goos: darwin
+            goarch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install the pnpm version declared by web/package.json
+        run: npm install -g "pnpm@$(node -p "require('./package.json').packageManager.split('@')[1]")"
+        working-directory: web
+      - name: Install and build the Web UI
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --dir app test
+          pnpm --dir app build
+        working-directory: web
+      - name: Test the app module with cgo enabled
+        run: go test ./...
+        working-directory: app
+      - name: Build the released executables
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "1"
+          VERSION: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -eu
+          version="${VERSION#v}"
+          root="plect_${version}_${GOOS}_${GOARCH}"
+          out="$PWD/dist/$root/bin"
+          mkdir -p "$out"
+          flags="-X github.com/kecbigmt/plecture/app/internal/version.Current=$version"
+          go build -C app -ldflags "$flags" -o "$out/plect" ./cmd/plect
+          go build -C app -ldflags "$flags" -o "$out/plect-web" ./cmd/plect-web
+          "$out/plect" --help
+          "$out/plect-web" --help
+          tar -C dist -czf "dist/${root}.tar.gz" "$root"
+          rm -rf "dist/$root"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ matrix.id }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: github.event_name == 'push'
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create the checksum manifest and GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cd dist
+          sha256sum *.tar.gz > SHA256SUMS
+          gh release create "$TAG" *.tar.gz SHA256SUMS --title "$TAG" --generate-notes

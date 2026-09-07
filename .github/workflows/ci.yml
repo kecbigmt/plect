@@ -89,13 +89,16 @@ jobs:
             exit 1
           fi
 
-  # app/internal/webui/webapp/embed.go commits the Vite build so go:embed
-  # can see it at compile time — the invariant this job guards is that
+  # app/internal/webui/webapp/embed.go embeds a committed
+  # static/unbuilt.html placeholder (static/dist/, Vite's real output, is
+  # gitignored and untracked) so go:embed always has something to compile
+  # against — the invariant this job guards is that
   # building the app module never needs Node, on every PR. The changes
   # job's per-module map can route around app's own build-test entry (e.g.
   # a web/app-only change whose rebuilt dist happens to be byte-identical
   # touches nothing under app/), so this is unconditional, with no Node
-  # ever installed in the job, rather than gated like build-test.
+  # ever installed in the job, rather than
+  # gated like build-test.
   go-install:
     name: go-install
     runs-on: ubuntu-latest
@@ -244,15 +247,14 @@ jobs:
           }
         working-directory: app/internal/webapi
 
-  # The client/server boundary ADR requires no Node at runtime and
-  # reproducible CI; app/internal/webui/webapp/embed.go commits the Vite
-  # build for exactly that reason (go:embed only sees what's present at
-  # compile time, and go install has no path to run pnpm build). This job is
-  # the reproducibility check for that committed build, mirroring
-  # web-api-contract's own generated-code drift check. Gated on WEB_CI for
-  # the same reason web-api-contract is: a frozen-reference-only change
-  # under docs/design/web-ui/prototype/** must not stand in for validating
-  # this production build.
+  # app/internal/webui/webapp/static/dist/ is gitignored and untracked,
+  # built only by the release workflow and by web-browser-acceptance below;
+  # this job's
+  # invariant is narrower — that the pinned frontend dependency graph can
+  # build and test from source, not that a generated artifact matches one
+  # committed to Git. Gated on WEB_CI for the same reason web-api-contract
+  # is: a frozen-reference-only change under docs/design/web-ui/prototype/**
+  # must not stand in for validating this production path.
   web-app-build:
     name: web-app-build
     needs: changes
@@ -272,23 +274,14 @@ jobs:
       - name: Unit tests (vitest)
         run: pnpm test
         working-directory: web/app
-      - name: Build and check for drift against the committed embed
-        run: |
-          pnpm build
-          git diff --exit-code -- ../../app/internal/webui/webapp/dist/ || {
-            echo "::error::app/internal/webui/webapp/dist/ is out of date; run 'pnpm build' in web/app and commit the result." >&2
-            exit 1
-          }
+      - name: Build
+        run: pnpm build
         working-directory: web/app
-      - uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-      - name: go test ./internal/webui/...
-        run: go test ./internal/webui/...
-        working-directory: app
 
   # Browser-level acceptance for the /app/ shell's read/live milestone: a
-  # real Chromium against the committed /app/ build, served by the real
+  # real Chromium against a freshly built /app/ (dist/ is gitignored, so
+  # this job builds it itself before the Go build below picks it up — see
+  # app/internal/webui/webapp/embed.go), served by the real
   # service/state stack over httptest.NewServer — the same seam
   # acceptance_test.go already drives at the HTTP level, with a browser on
   # top. Kept separate from web-app-build (rather than an extra step there)
@@ -312,6 +305,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install the pnpm version pinned in web/package.json
+        run: npm install -g "pnpm@$(node -p "require('./package.json').packageManager.split('@')[1]")"
+        working-directory: web
+      - name: pnpm install (workspace-wide)
+        run: pnpm install --frozen-lockfile
+        working-directory: web
+      - name: Build the Web UI
+        run: pnpm build
+        working-directory: web/app
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}

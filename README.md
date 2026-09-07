@@ -10,9 +10,23 @@ It is not an agent framework. It is not a workflow engine that dictates executio
 
 ## Install
 
+Download a release archive for your platform from the
+[latest release](https://github.com/kecbigmt/plecture/releases/latest) and
+extract `bin/plect` (and `bin/plect-web`, the Web UI server) onto your
+`PATH`. Verify the download against the release's `SHA256SUMS`.
+
+Alternatively, build `plect` from source — this requires a Go toolchain and
+the C compiler `github.com/mattn/go-sqlite3` needs, and it does not build
+`plect-web` (its Web UI is not part of a plain source checkout; install it
+from a release archive instead):
+
 ```bash
 go install github.com/kecbigmt/plecture/app/cmd/plect@latest
 ```
+
+A plugin's own executables (e.g. a GitHub or Slack adapter) are built by
+`plect` from its pinned catalog on the host; a Go toolchain remains a host
+requirement for any enabled catalog plugin with a build step.
 
 ## Quick start
 

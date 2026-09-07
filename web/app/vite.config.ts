@@ -20,8 +20,9 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
   build: {
-    // Committed and go:embed'd from here — see app/internal/webui/webapp.
-    outDir: "../../app/internal/webui/webapp/dist",
+    // Gitignored and entirely untracked; go:embed'd alongside the tracked
+    // static/unbuilt.html placeholder — see app/internal/webui/webapp.
+    outDir: "../../app/internal/webui/webapp/static/dist",
     emptyOutDir: true,
   },
   server: {

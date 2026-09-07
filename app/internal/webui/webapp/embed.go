@@ -1,16 +1,11 @@
-// Package webapp embeds the production build of the React/TypeScript Web UI
-// shell (web/app, built by Vite). The build is committed rather than
-// produced at install time — go:embed can only see files present at compile
-// time, and the go install github.com/kecbigmt/plecture/app/cmd/plect@latest
-// installability invariant compiles from committed module source alone, the
-// same reason web/api's generated OpenAPI/TypeScript/Go contract types are
-// committed instead of regenerated on install. Regenerate it after changing
-// web/app's source:
-//
-//	cd web/app && pnpm install --frozen-lockfile && pnpm build
+// Package webapp embeds the Web UI shell served under /app/. static/dist/
+// (Vite's output) is gitignored and entirely untracked; static/unbuilt.html,
+// its tracked sibling, keeps go:embed — a compile-time check, not a
+// runtime one — always satisfied. app/internal/webui/server.go checks at
+// runtime whether static/dist/index.html — a real build — is present.
 package webapp
 
 import "embed"
 
-//go:embed dist
+//go:embed static
 var FS embed.FS
