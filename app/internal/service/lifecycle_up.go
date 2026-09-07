@@ -256,8 +256,17 @@ func cleanupStaleWorkflowNodes(cfg *config.Config, store *state.Store, sessionNa
 	return nil
 }
 
+// persistStaleWorkflowCleanup writes the (possibly now "cleaned") TaskState
+// back onto its node id first -- never deleting the map entry itself, since
+// persistence can only correctly decide whether a released node's row
+// survives being dropped once the "cleaned" transition has actually reached
+// the database (see writeTasksTx's release-only pruning in
+// app/internal/persistence/tasks.go) -- then explicitly prunes each entry
+// that reached "cleaned", so a node this operation itself just finished
+// releasing disappears from this same result rather than waiting for a
+// later, unrelated write that happens to omit it.
 func persistStaleWorkflowCleanup(store *state.Store, sessionName string, session *domain.Session, stale []task.Resolved) error {
-	return store.Update(sessionName, func(s *domain.Session) error {
+	if err := store.Update(sessionName, func(s *domain.Session) error {
 		if s.Nodes == nil {
 			s.Nodes = make(map[string]*contract.TaskState)
 		}
@@ -266,15 +275,24 @@ func persistStaleWorkflowCleanup(store *state.Store, sessionName string, session
 			if st == nil {
 				continue
 			}
-			if st.Status == contract.TaskStatusCleaned {
-				delete(s.Nodes, r.NodeID)
-				continue
-			}
 			s.Nodes[r.NodeID] = st
 		}
 		s.UpdatedAt = session.UpdatedAt
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	for _, r := range stale {
+		st := session.Nodes[r.NodeID]
+		if st == nil || st.Status != contract.TaskStatusCleaned {
+			continue
+		}
+		if _, err := store.PruneReleasedNode(sessionName, r.NodeID); err != nil {
+			return fmt.Errorf("prune released node %q: %w", r.NodeID, err)
+		}
+		delete(session.Nodes, r.NodeID)
+	}
+	return nil
 }
 
 func staleProducedWorkflowNodes(cfg *config.Config, session *domain.Session, plan *task.Plan) ([]task.Resolved, error) {
@@ -361,6 +379,14 @@ func recreateSessionRuntime(cfg *config.Config, store *state.Store, sessionName 
 	session.LastTickAt = time.Time{}
 	session.TickBackoff = nil
 	session.UpdatedAt = time.Now()
+	// An ordinary write retains a node still unreleased when a caller merely
+	// stops mentioning it (see docs/design/sqlite-persistence.md's "Node
+	// execution identity" section); --force-recreate means exactly the
+	// opposite here, having just torn every node down above, so it discards
+	// their execution history explicitly instead.
+	if err := store.ResetNodes(sessionName); err != nil {
+		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to reset node state: %v", err)}
+	}
 	if err := replaceRuntimeState(store, sessionName, session); err != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to save session state: %v", err)}
 	}

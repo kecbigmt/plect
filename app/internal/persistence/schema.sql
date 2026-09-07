@@ -59,14 +59,38 @@ CREATE INDEX sessions_alias_idx ON sessions(alias);
 CREATE INDEX sessions_parent_idx ON sessions(parent_session_id);
 
 -- Static workflow-DAG nodes; task_instances holds the dynamic ones.
+--
+-- node_instances is the logical node's identity only: a setup attempt's own
+-- facts (status, inputs/outputs, cleanup contract...) live on node_executions
+-- instead, one row per attempt, so a later setup for the same node_id never
+-- overwrites an older, unreleased allocation's own release recipe -- the
+-- node_id alone is insufficient once a node can carry several execution
+-- generations across its session's lifetime. See
+-- docs/design/sqlite-persistence.md's "Node execution identity" section.
 CREATE TABLE node_instances (
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     node_id TEXT NOT NULL,
+    PRIMARY KEY (session_id, node_id)
+);
+
+-- One row per setup attempt for a node_instances row. task_id/name/scope/
+-- resource are this attempt's own facts (a workflow revision can remap a
+-- node_id onto a different declaration between attempts), not the logical
+-- node's identity. At most one row per (session_id, node_id) may be
+-- unreleased (status <> 'cleaned') at a time -- see
+-- node_executions_one_unreleased_idx -- so release ordering never needs to
+-- reason about two live generations of the same node competing at once;
+-- node_execution_dependencies instead orders unreleased executions of
+-- *different* nodes against each other.
+CREATE TABLE node_executions (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    node_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
     task_id TEXT,
     name TEXT,
     scope TEXT NOT NULL CHECK (scope IN ('session', 'run')),
     status TEXT NOT NULL CHECK (status IN ('produced', 'failed', 'cleaned')),
-    sequence INTEGER NOT NULL,
     resource TEXT,
     inputs_json TEXT CHECK (inputs_json IS NULL OR json_valid(inputs_json)),
     outputs_json TEXT CHECK (outputs_json IS NULL OR json_valid(outputs_json)),
@@ -80,13 +104,17 @@ CREATE TABLE node_instances (
     failed_at TEXT,
     cleaned_at TEXT,
     finalized_at TEXT,
-    PRIMARY KEY (session_id, node_id)
+    FOREIGN KEY (session_id, node_id) REFERENCES node_instances(session_id, node_id) ON DELETE CASCADE
 );
 
--- One row per layer of a node instance's nested effect chain, ordered by position.
-CREATE TABLE node_instance_layers (
-    session_id TEXT NOT NULL,
-    node_id TEXT NOT NULL,
+CREATE INDEX node_executions_session_node_idx ON node_executions(session_id, node_id, sequence);
+CREATE UNIQUE INDEX node_executions_one_unreleased_idx ON node_executions(session_id, node_id) WHERE status <> 'cleaned';
+
+-- One row per layer of one execution's nested effect chain, ordered by
+-- position. Belongs to the execution, not the node_id, so a revised nesting
+-- chain never replaces an older, unreleased chain's own cleanup information.
+CREATE TABLE node_execution_layers (
+    execution_id TEXT NOT NULL REFERENCES node_executions(id) ON DELETE CASCADE,
     position INTEGER NOT NULL,
     effect_id TEXT NOT NULL,
     status TEXT NOT NULL CHECK (status IN ('produced', 'failed', 'cleaned')),
@@ -100,9 +128,24 @@ CREATE TABLE node_instance_layers (
     failed_at TEXT,
     cleaned_at TEXT,
     error TEXT,
-    PRIMARY KEY (session_id, node_id, position),
-    FOREIGN KEY (session_id, node_id) REFERENCES node_instances(session_id, node_id) ON DELETE CASCADE
+    PRIMARY KEY (execution_id, position)
 );
+
+-- Snapshot of which other node's currently-unreleased execution this
+-- execution was resolved against at its own setup time (from
+-- task.Resolved.DependsOn), so release ordering (dependents released before
+-- prerequisites) survives a later config change that rewires, or entirely
+-- drops, the node that expressed the edge. execution_id is the dependent
+-- (released first); depends_on_execution_id is the prerequisite (released
+-- after).
+CREATE TABLE node_execution_dependencies (
+    execution_id TEXT NOT NULL REFERENCES node_executions(id) ON DELETE CASCADE,
+    depends_on_execution_id TEXT NOT NULL REFERENCES node_executions(id) ON DELETE CASCADE,
+    PRIMARY KEY (execution_id, depends_on_execution_id),
+    CHECK (execution_id <> depends_on_execution_id)
+);
+
+CREATE INDEX node_execution_dependencies_depends_on_idx ON node_execution_dependencies(depends_on_execution_id);
 
 -- id is preserved across an update; only a cleanup+setup mints a fresh one.
 CREATE TABLE task_instances (

@@ -141,6 +141,16 @@ type TaskState struct {
 	Resource string         `json:"resource,omitempty"` // bound --resource at instantiation
 	Name     string         `json:"name,omitempty"`     // --name instance identity (key == name when set)
 	Layers   []LayerState   `json:"layers,omitempty"`   // per-layer record for a nested task; empty for a plain one
+	// DependsOn is the workflow node ids this node's setup was resolved
+	// against at the time this attempt was created (task.Resolved.DependsOn,
+	// itself derived from node input bindings, not authored directly). It is
+	// meaningful only for a workflow-DAG node (a Session.Nodes entry, never a
+	// Session.Tasks one); persistence snapshots it as the recorded
+	// prerequisite of this specific execution, so release ordering survives a
+	// later config change that rewires or drops the node that expressed the
+	// edge. See docs/design/sqlite-persistence.md's "Node execution identity"
+	// section and node_execution_dependencies.
+	DependsOn []string `json:"depends_on,omitempty"`
 	// State is what a task instance holds about itself: the keys a reviewer
 	// or another session records into it, read by a completion predicate as
 	// `self.state.*`. Distinct from Outputs, which is what an effect's setup

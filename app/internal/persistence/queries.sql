@@ -93,37 +93,131 @@ SELECT EXISTS(SELECT 1 FROM sessions WHERE name = ?);
 SELECT DISTINCT name FROM sessions ORDER BY name;
 
 -- Workflow nodes (static; Session.Nodes entries)
+--
+-- node_instances is the logical node's identity; node_executions holds one
+-- row per setup attempt, at most one of which may be unreleased (status <>
+-- 'cleaned') per node at a time. A write reconciles by finding the current
+-- unreleased execution (CurrentNodeExecution) and updating it in place, or
+-- inserting a fresh one when none exists -- see persistence/tasks.go's
+-- upsertNodeExecutionTx, which is the sole caller of the Insert/Update pair
+-- below.
 
--- name: InsertNodeInstance :exec
-INSERT INTO node_instances (
-    session_id, node_id, task_id, name, scope, status, sequence, resource,
-    inputs_json, outputs_json, state_json, resource_observation_json,
-    resource_observed_at, done_when_json, extra_done_when_json, error,
-    setup_at, failed_at, cleaned_at, finalized_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+-- name: EnsureNodeInstance :exec
+INSERT INTO node_instances (session_id, node_id) VALUES (?, ?)
+ON CONFLICT (session_id, node_id) DO NOTHING;
 
--- name: ListNodeInstances :many
-SELECT session_id, node_id, task_id, name, scope, status, sequence, resource,
+-- name: DeleteNodeInstance :exec
+DELETE FROM node_instances WHERE session_id = ? AND node_id = ?;
+
+-- name: DeleteNodeInstancesForSession :exec
+-- Unconditionally wipes every node (and, via cascade, every execution,
+-- layer, and dependency edge) for the session -- used only by an explicit
+-- whole-runtime reset (--force-recreate), which deliberately discards every
+-- node's execution history rather than retaining an unreleased one the way
+-- an ordinary write does. See ResetNodes.
+DELETE FROM node_instances WHERE session_id = ?;
+
+-- name: DeleteReleasedNodeInstance :execrows
+-- Prunes node_id only if it currently has no unreleased execution -- a
+-- caller-driven, immediate counterpart to writeTasksTx's own
+-- absence-triggered pruning, for a caller (persistStaleWorkflowCleanup) that
+-- knows in the same breath a specific node's cleanup just succeeded and
+-- wants it gone from this same operation's result rather than the next
+-- write that happens to omit it. A non-zero result means it was pruned; zero
+-- means an unreleased execution still exists (nothing was touched).
+DELETE FROM node_instances
+WHERE session_id = ? AND node_id = ?
+AND NOT EXISTS (
+    SELECT 1 FROM node_executions
+    WHERE node_executions.session_id = node_instances.session_id
+      AND node_executions.node_id = node_instances.node_id
+      AND node_executions.status <> 'cleaned'
+);
+
+-- name: CurrentNodeExecution :one
+SELECT id, session_id, node_id, sequence, task_id, name, scope, status, resource,
        inputs_json, outputs_json, state_json, resource_observation_json,
        resource_observed_at, done_when_json, extra_done_when_json, error,
        setup_at, failed_at, cleaned_at, finalized_at
-FROM node_instances WHERE session_id = ? ORDER BY node_id;
+FROM node_executions WHERE session_id = ? AND node_id = ? AND status <> 'cleaned';
 
--- name: DeleteNodeInstancesForSession :exec
-DELETE FROM node_instances WHERE session_id = ?;
+-- name: InsertNodeExecution :one
+INSERT INTO node_executions (
+    id, session_id, node_id, sequence, task_id, name, scope, status, resource,
+    inputs_json, outputs_json, state_json, resource_observation_json,
+    resource_observed_at, done_when_json, extra_done_when_json, error,
+    setup_at, failed_at, cleaned_at, finalized_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+RETURNING id;
 
--- name: InsertNodeInstanceLayer :exec
-INSERT INTO node_instance_layers (
-    session_id, node_id, position, effect_id, status, inputs_json,
-    locals_json, outputs_json, env_json, heartbeat_ticks,
-    heartbeat_escalations, setup_at, failed_at, cleaned_at, error
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+-- name: UpdateNodeExecution :exec
+UPDATE node_executions SET
+    sequence = ?, task_id = ?, name = ?, scope = ?, status = ?, resource = ?,
+    inputs_json = ?, outputs_json = ?, state_json = ?,
+    resource_observation_json = ?, resource_observed_at = ?, done_when_json = ?,
+    extra_done_when_json = ?, error = ?, setup_at = ?, failed_at = ?,
+    cleaned_at = ?, finalized_at = ?
+WHERE id = ?;
 
--- name: ListNodeInstanceLayers :many
-SELECT session_id, node_id, position, effect_id, status, inputs_json,
-       locals_json, outputs_json, env_json, heartbeat_ticks,
-       heartbeat_escalations, setup_at, failed_at, cleaned_at, error
-FROM node_instance_layers WHERE session_id = ? ORDER BY node_id, position;
+-- name: ListCurrentNodeExecutions :many
+-- One row per node_id: its latest execution by (sequence, id), whatever
+-- that execution's status -- a released node stays visible (matching
+-- task_instances' own until-explicitly-pruned convention) until
+-- DeleteNodeInstance removes it. The id tiebreak only matters when two
+-- generations somehow share a sequence (callers are expected to assign a
+-- strictly increasing one per attempt); it keeps the pick deterministic
+-- rather than leaving it to join-order chance.
+SELECT ne.id, ne.session_id, ne.node_id, ne.sequence, ne.task_id, ne.name,
+       ne.scope, ne.status, ne.resource, ne.inputs_json, ne.outputs_json,
+       ne.state_json, ne.resource_observation_json, ne.resource_observed_at,
+       ne.done_when_json, ne.extra_done_when_json, ne.error, ne.setup_at,
+       ne.failed_at, ne.cleaned_at, ne.finalized_at
+FROM node_executions ne
+WHERE ne.session_id = ?
+AND NOT EXISTS (
+    SELECT 1 FROM node_executions newer
+    WHERE newer.session_id = ne.session_id AND newer.node_id = ne.node_id
+      AND (newer.sequence > ne.sequence OR (newer.sequence = ne.sequence AND newer.id > ne.id))
+)
+ORDER BY ne.node_id;
+
+-- name: DeleteNodeExecutionLayers :exec
+DELETE FROM node_execution_layers WHERE execution_id = ?;
+
+-- name: InsertNodeExecutionLayer :exec
+INSERT INTO node_execution_layers (
+    execution_id, position, effect_id, status, inputs_json, locals_json,
+    outputs_json, env_json, heartbeat_ticks, heartbeat_escalations,
+    setup_at, failed_at, cleaned_at, error
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- name: ListNodeExecutionLayersForSession :many
+SELECT nel.execution_id, nel.position, nel.effect_id, nel.status,
+       nel.inputs_json, nel.locals_json, nel.outputs_json, nel.env_json,
+       nel.heartbeat_ticks, nel.heartbeat_escalations, nel.setup_at,
+       nel.failed_at, nel.cleaned_at, nel.error
+FROM node_execution_layers nel
+INNER JOIN node_executions ne ON ne.id = nel.execution_id
+WHERE ne.session_id = ?
+ORDER BY nel.execution_id, nel.position;
+
+-- name: DeleteNodeExecutionDependencies :exec
+DELETE FROM node_execution_dependencies WHERE execution_id = ?;
+
+-- name: InsertNodeExecutionDependency :exec
+INSERT INTO node_execution_dependencies (execution_id, depends_on_execution_id)
+VALUES (?, ?) ON CONFLICT (execution_id, depends_on_execution_id) DO NOTHING;
+
+-- name: ListNodeExecutionDependenciesForSession :many
+-- One row per recorded edge, resolved back to the node_ids on both ends so a
+-- reader that only knows node_ids (see loadTasks) can rebuild
+-- TaskState.DependsOn without carrying raw execution ids into the domain
+-- layer.
+SELECT dependent.node_id AS node_id, ned.execution_id AS execution_id, prereq.node_id AS depends_on_node_id
+FROM node_execution_dependencies ned
+INNER JOIN node_executions dependent ON dependent.id = ned.execution_id
+INNER JOIN node_executions prereq ON prereq.id = ned.depends_on_execution_id
+WHERE dependent.session_id = ?;
 
 -- Task instances (dynamic; Session.Tasks entries)
 

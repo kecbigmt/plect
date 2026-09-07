@@ -181,6 +181,59 @@ func (db *DB) sessionEverExisted(ctx context.Context, name string) (bool, error)
 	return existed, err
 }
 
+// PruneReleasedNode removes node_id's row (and every recorded execution and
+// layer) from sessionName's live session, but only when it currently has no
+// unreleased execution -- see queries.sql's DeleteReleasedNodeInstance. It
+// reports whether the row was actually pruned; a false result with a nil
+// error means an unreleased execution still exists and nothing was touched.
+func (db *DB) PruneReleasedNode(ctx context.Context, sessionName, nodeID string) (bool, error) {
+	var pruned bool
+	err := db.WithImmediateTx(ctx, func(tx *sql.Tx) error {
+		q := sqlcgen.New(tx)
+		sessionID, err := q.SessionIDByLiveName(ctx, sessionName)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("no live session named %q", sessionName)
+			}
+			return fmt.Errorf("resolve session %q: %w", sessionName, err)
+		}
+		affected, err := q.DeleteReleasedNodeInstance(ctx, sqlcgen.DeleteReleasedNodeInstanceParams{SessionID: sessionID, NodeID: nodeID})
+		if err != nil {
+			return fmt.Errorf("prune released node %q/%q: %w", sessionName, nodeID, err)
+		}
+		pruned = affected > 0
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return pruned, nil
+}
+
+// ResetNodes unconditionally discards every node_instances row (and, via
+// cascade, every recorded execution, layer, and dependency edge) for
+// sessionName. It exists only for an explicit whole-runtime reset
+// (--force-recreate's own rebuild, see service.recreateSessionRuntime),
+// which deliberately throws away every node's execution history -- unlike
+// an ordinary PutSession/UpdateSession write, whose own node reconciliation
+// retains a node still unreleased when a caller merely stops mentioning it.
+func (db *DB) ResetNodes(ctx context.Context, sessionName string) error {
+	return db.WithImmediateTx(ctx, func(tx *sql.Tx) error {
+		q := sqlcgen.New(tx)
+		sessionID, err := q.SessionIDByLiveName(ctx, sessionName)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("no live session named %q", sessionName)
+			}
+			return fmt.Errorf("resolve session %q: %w", sessionName, err)
+		}
+		if err := q.DeleteNodeInstancesForSession(ctx, sessionID); err != nil {
+			return fmt.Errorf("reset nodes for %q: %w", sessionName, err)
+		}
+		return nil
+	})
+}
+
 // DestroySession transitions name's live row to SessionStatusDestroyed
 // (retaining the row and its history) and releases its up-slot
 // reservation, if any.

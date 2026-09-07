@@ -133,6 +133,39 @@ func (s *Store) Update(name string, fn func(*domain.Session) error) error {
 	return db.UpdateSession(context.Background(), name, fn)
 }
 
+// PruneReleasedNode immediately drops name's node_id row once its own
+// caller already knows (in this same operation) that node's execution just
+// reached "cleaned" -- rather than waiting for a later, unrelated write
+// that happens to stop mentioning it (see persistence.DB.PruneReleasedNode
+// and writeTasksTx's own absence-triggered pruning). It reports whether the
+// row was actually pruned; false with a nil error means an unreleased
+// execution still exists.
+func (s *Store) PruneReleasedNode(name, nodeID string) (bool, error) {
+	db, err := s.dbHandle()
+	if err != nil {
+		return false, fmt.Errorf("state: prune released node %q/%q: %w", name, nodeID, err)
+	}
+	pruned, err := db.PruneReleasedNode(context.Background(), name, nodeID)
+	if err != nil {
+		return false, fmt.Errorf("state: prune released node %q/%q: %w", name, nodeID, err)
+	}
+	return pruned, nil
+}
+
+// ResetNodes unconditionally discards every node's execution history for
+// name -- see persistence.DB.ResetNodes. It exists only for an explicit
+// whole-runtime reset (--force-recreate), never for an ordinary write.
+func (s *Store) ResetNodes(name string) error {
+	db, err := s.dbHandle()
+	if err != nil {
+		return fmt.Errorf("state: reset nodes %q: %w", name, err)
+	}
+	if err := db.ResetNodes(context.Background(), name); err != nil {
+		return fmt.Errorf("state: reset nodes %q: %w", name, err)
+	}
+	return nil
+}
+
 // Population returns one population's durable state, or nil if key has
 // never been recorded.
 func (s *Store) Population(key string) (*PopulationState, error) {

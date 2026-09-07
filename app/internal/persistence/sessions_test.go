@@ -551,13 +551,60 @@ func TestPutSession_NodeInstanceDoneWhenRoundTripsAsEmbeddedJSON(t *testing.T) {
 	}
 }
 
-func TestPutSession_ReplacesNodesRatherThanAccumulating(t *testing.T) {
+// TestPutSession_UnreleasedNodeSurvivesBeingDroppedFromTheMap proves the
+// core fix for issue #496: a node whose latest execution is still
+// unreleased (produced/failed) is never discarded just because a later Put
+// stops mentioning it -- a workflow revision doing exactly that must not
+// silently destroy the execution record and cleanup obligation that
+// `plect down`/`destroy` still needs. See
+// TestPutSession_ReleasedNodeIsPrunedWhenDroppedFromTheMap for the
+// complementary, already-released case.
+func TestPutSession_UnreleasedNodeSurvivesBeingDroppedFromTheMap(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
 
 	session := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Nodes: map[string]*contract.TaskState{
-		"a": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced},
+		"a": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusFailed, TaskID: "work", Error: "boom"},
+	}}
+	if err := db.PutSession(ctx, session); err != nil {
+		t.Fatalf("PutSession: %v", err)
+	}
+	session.Nodes = map[string]*contract.TaskState{
+		"b": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced},
+	}
+	if err := db.PutSession(ctx, session); err != nil {
+		t.Fatalf("PutSession (2nd): %v", err)
+	}
+
+	got, err := db.GetSession(ctx, "s1")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	nodeA := got.Nodes["a"]
+	if nodeA == nil {
+		t.Fatalf("node %q was discarded by a Put that stopped declaring it while unreleased", "a")
+	}
+	if nodeA.Status != contract.TaskStatusFailed || nodeA.TaskID != "work" || nodeA.Error != "boom" {
+		t.Errorf("retained node %q = %+v, want its unreleased fields intact", "a", nodeA)
+	}
+	if _, ok := got.Nodes["b"]; !ok {
+		t.Errorf("node %q missing after Put", "b")
+	}
+}
+
+// TestPutSession_ReleasedNodeIsPrunedWhenDroppedFromTheMap proves the
+// complementary case: a node whose latest execution already reached
+// "cleaned" is pruned once a Put stops mentioning it, preserving today's
+// tidiness for the ordinary case where a caller (e.g.
+// persistStaleWorkflowCleanup) explicitly finished releasing it first.
+func TestPutSession_ReleasedNodeIsPrunedWhenDroppedFromTheMap(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	session := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Nodes: map[string]*contract.TaskState{
+		"a": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusCleaned},
 	}}
 	if err := db.PutSession(ctx, session); err != nil {
 		t.Fatalf("PutSession: %v", err)
@@ -574,7 +621,7 @@ func TestPutSession_ReplacesNodesRatherThanAccumulating(t *testing.T) {
 		t.Fatalf("GetSession: %v", err)
 	}
 	if _, ok := got.Nodes["a"]; ok {
-		t.Errorf("node %q survived a Put that no longer declared it", "a")
+		t.Errorf("released node %q survived a Put that no longer declared it", "a")
 	}
 	if _, ok := got.Nodes["b"]; !ok {
 		t.Errorf("node %q missing after Put", "b")
@@ -583,8 +630,10 @@ func TestPutSession_ReplacesNodesRatherThanAccumulating(t *testing.T) {
 
 // TestPutSession_ReplacesTasksRatherThanAccumulating covers the task_instances
 // reconciliation path (upsert current, delete any instance_name no longer
-// present), which is a different write strategy from node_instances' full
-// delete-then-insert (see TestPutSession_ReplacesNodesRatherThanAccumulating).
+// present) unconditionally, regardless of status -- a different write
+// strategy from node_instances' released-only pruning (see
+// TestPutSession_UnreleasedNodeSurvivesBeingDroppedFromTheMap and
+// TestPutSession_ReleasedNodeIsPrunedWhenDroppedFromTheMap).
 func TestPutSession_ReplacesTasksRatherThanAccumulating(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()

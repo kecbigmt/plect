@@ -51,22 +51,25 @@ func taskInstanceIDForTest(t *testing.T, db *DB, sessionName, instanceName strin
 // on the closed-set columns copied from contracts/state's own constants
 // (TaskScopeSession/TaskScopeRun, TaskStatusProduced/TaskStatusFailed/
 // TaskStatusCleaned): an out-of-set value is rejected at insert, on both
-// node_instances and task_instances.
+// node_executions and task_instances.
 func TestSchema_RejectsOutOfSetScopeAndStatus(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
 	q := sqlcgen.New(db.write)
 	sessionID := seedBareSessionForTest(t, db, "s1")
-
-	if err := q.InsertNodeInstance(ctx, sqlcgen.InsertNodeInstanceParams{
-		SessionID: sessionID, NodeID: "n1", Scope: "bogus", Status: "produced",
-	}); err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
-		t.Fatalf("InsertNodeInstance with bogus scope: err = %v, want a CHECK constraint failure", err)
+	if err := q.EnsureNodeInstance(ctx, sqlcgen.EnsureNodeInstanceParams{SessionID: sessionID, NodeID: "n1"}); err != nil {
+		t.Fatalf("EnsureNodeInstance: %v", err)
 	}
-	if err := q.InsertNodeInstance(ctx, sqlcgen.InsertNodeInstanceParams{
-		SessionID: sessionID, NodeID: "n1", Scope: "session", Status: "bogus",
+
+	if _, err := q.InsertNodeExecution(ctx, sqlcgen.InsertNodeExecutionParams{
+		ID: newULID(), SessionID: sessionID, NodeID: "n1", Scope: "bogus", Status: "produced",
 	}); err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
-		t.Fatalf("InsertNodeInstance with bogus status: err = %v, want a CHECK constraint failure", err)
+		t.Fatalf("InsertNodeExecution with bogus scope: err = %v, want a CHECK constraint failure", err)
+	}
+	if _, err := q.InsertNodeExecution(ctx, sqlcgen.InsertNodeExecutionParams{
+		ID: newULID(), SessionID: sessionID, NodeID: "n1", Scope: "session", Status: "bogus",
+	}); err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
+		t.Fatalf("InsertNodeExecution with bogus status: err = %v, want a CHECK constraint failure", err)
 	}
 
 	if _, err := q.UpsertTaskInstance(ctx, sqlcgen.UpsertTaskInstanceParams{

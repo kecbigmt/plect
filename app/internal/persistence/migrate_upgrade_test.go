@@ -9,6 +9,7 @@ import (
 
 	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/contracts/event"
+	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
 // eventTablesVersion is the goose version immediately before this package's
@@ -161,7 +162,8 @@ func TestMigrate_DownRestoresDeliveryModeColumnWithoutError(t *testing.T) {
 // dissolution migration's Down runs without error and leaves an
 // identifiable event row reachable under the restored pre-dissolution
 // schema. It does not assert losslessness -- see that migration's own
-// header comment.
+// header comment. It steps down twice: once for the node-execution-identity
+// migration now on top, then once for the dissolution migration itself.
 func TestMigrate_DownRestoresPreDissolutionSchemaWithoutError(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
@@ -179,7 +181,10 @@ func TestMigrate_DownRestoresPreDissolutionSchemaWithoutError(t *testing.T) {
 		t.Fatalf("NewProvider: %v", err)
 	}
 	if _, err := provider.Down(ctx); err != nil {
-		t.Fatalf("Down: %v", err)
+		t.Fatalf("Down (node-execution-identity): %v", err)
+	}
+	if _, err := provider.Down(ctx); err != nil {
+		t.Fatalf("Down (dissolution): %v", err)
 	}
 
 	var count int
@@ -207,5 +212,116 @@ func TestMigrate_DownRestoresPreDissolutionSchemaWithoutError(t *testing.T) {
 	}
 	if gotID != "01EVENT0000000000000002" || gotType != "widget.message" || gotSummary != "hello" {
 		t.Fatalf("restored event = (%q, %q, %q), want the seeded values intact", gotID, gotType, gotSummary)
+	}
+}
+
+// preNodeExecutionIdentityVersion is the goose version immediately before
+// this package's node-execution-identity migration -- the last migration
+// where a node_instances row still carries its own status/inputs/outputs
+// directly instead of delegating them to node_executions.
+const preNodeExecutionIdentityVersion = 20260907002408
+
+// TestMigrate_AddNodeExecutionIdentityPreservesExistingNodeRows is the
+// upgrade-path case TestSchemaSQL_MatchesMigrationHistory cannot cover: that
+// check only ever migrates an empty database. It proves an existing
+// node_instances/node_instance_layers row survives the split into
+// node_instances (identity only) + node_executions (this row's data, as the
+// node's first recorded execution) + node_execution_layers.
+func TestMigrate_AddNodeExecutionIdentityPreservesExistingNodeRows(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db.write, db.migrations)
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+	if _, err := provider.UpTo(ctx, preNodeExecutionIdentityVersion); err != nil {
+		t.Fatalf("UpTo(%d): %v", preNodeExecutionIdentityVersion, err)
+	}
+
+	sessionID := "01SESSION000000000000000"
+	if _, err := db.write.ExecContext(ctx,
+		`INSERT INTO sessions (id, name, status, workflow, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		sessionID, "s1", "up", "wf", formatTime(now), formatTime(now),
+	); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+	if _, err := db.write.ExecContext(ctx,
+		`INSERT INTO node_instances (session_id, node_id, task_id, scope, status, sequence, inputs_json, outputs_json, error, setup_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		sessionID, "n1", "work", "session", "failed", 1, `{"a":1}`, `{"b":2}`, "boom", formatTime(now),
+	); err != nil {
+		t.Fatalf("seed node_instances row: %v", err)
+	}
+	if _, err := db.write.ExecContext(ctx,
+		`INSERT INTO node_instance_layers (session_id, node_id, position, effect_id, status, inputs_json)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		sessionID, "n1", 0, "eff1", "failed", `{"c":3}`,
+	); err != nil {
+		t.Fatalf("seed node_instance_layers row: %v", err)
+	}
+
+	if _, err := provider.UpByOne(ctx); err != nil {
+		t.Fatalf("UpByOne (apply node-execution-identity): %v", err)
+	}
+
+	var execID, taskID, scope, status, inputsJSON, outputsJSON, errCol string
+	if err := db.write.QueryRowContext(ctx,
+		`SELECT id, task_id, scope, status, inputs_json, outputs_json, error FROM node_executions WHERE session_id = ? AND node_id = ?`,
+		sessionID, "n1",
+	).Scan(&execID, &taskID, &scope, &status, &inputsJSON, &outputsJSON, &errCol); err != nil {
+		t.Fatalf("read migrated node_executions row: %v", err)
+	}
+	if taskID != "work" || scope != "session" || status != "failed" || inputsJSON != `{"a":1}` || outputsJSON != `{"b":2}` || errCol != "boom" {
+		t.Fatalf("migrated execution = (%q,%q,%q,%q,%q,%q), want the seeded node_instances values intact", taskID, scope, status, inputsJSON, outputsJSON, errCol)
+	}
+
+	var layerEffectID, layerStatus, layerInputsJSON string
+	if err := db.write.QueryRowContext(ctx,
+		`SELECT effect_id, status, inputs_json FROM node_execution_layers WHERE execution_id = ? AND position = 0`,
+		execID,
+	).Scan(&layerEffectID, &layerStatus, &layerInputsJSON); err != nil {
+		t.Fatalf("read migrated node_execution_layers row: %v", err)
+	}
+	if layerEffectID != "eff1" || layerStatus != "failed" || layerInputsJSON != `{"c":3}` {
+		t.Fatalf("migrated layer = (%q,%q,%q), want the seeded node_instance_layers values intact", layerEffectID, layerStatus, layerInputsJSON)
+	}
+}
+
+// TestMigrate_DownRestoresNodeInstancesColumnsWithoutError proves this
+// migration's Down runs without error and restores a node's data under the
+// pre-change node_instances shape. Best-effort, not lossless (see the
+// migration's own Down comment, and the record_json-dissolution precedent
+// above): a node with more than one recorded execution would collapse onto
+// its latest, and any recorded dependency edge is discarded.
+func TestMigrate_DownRestoresNodeInstancesColumnsWithoutError(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	session := &domain.Session{Name: "s4", CreatedAt: now, UpdatedAt: now, Nodes: map[string]*contract.TaskState{
+		"n1": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "work", Outputs: map[string]any{"b": float64(2)}},
+	}}
+	if err := db.PutSession(ctx, session); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db.write, db.migrations)
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+	if _, err := provider.Down(ctx); err != nil {
+		t.Fatalf("Down: %v", err)
+	}
+
+	var taskID, scope, status, outputsJSON string
+	if err := db.write.QueryRowContext(ctx,
+		`SELECT task_id, scope, status, outputs_json FROM node_instances WHERE node_id = ?`, "n1",
+	).Scan(&taskID, &scope, &status, &outputsJSON); err != nil {
+		t.Fatalf("read restored node_instances row: %v", err)
+	}
+	if taskID != "work" || scope != contract.TaskScopeSession || status != contract.TaskStatusProduced || outputsJSON != `{"b":2}` {
+		t.Fatalf("restored node = (%q,%q,%q,%q), want the seeded values intact", taskID, scope, status, outputsJSON)
 	}
 }
