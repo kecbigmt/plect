@@ -115,6 +115,7 @@ receiving everything and relying on a later check to reject the rest.
 | Resource `subscribe` | `session.name`, `resource.id`, `resource.inputs.<key>` |
 | Resource `unsubscribe` | `session.name`, `resource.id`, `resource.inputs.<key>` |
 | Resource query means | `inputs.<key>` |
+| Workflow public `outputs` | `nodes.<id>.outputs.<key>`, `session.inputs.<key>` |
 | Workflow population session `inputs` | `resource.id`, `item.<key>` |
 | Workflow `display` | `workflow.outputs.<key>`, `session.inputs.<key>` |
 | Workflow node `inputs` | `nodes.<id>.outputs.<key>`, `workflow.outputs.<key>`, `session.*`, `session.inputs.<key>` |

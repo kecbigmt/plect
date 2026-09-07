@@ -104,9 +104,11 @@ in-file order. Cross-file duplicate definition ids in one layer are load
 errors, as are table collisions below a definition table that TOML would
 reject in one concatenated document.
 
-No `.plect/` directory participates in definition discovery. Resource-specific
-policy is a workflow declared in the trusted global layer, not checkout-path
-configuration.
+Invocation selects an optional project definition layer before workflow setup:
+the nearest ancestor with `.plect/project.toml` is its project root. Only that
+root's `.plect/` tree participates; no higher ancestor and no generated
+checkout participates. The project root must be listed as trusted in the
+machine configuration. See [`config.md`](config.md).
 
 ## Namespaces
 
@@ -119,10 +121,10 @@ alias and plugin path.
 
 | Deeper definition | Rule |
 |---|---|
-| Same id, same kind | A deeper global declaration replaces the shallower declaration. |
+| Same id, same kind | A deeper user declaration replaces the shallower declaration as a whole. |
 | Same id, different kind | Coexist. Each layer has its own namespace, so the deeper declaration shadows nothing, and a reference resolves by the kind its site expects. |
 
-The whole-definition kinds are resource, channel, effect, and task.
+The whole-definition kinds are resource, channel, effect, task, and workflow.
 
 Catalog-qualified references select catalog plugin definitions and are not
 shadowed by a same-id relative definition in a user-owned layer. A same-id

@@ -17,7 +17,7 @@ document that declared it.
 | `id` | Identifies the chain within the declaring document. |
 | `workflow` | The workflow to run. A static reference. |
 | `placement` | Where the spawned session sits relative to this one. |
-| `resource` | The resource the spawned session is about. |
+| `resource` | The concrete entry resource of the spawned session. |
 | `when` | The facts that must hold for the chain to fire. |
 | `inputs` | The session inputs handed to the spawned workflow. |
 
@@ -113,10 +113,11 @@ work_session = { from = "task.session" }
 judge_ids    = { from = "task.done_when.pending_judge_ids" }
 ```
 
-A reviewer's subject is the pull request, and the work session's subject is
-the issue that asked for it. Naming the resource is what lets one chain say
-both — the fact the reviewer is spawned against is a fact the work instance
-observed.
+A reviewer's entry resource is the pull request, and the work session's entry
+resource is the issue that asked for it. The chain's target workflow must
+declare the pull-request resource type. Naming the resource is what lets one
+chain say both — the fact the reviewer is spawned against is a fact the work
+instance observed.
 
 Resolution is fail-closed at fire time. A `resource` that reads a key nothing
 has reported yet, or that resolves to an empty string, blocks the fire rather
@@ -135,6 +136,7 @@ consumer.
 
 - `workflow` resolves to a definition of kind `workflow`.
 - `workflow` is never a computed value.
+- The target workflow accepts the resolved chain resource.
 - `resource` projects the same roots `inputs` does.
 - A `resource` that resolves to nothing, or to an empty string, blocks the
   fire.

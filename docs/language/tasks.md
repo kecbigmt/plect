@@ -139,7 +139,9 @@ per-layer namespace every kind shares, and references use the same dotted forms
 validated against `kind = "task"`.
 
 Instance identity is separate and orthogonal: the id names the declaration,
-while an instance is identified by its resource and instance name.
+while an instance is identified by its concrete resource and instance name. A
+task can be added to a session whose entry resource has another type; this does
+not change the session's identity or environment.
 
 ## State
 
@@ -254,7 +256,7 @@ evaluated per instance.
 
 ## Resource binding
 
-A task document declares the resource it is written for:
+A task document declares the resource type it is written for:
 
 ```toml
 resource = "issue_pr"
@@ -280,6 +282,10 @@ a load error rather than a surprise at run time. And because the declaration
 states a type, instantiation checks compatibility up front: binding an instance
 to a resource that does not resolve to the declared resource fails immediately,
 rather than producing an instance that can never satisfy.
+
+The initiating caller selects an optional initial task: `plect up`, a chain,
+or a population. A workflow does not select it. Each surface selects at most
+one task and supplies one compatible concrete resource binding.
 
 Every shipped task document is written for exactly one resource type, so this
 dependency already existed — it was hiding in a runtime convention. Declaring it

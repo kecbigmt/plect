@@ -1,94 +1,82 @@
 # Resources
 
-A resource declaration owns the facts and operations that describe one kind of
-external thing. It recognizes an identifier, derives the session name for it,
-observes its state, records a completed task when appropriate, and binds or
-unbinds the session from the resource's delivery mechanism. A resource does
-not acquire a directory and it does not run as a workflow node.
+A resource declaration owns one kind of external thing: recognition, instance
+naming, observation, query, delivery binding, and finalization. A resource is
+not a workflow node and does not acquire an environment.
 
-## Surface
+## Identity and actions
 
-| Field | Meaning |
-|---|---|
-| `match` | Required regular expression recognizing a resource identifier. |
-| `name` | Required value over `match` captures that derives the session name. |
-| `observe` | Required action producing the resource's current state. |
-| `finalize` | Optional action recording completion and its judge evidence. |
-| `subscribe`, `unsubscribe` | Optional actions binding and unbinding one session/resource pair. |
-| `query` | Optional shared contract with `poll` and/or `subscribe` item sources. |
-| `inputs_schema`, `state_schema` | JSON Schema contracts for resource inputs and observed state. |
+`match` recognizes a concrete identifier; `name` derives that resource
+instance's name from its captures. This name is distinct from a session name.
+`observe` refreshes `resource.state.*`; it neither performs work nor implies
+completion. `finalize` records a task's accepted completion and its evidence.
+`subscribe` and `unsubscribe` bind or remove delivery for one session/resource
+pair.
 
-`match` and `name` are one identity contract. A session created from a resource
-uses the name value after the match succeeds. An explicitly selected workflow
-must reference the resource that matches its supplied identifier. A resource
-match that recognizes no identifier is valid; a supplied identifier that it
-does not recognize is not. A workflow's optional `resource_inputs` literal
-object satisfies the resource's `inputs_schema` and supplies `resource.inputs.*`
-to its actions. Query means use their own `inputs.*` contract; the two input
-namespaces do not overlap.
+Each resource action takes a resource input object satisfying
+`inputs_schema`. The object is supplied at the operation that needs it:
+
+- `plect up` supplies it for the entry resource;
+- adding a task supplies it for that task's concrete resource, including a
+  resource of another type;
+- a standalone observe, subscribe, unsubscribe, or finalize operation supplies
+  it directly.
+
+Resource action inputs are never inferred from workflow inputs or a previous
+resource binding. Query inputs are separate: a population supplies the literal
+object required by `[resource.query.inputs_schema]`, and query actions see it
+as `inputs.*`, not `resource.inputs.*`.
 
 ```toml
-[github_issue]
+[issue]
 kind  = "resource"
-match = '^https://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/(?:issues|pull)/(?P<number>\d+)'
-name  = { expr = "match.owner + '/' + match.repo + '-' + match.number" }
+match = '^https://forge\.example/(?P<project>[^/]+)/issues/(?P<number>\d+)$'
+name  = { expr = "match.project + '-issue-' + match.number" }
 
-[github_issue.observe]
+[issue.observe]
 type = "exec"
-bin  = "github-issue-pr"
-args = ["observe", "--resource", { from = "resource.id" }]
+bin  = "forge"
+args = ["issue", "observe", { from = "resource.id" }, "--token", { from = "resource.inputs.token" }]
 
-[github_issue.subscribe]
+[issue.subscribe]
 type = "exec"
-bin  = "github-watcher"
-args = ["subscribe", "--session", { from = "session.name" }, "--resource", { from = "resource.id" }]
+bin  = "forge"
+args = ["issue", "subscribe", { from = "resource.id" }, { from = "session.name" }, "--token", { from = "resource.inputs.token" }]
 
-[github_issue.unsubscribe]
-type = "exec"
-bin  = "github-watcher"
-args = ["unsubscribe", "--session", { from = "session.name" }, "--resource", { from = "resource.id" }]
+[issue.inputs_schema]
+type = "object"
+required = ["token"]
 
-[github_issue.state_schema]
+[issue.inputs_schema.properties]
+token = { type = "string" }
+
+[issue.state_schema]
 type = "object"
 
-[github_issue.state_schema.properties]
+[issue.state_schema.properties]
 revision = { type = "string" }
-title    = { type = "string" }
+pr_url   = { type = "string" }
 ```
 
-`observe` is the sole source of live `resource.state.*` facts. `finalize`
-runs after completion has been reconfirmed and judge evidence gathered, so it
-records rather than gates. A first-observation failure rejects instantiation;
-a later failure is recorded degradation until a later observation succeeds.
-
-`subscribe` and `unsubscribe` concern delivery, not lifecycle. They receive
-the session and resource identity. An unavailable binding is retried through
-the durable delivery queue; it does not turn a session directory into a core
-concern.
+The first observation is required before instantiation; later observation
+failure is recorded degradation. Finalization and delivery receive the
+concrete resource, the concrete session where applicable, and the resource
+action input object. A resource does not own a task's state or judge evidence.
 
 ## Query
 
-`[<id>.query]` finds resources of this kind. Its required `inputs_schema`
-describes a population's literal parameters, and its required `item_schema`
-describes every item either means produces. At least one means is present:
-
-- `poll` returns the complete matching set. Only a successful, fully validated
-  poll proves absence.
-- `subscribe` stays supervised and emits one JSON object per line. An item
-  reports an appearance; silence, failure, and restart never prove absence.
-
-The item schema has type `object`, requires only a string `resource` property,
-and may declare optional identity or appearance context. Query items do not
-duplicate properties from `state_schema`.
+`[<id>.query]` finds resource identifiers for a workflow population. It
+declares an input schema and an item schema, and at least one of `poll` or
+`subscribe`. A successful poll is the only absence authority; subscribe items
+only report appearances. A query item has a string `resource` property and
+optional appearance context. It does not duplicate observation state.
 
 ## Validation rules
 
-- `match`, `name`, and `observe` are required.
-- A name projection names only captures declared by `match`.
-- `resource_inputs` satisfies the selected resource's `inputs_schema`.
-- `finalize`, `subscribe`, and `unsubscribe` are optional.
-- A query declares both shared schemas and at least one of `poll` and
-  `subscribe`.
-- A query item requires only its string `resource` property and declares no
-  property also declared by `state_schema`.
-- A task's `resource.state.<key>` projection names a `state_schema` property.
+- `match`, `name`, `observe`, `inputs_schema`, and `state_schema` are required.
+- A `name` projection names only captures declared by `match`.
+- Every action operation receives an object satisfying `inputs_schema`.
+- Query inputs satisfy the query input schema independently of action inputs.
+- A query has its shared schemas and at least one means.
+- A task's resource type matches the concrete resource to which its instance
+  is bound.

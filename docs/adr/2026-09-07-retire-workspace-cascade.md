@@ -1,56 +1,69 @@
-# Retire workspace configuration layers
+# Invocation-selected project configuration context
 
 ## Context
 
-Definition discovery includes plugin and global roots, ancestor `.plect/`
-overlays, and a workspace-directory layer. [Discovery](../../app/internal/config/discover.go)
-and [workflow root calculation](../../app/internal/config/workflow.go) are the
-present authorities for those layers.
+Workspace-directory and ancestor discovery make a generated checkout decide
+configuration after a workflow starts. Removing both without a replacement
+would also discard legitimate repository policy: setup and teardown, owner
+orchestrator outputs and instructions, and repository-specific review wiring.
+The invoking directory can select that policy before any environment exists.
 
 ## Decision
 
-The workspace-directory and ancestor cascade layers are retired. Only plugin
-and machine-owned global configuration layers participate in definition
-discovery. A checkout's `.plect/` directory contributes no definitions.
+An invocation resolves its configuration context before it resolves a resource
+or acquires an environment. Starting at the invocation directory, `plect`
+finds the nearest ancestor containing `.plect/project.toml`; that ancestor is
+the project root. It reads only that root's `.plect/` definition tree. A
+directory with no such marker selects no project tree. Ancestors above the
+nearest root are never merged, and a generated checkout is never searched.
 
-Resource-specific customization is a workflow defined in the machine-owned
-global layer. For example, a deployment variant can add a teardown node:
+The selected context composes, in order, plugin definitions, machine-owned
+global definitions, then the selected project definitions. Each later layer
+replaces a whole same-kind definition; definition fragments do not merge. The
+global layer is trusted by the local machine owner. A project tree is trusted
+only when its root's canonical path is listed in `config.toml`'s
+`trusted_project_roots`; an unlisted project root is reported and contributes
+no definitions. This makes the project selection visible and rejects a
+directory traversal as an implicit source of executable configuration.
 
-```toml
-[widgets_review]
-kind     = "workflow"
-resource = "official.github.issue"
+The resolved context records its project root, layer revisions, and effective
+configuration digest in the session. Later `up`, `down`, `destroy`, task
+addition, observation, and delivery use that record, not the caller's current
+directory. A config reload can change policy only for subsequently created
+sessions; an existing session keeps its recorded digest until it is destroyed.
+If the recorded tree cannot be read or no longer matches its digest, an
+operation fails rather than selecting a different configuration.
 
-[[widgets_review.nodes]]
-uses = "official.github.worktree"
-
-[[widgets_review.nodes]]
-uses = "widgets_teardown"
-```
-
-The caller selects that variant explicitly with `--workflow widgets_review`.
-Automatic dispatch continues to require exactly one matching workflow and
-errors otherwise. No regex routing table is part of the language.
+Chains inherit the triggering session's recorded context unless their target
+workflow is absent there; then firing fails. Resident populations resolve their
+context from the project root recorded when the resident started, not from the
+resident process's cwd. A population-created session records that same context.
 
 ## Consequences
 
-The migration inventories checkout `.plect/` content, copies intended policy
-to global configuration, and makes a backup before removing migrated content.
+The workspace-directory cascade and arbitrary ancestor merging are retired.
+Repository policy has one explicit root and one trust decision, while a Slack
+orchestrator may retain a run-scoped multi-repository context without its
+working directory becoming configuration input.
+
+Migration backs up both global and project `.plect/` trees, places a
+`project.toml` marker at each intended project root, records every root in
+`trusted_project_roots`, consolidates ancestor fragments into the selected
+tree, and removes workspace-derived overlays. The implementation must migrate
+stored sessions to a recorded context before allowing lifecycle operations;
+sessions whose old context cannot be reconstructed require operator selection
+after backup. There is no fallback to an ancestor or generated checkout.
+The same procedure records the environment-effect and state migration in
+[`resource-and-workspace-effects-migration.md`](../migrations/resource-and-workspace-effects-migration.md).
 
 ## Alternatives considered
 
-### Keep ancestor overlays but remove the workspace-directory layer
+### Global workflows only
 
-Rejected. A path-derived layer retains checkout-dependent configuration and a
-separate trust model.
+Rejected. It makes repository-specific policy a manual copy and loses the
+invocation's deliberate relationship to the project.
 
-### Add pattern-keyed global workflow routing
+### Arbitrary ancestor merging
 
-Rejected. No concrete consumer requires routing between global workflow
-variants. Explicit `--workflow` selection preserves automatic dispatch's
-single-match rule without adding a second selection mechanism.
-
-### Permit checkout configuration after a signature check
-
-Rejected. It adds a trust-distribution mechanism solely to preserve retired
-layers.
+Rejected. More than one tree answers which policy controls one invocation and
+expands the executable trust boundary with every parent directory.

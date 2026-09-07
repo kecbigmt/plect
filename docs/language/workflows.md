@@ -1,307 +1,180 @@
 # Workflows
 
-A workflow is a named bundle of nodes plus the event channels, display values,
-and clocks for the sessions it produces. It selects the resource those sessions
-address; effects own any lifecycle the session needs.
+A workflow assembles a session environment and declares exactly one entry
+resource type. It does not declare the session's task. A task selected by the
+caller may bind the entry resource or another concrete resource type.
 
-A workflow declares, once, which node output is the session's working
-directory.
+## Session creation and identity
 
-`[<id>.resource_inputs]` is an optional literal object for the selected
-resource. It satisfies that resource's `inputs_schema` and supplies the
-resource actions' `resource.inputs.*` values. Resource query means retain
-their separate `inputs.*` values. It is resource wiring, not a node input: it
-does not create a lifecycle dependency.
+`plect up <resource>` resolves the concrete identifier to a resource type and
+accepts `--workflow <id>` and optional `--tag <tag>`. The selected workflow's
+`resource` must equal the resolved type. Without `--workflow`, exactly one
+workflow accepting that type is required; zero or more than one is an error.
 
-## Nodes
+The resource's `name` creates its instance name. Without a tag, that value is
+the session name. A tag appends one validated non-empty session-name segment;
+the resulting name must either be new or name the same entry-resource and tag
+record. Tags distinguish concurrent sessions for one resource without making a
+task, plugin, or working-directory detail part of core identity.
 
-Each node selects an effect through `uses` and binds that effect's inputs. A node's
-`id` defaults to the referenced definition's id.
+The caller optionally selects an initial task and its concrete resource
+binding. The task is compatible when its declared resource type matches that
+binding. `plect up` may omit it, creating an environment a person may use.
+Chains and populations use the same one-task selection surface, not a workflow
+field. Adding or finishing a task never changes the entry resource, session
+name, environment, or session lifetime.
 
-The setup and cleanup graph is derived from the node bindings: a projection
-rooted at `nodes.<id>.outputs` is a dependency edge. There is no `depends_on` —
-wiring data is what declares order.
+## Nodes, work directory, and public outputs
 
-`blocks` declares the reverse edge, making each listed node a dependent of this
-one.
+Nodes are ordinary effects. A projection from `nodes.<id>.outputs.*` creates a
+dependency edge; `blocks` states a reverse edge. A workflow has no provider
+node or special lifecycle.
 
-```toml
-[goal_reviewer]
-kind               = "workflow"
-name               = "goal-review agent (local-okf)"
-description        = "Dispatch an agent session against a local-okf goal resource, then deliver the goal_review task's instructions."
-resource           = "okf_goal"
-
-[goal_reviewer.display]
-title  = { from = "workflow.outputs.concept_id" }
-status = "goal_review"
-
-[goal_reviewer.inputs_schema]
-type                 = "object"
-required             = ["task"]
-additionalProperties = false
-
-# A chain's inputs are session inputs, so this schema is the contract they are
-# checked against: the work facts the chain hands its reviewer are declared
-# here, not passed around it.
-[goal_reviewer.inputs_schema.properties]
-work_session = { type = "string" }
-instance     = { type = "string" }
-judge_ids    = { type = "array", items = { type = "string" } }
-
-[goal_reviewer.inputs_schema.properties.task]
-type        = "string"
-description = "Initial task to instantiate for this session."
-enum        = ["goal_review", "none"]
-
-[[goal_reviewer.nodes]]
-uses = "pane"
-
-[[goal_reviewer.nodes]]
-id   = "worker"
-uses = "official.codex.exec_runtime"
-
-[[goal_reviewer.nodes]]
-uses = "initial_task"
-
-[goal_reviewer.nodes.inputs]
-task      = { from = "session.inputs.task", default = "" }
-queue_dir = { from = "nodes.worker.outputs.queue_dir" }
-
-[[goal_reviewer.event.channel]]
-name    = "runtime"
-uses    = "official.codex.exec_delivery"
-include = ["plect.instruction", "user.emit", "plect.terminal.*", "plect.node.result"]
-
-[goal_reviewer.event.channel.inputs]
-queue_dir = { from = "nodes.worker.outputs.queue_dir" }
-
-[goal_reviewer.tick]
-on        = ["resource.*"]
-heartbeat = "15m"
-```
-
-## Event channels
-
-`[[<id>.event.channel]]` selects a channel definition instead of an effect and
-adds an `include` allowlist of event-type globs. Its `inputs` are values over
-the same roots node inputs use, evaluated at delivery.
-
-`name` identifies the channel binding within the workflow; two bindings may
-select the same channel definition under different names and includes.
-
-## Node lifecycle
-
-`plect.node.result` is appended to a session's own log whenever a node's
-setup, cleanup, or liveness verification completes, or a produced node is
-skipped after its liveness check passes. It fires the same way for a manual
-session, a child session, and a population-produced member, independent of
-`plect.workflow_population.up`/`down` — a member repaired in place still
-reaches a channel that includes it.
-
-| Metadata key | Meaning |
-|---|---|
-| `node` | The node id. |
-| `effect` | The node's effect (its `uses` target). |
-| `scope` | `session` or `run`. |
-| `action` | `setup`, `cleanup`, or `alive`. |
-| `result` | `produced`, `skipped`, `failed`, or `cleaned`. |
-| `duration_ms` | How long the action took. |
-
-`body` carries a bounded stderr or error tail for a `failed` result; a
-`produced` or `cleaned` result carries none — state remains the authority for
-outputs.
-
-## Display
-
-`[<id>.display]` declares the values the CLI's listing and show commands, and
-the web UI, render.
-They read persisted outputs only — no network — so their freshness follows
-whatever cadence updates those outputs.
-
-## Clocks
-
-`[<id>.tick]` declares when the tick reactor advances a session, on top of the
-judge builtin trigger. `on` is a list of event-type globs whose match ticks the
-session; `heartbeat` ticks when that long has passed since the last tick;
-`max_heartbeat` caps the quiet-tick backoff interval. Both fields are optional
-and independent: neither declared means a manual tick and the judge builtin
-are the only drivers.
-
-`[<id>.healthcheck]` declares the health sampling cycle: `period`,
-`stall_threshold`, and `renotify_every`. It names the cycle, not what health
-means; what each probe observes is an effect-level `[health]` declaration.
-
-`[tick]` and `[healthcheck]` are whole-table runtime tuning. A global workflow
-replacement supplies each table as one declaration rather than merging keys.
-
-## Concurrency
-
-`max_up_children` optionally caps how many sessions parented on a session
-this workflow produces may hold run state "up" at once — for example, an
-orchestrator workflow declaring `max_up_children = 7` limits itself to 7
-concurrently-up child sessions. `plect up` rejects a child that would push
-its parent past the cap, naming the parent, the cap, and the current count;
-it does not queue the request, so the caller (typically an orchestrator
-tick) retries on a later cycle once a child frees up.
-
-Counting rule: a child counts toward the cap while it holds run state
-"up" — any run-scoped task produced — and stops counting the moment it goes
-down or is destroyed. A `plect up` in flight against the same parent, admitted
-but not yet up itself, also counts, closing the window between two
-concurrent `plect up` processes deciding at the same instant; this is why a
-rejection's reported count can briefly exceed what `plect ls` shows. A
-`plect up` that only brings an already-up child back up again (an idempotent
-re-up) is exempt from the cap, since that child is already counted.
-`--force-recreate` is not this case even on an already-up child: it tears
-run state down before rebuilding it, so it holds an admission of its own
-for that whole window rather than being exempt.
-
-An in-flight admission survives however long its `plect up` process
-legitimately keeps running — it counts until that process is confirmed
-gone, not until some fixed time passes. A second `plect up` for that same
-child while the first is still running is itself rejected outright, not
-queued behind it; once the first process is confirmed gone (killed rather
-than finished), a retry on that child reclaims the admission, and `plect
-destroy` on it clears the admission immediately either way.
-
-Unset means no cap.
-
-## Populations
-
-`[[<id>.populations]]` declares a desired set of parentless sessions under a
-user-owned workflow. A population is deployment policy, so plugins and cloned
-workspace overlays cannot declare it. Its identity is the containing
-workflow's resolved address plus its unique `name`; that provenance is stored
-on every admitted session and is required for later mutation or destruction.
-
-| Field | Meaning |
-|---|---|
-| `name` | Required stable identifier, unique within the workflow. |
-| `resource` | Required static reference to the resource that recognizes, queries, and observes population resources. |
-| `query` | Required literal parameter object validated by the resource query's `inputs_schema`. |
-| `uses` | Required, non-empty selection of query means this entry runs, e.g. `["poll"]`. Each keyword must be one the resolved resource's query declares. |
-| `session.task` | Optional static initial task, installed with the name `initial`; it uses the same resource. |
-| `session.inputs` | Optional values over literals, `resource.id`, and properties declared by the query `item_schema` under `item.*`. |
-| `session.destroy.force` | Whether an enabled automatic destruction uses force; defaults to false. |
-| `poll_every` | Required positive duration when `uses` selects `poll`; forbidden otherwise. |
-| `expire_after` | Required positive external-input quiescence duration when `uses` does not select `poll`; forbidden when it does. |
-| `auto_down` | Permits capacity-pressure down selection; defaults to false. |
-| `auto_destroy` | Permits guarded automatic destruction; defaults to false, producing a dry-run verdict instead. |
-
-`uses` is the sole authority for which means run: an entry naming only
-`poll` never starts the resource's subscribe action even when the resource
-declares one, and an entry naming only `subscribe` never runs poll, even
-against a resource whose query declares both. There is no default
-selection, so a means a plugin resource adds later cannot start running in an
-existing deployment until an entry names it explicitly.
-
-Selecting `poll` makes it the sole membership and absence authority for that
-entry: a complete snapshot is validated before membership changes, and
-subscribe items (when also selected) admit or re-up a member but cannot undo
-an absence tombstone; only a later positive poll opens a new generation.
-Deselecting `poll` follows the subscribe-only rules instead: expiry is
-measured from successful session creation and reset by accepted repeated
-appearances or inbound session events, and a resource is never presumed
-absent. Internal, outbound, and status events do not reset that clock.
-
-Deselecting `poll` on a resource whose query declares it is a deliberate
-trade: it drops absence detection and missed-event repair (a subscribe
-delivery gap is never independently corrected) in exchange for not running a
-poll means that is too expensive, rate-limited, or unavailable for this
-deployment. An enumerable resource should normally keep `poll` selected;
-deselecting `subscribe` instead is the more common case, e.g. for a
-deployment with no reachable webhook endpoint to run a fail-closed subscribe
-action against, which would otherwise become a permanent restart loop under
-the resident supervisor.
-
-Changing an entry's `uses` on a config reload keeps its owned sessions and
-their provenance — removal or replacement of policy is never evidence about
-a resource — but the evaluator re-derives membership from the new
-selection's authority alone. A resource tombstoned under a since-deselected
-`poll` is admitted again by a later subscribe appearance instead of staying
-locked out waiting for a poll snapshot that will never come.
-
-Destruction waits until every produced dynamic task with a `done_when`
-predicate is satisfied. A missing predicate, observation error, evaluation
-error, or pending leaf blocks destruction. `auto_destroy = false` records the
-same eligible decision without applying it.
-
-At virtual-root capacity, only an up, population-owned session from an entry
-with `auto_down = true` is eligible. Its latest durable status event must be an
-explicit clear newer than its creation, last accepted appearance, and last
-inbound event. Eligible sessions are selected by oldest activity, then session
-name, and are brought down through ordinary run-scoped cleanup. An appearance,
-inbound event, or positive poll generation requests ordinary up again.
-
-Removing or invalidly changing provenance never authorizes a differently named
-entry to adopt existing sessions. A resident config reload that fails
-validation keeps the last valid evaluator running.
+`workdir`, when present, is exactly one projection from a node output:
 
 ```toml
-[standing_cases]
+[pull_review]
 kind     = "workflow"
-resource = "query_source"
+resource = "pull_request"
+workdir  = { from = "nodes.checkout.outputs.workspace_dir" }
 
-[standing_cases.inputs_schema]
-type                 = "object"
-required             = ["resource"]
-additionalProperties = false
+[[pull_review.nodes]]
+id   = "checkout"
+uses = "checkout_effect"
 
-[standing_cases.inputs_schema.properties]
-resource = { type = "string" }
-context  = { type = "string" }
+[[pull_review.nodes]]
+id   = "agent"
+uses = "agent_runtime"
 
-[[standing_cases.populations]]
-name     = "dispatch"
-resource = "query_source"
-uses              = ["poll", "subscribe"]
-poll_every        = "5m"
-auto_down         = true
-auto_destroy      = false
-
-[standing_cases.populations.query]
-scope = "open"
-
-[standing_cases.populations.session]
-task = "population_task"
-
-[standing_cases.populations.session.inputs]
-resource = { from = "resource.id" }
-context  = { from = "item.context", optional = true }
-
-[standing_cases.populations.session.destroy]
-force = false
+[pull_review.nodes.inputs]
+workspace_dir = { from = "nodes.checkout.outputs.workspace_dir" }
 ```
 
-Population lifecycle decisions are durable events:
+The workdir producer and all its transitive prerequisites are preparation
+nodes. The graph determines that set before default-workdir dependencies are
+added. Preparation actions execute in the invocation process directory. Every
+other node runs in the declared directory and depends on its producer. If
+`workdir` is omitted, no node receives a default directory. There are no
+per-node or per-action cwd overrides.
 
-| Event | Meaning |
-|---|---|
-| `plect.workflow_population.up` | A member's session transitioned to up. Re-admitting an already-up member records nothing. |
-| `plect.workflow_population.down` | Capacity policy selected or evaluated a down action. |
-| `plect.workflow_population.destroy` | An eligible member was destroyed. |
-| `plect.workflow_population.destroy_deferred` | The task guard blocked destruction. |
-| `plect.workflow_population.destroy_dry_run` | Destruction was eligible but automatic execution was disabled. |
-| `plect.workflow_population.conflict` | Existing state has incompatible provenance. |
-| `plect.workflow_population.failure` | A query or lifecycle operation failed. |
+Cleanup uses the directory chosen for its node setup. If that directory has
+vanished, cleanup records a failure and does not run in any fallback directory.
+This preserves cleanup actions' directory boundary. Down, repeated up, and
+destroy use the same rule.
 
-## Resource selection
+`[<id>.outputs]` is the workflow's explicit public projection record;
+`outputs_schema` declares it. Each binding is evaluated from durable node
+outputs after setup. `workflow.outputs.*` is persisted on the session and is
+the only workflow-output root for display, instructions, node inputs, and
+channel delivery. It replaces the former provider output path without creating
+an `@workflow` pseudo-node.
 
-`resource` is a static reference. It selects the resource identity and
-delivery contract; it does not create a directory or add a lifecycle node.
-Automatic dispatch requires exactly one workflow naming the matched resource
-and errors otherwise. A machine-owned global workflow supplies a
-resource-specific variant when needed; the caller selects it with
-`--workflow`. An effect's inputs are its own contract and may bind a preceding
-node's output.
+```toml
+[pull_review.outputs]
+owner_endpoint = { from = "nodes.orchestrator.outputs.endpoint" }
+instruction    = { from = "nodes.agent.outputs.instruction" }
+
+[pull_review.outputs_schema]
+type     = "object"
+required = ["owner_endpoint", "instruction"]
+
+[pull_review.outputs_schema.properties]
+owner_endpoint = { type = "string" }
+instruction    = { type = "string" }
+
+[pull_review.display]
+title  = { from = "workflow.outputs.instruction" }
+status = "review"
+```
+
+## Populations and chains
+
+A population belongs to a workflow and therefore derives its resource type
+from the workflow. It cannot declare an independently authoritative resource.
+Its query parameters satisfy the entry resource's query contract. It manages
+the desired entry-resource sessions using its selected query means and declared
+retention, down, and destroy policy. A population selects at most one initial
+task compatible with its entry resource; it may omit it.
+
+A task chain may start another session under a selected workflow once its
+condition holds. It addresses the same resource by default or another concrete
+resource it observed, such as a pull request created from issue work. The
+target workflow must accept that resource. Judge acceptance remains associated
+with the completion condition and revision/evidence contract that declared it.
+
+## Representative configurations
+
+The shared-environment pattern has specialized workflows for issue work and
+pull review. The duplication is intentional: their entry resource types are
+different even when their checkout, terminal, agent, and delivery nodes look
+similar. Migrating one workflow from issues to pull requests creates a second
+workflow, moves callers and populations to it, and retires the old one only
+after its sessions drain.
+
+```toml
+[issue_work]
+kind     = "workflow"
+resource = "issue"
+workdir  = { from = "nodes.checkout.outputs.workspace_dir" }
+
+[[issue_work.nodes]]
+id = "checkout"
+uses = "checkout_effect"
+[[issue_work.nodes]]
+id = "agent"
+uses = "agent_runtime"
+
+[pull_review]
+kind     = "workflow"
+resource = "pull_request"
+workdir  = { from = "nodes.checkout.outputs.workspace_dir" }
+
+[[pull_review.nodes]]
+id = "checkout"
+uses = "checkout_effect"
+[[pull_review.nodes]]
+id = "reviewer"
+uses = "agent_runtime"
+
+[conversation]
+kind     = "workflow"
+resource = "conversation"
+workdir  = { from = "nodes.thread_dir.outputs.workspace_dir" }
+
+[[conversation.nodes]]
+id = "thread_dir"
+uses = "thread_directory"
+[[conversation.nodes]]
+id = "agent"
+uses = "agent_runtime"
+
+[[conversation.populations]]
+name       = "open_conversations"
+uses       = ["poll", "subscribe"]
+poll_every = "5m"
+auto_down  = true
+auto_destroy = true
+
+[conversation.populations.query]
+status = "open"
+
+[conversation.populations.session]
+task = "conversation_triage"
+```
+
+The conversation population retains its directory and agent environment when
+it adds an `issue_investigation` task bound to an issue resource. Its
+capacity-driven down/up and guarded destruction remain population policy;
+neither turns the issue into the session's entry resource.
 
 ## Validation rules
 
-- `resource` and every node's `uses` resolve to a definition of the
-  expected kind.
-- Two nodes may not share an id, including after `id` defaulting.
-- Dependencies derived from `nodes.<id>.outputs` projections form no cycle.
-- A node input projecting `nodes.<id>.outputs.<key>` names a node in this
-  workflow and an output that node's effect declares.
-- Workflow selection is unambiguous for a matched resource.
+- `resource` resolves to one `resource` definition.
+- A selected entry identifier resolves to that resource type.
+- An omitted workflow is valid only with exactly one accepting workflow.
+- `workdir` is a projection from a node output declared by this workflow.
+- Node dependencies plus derived default-workdir edges have no cycle.
+- A population uses its containing workflow's resource and its query contract.
+- An initial task is caller-selected and compatible with its concrete binding.
+- Workflow public outputs satisfy `outputs_schema` and bind only declared node
+  outputs or allowed session inputs.

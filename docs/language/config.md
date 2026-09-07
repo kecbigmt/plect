@@ -22,6 +22,7 @@ max_up_children     = 12
 resource_allowlist  = ["^https://github\\.com/kecbigmt/"]
 plugin_dirs         = ["~/.config/plect/plugins"]
 channels            = ["notify"]
+trusted_project_roots = ["/projects/widgets"]
 
 [inputs_schema]
 type                 = "object"
@@ -38,13 +39,23 @@ task = { type = "string" }
 | `resource_allowlist` | Patterns a resource identifier must match to be accepted. |
 | `plugin_dirs` | Additional plugin mount directories, after the catalog-resolved ones. |
 | `channels` | Channel definitions delivering for every session. |
+| `trusted_project_roots` | Canonical project roots permitted to contribute a project layer. |
 | `inputs_schema` | Contract for the session inputs this machine accepts. |
 
-`config.toml` has no workspace-directory setting.
+`config.toml` has no workspace-directory setting. The invocation's nearest
+ancestor containing `.plect/project.toml` is its project root. When its
+canonical path is in `trusted_project_roots`, that root's `.plect/` definition
+tree composes after plugins and the machine-owned global layer. No other
+ancestor is read, and a generated checkout is never a configuration source.
+An untrusted root contributes nothing and is reported as a trust error.
 
-Resource-specific customization is a workflow in the machine-owned global
-layer. The caller selects it with `--workflow`; a checkout does not contribute
-configuration.
+The resolved project root, participating layer revisions, and effective digest
+are recorded in each session. Later lifecycle, task, observation, and delivery
+operations use that record rather than their caller's cwd. A configuration
+change creates a new context for later sessions only; a missing or changed
+recorded context fails closed. Chains inherit their triggering session's
+context. A resident population inherits the context captured when the resident
+started, not its process cwd.
 
 `max_up_children` applies one machine-wide capacity key to every session with
 no real parent, including sessions placed in an explicit `root:*` sibling
@@ -131,6 +142,7 @@ edit.
   the direction the comparison found.
 - A catalog alias matches `^[A-Za-z0-9][A-Za-z0-9_-]*$`.
 - Every `channels` entry resolves to a definition of kind `channel`.
+- Each `trusted_project_roots` entry is an absolute canonical path.
 - `max_up_children`, when declared, is at least one.
 - A missing `catalogs.toml` means no catalogs are registered, which is not an
   error.

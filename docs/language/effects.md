@@ -6,6 +6,12 @@ interactive capability, and composition.
 It brings something up, keeps it observable, and takes it down. It does not
 decide whether the work is finished — that is a [task document](tasks.md).
 
+An effect may acquire part of a session environment, including a directory.
+There is no workspace-provider lifecycle. A session-scoped checkout or
+conversation-directory effect is an ordinary node whose outputs may be chosen
+by its workflow's single `workdir` declaration. It does not reserve an output
+name, and a workflow with no `workdir` is valid.
+
 ## Surface
 
 | Field | Meaning |
@@ -65,6 +71,12 @@ uses = "pane"
 ```
 
 A nested effect that declares no `scope` takes the innermost layer's scope.
+
+When a workflow declares `workdir`, graph-derived preparation nodes execute in
+the invocation process directory and all other nodes receive that declared
+directory. Effects cannot override it per node or action. Cleanup uses the
+directory its setup used; a vanished directory is a cleanup failure, not an
+invitation to run elsewhere.
 
 ## Outputs are production records
 

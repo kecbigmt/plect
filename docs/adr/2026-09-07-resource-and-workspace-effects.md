@@ -2,139 +2,120 @@
 supersedes: 2026-08-17-workspace-provider-vocabulary
 ---
 
-# Resource identity and workspace effects
+# Resource entry points and ordinary environment effects
 
 ## Context
 
-`workspace_provider` combines resource resolution and subscription with
-workspace lifecycle. It requires `setup`, accepts `match`, `name`,
-`subscribe`, and `unsubscribe`, and reserves an immutable `workspace_dir`
-output. [Its configuration](../../app/internal/config/workspace_provider.go)
-and [loader](../../app/internal/config/workspace_provider.go) establish those
-present rules.
+`workspace_provider` makes one declaration answer resource identity, delivery,
+directory acquisition, and exceptional pre-plan lifecycle questions. Its
+reserved `workspace_dir` output is persisted through an `@workflow` pseudo-node.
+`resource_observer` separately recognizes and observes the same external
+things. The split gives two authorities for an identifier and makes a
+filesystem directory look like the definition of a session environment.
 
-Provider setup persists as the `@workflow` pseudo-node and requires a non-empty
-`workspace_dir`; the lifecycle copies that output to the session. [The setup
-hook](../../app/internal/task/workflowhook.go) and [session recreation](../../app/internal/service/lifecycle_up.go)
-are the present authorities. `resource_observer` separately owns matching,
-observation, finalization, state, and query. [Its configuration](../../app/internal/config/resource.go)
-is the present authority.
+The GitHub issue and pull-request workflows, a Slack conversation workflow,
+and the local goal workflow show the required shape. They need resource
+identity and delivery, ordinary setup/cleanup effects, an agent's work
+directory when applicable, public outputs consumed by display and delivery,
+and tasks which may concern a resource other than the session's entry resource.
 
 ## Decision
 
-`workspace_provider` and `resource_observer` are replaced by one
-`kind = "resource"`. A resource owns identity, observation, and delivery
-binding: `match`, `name`, `observe`, `finalize`, `subscribe`, `unsubscribe`,
-`inputs_schema`, `state_schema`, and `query`.
+`workspace_provider` and `resource_observer` are replaced by `kind =
+"resource"`. A resource recognizes an identifier (`match`), derives its
+resource-instance name (`name`), observes it, queries it, binds delivery, and
+finalizes it. Resource action inputs are supplied at each concrete operation:
+an entry invocation, an additional task-resource binding, and a standalone
+resource operation each provide an object satisfying that resource's
+`inputs_schema`. Query inputs are a separate object satisfying the query
+contract. They do not inherit from one another.
 
-An ordinary `kind = "effect"` with `scope = "session"` acquires a session
-workspace. Its setup, cleanup, liveness, and invalidation follow the ordinary
-effect rules. The Slack thread provider becomes such an effect; it retains the
-per-thread directory it creates today:
+A workflow declares exactly one entry resource type. `plect up` receives a
+concrete entry-resource identifier and an optional workflow. With no workflow,
+resolution succeeds only when exactly one workflow accepts the identifier's
+resolved resource type. A workflow constrains session creation, not the types
+of tasks the resulting session may carry.
 
-```toml
-[thread_workspace]
-kind  = "effect"
-scope = "session"
+The resource instance name is not a session name. Core constructs the session
+name from that name plus an optional caller-supplied tag. No tag uses the
+resource instance name unchanged; a tag is non-empty, validated as one session
+name segment, and the resulting name must be unused unless it resolves to the
+same entry resource and tag. The recorded entry resource, tag, and selected
+configuration context are the dispatch and storage authority; adding a task
+does not rename or retarget the session.
 
-[thread_workspace.setup]
-type = "shell"
-script = '''
-rest=${session_name#slack/}
-channel_id=${rest%-*}
-ts_digits=${rest##*-}
-thread_ts="${ts_digits%??????}.${ts_digits#??????????}"
-workspace_dir="$workspace_dirs_root/slack/$channel_id/$thread_ts"
-mkdir -p "$workspace_dir"
-printf '{"workspace_dir":"%s","channel_id":"%s","thread_ts":"%s"}\n' \
-  "$workspace_dir" "$channel_id" "$thread_ts"
-'''
+Effects assemble an environment under their ordinary dependency graph. An
+environment can include a conversation, a terminal, credentials, and a
+directory; it need not include a directory. A session-scoped effect therefore
+acquires a worktree or Slack-thread directory, using ordinary setup, liveness,
+invalidation, and cleanup rules. There is no reserved output, session column,
+or `@workflow` node.
 
-[thread_workspace.setup.bind]
-session_name        = { from = "session.name" }
-workspace_dirs_root = { from = "inputs.workspace_dirs_root" }
+A workflow may declare one `workdir` projection from a node output. Its
+producer and that producer's transitive prerequisites are preparation nodes;
+the set is derived before default-workdir edges are added. Every other node
+executes in the declared directory and depends on its producer. Preparation
+actions execute in the invocation process directory; this gives setup no
+unstated dependency on a directory it is creating. A workflow without
+`workdir` has no default directory. Cleanup uses the directory selected for
+that node's setup; if it has disappeared, cleanup fails and records that fact.
+It never falls back to the invocation directory or another node's directory.
+There are no per-node or per-action cwd overrides.
 
-[thread_workspace.health.alive]
-type   = "shell"
-script = 'test -d "$workspace_dir"'
+`[workflow.outputs]` and `outputs_schema` are the public projection record.
+They bind declared values from node outputs after setup and are persisted with
+the session. `workflow.outputs.*` remains the only workflow-output root for
+display, task instructions, downstream node bindings, and channel delivery;
+it is not an effect lifecycle and does not create a pseudo-node.
 
-[thread_workspace.health.alive.bind]
-workspace_dir = { from = "self.outputs.workspace_dir" }
+The initiating caller selects the optional initial task. `plect up`, a chain,
+and a population each select at most one compatible task; omission creates an
+environment for a human. The task binds one concrete resource and its declared
+resource type must match that resource. It may be a different type from the
+entry resource. Completion reads its resource observation, task state, and
+judge evidence; it does not require mutation of the resource. `observe`
+refreshes Plecture's knowledge and does not advance the external thing.
 
-[thread_workspace.inputs_schema]
-type     = "object"
-required = ["workspace_dirs_root"]
-
-[thread_workspace.inputs_schema.properties]
-workspace_dirs_root = { type = "string" }
-
-[thread_workspace.outputs_schema]
-type     = "object"
-required = ["workspace_dir", "channel_id", "thread_ts"]
-
-[thread_workspace.outputs_schema.properties]
-workspace_dir = { type = "string" }
-channel_id    = { type = "string" }
-thread_ts     = { type = "string" }
-```
-
-Core drops the reserved `workspace_dir` output and the `@workflow` pseudo-node.
-A workflow declares, once, which node output is the session's working
-directory.
-
-The deployment's `claude.toml` is not in this repository, so this diff uses the
-shipped [review-thread workflow](../../plugins/slack/examples/review-thread-workflow.toml).
-The worktree node is added; the existing node list is otherwise unchanged:
-
-```diff
- [pr_review_with_slack]
- kind               = "workflow"
--workspace_provider = "official.github.worktree"
-+resource           = "official.github.issue"
-+workdir            = { from = "nodes.worktree.outputs.workspace_dir" }
-
-+[[pr_review_with_slack.nodes]]
-+id   = "worktree"
-+uses = "official.github.worktree"
-
- [[pr_review_with_slack.nodes]]
- id   = "slack_thread"
- uses = "official.slack.slack_thread"
-
- [[pr_review_with_slack.nodes]]
- id   = "reviewer"
- uses = "official.codex.codex"
-```
+Chains may start another session on their triggering condition, addressing the
+same resource or a newly observed one such as a pull request. Population
+queries derive their resource type from their containing workflow and manage
+the desired sessions under declared retention and removal policy. A Slack
+conversation session can consequently retain its directory and conversation
+while it gains an issue-investigation task.
 
 ## Consequences
 
-One migration rewrites the three shipped provider declarations:
+The new dialect specializes workflows by entry resource type. This duplicates
+otherwise similar issue, pull-request, and conversation wiring, and moving a
+workflow to another entry type requires a new workflow plus migration of its
+population and callers. That explicit cost is preferable to pretending every
+task in one environment has one resource type.
 
-- `plugins/github/config/workspaces/worktree.toml`
-- `plugins/slack/config/workspaces/thread_workspace.toml`
-- `plugins/okf/config/workspaces/local_okf.toml`
+The migration is one breaking change after the SQLite cutover: back up each
+configuration tree and durable state; rewrite `workspace_provider` and
+`resource_observer` declarations as resources and effects; replace provider
+nodes and `workspace.*` bindings; migrate stored pseudo-node/output records to
+ordinary nodes and public outputs; and remove obsolete workspace fields. It
+has no compatibility interval. The implementation must preserve invocation
+cleanup inputs, including `force` and plugin-owned options; creation inputs do
+not authorize destructive cleanup.
 
-It also rewrites the deployment-owned orchestrator provider and each shipped
-resource observer to `kind = "resource"`:
-
-- [GitHub issue](../../plugins/github/config/resources/issue.toml)
-- [GitHub pull request](../../plugins/github/config/resources/pull_request.toml)
-- [OKF goal](../../plugins/okf/config/resources/okf_goal.toml)
-- [Slack thread](../../plugins/slack/config/resources/thread.toml)
-
-The migration inventory includes every `workspace.*` template reference,
-`plect subscribe`, dispatch-time auto-subscribe, `plect up --force-recreate`,
-the pseudo-node and storage importer, and the two repositories' `.plect/`
-content. Core's direct reads of the branch output are removed separately.
+The implementation also has to define validators, storage migration, resource
+operation surfaces, session-name collision diagnostics, public-output
+persistence, graph construction, vanished-directory cleanup behavior, and
+task/chain/population compatibility. Existing runtime tests validate the old
+dialect, not this decision. The operational procedure is
+[`resource-and-workspace-effects-migration.md`](../migrations/resource-and-workspace-effects-migration.md).
 
 ## Alternatives considered
 
-### Keep `workspace_provider` and make `workspace_dir` optional
+### Retain a workspace provider
 
-Rejected. It preserves an exceptional lifecycle type after the directory is no
-longer a core requirement.
+Rejected. It keeps a provider-only lifecycle and makes an optional directory a
+core identity concern.
 
-### Keep resource observation separate from identity and delivery binding
+### Give every node its own cwd control
 
-Rejected. Two declarations matching one identifier would require agreement
-rules for naming, binding ownership, and observation.
+Rejected. The reference configurations need only one workflow work directory;
+additional overrides add competing order and cleanup semantics without a
+consumer.
