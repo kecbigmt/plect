@@ -2,11 +2,14 @@ package legacyimport
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strconv"
 	"syscall"
 	"testing"
+
+	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/persistence"
@@ -109,14 +112,14 @@ func TestRun_ImportsAFullLegacyDirectoryAndRoundTrips(t *testing.T) {
 	if !report.Promoted {
 		t.Fatal("report.Promoted = false, want true")
 	}
-	if report.Sessions != 3 {
-		t.Errorf("report.Sessions = %d, want 3", report.Sessions)
+	if report.Sessions != 2 {
+		t.Errorf("report.Sessions = %d, want 2", report.Sessions)
 	}
-	if report.SessionsFromEventLogOnly != 1 {
-		t.Errorf("report.SessionsFromEventLogOnly = %d, want 1", report.SessionsFromEventLogOnly)
+	if report.SkippedEventOnly != 1 {
+		t.Errorf("report.SkippedEventOnly = %d, want 1", report.SkippedEventOnly)
 	}
-	if report.Events != 4 {
-		t.Errorf("report.Events = %d, want 4", report.Events)
+	if report.Events != 3 {
+		t.Errorf("report.Events = %d, want 3", report.Events)
 	}
 	if report.Cursors != 3 { // delivery + tick + heartbeat, all on root-session
 		t.Errorf("report.Cursors = %d, want 3", report.Cursors)
@@ -181,9 +184,28 @@ func TestRun_ImportsAFullLegacyDirectoryAndRoundTrips(t *testing.T) {
 		t.Errorf("child.ID = %q, want a freshly minted id distinct from root's", child.ID)
 	}
 
+	// orphan-events-only has no state.json entry: it is skipped entirely --
+	// no row, no events, not even reachable by incarnation id.
 	orphan, err := db.GetSession(ctx, "orphan-events-only")
-	if err != nil || orphan == nil {
-		t.Fatalf("GetSession(orphan-events-only) = %v, %v", orphan, err)
+	if err != nil {
+		t.Fatalf("GetSession(orphan-events-only): %v", err)
+	}
+	if orphan != nil {
+		t.Errorf("GetSession(orphan-events-only) = %+v, want nil (skipped, never imported)", orphan)
+	}
+	all, err := db.AllSessions(ctx)
+	if err != nil {
+		t.Fatalf("AllSessions: %v", err)
+	}
+	if _, ok := all["orphan-events-only"]; ok {
+		t.Error("AllSessions includes orphan-events-only, want it absent (skipped)")
+	}
+	orphanIDs, err := db.EventStreamIDsBySession(ctx, "orphan-events-only")
+	if err != nil {
+		t.Fatalf("EventStreamIDsBySession(orphan-events-only): %v", err)
+	}
+	if len(orphanIDs) != 0 {
+		t.Errorf("EventStreamIDsBySession(orphan-events-only) = %v, want none (no row was ever created for it)", orphanIDs)
 	}
 
 	rootEvents, _, err := db.ListEventsFrom(ctx, "root-session", 0)
@@ -233,6 +255,39 @@ func TestRun_ImportsAFullLegacyDirectoryAndRoundTrips(t *testing.T) {
 	}
 	if !sawReservation {
 		t.Error("imported up-slot reservation not found")
+	}
+}
+
+// An events/-only directory carries no parent, workflow, resource, inputs,
+// or lifecycle facts to build a session row from, so the importer skips it
+// entirely rather than materializing an incomplete row for it.
+func TestRun_EventLogOnlySessionIsSkippedEntirely(t *testing.T) {
+	sourceDir, _, _ := legacyFixture(t)
+	destDir := t.TempDir()
+	ctx := context.Background()
+
+	report, err := Run(ctx, Options{SourceDir: sourceDir, DestDir: destDir})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if report.SkippedEventOnly != 1 {
+		t.Errorf("report.SkippedEventOnly = %d, want 1", report.SkippedEventOnly)
+	}
+
+	rawDB, err := sql.Open("sqlite3", persistence.PathIn(destDir))
+	if err != nil {
+		t.Fatalf("open storage.db directly: %v", err)
+	}
+	defer rawDB.Close()
+
+	var count int
+	if err := rawDB.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sessions WHERE name = ?`, "orphan-events-only",
+	).Scan(&count); err != nil {
+		t.Fatalf("query orphan-events-only row: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("sessions rows for orphan-events-only = %d, want 0 (skipped, not imported at all)", count)
 	}
 }
 

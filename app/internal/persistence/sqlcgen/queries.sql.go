@@ -11,6 +11,27 @@ import (
 	"strings"
 )
 
+const clearParentReferencesToID = `-- name: ClearParentReferencesToID :exec
+UPDATE sessions SET parent_session_id = NULL WHERE parent_session_id = ?
+`
+
+// parent_session_id/root_session_id are ON DELETE NO ACTION: a caller must
+// sever every inbound reference to an id before DeleteSessionByID, or the
+// delete is rejected outright.
+func (q *Queries) ClearParentReferencesToID(ctx context.Context, parentSessionID sql.NullString) error {
+	_, err := q.db.ExecContext(ctx, clearParentReferencesToID, parentSessionID)
+	return err
+}
+
+const clearRootReferencesToID = `-- name: ClearRootReferencesToID :exec
+UPDATE sessions SET root_session_id = NULL WHERE root_session_id = ?
+`
+
+func (q *Queries) ClearRootReferencesToID(ctx context.Context, rootSessionID sql.NullString) error {
+	_, err := q.db.ExecContext(ctx, clearRootReferencesToID, rootSessionID)
+	return err
+}
+
 const countLiveSessionsNamed = `-- name: CountLiveSessionsNamed :one
 SELECT COUNT(*) FROM sessions WHERE name = ? AND status <> 'destroyed'
 `
@@ -63,6 +84,15 @@ func (q *Queries) CurrentNodeExecution(ctx context.Context, arg CurrentNodeExecu
 		&i.FinalizedAt,
 	)
 	return i, err
+}
+
+const deleteEventsForSession = `-- name: DeleteEventsForSession :exec
+DELETE FROM events WHERE session_id = ?
+`
+
+func (q *Queries) DeleteEventsForSession(ctx context.Context, sessionID string) error {
+	_, err := q.db.ExecContext(ctx, deleteEventsForSession, sessionID)
+	return err
 }
 
 const deleteNodeExecutionDependencies = `-- name: DeleteNodeExecutionDependencies :exec
@@ -128,6 +158,18 @@ func (q *Queries) DeleteReleasedNodeInstance(ctx context.Context, arg DeleteRele
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const deleteSessionByID = `-- name: DeleteSessionByID :exec
+DELETE FROM sessions WHERE id = ?
+`
+
+// node_instances/task_instances/session_channel_health/event_cursors all
+// cascade from this; events does not (see its own table comment), so a
+// caller must delete those first.
+func (q *Queries) DeleteSessionByID(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, deleteSessionByID, id)
+	return err
 }
 
 const deleteSessionChannelHealth = `-- name: DeleteSessionChannelHealth :exec

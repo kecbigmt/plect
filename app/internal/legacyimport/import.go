@@ -6,13 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/legacystate"
 	"github.com/kecbigmt/plecture/app/internal/persistence"
 	"github.com/kecbigmt/plecture/contracts/atomicfile"
-	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
 // Options configures one Run call.
@@ -70,8 +68,15 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 		return report, fmt.Errorf("legacyimport: %w", err)
 	}
 
-	sessionLogs := make(map[string]*SessionLog, len(sessionNames))
+	// Only a state.json session's own event log is read: an events/-only
+	// directory carries no parent, workflow, resource, inputs, or lifecycle
+	// facts to build a session row from, so it is skipped and only counted.
+	sessionLogs := make(map[string]*SessionLog, len(sf.Sessions))
 	for _, name := range sessionNames {
+		if _, hasState := sf.Sessions[name]; !hasState {
+			report.SkippedEventOnly++
+			continue
+		}
 		sl, err := ReadSessionDir(eventsRoot, name)
 		if err != nil {
 			return report, fmt.Errorf("legacyimport: %w", err)
@@ -86,7 +91,7 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 		return report, fmt.Errorf("legacyimport: unrecognized files in the legacy events tree, not imported: %v", report.UnknownFiles)
 	}
 
-	allNames := unionSorted(sf.Sessions, sessionLogs)
+	allNames := sortedSessionNames(sf.Sessions)
 
 	if !opts.DryRun {
 		if _, err := os.Stat(report.DBPath); err == nil {
@@ -120,8 +125,6 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 		return report, fmt.Errorf("legacyimport: migrate temporary database: %w", err)
 	}
 
-	importTime := time.Now().UTC()
-
 	for key, pop := range sf.Populations {
 		if pop == nil {
 			continue
@@ -137,15 +140,7 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 	}
 
 	for _, name := range allNames {
-		s, hasState := sf.Sessions[name]
-		if !hasState {
-			// events/<name> exists with no state.json entry: a plain event
-			// target (matching persistence.EnsureLiveSession's own
-			// placeholder), never formally created via `plect create`.
-			s = &domain.Session{Name: name, Status: contract.SessionStatusDown, CreatedAt: importTime, UpdatedAt: importTime}
-			report.SessionsFromEventLogOnly++
-		}
-
+		s := sf.Sessions[name]
 		id := ""
 		if sl := sessionLogs[name]; sl != nil {
 			id = sl.GenID
@@ -199,16 +194,11 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 		}
 	}
 
-	// Second pass: resolve each state.json session's ParentSession and write
-	// its tasks/channel health, now that every session row exists so
-	// resolution never depends on map iteration order (see
-	// persistence.ImportSession).
+	// Second pass: resolve each session's ParentSession and write its
+	// tasks/channel health, now that every session row exists so resolution
+	// never depends on map iteration order (see persistence.ImportSession).
 	for _, name := range allNames {
-		s, hasState := sf.Sessions[name]
-		if !hasState {
-			continue
-		}
-		if err := db.PutSession(ctx, s); err != nil {
+		if err := db.PutSession(ctx, sf.Sessions[name]); err != nil {
 			return report, fmt.Errorf("legacyimport: session %q: resolve parent link: %w", name, err)
 		}
 	}
@@ -285,25 +275,14 @@ func checkDeliveryLocksNotHeld(sourceDir string) error {
 	return nil
 }
 
-// unionSorted returns every session name appearing in either the parsed
-// state or the legacy event-log tree, sorted for deterministic import order
-// (correctness does not depend on this order — see ImportSession — but a
-// stable order keeps Run's error messages and any future progress log
-// reproducible).
-func unionSorted(sessions map[string]*domain.Session, logs map[string]*SessionLog) []string {
-	seen := make(map[string]bool, len(sessions)+len(logs))
-	var names []string
+// sortedSessionNames returns every state.json session name, sorted for
+// deterministic import order (correctness does not depend on this order —
+// see ImportSession — but a stable order keeps Run's error messages and any
+// future progress log reproducible).
+func sortedSessionNames(sessions map[string]*domain.Session) []string {
+	names := make([]string, 0, len(sessions))
 	for name := range sessions {
-		if !seen[name] {
-			seen[name] = true
-			names = append(names, name)
-		}
-	}
-	for name := range logs {
-		if !seen[name] {
-			seen[name] = true
-			names = append(names, name)
-		}
+		names = append(names, name)
 	}
 	sort.Strings(names)
 	return names

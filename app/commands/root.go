@@ -63,6 +63,13 @@ identifier no resolver matches selects a workflow explicitly (see
 			// invocation, including the documented default cutover command.
 			return nil
 		}
+		if cmd == storageRepairCmd {
+			// legacyimport.RepairImportedSessions must back up --data-home's
+			// storage.db before anything opens or migrates it; opening the
+			// default path here first (--data-home or not) would risk a
+			// silent migration landing ahead of that backup.
+			return nil
+		}
 		if err := state.NewStore("").CheckReadable(); err != nil {
 			return err
 		}

@@ -253,6 +253,39 @@ func (db *DB) DestroySession(ctx context.Context, name string, destroyedAt time.
 	})
 }
 
+// PurgeSessionByName erases every incarnation of name, its events, and its
+// up-slot reservation -- unlike DestroySession, nothing survives.
+func (db *DB) PurgeSessionByName(ctx context.Context, name string) error {
+	return db.WithImmediateTx(ctx, func(tx *sql.Tx) error {
+		q := sqlcgen.New(tx)
+		ids, err := q.ListSessionIDsByName(ctx, name)
+		if err != nil {
+			return fmt.Errorf("purge session %q: list incarnations: %w", name, err)
+		}
+		for _, id := range ids {
+			// A kept row's parent/root id can legitimately point at this
+			// id; ON DELETE NO ACTION would reject the delete below.
+			ref := sql.NullString{String: id, Valid: true}
+			if err := q.ClearParentReferencesToID(ctx, ref); err != nil {
+				return fmt.Errorf("purge session %q: clear parent references to %s: %w", name, id, err)
+			}
+			if err := q.ClearRootReferencesToID(ctx, ref); err != nil {
+				return fmt.Errorf("purge session %q: clear root references to %s: %w", name, id, err)
+			}
+			if err := q.DeleteEventsForSession(ctx, id); err != nil {
+				return fmt.Errorf("purge session %q: delete events for incarnation %s: %w", name, id, err)
+			}
+			if err := q.DeleteSessionByID(ctx, id); err != nil {
+				return fmt.Errorf("purge session %q: delete row %s: %w", name, id, err)
+			}
+		}
+		if err := q.DeleteUpReservation(ctx, name); err != nil {
+			return fmt.Errorf("purge session %q: delete up-slot reservation: %w", name, err)
+		}
+		return nil
+	})
+}
+
 func (db *DB) writeSessionTx(ctx context.Context, tx *sql.Tx, s *domain.Session) error {
 	q := sqlcgen.New(tx)
 

@@ -102,6 +102,21 @@ SELECT COUNT(*) FROM sessions WHERE name = ? AND status <> 'destroyed';
 -- name: ListSessionIDsByName :many
 SELECT id FROM sessions WHERE name = ? ORDER BY created_at ASC;
 
+-- name: DeleteSessionByID :exec
+-- node_instances/task_instances/session_channel_health/event_cursors all
+-- cascade from this; events does not (see its own table comment), so a
+-- caller must delete those first.
+DELETE FROM sessions WHERE id = ?;
+
+-- name: ClearParentReferencesToID :exec
+-- parent_session_id/root_session_id are ON DELETE NO ACTION: a caller must
+-- sever every inbound reference to an id before DeleteSessionByID, or the
+-- delete is rejected outright.
+UPDATE sessions SET parent_session_id = NULL WHERE parent_session_id = ?;
+
+-- name: ClearRootReferencesToID :exec
+UPDATE sessions SET root_session_id = NULL WHERE root_session_id = ?;
+
 -- name: SessionEverExistedByName :one
 SELECT EXISTS(SELECT 1 FROM sessions WHERE name = ?);
 
@@ -490,6 +505,9 @@ SELECT COALESCE(MAX(sequence), 0) + 1 FROM events WHERE session_id = ?;
 -- name: InsertEvent :exec
 INSERT INTO events (id, session_id, sequence, time, type, source, direction, summary, body, metadata_json)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- name: DeleteEventsForSession :exec
+DELETE FROM events WHERE session_id = ?;
 
 -- name: ListEventsFromBySession :many
 SELECT id, sequence, time, type, source, direction, summary, body, metadata_json
