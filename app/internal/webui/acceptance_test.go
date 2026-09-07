@@ -22,7 +22,20 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/state"
 	webapiv1 "github.com/kecbigmt/plecture/app/internal/webapi/generated"
 	"github.com/kecbigmt/plecture/contracts/event"
+	contract "github.com/kecbigmt/plecture/contracts/state"
 )
+
+// branchTasks seeds a session's @workflow pseudo-node with a "branch"
+// output, the shape domain.SessionBranch reads instead of a stored field.
+func branchTasks(branch string) map[string]*contract.TaskState {
+	return map[string]*contract.TaskState{
+		contract.WorkflowPseudoNodeID: {
+			Scope:   contract.TaskScopeSession,
+			Status:  contract.TaskStatusProduced,
+			Outputs: map[string]any{"branch": branch},
+		},
+	}
+}
 
 // mountResolverOnlyWorkspaceProvider registers a minimal global-layer workflow +
 // workspace provider so dispatch can resolve a github.com URL without depending on
@@ -68,7 +81,7 @@ func TestAcceptance_SessionAppearsInList(t *testing.T) {
 	sess := &domain.Session{
 		Name:             "acceptance/web-1",
 		ResourceID:       "https://github.com/acceptance/web/issues/1",
-		Branch:           "issue/1",
+		Tasks:            branchTasks("issue/1"),
 		WorkspaceDirPath: "/nonexistent/workspace-dir",
 		CreatedAt:        time.Now(),
 		UpdatedAt:        time.Now(),
@@ -105,7 +118,7 @@ func TestAcceptance_ApiV1SessionDetailServesSeededSession(t *testing.T) {
 	sess := &domain.Session{
 		Name:             "acceptance/web-2",
 		ResourceID:       "https://github.com/acceptance/web/issues/2",
-		Branch:           "issue/2",
+		Tasks:            branchTasks("issue/2"),
 		WorkspaceDirPath: "/nonexistent/workspace-dir",
 		CreatedAt:        time.Now(),
 		UpdatedAt:        time.Now(),
@@ -270,7 +283,7 @@ func TestAcceptance_SessionDetail(t *testing.T) {
 	sess := &domain.Session{
 		Name:             "acceptance/web-2",
 		ResourceID:       "https://github.com/acceptance/web/issues/2",
-		Branch:           "issue/2",
+		Tasks:            branchTasks("issue/2"),
 		WorkspaceDirPath: "/nonexistent/workspace-dir",
 		CreatedAt:        time.Now(),
 		UpdatedAt:        time.Now(),

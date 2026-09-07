@@ -190,7 +190,7 @@ func setupTaskDocument(cfg *config.Config, store *state.Store, resolvedName stri
 	}
 	// Instantiation observes once, and a failed first observation rejects it:
 	// an instance whose predicate has nothing to read is worse than none.
-	observed, oerr := task.ObserveResource(observer, resourceID, session.Branch, session.WorkspaceDirPath, cfg.Plugins)
+	observed, oerr := task.ObserveResource(observer, resourceID, domain.SessionBranch(session), session.WorkspaceDirPath, cfg.Plugins)
 	if oerr != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("task %s: observing %s failed, so no instance was created: %v", doc.ID, resourceID, oerr)}
 	}
@@ -245,7 +245,7 @@ func setupTaskDocument(cfg *config.Config, store *state.Store, resolvedName stri
 	recordLifecycle(store, resolvedName, "task_setup", fmt.Sprintf("instantiated %s", key))
 	appendInstruction(store, resolvedName, key, params.Resource, instruction)
 
-	subscribed, subscribeErrMsg := wireDeliveryOnSetup(cfg, store, resolvedName, params.Resource, session.Branch)
+	subscribed, subscribeErrMsg := wireDeliveryOnSetup(cfg, store, resolvedName, params.Resource, domain.SessionBranch(session))
 
 	return &TaskSetupResult{
 		SessionName: resolvedName,

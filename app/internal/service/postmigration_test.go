@@ -33,7 +33,6 @@ func seedPostMigrationSession(t *testing.T, store *state.Store, name, resourceID
 		Name:             name,
 		ResourceID:       resourceID,
 		Alias:            resourceID,
-		Branch:           branch,
 		Workflow:         workflow,
 		WorkspaceDirPath: workspaceDirPath,
 		CreatedAt:        createdAt,
@@ -47,6 +46,20 @@ func seedPostMigrationSession(t *testing.T, store *state.Store, name, resourceID
 				Outputs: map[string]any{contract.OutputKeyWorkspaceDir: workspaceDirPath},
 			},
 		}
+	}
+	if branch != "" {
+		if session.Tasks == nil {
+			session.Tasks = map[string]*contract.TaskState{}
+		}
+		wf := session.Tasks[contract.WorkflowPseudoNodeID]
+		if wf == nil {
+			wf = &contract.TaskState{Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced}
+			session.Tasks[contract.WorkflowPseudoNodeID] = wf
+		}
+		if wf.Outputs == nil {
+			wf.Outputs = map[string]any{}
+		}
+		wf.Outputs["branch"] = branch
 	}
 	if err := store.Put(session); err != nil {
 		t.Fatalf("seed %q: %v", name, err)
@@ -68,8 +81,8 @@ func TestPostMigrationState_LoadsIdentityFields(t *testing.T) {
 	if s.Alias != "https://example.test/acme/widgets/items/1" {
 		t.Errorf("Alias = %q", s.Alias)
 	}
-	if s.Branch != "item/1+claude" {
-		t.Errorf("Branch = %q", s.Branch)
+	if domain.SessionBranch(s) != "item/1+claude" {
+		t.Errorf("Branch = %q", domain.SessionBranch(s))
 	}
 	if s.WorkspaceDirPath != "/tmp/workdirs/acme-widgets-1-claude" {
 		t.Errorf("WorkspaceDirPath = %q", s.WorkspaceDirPath)

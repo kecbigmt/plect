@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/eventlog"
+	"github.com/kecbigmt/plecture/app/internal/eventlog/eventlogtest"
 	"github.com/kecbigmt/plecture/contracts/event"
 )
 
@@ -311,7 +312,8 @@ func TestRegistry_LastUnsubscribeJoinsReaderGoroutine(t *testing.T) {
 }
 
 func TestRegistry_ActiveReaderSurvivesStreamRotation(t *testing.T) {
-	store := eventlog.NewStore(t.TempDir())
+	dir := t.TempDir()
+	store := eventlog.NewStore(dir)
 	store.Append(event.Event{SessionName: "o/r-1", Type: "user.note", Body: "old-seen", Direction: event.Internal})
 	// A slow poll gives every write below a wide window to land before the reader's first check, guaranteeing the rotation is mid-flight, not already resolved.
 	reg := NewRegistry(store, WithPollInterval(200*time.Millisecond))
@@ -320,7 +322,7 @@ func TestRegistry_ActiveReaderSurvivesStreamRotation(t *testing.T) {
 	defer sub.Close()
 
 	oldTail, _, _, _ := store.Append(event.Event{SessionName: "o/r-1", Type: "user.note", Body: "old-tail", Direction: event.Internal})
-	if _, err := store.NewStream("o/r-1"); err != nil {
+	if err := eventlogtest.NewIncarnation(dir, "o/r-1"); err != nil {
 		t.Fatal(err)
 	}
 	stored1, _, _, _ := store.Append(event.Event{SessionName: "o/r-1", Type: "user.note", Body: "new-first", Direction: event.Internal})

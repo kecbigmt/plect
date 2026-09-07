@@ -280,16 +280,23 @@ func indexPredicate(t *testing.T, ctx context.Context, handle *sql.DB, index str
 	return normalizeSQLFragment(createSQL.String[where+len("WHERE"):])
 }
 
-// maskStringLiterals masks string-literal content so callers can search
-// for keywords and count parens without a literal's own contents (which
-// are free to contain "CHECK", "WHERE", or a stray paren) being mistaken
-// for syntax; the result stays the same length, so an index found in it
-// still locates the same character in s.
+// maskStringLiterals masks string-literal content and `--` line-comment
+// content: an ordinary English apostrophe inside a why-not comment (e.g.
+// "it's") would otherwise be mistaken for a string literal's opening
+// quote, desyncing every boundary found afterward. The result stays the
+// same length, so an index found in it still locates the same character in s.
 func maskStringLiterals(s string) string {
 	b := []byte(s)
 	inString := false
+	inComment := false
 	for i := 0; i < len(b); i++ {
 		switch {
+		case inComment:
+			if b[i] == '\n' {
+				inComment = false
+				continue
+			}
+			b[i] = 'x'
 		case inString && b[i] == '\'':
 			if i+1 < len(b) && b[i+1] == '\'' {
 				// A doubled '' is SQL's escape for a literal quote inside
@@ -301,6 +308,9 @@ func maskStringLiterals(s string) string {
 			}
 			inString = false
 		case inString:
+			b[i] = 'x'
+		case b[i] == '-' && i+1 < len(b) && b[i+1] == '-':
+			inComment = true
 			b[i] = 'x'
 		case b[i] == '\'':
 			inString = true
@@ -760,6 +770,21 @@ func TestExtractChecks_DistinguishesLiteralCase(t *testing.T) {
 	}
 	if upper[0] == lower[0] {
 		t.Fatalf("extractChecks did not distinguish string literal case: both normalized to %q", upper[0])
+	}
+}
+
+// TestExtractChecks_IgnoresApostrophesInsideLineComments guards against a
+// comment's apostrophe desyncing CHECK-constraint extraction after it.
+func TestExtractChecks_IgnoresApostrophesInsideLineComments(t *testing.T) {
+	const createTable = `CREATE TABLE t (
+		-- note is optional; it's never required. CHECK constraints follow.
+		note TEXT,
+		CHECK (note <> '')
+	)`
+
+	got := extractChecks(createTable)
+	if len(got) != 1 || got[0] != "(note <> '')" {
+		t.Fatalf("extractChecks(...) = %v, want exactly [\"(note <> '')\"]", got)
 	}
 }
 

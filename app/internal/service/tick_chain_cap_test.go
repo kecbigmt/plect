@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/domain"
@@ -433,19 +432,19 @@ func TestEvaluateSessionActions_ReturnedSnapshotIsImmuneToALaterStoreMutation(t 
 	if err != nil {
 		t.Fatalf("evaluateSessionActions: %v", err)
 	}
-	snapshot := session.CreatedAt
+	snapshot := session.Alias
 
 	if err := store.Update("work1", func(s *domain.Session) error {
-		s.CreatedAt = s.CreatedAt.Add(time.Hour)
+		s.Alias = snapshot + "-mutated"
 		return nil
 	}); err != nil {
 		t.Fatalf("store.Update: %v", err)
 	}
 
-	if got := session.CreatedAt; !got.Equal(snapshot) {
-		t.Fatalf("session.CreatedAt = %v after an unrelated store mutation, want %v unchanged", got, snapshot)
+	if got := session.Alias; got != snapshot {
+		t.Fatalf("session.Alias = %q after an unrelated store mutation, want %q unchanged", got, snapshot)
 	}
-	if live := store.Get("work1").CreatedAt; live.Equal(snapshot) {
-		t.Fatal("test setup did not actually change the live session's CreatedAt")
+	if live := store.Get("work1").Alias; live == snapshot {
+		t.Fatal("test setup did not actually change the live session's Alias")
 	}
 }

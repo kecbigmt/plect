@@ -12,10 +12,10 @@ import (
 	"time"
 )
 
-// Message is a session-level, self-reported free-text status line: the
-// session's current activity, or empty when the session is idle. plect does
-// not interpret Text; it is a slot for external updaters, not a plect
-// concept.
+// Message is a session's self-reported free-text status line: the session's
+// current activity, or empty when idle. It is not a Session field -- the
+// fact lives in the session's plect.status_message event stream, and this
+// type is only the shape a reader derives from that event.
 type Message struct {
 	Text      string    `json:"text"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -79,6 +79,16 @@ const (
 const (
 	TaskScopeSession = "session"
 	TaskScopeRun     = "run"
+)
+
+// Session lifecycle status values for Session.Status: a lifecycle phase,
+// not health or run-scope liveness (those are answered separately).
+// destroyed is terminal but the row is retained, not deleted; a later
+// create under the same name mints a new Session.ID rather than reviving it.
+const (
+	SessionStatusDown      = "down"
+	SessionStatusUp        = "up"
+	SessionStatusDestroyed = "destroyed"
 )
 
 // WorkflowPseudoNodeID is the reserved Session.Tasks key for the
@@ -210,14 +220,26 @@ type LayerState struct {
 // repository, a number, a permalink) is a workspace provider setup output,
 // not a session field.
 type Session struct {
-	Name             string                `json:"session_name"`
-	ResourceID       string                `json:"resource_id,omitempty"`
+	// ID is the durable surrogate identity minted once at creation (or
+	// recreation under a reused name) and never changed thereafter;
+	// unlike Name, it survives destroy.
+	ID          string    `json:"id,omitempty"`
+	Name        string    `json:"session_name"`
+	Status      string    `json:"status,omitempty"`
+	DestroyedAt time.Time `json:"destroyed_at,omitzero"`
+	ResourceID  string    `json:"resource_id,omitempty"`
+	// ParentSessionID and RootSessionID are ParentSession's durable
+	// identity, resolved once and never re-resolved on a later write, so a
+	// destroyed-and-recreated parent never retargets this session.
+	ParentSessionID string `json:"parent_session_id,omitempty"`
+	RootSessionID   string `json:"root_session_id,omitempty"`
+	// ParentSession is a read-side projection of the above onto the
+	// referenced session's current name ("root:"-prefixed for
+	// RootSessionID), not itself a write-time identity.
 	ParentSession    string                `json:"parent_session,omitempty"`
 	Children         []string              `json:"children,omitempty"`
 	Alias            string                `json:"alias,omitempty"`
-	Branch           string                `json:"branch"`
 	WorkspaceDirPath string                `json:"workspace_dir_path"`
-	Message          *Message              `json:"message,omitempty"`
 	Workflow         string                `json:"workflow,omitempty"`
 	Population       *PopulationProvenance `json:"population,omitempty"`
 	Inputs           map[string]any        `json:"inputs,omitempty"`
@@ -307,9 +329,6 @@ type TickBackoff struct {
 	// LastFingerprint is the composite done_when fingerprint (across every
 	// instance) as of the last heartbeat sweep; a change resets ConsecutiveUnchanged.
 	LastFingerprint string `json:"last_fingerprint,omitempty"`
-	// LastLogPosition is the event-log byte offset up to which inbound events
-	// have been scanned; an inbound event past it resets ConsecutiveUnchanged.
-	LastLogPosition int64 `json:"last_log_position,omitempty"`
 	// ConsecutiveUnchanged counts heartbeat sweeps in a row with neither a
 	// fingerprint change nor an inbound event; interval = heartbeat * 2^n.
 	ConsecutiveUnchanged int `json:"consecutive_unchanged,omitempty"`

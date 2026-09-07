@@ -126,8 +126,8 @@ func TestServiceDeleteSessionHelperProcess(t *testing.T) {
 		os.Exit(2)
 	}
 	dir, sessionName := args[1], args[2]
-	if err := state.NewStore(dir).Delete(sessionName); err != nil {
-		fmt.Fprintln(os.Stderr, "delete:", err)
+	if err := state.NewStore(dir).Destroy(sessionName); err != nil {
+		fmt.Fprintln(os.Stderr, "destroy:", err)
 		os.Exit(1)
 	}
 	os.Exit(0)

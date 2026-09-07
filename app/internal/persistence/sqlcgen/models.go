@@ -10,7 +10,7 @@ import (
 
 type Event struct {
 	ID           string
-	StreamID     string
+	SessionID    string
 	Sequence     int64
 	Time         string
 	Type         string
@@ -22,25 +22,50 @@ type Event struct {
 }
 
 type EventCursor struct {
-	StreamID     string
+	SessionID    string
 	Kind         string
 	NextSequence int64
 }
 
-type EventStream struct {
-	ID          string
-	SessionName string
-	CreatedAt   string
+type NodeInstance struct {
+	SessionID               string
+	NodeID                  string
+	TaskID                  sql.NullString
+	Name                    sql.NullString
+	Scope                   string
+	Status                  string
+	Sequence                int64
+	Resource                sql.NullString
+	InputsJson              sql.NullString
+	OutputsJson             sql.NullString
+	StateJson               sql.NullString
+	ResourceObservationJson sql.NullString
+	ResourceObservedAt      sql.NullString
+	DoneWhenJson            sql.NullString
+	ExtraDoneWhenJson       sql.NullString
+	Error                   sql.NullString
+	SetupAt                 sql.NullString
+	FailedAt                sql.NullString
+	CleanedAt               sql.NullString
+	FinalizedAt             sql.NullString
 }
 
-type NodeInstance struct {
-	SessionName string
-	NodeID      string
-	Scope       string
-	Status      string
-	Sequence    int64
-	FinalizedAt sql.NullString
-	RecordJson  string
+type NodeInstanceLayer struct {
+	SessionID            string
+	NodeID               string
+	Position             int64
+	EffectID             string
+	Status               string
+	InputsJson           sql.NullString
+	LocalsJson           sql.NullString
+	OutputsJson          sql.NullString
+	EnvJson              sql.NullString
+	HeartbeatTicks       sql.NullInt64
+	HeartbeatEscalations sql.NullInt64
+	SetupAt              sql.NullString
+	FailedAt             sql.NullString
+	CleanedAt            sql.NullString
+	Error                sql.NullString
 }
 
 type Population struct {
@@ -49,35 +74,66 @@ type Population struct {
 }
 
 type PopulationMember struct {
-	Workflow         string
-	Name             string
-	ResourceID       string
-	SessionName      sql.NullString
-	Generation       int64
-	AcceptedAt       sql.NullString
-	LastAppearance   sql.NullString
-	LastInbound      sql.NullString
-	Tombstoned       bool
-	PendingUp        bool
-	DecisionKind     sql.NullString
-	DecisionReason   sql.NullString
-	ItemJson         string
-	LastBlockersJson string
+	Workflow       string
+	Name           string
+	ResourceID     string
+	SessionName    sql.NullString
+	Generation     int64
+	AcceptedAt     sql.NullString
+	LastAppearance sql.NullString
+	LastInbound    sql.NullString
+	Tombstoned     bool
+	PendingUp      bool
+	DecisionKind   sql.NullString
+	DecisionReason sql.NullString
+	ItemJson       string
+}
+
+type PopulationMemberBlocker struct {
+	Workflow   string
+	Name       string
+	ResourceID string
+	Position   int64
+	Reason     string
 }
 
 type Session struct {
-	Name               string
-	ParentSessionName  sql.NullString
-	RootSessionName    sql.NullString
-	ResourceID         sql.NullString
-	Alias              sql.NullString
-	Workflow           string
-	WorkspaceDir       sql.NullString
-	PopulationWorkflow sql.NullString
-	PopulationName     sql.NullString
-	CreatedAt          string
-	UpdatedAt          string
-	RecordJson         string
+	ID                       string
+	Name                     string
+	Status                   string
+	DestroyedAt              sql.NullString
+	ParentSessionID          sql.NullString
+	RootSessionID            sql.NullString
+	ResourceID               sql.NullString
+	Alias                    sql.NullString
+	Workflow                 string
+	WorkspaceDir             sql.NullString
+	PopulationWorkflow       sql.NullString
+	PopulationName           sql.NullString
+	InputsJson               sql.NullString
+	HealthLastCheckedAt      sql.NullString
+	HealthLastActivityAt     sql.NullString
+	HealthLastFingerprint    sql.NullString
+	HealthLastState          sql.NullString
+	HealthLastReason         sql.NullString
+	HealthLastNotifiedAt     sql.NullString
+	HealthNotifyCount        sql.NullInt64
+	TickConsecutiveUnchanged sql.NullInt64
+	TickLastFingerprint      sql.NullString
+	LastTickAt               sql.NullString
+	CreatedAt                string
+	UpdatedAt                string
+}
+
+type SessionChannelHealth struct {
+	SessionID           string
+	Kind                string
+	ConsecutiveFailures int64
+	FirstFailureAt      string
+	LastFailureAt       string
+	LastChannel         sql.NullString
+	LastError           sql.NullString
+	EscalatedAt         sql.NullString
 }
 
 type TaskDoneWhenJudge struct {
@@ -99,24 +155,55 @@ type TaskDoneWhenState struct {
 	LastAction           sql.NullString
 	LastFingerprint      sql.NullString
 	LastReason           sql.NullString
-	LastUnsatisfiedJson  string
 	LastBody             sql.NullString
 	EscalatedAt          sql.NullString
 	EscalateReason       sql.NullString
 }
 
+type TaskDoneWhenUnsatisfiedItem struct {
+	TaskInstanceID string
+	Position       int64
+	Item           string
+}
+
 type TaskInstance struct {
-	ID           string
-	SessionName  string
-	InstanceName string
-	TaskID       string
-	Scope        string
-	Status       string
-	Sequence     int64
-	Resource     sql.NullString
-	Named        bool
-	FinalizedAt  sql.NullString
-	RecordJson   string
+	ID                      string
+	SessionID               string
+	InstanceName            string
+	TaskID                  string
+	Scope                   string
+	Status                  string
+	Sequence                int64
+	Resource                sql.NullString
+	Named                   bool
+	InputsJson              sql.NullString
+	OutputsJson             sql.NullString
+	StateJson               sql.NullString
+	ResourceObservationJson sql.NullString
+	ResourceObservedAt      sql.NullString
+	ExtraDoneWhenJson       sql.NullString
+	Error                   sql.NullString
+	SetupAt                 sql.NullString
+	FailedAt                sql.NullString
+	CleanedAt               sql.NullString
+	FinalizedAt             sql.NullString
+}
+
+type TaskInstanceLayer struct {
+	TaskInstanceID       string
+	Position             int64
+	EffectID             string
+	Status               string
+	InputsJson           sql.NullString
+	LocalsJson           sql.NullString
+	OutputsJson          sql.NullString
+	EnvJson              sql.NullString
+	HeartbeatTicks       sql.NullInt64
+	HeartbeatEscalations sql.NullInt64
+	SetupAt              sql.NullString
+	FailedAt             sql.NullString
+	CleanedAt            sql.NullString
+	Error                sql.NullString
 }
 
 type UpReservation struct {

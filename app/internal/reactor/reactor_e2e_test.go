@@ -73,12 +73,6 @@ func TestSessionReactor_ReactiveTickReachesDoneWhenConsequence(t *testing.T) {
 	if err := st.Put(&domain.Session{Name: "o/parent"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := log.NewStream("o/parent"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := log.NewStream("o/r-1"); err != nil {
-		t.Fatal(err)
-	}
 	if err := st.Put(&domain.Session{
 		Name:          "o/r-1",
 		ParentSession: "o/parent",
@@ -170,9 +164,6 @@ func TestSessionReactor_UnchangedUnmetStateAnnouncesOnce(t *testing.T) {
 			},
 		},
 	}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := log.NewStream("o/r-1"); err != nil {
 		t.Fatal(err)
 	}
 

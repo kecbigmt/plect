@@ -10,23 +10,23 @@ import (
 	"database/sql"
 )
 
-const countSessionsNamed = `-- name: CountSessionsNamed :one
-SELECT COUNT(*) FROM sessions WHERE name = ?
+const countLiveSessionsNamed = `-- name: CountLiveSessionsNamed :one
+SELECT COUNT(*) FROM sessions WHERE name = ? AND status <> 'destroyed'
 `
 
-func (q *Queries) CountSessionsNamed(ctx context.Context, name string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countSessionsNamed, name)
+func (q *Queries) CountLiveSessionsNamed(ctx context.Context, name string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countLiveSessionsNamed, name)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
 }
 
 const deleteNodeInstancesForSession = `-- name: DeleteNodeInstancesForSession :exec
-DELETE FROM node_instances WHERE session_name = ?
+DELETE FROM node_instances WHERE session_id = ?
 `
 
-func (q *Queries) DeleteNodeInstancesForSession(ctx context.Context, sessionName string) error {
-	_, err := q.db.ExecContext(ctx, deleteNodeInstancesForSession, sessionName)
+func (q *Queries) DeleteNodeInstancesForSession(ctx context.Context, sessionID string) error {
+	_, err := q.db.ExecContext(ctx, deleteNodeInstancesForSession, sessionID)
 	return err
 }
 
@@ -44,12 +44,17 @@ func (q *Queries) DeletePopulationMembersForPopulation(ctx context.Context, arg 
 	return err
 }
 
-const deleteSession = `-- name: DeleteSession :exec
-DELETE FROM sessions WHERE name = ?
+const deleteSessionChannelHealth = `-- name: DeleteSessionChannelHealth :exec
+DELETE FROM session_channel_health WHERE session_id = ? AND kind = ?
 `
 
-func (q *Queries) DeleteSession(ctx context.Context, name string) error {
-	_, err := q.db.ExecContext(ctx, deleteSession, name)
+type DeleteSessionChannelHealthParams struct {
+	SessionID string
+	Kind      string
+}
+
+func (q *Queries) DeleteSessionChannelHealth(ctx context.Context, arg DeleteSessionChannelHealthParams) error {
+	_, err := q.db.ExecContext(ctx, deleteSessionChannelHealth, arg.SessionID, arg.Kind)
 	return err
 }
 
@@ -71,17 +76,35 @@ func (q *Queries) DeleteTaskDoneWhenStateByInstanceID(ctx context.Context, taskI
 	return err
 }
 
+const deleteTaskDoneWhenUnsatisfiedItemsByInstanceID = `-- name: DeleteTaskDoneWhenUnsatisfiedItemsByInstanceID :exec
+DELETE FROM task_done_when_unsatisfied_items WHERE task_instance_id = ?
+`
+
+func (q *Queries) DeleteTaskDoneWhenUnsatisfiedItemsByInstanceID(ctx context.Context, taskInstanceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteTaskDoneWhenUnsatisfiedItemsByInstanceID, taskInstanceID)
+	return err
+}
+
 const deleteTaskInstanceByName = `-- name: DeleteTaskInstanceByName :exec
-DELETE FROM task_instances WHERE session_name = ? AND instance_name = ?
+DELETE FROM task_instances WHERE session_id = ? AND instance_name = ?
 `
 
 type DeleteTaskInstanceByNameParams struct {
-	SessionName  string
+	SessionID    string
 	InstanceName string
 }
 
 func (q *Queries) DeleteTaskInstanceByName(ctx context.Context, arg DeleteTaskInstanceByNameParams) error {
-	_, err := q.db.ExecContext(ctx, deleteTaskInstanceByName, arg.SessionName, arg.InstanceName)
+	_, err := q.db.ExecContext(ctx, deleteTaskInstanceByName, arg.SessionID, arg.InstanceName)
+	return err
+}
+
+const deleteTaskInstanceLayersByInstanceID = `-- name: DeleteTaskInstanceLayersByInstanceID :exec
+DELETE FROM task_instance_layers WHERE task_instance_id = ?
+`
+
+func (q *Queries) DeleteTaskInstanceLayersByInstanceID(ctx context.Context, taskInstanceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteTaskInstanceLayersByInstanceID, taskInstanceID)
 	return err
 }
 
@@ -95,43 +118,63 @@ func (q *Queries) DeleteUpReservation(ctx context.Context, childSessionName stri
 }
 
 const getEventCursor = `-- name: GetEventCursor :one
-SELECT next_sequence FROM event_cursors WHERE stream_id = ? AND kind = ?
+SELECT next_sequence FROM event_cursors WHERE session_id = ? AND kind = ?
 `
 
 type GetEventCursorParams struct {
-	StreamID string
-	Kind     string
+	SessionID string
+	Kind      string
 }
 
 func (q *Queries) GetEventCursor(ctx context.Context, arg GetEventCursorParams) (int64, error) {
-	row := q.db.QueryRowContext(ctx, getEventCursor, arg.StreamID, arg.Kind)
+	row := q.db.QueryRowContext(ctx, getEventCursor, arg.SessionID, arg.Kind)
 	var next_sequence int64
 	err := row.Scan(&next_sequence)
 	return next_sequence, err
 }
 
-const getEventStreamIDBySession = `-- name: GetEventStreamIDBySession :one
-
-SELECT id FROM event_streams WHERE session_name = ? ORDER BY created_at DESC LIMIT 1
+const getLiveSession = `-- name: GetLiveSession :one
+SELECT id, name, status, destroyed_at, parent_session_id, root_session_id,
+       resource_id, alias, workflow, workspace_dir,
+       population_workflow, population_name, inputs_json,
+       health_last_checked_at, health_last_activity_at, health_last_fingerprint,
+       health_last_state, health_last_reason, health_last_notified_at, health_notify_count,
+       tick_consecutive_unchanged, tick_last_fingerprint, last_tick_at,
+       created_at, updated_at
+FROM sessions WHERE name = ? AND status <> 'destroyed'
 `
 
-// Events
-func (q *Queries) GetEventStreamIDBySession(ctx context.Context, sessionName string) (string, error) {
-	row := q.db.QueryRowContext(ctx, getEventStreamIDBySession, sessionName)
-	var id string
-	err := row.Scan(&id)
-	return id, err
-}
-
-const getEventStreamSessionName = `-- name: GetEventStreamSessionName :one
-SELECT session_name FROM event_streams WHERE id = ?
-`
-
-func (q *Queries) GetEventStreamSessionName(ctx context.Context, id string) (string, error) {
-	row := q.db.QueryRowContext(ctx, getEventStreamSessionName, id)
-	var session_name string
-	err := row.Scan(&session_name)
-	return session_name, err
+func (q *Queries) GetLiveSession(ctx context.Context, name string) (Session, error) {
+	row := q.db.QueryRowContext(ctx, getLiveSession, name)
+	var i Session
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Status,
+		&i.DestroyedAt,
+		&i.ParentSessionID,
+		&i.RootSessionID,
+		&i.ResourceID,
+		&i.Alias,
+		&i.Workflow,
+		&i.WorkspaceDir,
+		&i.PopulationWorkflow,
+		&i.PopulationName,
+		&i.InputsJson,
+		&i.HealthLastCheckedAt,
+		&i.HealthLastActivityAt,
+		&i.HealthLastFingerprint,
+		&i.HealthLastState,
+		&i.HealthLastReason,
+		&i.HealthLastNotifiedAt,
+		&i.HealthNotifyCount,
+		&i.TickConsecutiveUnchanged,
+		&i.TickLastFingerprint,
+		&i.LastTickAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const getPopulation = `-- name: GetPopulation :one
@@ -152,57 +195,30 @@ func (q *Queries) GetPopulation(ctx context.Context, arg GetPopulationParams) (P
 	return i, err
 }
 
-const getSession = `-- name: GetSession :one
-SELECT name, parent_session_name, root_session_name, resource_id, alias,
-       workflow, workspace_dir, population_workflow, population_name,
-       created_at, updated_at, record_json
-FROM sessions WHERE name = ?
-`
-
-func (q *Queries) GetSession(ctx context.Context, name string) (Session, error) {
-	row := q.db.QueryRowContext(ctx, getSession, name)
-	var i Session
-	err := row.Scan(
-		&i.Name,
-		&i.ParentSessionName,
-		&i.RootSessionName,
-		&i.ResourceID,
-		&i.Alias,
-		&i.Workflow,
-		&i.WorkspaceDir,
-		&i.PopulationWorkflow,
-		&i.PopulationName,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.RecordJson,
-	)
-	return i, err
-}
-
 const hasEventCursor = `-- name: HasEventCursor :one
-SELECT COUNT(*) FROM event_cursors WHERE stream_id = ? AND kind = ?
+SELECT COUNT(*) FROM event_cursors WHERE session_id = ? AND kind = ?
 `
 
 type HasEventCursorParams struct {
-	StreamID string
-	Kind     string
+	SessionID string
+	Kind      string
 }
 
 func (q *Queries) HasEventCursor(ctx context.Context, arg HasEventCursorParams) (int64, error) {
-	row := q.db.QueryRowContext(ctx, hasEventCursor, arg.StreamID, arg.Kind)
+	row := q.db.QueryRowContext(ctx, hasEventCursor, arg.SessionID, arg.Kind)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
 }
 
 const insertEvent = `-- name: InsertEvent :exec
-INSERT INTO events (id, stream_id, sequence, time, type, source, direction, summary, body, metadata_json)
+INSERT INTO events (id, session_id, sequence, time, type, source, direction, summary, body, metadata_json)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertEventParams struct {
 	ID           string
-	StreamID     string
+	SessionID    string
 	Sequence     int64
 	Time         string
 	Type         string
@@ -216,7 +232,7 @@ type InsertEventParams struct {
 func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) error {
 	_, err := q.db.ExecContext(ctx, insertEvent,
 		arg.ID,
-		arg.StreamID,
+		arg.SessionID,
 		arg.Sequence,
 		arg.Time,
 		arg.Type,
@@ -229,48 +245,109 @@ func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) error 
 	return err
 }
 
-const insertEventStream = `-- name: InsertEventStream :exec
-INSERT INTO event_streams (id, session_name, created_at) VALUES (?, ?, ?)
-`
-
-type InsertEventStreamParams struct {
-	ID          string
-	SessionName string
-	CreatedAt   string
-}
-
-func (q *Queries) InsertEventStream(ctx context.Context, arg InsertEventStreamParams) error {
-	_, err := q.db.ExecContext(ctx, insertEventStream, arg.ID, arg.SessionName, arg.CreatedAt)
-	return err
-}
-
 const insertNodeInstance = `-- name: InsertNodeInstance :exec
 
 INSERT INTO node_instances (
-    session_name, node_id, scope, status, sequence, finalized_at, record_json
-) VALUES (?, ?, ?, ?, ?, ?, ?)
+    session_id, node_id, task_id, name, scope, status, sequence, resource,
+    inputs_json, outputs_json, state_json, resource_observation_json,
+    resource_observed_at, done_when_json, extra_done_when_json, error,
+    setup_at, failed_at, cleaned_at, finalized_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertNodeInstanceParams struct {
-	SessionName string
-	NodeID      string
-	Scope       string
-	Status      string
-	Sequence    int64
-	FinalizedAt sql.NullString
-	RecordJson  string
+	SessionID               string
+	NodeID                  string
+	TaskID                  sql.NullString
+	Name                    sql.NullString
+	Scope                   string
+	Status                  string
+	Sequence                int64
+	Resource                sql.NullString
+	InputsJson              sql.NullString
+	OutputsJson             sql.NullString
+	StateJson               sql.NullString
+	ResourceObservationJson sql.NullString
+	ResourceObservedAt      sql.NullString
+	DoneWhenJson            sql.NullString
+	ExtraDoneWhenJson       sql.NullString
+	Error                   sql.NullString
+	SetupAt                 sql.NullString
+	FailedAt                sql.NullString
+	CleanedAt               sql.NullString
+	FinalizedAt             sql.NullString
 }
 
 // Workflow nodes (static; Session.Tasks entries with Dynamic == false)
 func (q *Queries) InsertNodeInstance(ctx context.Context, arg InsertNodeInstanceParams) error {
 	_, err := q.db.ExecContext(ctx, insertNodeInstance,
-		arg.SessionName,
+		arg.SessionID,
 		arg.NodeID,
+		arg.TaskID,
+		arg.Name,
 		arg.Scope,
 		arg.Status,
 		arg.Sequence,
+		arg.Resource,
+		arg.InputsJson,
+		arg.OutputsJson,
+		arg.StateJson,
+		arg.ResourceObservationJson,
+		arg.ResourceObservedAt,
+		arg.DoneWhenJson,
+		arg.ExtraDoneWhenJson,
+		arg.Error,
+		arg.SetupAt,
+		arg.FailedAt,
+		arg.CleanedAt,
 		arg.FinalizedAt,
-		arg.RecordJson,
+	)
+	return err
+}
+
+const insertNodeInstanceLayer = `-- name: InsertNodeInstanceLayer :exec
+INSERT INTO node_instance_layers (
+    session_id, node_id, position, effect_id, status, inputs_json,
+    locals_json, outputs_json, env_json, heartbeat_ticks,
+    heartbeat_escalations, setup_at, failed_at, cleaned_at, error
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type InsertNodeInstanceLayerParams struct {
+	SessionID            string
+	NodeID               string
+	Position             int64
+	EffectID             string
+	Status               string
+	InputsJson           sql.NullString
+	LocalsJson           sql.NullString
+	OutputsJson          sql.NullString
+	EnvJson              sql.NullString
+	HeartbeatTicks       sql.NullInt64
+	HeartbeatEscalations sql.NullInt64
+	SetupAt              sql.NullString
+	FailedAt             sql.NullString
+	CleanedAt            sql.NullString
+	Error                sql.NullString
+}
+
+func (q *Queries) InsertNodeInstanceLayer(ctx context.Context, arg InsertNodeInstanceLayerParams) error {
+	_, err := q.db.ExecContext(ctx, insertNodeInstanceLayer,
+		arg.SessionID,
+		arg.NodeID,
+		arg.Position,
+		arg.EffectID,
+		arg.Status,
+		arg.InputsJson,
+		arg.LocalsJson,
+		arg.OutputsJson,
+		arg.EnvJson,
+		arg.HeartbeatTicks,
+		arg.HeartbeatEscalations,
+		arg.SetupAt,
+		arg.FailedAt,
+		arg.CleanedAt,
+		arg.Error,
 	)
 	return err
 }
@@ -279,25 +356,24 @@ const insertPopulationMember = `-- name: InsertPopulationMember :exec
 INSERT INTO population_members (
     workflow, name, resource_id, session_name, generation, accepted_at,
     last_appearance, last_inbound, tombstoned, pending_up,
-    decision_kind, decision_reason, item_json, last_blockers_json
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    decision_kind, decision_reason, item_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertPopulationMemberParams struct {
-	Workflow         string
-	Name             string
-	ResourceID       string
-	SessionName      sql.NullString
-	Generation       int64
-	AcceptedAt       sql.NullString
-	LastAppearance   sql.NullString
-	LastInbound      sql.NullString
-	Tombstoned       bool
-	PendingUp        bool
-	DecisionKind     sql.NullString
-	DecisionReason   sql.NullString
-	ItemJson         string
-	LastBlockersJson string
+	Workflow       string
+	Name           string
+	ResourceID     string
+	SessionName    sql.NullString
+	Generation     int64
+	AcceptedAt     sql.NullString
+	LastAppearance sql.NullString
+	LastInbound    sql.NullString
+	Tombstoned     bool
+	PendingUp      bool
+	DecisionKind   sql.NullString
+	DecisionReason sql.NullString
+	ItemJson       string
 }
 
 func (q *Queries) InsertPopulationMember(ctx context.Context, arg InsertPopulationMemberParams) error {
@@ -315,7 +391,103 @@ func (q *Queries) InsertPopulationMember(ctx context.Context, arg InsertPopulati
 		arg.DecisionKind,
 		arg.DecisionReason,
 		arg.ItemJson,
-		arg.LastBlockersJson,
+	)
+	return err
+}
+
+const insertPopulationMemberBlocker = `-- name: InsertPopulationMemberBlocker :exec
+INSERT INTO population_member_blockers (workflow, name, resource_id, position, reason)
+VALUES (?, ?, ?, ?, ?)
+`
+
+type InsertPopulationMemberBlockerParams struct {
+	Workflow   string
+	Name       string
+	ResourceID string
+	Position   int64
+	Reason     string
+}
+
+func (q *Queries) InsertPopulationMemberBlocker(ctx context.Context, arg InsertPopulationMemberBlockerParams) error {
+	_, err := q.db.ExecContext(ctx, insertPopulationMemberBlocker,
+		arg.Workflow,
+		arg.Name,
+		arg.ResourceID,
+		arg.Position,
+		arg.Reason,
+	)
+	return err
+}
+
+const insertSession = `-- name: InsertSession :exec
+
+INSERT INTO sessions (
+    id, name, status, destroyed_at, parent_session_id, root_session_id,
+    resource_id, alias, workflow, workspace_dir,
+    population_workflow, population_name, inputs_json,
+    health_last_checked_at, health_last_activity_at, health_last_fingerprint,
+    health_last_state, health_last_reason, health_last_notified_at, health_notify_count,
+    tick_consecutive_unchanged, tick_last_fingerprint, last_tick_at,
+    created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type InsertSessionParams struct {
+	ID                       string
+	Name                     string
+	Status                   string
+	DestroyedAt              sql.NullString
+	ParentSessionID          sql.NullString
+	RootSessionID            sql.NullString
+	ResourceID               sql.NullString
+	Alias                    sql.NullString
+	Workflow                 string
+	WorkspaceDir             sql.NullString
+	PopulationWorkflow       sql.NullString
+	PopulationName           sql.NullString
+	InputsJson               sql.NullString
+	HealthLastCheckedAt      sql.NullString
+	HealthLastActivityAt     sql.NullString
+	HealthLastFingerprint    sql.NullString
+	HealthLastState          sql.NullString
+	HealthLastReason         sql.NullString
+	HealthLastNotifiedAt     sql.NullString
+	HealthNotifyCount        sql.NullInt64
+	TickConsecutiveUnchanged sql.NullInt64
+	TickLastFingerprint      sql.NullString
+	LastTickAt               sql.NullString
+	CreatedAt                string
+	UpdatedAt                string
+}
+
+// Sessions
+func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) error {
+	_, err := q.db.ExecContext(ctx, insertSession,
+		arg.ID,
+		arg.Name,
+		arg.Status,
+		arg.DestroyedAt,
+		arg.ParentSessionID,
+		arg.RootSessionID,
+		arg.ResourceID,
+		arg.Alias,
+		arg.Workflow,
+		arg.WorkspaceDir,
+		arg.PopulationWorkflow,
+		arg.PopulationName,
+		arg.InputsJson,
+		arg.HealthLastCheckedAt,
+		arg.HealthLastActivityAt,
+		arg.HealthLastFingerprint,
+		arg.HealthLastState,
+		arg.HealthLastReason,
+		arg.HealthLastNotifiedAt,
+		arg.HealthNotifyCount,
+		arg.TickConsecutiveUnchanged,
+		arg.TickLastFingerprint,
+		arg.LastTickAt,
+		arg.CreatedAt,
+		arg.UpdatedAt,
 	)
 	return err
 }
@@ -360,9 +532,9 @@ const insertTaskDoneWhenState = `-- name: InsertTaskDoneWhenState :exec
 
 INSERT INTO task_done_when_states (
     task_instance_id, heartbeat_ticks, heartbeat_escalations,
-    last_action, last_fingerprint, last_reason, last_unsatisfied_json,
+    last_action, last_fingerprint, last_reason,
     last_body, escalated_at, escalate_reason
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertTaskDoneWhenStateParams struct {
@@ -372,7 +544,6 @@ type InsertTaskDoneWhenStateParams struct {
 	LastAction           sql.NullString
 	LastFingerprint      sql.NullString
 	LastReason           sql.NullString
-	LastUnsatisfiedJson  string
 	LastBody             sql.NullString
 	EscalatedAt          sql.NullString
 	EscalateReason       sql.NullString
@@ -387,7 +558,6 @@ func (q *Queries) InsertTaskDoneWhenState(ctx context.Context, arg InsertTaskDon
 		arg.LastAction,
 		arg.LastFingerprint,
 		arg.LastReason,
-		arg.LastUnsatisfiedJson,
 		arg.LastBody,
 		arg.EscalatedAt,
 		arg.EscalateReason,
@@ -395,98 +565,78 @@ func (q *Queries) InsertTaskDoneWhenState(ctx context.Context, arg InsertTaskDon
 	return err
 }
 
-const listChildSessionNames = `-- name: ListChildSessionNames :many
-SELECT name FROM sessions WHERE parent_session_name = ? ORDER BY name
+const insertTaskDoneWhenUnsatisfiedItem = `-- name: InsertTaskDoneWhenUnsatisfiedItem :exec
+INSERT INTO task_done_when_unsatisfied_items (task_instance_id, position, item)
+VALUES (?, ?, ?)
 `
 
-func (q *Queries) ListChildSessionNames(ctx context.Context, parentSessionName sql.NullString) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, listChildSessionNames, parentSessionName)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, err
-		}
-		items = append(items, name)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+type InsertTaskDoneWhenUnsatisfiedItemParams struct {
+	TaskInstanceID string
+	Position       int64
+	Item           string
 }
 
-const listEventStreamIDsBySession = `-- name: ListEventStreamIDsBySession :many
-SELECT id FROM event_streams WHERE session_name = ? ORDER BY created_at ASC
+func (q *Queries) InsertTaskDoneWhenUnsatisfiedItem(ctx context.Context, arg InsertTaskDoneWhenUnsatisfiedItemParams) error {
+	_, err := q.db.ExecContext(ctx, insertTaskDoneWhenUnsatisfiedItem, arg.TaskInstanceID, arg.Position, arg.Item)
+	return err
+}
+
+const insertTaskInstanceLayer = `-- name: InsertTaskInstanceLayer :exec
+INSERT INTO task_instance_layers (
+    task_instance_id, position, effect_id, status, inputs_json, locals_json,
+    outputs_json, env_json, heartbeat_ticks, heartbeat_escalations,
+    setup_at, failed_at, cleaned_at, error
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
-func (q *Queries) ListEventStreamIDsBySession(ctx context.Context, sessionName string) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, listEventStreamIDsBySession, sessionName)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+type InsertTaskInstanceLayerParams struct {
+	TaskInstanceID       string
+	Position             int64
+	EffectID             string
+	Status               string
+	InputsJson           sql.NullString
+	LocalsJson           sql.NullString
+	OutputsJson          sql.NullString
+	EnvJson              sql.NullString
+	HeartbeatTicks       sql.NullInt64
+	HeartbeatEscalations sql.NullInt64
+	SetupAt              sql.NullString
+	FailedAt             sql.NullString
+	CleanedAt            sql.NullString
+	Error                sql.NullString
 }
 
-const listEventStreamSessions = `-- name: ListEventStreamSessions :many
-SELECT DISTINCT session_name FROM event_streams ORDER BY session_name
-`
-
-func (q *Queries) ListEventStreamSessions(ctx context.Context) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, listEventStreamSessions)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []string
-	for rows.Next() {
-		var session_name string
-		if err := rows.Scan(&session_name); err != nil {
-			return nil, err
-		}
-		items = append(items, session_name)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+func (q *Queries) InsertTaskInstanceLayer(ctx context.Context, arg InsertTaskInstanceLayerParams) error {
+	_, err := q.db.ExecContext(ctx, insertTaskInstanceLayer,
+		arg.TaskInstanceID,
+		arg.Position,
+		arg.EffectID,
+		arg.Status,
+		arg.InputsJson,
+		arg.LocalsJson,
+		arg.OutputsJson,
+		arg.EnvJson,
+		arg.HeartbeatTicks,
+		arg.HeartbeatEscalations,
+		arg.SetupAt,
+		arg.FailedAt,
+		arg.CleanedAt,
+		arg.Error,
+	)
+	return err
 }
 
-const listEventsFromByStream = `-- name: ListEventsFromByStream :many
+const latestEventByType = `-- name: LatestEventByType :one
 SELECT id, sequence, time, type, source, direction, summary, body, metadata_json
-FROM events WHERE stream_id = ? AND sequence >= ? ORDER BY sequence
+FROM events WHERE session_id = ? AND type = ? ORDER BY sequence DESC LIMIT 1
 `
 
-type ListEventsFromByStreamParams struct {
-	StreamID string
-	Sequence int64
+type LatestEventByTypeParams struct {
+	SessionID string
+	Type      string
 }
 
-type ListEventsFromByStreamRow struct {
+type LatestEventByTypeRow struct {
 	ID           string
 	Sequence     int64
 	Time         string
@@ -498,15 +648,55 @@ type ListEventsFromByStreamRow struct {
 	MetadataJson string
 }
 
-func (q *Queries) ListEventsFromByStream(ctx context.Context, arg ListEventsFromByStreamParams) ([]ListEventsFromByStreamRow, error) {
-	rows, err := q.db.QueryContext(ctx, listEventsFromByStream, arg.StreamID, arg.Sequence)
+// LatestEventByType backs the status-message reader.
+func (q *Queries) LatestEventByType(ctx context.Context, arg LatestEventByTypeParams) (LatestEventByTypeRow, error) {
+	row := q.db.QueryRowContext(ctx, latestEventByType, arg.SessionID, arg.Type)
+	var i LatestEventByTypeRow
+	err := row.Scan(
+		&i.ID,
+		&i.Sequence,
+		&i.Time,
+		&i.Type,
+		&i.Source,
+		&i.Direction,
+		&i.Summary,
+		&i.Body,
+		&i.MetadataJson,
+	)
+	return i, err
+}
+
+const listEventsFromBySession = `-- name: ListEventsFromBySession :many
+SELECT id, sequence, time, type, source, direction, summary, body, metadata_json
+FROM events WHERE session_id = ? AND sequence >= ? ORDER BY sequence
+`
+
+type ListEventsFromBySessionParams struct {
+	SessionID string
+	Sequence  int64
+}
+
+type ListEventsFromBySessionRow struct {
+	ID           string
+	Sequence     int64
+	Time         string
+	Type         string
+	Source       string
+	Direction    string
+	Summary      string
+	Body         string
+	MetadataJson string
+}
+
+func (q *Queries) ListEventsFromBySession(ctx context.Context, arg ListEventsFromBySessionParams) ([]ListEventsFromBySessionRow, error) {
+	rows, err := q.db.QueryContext(ctx, listEventsFromBySession, arg.SessionID, arg.Sequence)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListEventsFromByStreamRow
+	var items []ListEventsFromBySessionRow
 	for rows.Next() {
-		var i ListEventsFromByStreamRow
+		var i ListEventsFromBySessionRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.Sequence,
@@ -531,13 +721,236 @@ func (q *Queries) ListEventsFromByStream(ctx context.Context, arg ListEventsFrom
 	return items, nil
 }
 
-const listNodeInstances = `-- name: ListNodeInstances :many
-SELECT session_name, node_id, scope, status, sequence, finalized_at, record_json
-FROM node_instances WHERE session_name = ? ORDER BY node_id
+const listEverSessionNames = `-- name: ListEverSessionNames :many
+SELECT DISTINCT name FROM sessions ORDER BY name
 `
 
-func (q *Queries) ListNodeInstances(ctx context.Context, sessionName string) ([]NodeInstance, error) {
-	rows, err := q.db.QueryContext(ctx, listNodeInstances, sessionName)
+func (q *Queries) ListEverSessionNames(ctx context.Context) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listEverSessionNames)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		items = append(items, name)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLiveChildSessionNames = `-- name: ListLiveChildSessionNames :many
+SELECT name FROM sessions WHERE parent_session_id = ? AND status <> 'destroyed' ORDER BY name
+`
+
+func (q *Queries) ListLiveChildSessionNames(ctx context.Context, parentSessionID sql.NullString) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listLiveChildSessionNames, parentSessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		items = append(items, name)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLiveSessions = `-- name: ListLiveSessions :many
+SELECT id, name, status, destroyed_at, parent_session_id, root_session_id,
+       resource_id, alias, workflow, workspace_dir,
+       population_workflow, population_name, inputs_json,
+       health_last_checked_at, health_last_activity_at, health_last_fingerprint,
+       health_last_state, health_last_reason, health_last_notified_at, health_notify_count,
+       tick_consecutive_unchanged, tick_last_fingerprint, last_tick_at,
+       created_at, updated_at
+FROM sessions WHERE status <> 'destroyed' ORDER BY name
+`
+
+func (q *Queries) ListLiveSessions(ctx context.Context) ([]Session, error) {
+	rows, err := q.db.QueryContext(ctx, listLiveSessions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Session
+	for rows.Next() {
+		var i Session
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Status,
+			&i.DestroyedAt,
+			&i.ParentSessionID,
+			&i.RootSessionID,
+			&i.ResourceID,
+			&i.Alias,
+			&i.Workflow,
+			&i.WorkspaceDir,
+			&i.PopulationWorkflow,
+			&i.PopulationName,
+			&i.InputsJson,
+			&i.HealthLastCheckedAt,
+			&i.HealthLastActivityAt,
+			&i.HealthLastFingerprint,
+			&i.HealthLastState,
+			&i.HealthLastReason,
+			&i.HealthLastNotifiedAt,
+			&i.HealthNotifyCount,
+			&i.TickConsecutiveUnchanged,
+			&i.TickLastFingerprint,
+			&i.LastTickAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLiveSessionsByAlias = `-- name: ListLiveSessionsByAlias :many
+SELECT id, name, status, destroyed_at, parent_session_id, root_session_id,
+       resource_id, alias, workflow, workspace_dir,
+       population_workflow, population_name, inputs_json,
+       health_last_checked_at, health_last_activity_at, health_last_fingerprint,
+       health_last_state, health_last_reason, health_last_notified_at, health_notify_count,
+       tick_consecutive_unchanged, tick_last_fingerprint, last_tick_at,
+       created_at, updated_at
+FROM sessions WHERE alias = ? AND status <> 'destroyed' ORDER BY name
+`
+
+func (q *Queries) ListLiveSessionsByAlias(ctx context.Context, alias sql.NullString) ([]Session, error) {
+	rows, err := q.db.QueryContext(ctx, listLiveSessionsByAlias, alias)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Session
+	for rows.Next() {
+		var i Session
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Status,
+			&i.DestroyedAt,
+			&i.ParentSessionID,
+			&i.RootSessionID,
+			&i.ResourceID,
+			&i.Alias,
+			&i.Workflow,
+			&i.WorkspaceDir,
+			&i.PopulationWorkflow,
+			&i.PopulationName,
+			&i.InputsJson,
+			&i.HealthLastCheckedAt,
+			&i.HealthLastActivityAt,
+			&i.HealthLastFingerprint,
+			&i.HealthLastState,
+			&i.HealthLastReason,
+			&i.HealthLastNotifiedAt,
+			&i.HealthNotifyCount,
+			&i.TickConsecutiveUnchanged,
+			&i.TickLastFingerprint,
+			&i.LastTickAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNodeInstanceLayers = `-- name: ListNodeInstanceLayers :many
+SELECT session_id, node_id, position, effect_id, status, inputs_json,
+       locals_json, outputs_json, env_json, heartbeat_ticks,
+       heartbeat_escalations, setup_at, failed_at, cleaned_at, error
+FROM node_instance_layers WHERE session_id = ? ORDER BY node_id, position
+`
+
+func (q *Queries) ListNodeInstanceLayers(ctx context.Context, sessionID string) ([]NodeInstanceLayer, error) {
+	rows, err := q.db.QueryContext(ctx, listNodeInstanceLayers, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []NodeInstanceLayer
+	for rows.Next() {
+		var i NodeInstanceLayer
+		if err := rows.Scan(
+			&i.SessionID,
+			&i.NodeID,
+			&i.Position,
+			&i.EffectID,
+			&i.Status,
+			&i.InputsJson,
+			&i.LocalsJson,
+			&i.OutputsJson,
+			&i.EnvJson,
+			&i.HeartbeatTicks,
+			&i.HeartbeatEscalations,
+			&i.SetupAt,
+			&i.FailedAt,
+			&i.CleanedAt,
+			&i.Error,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNodeInstances = `-- name: ListNodeInstances :many
+SELECT session_id, node_id, task_id, name, scope, status, sequence, resource,
+       inputs_json, outputs_json, state_json, resource_observation_json,
+       resource_observed_at, done_when_json, extra_done_when_json, error,
+       setup_at, failed_at, cleaned_at, finalized_at
+FROM node_instances WHERE session_id = ? ORDER BY node_id
+`
+
+func (q *Queries) ListNodeInstances(ctx context.Context, sessionID string) ([]NodeInstance, error) {
+	rows, err := q.db.QueryContext(ctx, listNodeInstances, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -546,13 +959,67 @@ func (q *Queries) ListNodeInstances(ctx context.Context, sessionName string) ([]
 	for rows.Next() {
 		var i NodeInstance
 		if err := rows.Scan(
-			&i.SessionName,
+			&i.SessionID,
 			&i.NodeID,
+			&i.TaskID,
+			&i.Name,
 			&i.Scope,
 			&i.Status,
 			&i.Sequence,
+			&i.Resource,
+			&i.InputsJson,
+			&i.OutputsJson,
+			&i.StateJson,
+			&i.ResourceObservationJson,
+			&i.ResourceObservedAt,
+			&i.DoneWhenJson,
+			&i.ExtraDoneWhenJson,
+			&i.Error,
+			&i.SetupAt,
+			&i.FailedAt,
+			&i.CleanedAt,
 			&i.FinalizedAt,
-			&i.RecordJson,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPopulationMemberBlockersForPopulation = `-- name: ListPopulationMemberBlockersForPopulation :many
+SELECT b.workflow, b.name, b.resource_id, b.position, b.reason
+FROM population_member_blockers b
+WHERE b.workflow = ? AND b.name = ?
+ORDER BY b.resource_id, b.position
+`
+
+type ListPopulationMemberBlockersForPopulationParams struct {
+	Workflow string
+	Name     string
+}
+
+func (q *Queries) ListPopulationMemberBlockersForPopulation(ctx context.Context, arg ListPopulationMemberBlockersForPopulationParams) ([]PopulationMemberBlocker, error) {
+	rows, err := q.db.QueryContext(ctx, listPopulationMemberBlockersForPopulation, arg.Workflow, arg.Name)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PopulationMemberBlocker
+	for rows.Next() {
+		var i PopulationMemberBlocker
+		if err := rows.Scan(
+			&i.Workflow,
+			&i.Name,
+			&i.ResourceID,
+			&i.Position,
+			&i.Reason,
 		); err != nil {
 			return nil, err
 		}
@@ -570,7 +1037,7 @@ func (q *Queries) ListNodeInstances(ctx context.Context, sessionName string) ([]
 const listPopulationMembers = `-- name: ListPopulationMembers :many
 SELECT workflow, name, resource_id, session_name, generation, accepted_at,
        last_appearance, last_inbound, tombstoned, pending_up,
-       decision_kind, decision_reason, item_json, last_blockers_json
+       decision_kind, decision_reason, item_json
 FROM population_members WHERE workflow = ? AND name = ? ORDER BY resource_id
 `
 
@@ -602,7 +1069,6 @@ func (q *Queries) ListPopulationMembers(ctx context.Context, arg ListPopulationM
 			&i.DecisionKind,
 			&i.DecisionReason,
 			&i.ItemJson,
-			&i.LastBlockersJson,
 		); err != nil {
 			return nil, err
 		}
@@ -617,35 +1083,30 @@ func (q *Queries) ListPopulationMembers(ctx context.Context, arg ListPopulationM
 	return items, nil
 }
 
-const listSessions = `-- name: ListSessions :many
-SELECT name, parent_session_name, root_session_name, resource_id, alias,
-       workflow, workspace_dir, population_workflow, population_name,
-       created_at, updated_at, record_json
-FROM sessions ORDER BY name
+const listSessionChannelHealth = `-- name: ListSessionChannelHealth :many
+SELECT session_id, kind, consecutive_failures, first_failure_at,
+       last_failure_at, last_channel, last_error, escalated_at
+FROM session_channel_health WHERE session_id = ?
 `
 
-func (q *Queries) ListSessions(ctx context.Context) ([]Session, error) {
-	rows, err := q.db.QueryContext(ctx, listSessions)
+func (q *Queries) ListSessionChannelHealth(ctx context.Context, sessionID string) ([]SessionChannelHealth, error) {
+	rows, err := q.db.QueryContext(ctx, listSessionChannelHealth, sessionID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Session
+	var items []SessionChannelHealth
 	for rows.Next() {
-		var i Session
+		var i SessionChannelHealth
 		if err := rows.Scan(
-			&i.Name,
-			&i.ParentSessionName,
-			&i.RootSessionName,
-			&i.ResourceID,
-			&i.Alias,
-			&i.Workflow,
-			&i.WorkspaceDir,
-			&i.PopulationWorkflow,
-			&i.PopulationName,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.RecordJson,
+			&i.SessionID,
+			&i.Kind,
+			&i.ConsecutiveFailures,
+			&i.FirstFailureAt,
+			&i.LastFailureAt,
+			&i.LastChannel,
+			&i.LastError,
+			&i.EscalatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -660,39 +1121,23 @@ func (q *Queries) ListSessions(ctx context.Context) ([]Session, error) {
 	return items, nil
 }
 
-const listSessionsByAlias = `-- name: ListSessionsByAlias :many
-SELECT name, parent_session_name, root_session_name, resource_id, alias,
-       workflow, workspace_dir, population_workflow, population_name,
-       created_at, updated_at, record_json
-FROM sessions WHERE alias = ? ORDER BY name
+const listSessionIDsByName = `-- name: ListSessionIDsByName :many
+SELECT id FROM sessions WHERE name = ? ORDER BY created_at ASC
 `
 
-func (q *Queries) ListSessionsByAlias(ctx context.Context, alias sql.NullString) ([]Session, error) {
-	rows, err := q.db.QueryContext(ctx, listSessionsByAlias, alias)
+func (q *Queries) ListSessionIDsByName(ctx context.Context, name string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listSessionIDsByName, name)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Session
+	var items []string
 	for rows.Next() {
-		var i Session
-		if err := rows.Scan(
-			&i.Name,
-			&i.ParentSessionName,
-			&i.RootSessionName,
-			&i.ResourceID,
-			&i.Alias,
-			&i.Workflow,
-			&i.WorkspaceDir,
-			&i.PopulationWorkflow,
-			&i.PopulationName,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.RecordJson,
-		); err != nil {
+		var id string
+		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
-		items = append(items, i)
+		items = append(items, id)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -708,11 +1153,11 @@ SELECT j.task_instance_id, j.leaf_id, j.action, j.reason, j.revision,
        j.judge_session, j.judge_workflow, j.relation, j.created_at
 FROM task_done_when_judges j
 JOIN task_instances t ON t.id = j.task_instance_id
-WHERE t.session_name = ?
+WHERE t.session_id = ?
 `
 
-func (q *Queries) ListTaskDoneWhenJudgesForSession(ctx context.Context, sessionName string) ([]TaskDoneWhenJudge, error) {
-	rows, err := q.db.QueryContext(ctx, listTaskDoneWhenJudgesForSession, sessionName)
+func (q *Queries) ListTaskDoneWhenJudgesForSession(ctx context.Context, sessionID string) ([]TaskDoneWhenJudge, error) {
+	rows, err := q.db.QueryContext(ctx, listTaskDoneWhenJudgesForSession, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -746,15 +1191,15 @@ func (q *Queries) ListTaskDoneWhenJudgesForSession(ctx context.Context, sessionN
 
 const listTaskDoneWhenStatesForSession = `-- name: ListTaskDoneWhenStatesForSession :many
 SELECT s.task_instance_id, s.heartbeat_ticks, s.heartbeat_escalations,
-       s.last_action, s.last_fingerprint, s.last_reason, s.last_unsatisfied_json,
+       s.last_action, s.last_fingerprint, s.last_reason,
        s.last_body, s.escalated_at, s.escalate_reason
 FROM task_done_when_states s
 JOIN task_instances t ON t.id = s.task_instance_id
-WHERE t.session_name = ?
+WHERE t.session_id = ?
 `
 
-func (q *Queries) ListTaskDoneWhenStatesForSession(ctx context.Context, sessionName string) ([]TaskDoneWhenState, error) {
-	rows, err := q.db.QueryContext(ctx, listTaskDoneWhenStatesForSession, sessionName)
+func (q *Queries) ListTaskDoneWhenStatesForSession(ctx context.Context, sessionID string) ([]TaskDoneWhenState, error) {
+	rows, err := q.db.QueryContext(ctx, listTaskDoneWhenStatesForSession, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -769,7 +1214,6 @@ func (q *Queries) ListTaskDoneWhenStatesForSession(ctx context.Context, sessionN
 			&i.LastAction,
 			&i.LastFingerprint,
 			&i.LastReason,
-			&i.LastUnsatisfiedJson,
 			&i.LastBody,
 			&i.EscalatedAt,
 			&i.EscalateReason,
@@ -787,16 +1231,97 @@ func (q *Queries) ListTaskDoneWhenStatesForSession(ctx context.Context, sessionN
 	return items, nil
 }
 
+const listTaskDoneWhenUnsatisfiedItemsForSession = `-- name: ListTaskDoneWhenUnsatisfiedItemsForSession :many
+SELECT i.task_instance_id, i.position, i.item
+FROM task_done_when_unsatisfied_items i
+JOIN task_instances t ON t.id = i.task_instance_id
+WHERE t.session_id = ?
+ORDER BY i.task_instance_id, i.position
+`
+
+func (q *Queries) ListTaskDoneWhenUnsatisfiedItemsForSession(ctx context.Context, sessionID string) ([]TaskDoneWhenUnsatisfiedItem, error) {
+	rows, err := q.db.QueryContext(ctx, listTaskDoneWhenUnsatisfiedItemsForSession, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TaskDoneWhenUnsatisfiedItem
+	for rows.Next() {
+		var i TaskDoneWhenUnsatisfiedItem
+		if err := rows.Scan(&i.TaskInstanceID, &i.Position, &i.Item); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTaskInstanceLayersForSession = `-- name: ListTaskInstanceLayersForSession :many
+SELECT l.task_instance_id, l.position, l.effect_id, l.status, l.inputs_json,
+       l.locals_json, l.outputs_json, l.env_json, l.heartbeat_ticks,
+       l.heartbeat_escalations, l.setup_at, l.failed_at, l.cleaned_at, l.error
+FROM task_instance_layers l
+JOIN task_instances t ON t.id = l.task_instance_id
+WHERE t.session_id = ?
+ORDER BY l.task_instance_id, l.position
+`
+
+func (q *Queries) ListTaskInstanceLayersForSession(ctx context.Context, sessionID string) ([]TaskInstanceLayer, error) {
+	rows, err := q.db.QueryContext(ctx, listTaskInstanceLayersForSession, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TaskInstanceLayer
+	for rows.Next() {
+		var i TaskInstanceLayer
+		if err := rows.Scan(
+			&i.TaskInstanceID,
+			&i.Position,
+			&i.EffectID,
+			&i.Status,
+			&i.InputsJson,
+			&i.LocalsJson,
+			&i.OutputsJson,
+			&i.EnvJson,
+			&i.HeartbeatTicks,
+			&i.HeartbeatEscalations,
+			&i.SetupAt,
+			&i.FailedAt,
+			&i.CleanedAt,
+			&i.Error,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTaskInstances = `-- name: ListTaskInstances :many
 
-SELECT id, session_name, instance_name, task_id, scope, status, sequence,
-       resource, named, finalized_at, record_json
-FROM task_instances WHERE session_name = ? ORDER BY instance_name
+SELECT id, session_id, instance_name, task_id, scope, status, sequence,
+       resource, named, inputs_json, outputs_json, state_json,
+       resource_observation_json, resource_observed_at, extra_done_when_json,
+       error, setup_at, failed_at, cleaned_at, finalized_at
+FROM task_instances WHERE session_id = ? ORDER BY instance_name
 `
 
 // Task instances (dynamic; Session.Tasks entries with Dynamic == true)
-func (q *Queries) ListTaskInstances(ctx context.Context, sessionName string) ([]TaskInstance, error) {
-	rows, err := q.db.QueryContext(ctx, listTaskInstances, sessionName)
+func (q *Queries) ListTaskInstances(ctx context.Context, sessionID string) ([]TaskInstance, error) {
+	rows, err := q.db.QueryContext(ctx, listTaskInstances, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -806,7 +1331,7 @@ func (q *Queries) ListTaskInstances(ctx context.Context, sessionName string) ([]
 		var i TaskInstance
 		if err := rows.Scan(
 			&i.ID,
-			&i.SessionName,
+			&i.SessionID,
 			&i.InstanceName,
 			&i.TaskID,
 			&i.Scope,
@@ -814,8 +1339,17 @@ func (q *Queries) ListTaskInstances(ctx context.Context, sessionName string) ([]
 			&i.Sequence,
 			&i.Resource,
 			&i.Named,
+			&i.InputsJson,
+			&i.OutputsJson,
+			&i.StateJson,
+			&i.ResourceObservationJson,
+			&i.ResourceObservedAt,
+			&i.ExtraDoneWhenJson,
+			&i.Error,
+			&i.SetupAt,
+			&i.FailedAt,
+			&i.CleanedAt,
 			&i.FinalizedAt,
-			&i.RecordJson,
 		); err != nil {
 			return nil, err
 		}
@@ -866,41 +1400,161 @@ func (q *Queries) ListUpReservations(ctx context.Context) ([]UpReservation, erro
 	return items, nil
 }
 
-const nextEventSequence = `-- name: NextEventSequence :one
-SELECT COALESCE(MAX(sequence), 0) + 1 FROM events WHERE stream_id = ?
+const liveSessionParentID = `-- name: LiveSessionParentID :one
+SELECT parent_session_id FROM sessions WHERE id = ?
 `
 
-func (q *Queries) NextEventSequence(ctx context.Context, streamID string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, nextEventSequence, streamID)
+func (q *Queries) LiveSessionParentID(ctx context.Context, id string) (sql.NullString, error) {
+	row := q.db.QueryRowContext(ctx, liveSessionParentID, id)
+	var parent_session_id sql.NullString
+	err := row.Scan(&parent_session_id)
+	return parent_session_id, err
+}
+
+const nextEventSequence = `-- name: NextEventSequence :one
+
+SELECT COALESCE(MAX(sequence), 0) + 1 FROM events WHERE session_id = ?
+`
+
+// Events
+func (q *Queries) NextEventSequence(ctx context.Context, sessionID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, nextEventSequence, sessionID)
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
 }
 
-const sessionParent = `-- name: SessionParent :one
-SELECT parent_session_name FROM sessions WHERE name = ?
+const sessionEverExistedByName = `-- name: SessionEverExistedByName :one
+SELECT EXISTS(SELECT 1 FROM sessions WHERE name = ?)
 `
 
-func (q *Queries) SessionParent(ctx context.Context, name string) (sql.NullString, error) {
-	row := q.db.QueryRowContext(ctx, sessionParent, name)
-	var parent_session_name sql.NullString
-	err := row.Scan(&parent_session_name)
-	return parent_session_name, err
+func (q *Queries) SessionEverExistedByName(ctx context.Context, name string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, sessionEverExistedByName, name)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const sessionIDByLiveName = `-- name: SessionIDByLiveName :one
+SELECT id FROM sessions WHERE name = ? AND status <> 'destroyed'
+`
+
+func (q *Queries) SessionIDByLiveName(ctx context.Context, name string) (string, error) {
+	row := q.db.QueryRowContext(ctx, sessionIDByLiveName, name)
+	var id string
+	err := row.Scan(&id)
+	return id, err
+}
+
+const sessionNameByID = `-- name: SessionNameByID :one
+SELECT name FROM sessions WHERE id = ?
+`
+
+func (q *Queries) SessionNameByID(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRowContext(ctx, sessionNameByID, id)
+	var name string
+	err := row.Scan(&name)
+	return name, err
+}
+
+const updateSessionByID = `-- name: UpdateSessionByID :exec
+UPDATE sessions SET
+    name = ?,
+    status = ?,
+    destroyed_at = ?,
+    parent_session_id = ?,
+    root_session_id = ?,
+    resource_id = ?,
+    alias = ?,
+    workflow = ?,
+    workspace_dir = ?,
+    population_workflow = ?,
+    population_name = ?,
+    inputs_json = ?,
+    health_last_checked_at = ?,
+    health_last_activity_at = ?,
+    health_last_fingerprint = ?,
+    health_last_state = ?,
+    health_last_reason = ?,
+    health_last_notified_at = ?,
+    health_notify_count = ?,
+    tick_consecutive_unchanged = ?,
+    tick_last_fingerprint = ?,
+    last_tick_at = ?,
+    updated_at = ?
+WHERE id = ?
+`
+
+type UpdateSessionByIDParams struct {
+	Name                     string
+	Status                   string
+	DestroyedAt              sql.NullString
+	ParentSessionID          sql.NullString
+	RootSessionID            sql.NullString
+	ResourceID               sql.NullString
+	Alias                    sql.NullString
+	Workflow                 string
+	WorkspaceDir             sql.NullString
+	PopulationWorkflow       sql.NullString
+	PopulationName           sql.NullString
+	InputsJson               sql.NullString
+	HealthLastCheckedAt      sql.NullString
+	HealthLastActivityAt     sql.NullString
+	HealthLastFingerprint    sql.NullString
+	HealthLastState          sql.NullString
+	HealthLastReason         sql.NullString
+	HealthLastNotifiedAt     sql.NullString
+	HealthNotifyCount        sql.NullInt64
+	TickConsecutiveUnchanged sql.NullInt64
+	TickLastFingerprint      sql.NullString
+	LastTickAt               sql.NullString
+	UpdatedAt                string
+	ID                       string
+}
+
+func (q *Queries) UpdateSessionByID(ctx context.Context, arg UpdateSessionByIDParams) error {
+	_, err := q.db.ExecContext(ctx, updateSessionByID,
+		arg.Name,
+		arg.Status,
+		arg.DestroyedAt,
+		arg.ParentSessionID,
+		arg.RootSessionID,
+		arg.ResourceID,
+		arg.Alias,
+		arg.Workflow,
+		arg.WorkspaceDir,
+		arg.PopulationWorkflow,
+		arg.PopulationName,
+		arg.InputsJson,
+		arg.HealthLastCheckedAt,
+		arg.HealthLastActivityAt,
+		arg.HealthLastFingerprint,
+		arg.HealthLastState,
+		arg.HealthLastReason,
+		arg.HealthLastNotifiedAt,
+		arg.HealthNotifyCount,
+		arg.TickConsecutiveUnchanged,
+		arg.TickLastFingerprint,
+		arg.LastTickAt,
+		arg.UpdatedAt,
+		arg.ID,
+	)
+	return err
 }
 
 const upsertEventCursor = `-- name: UpsertEventCursor :exec
-INSERT INTO event_cursors (stream_id, kind, next_sequence) VALUES (?, ?, ?)
-ON CONFLICT(stream_id, kind) DO UPDATE SET next_sequence = excluded.next_sequence
+INSERT INTO event_cursors (session_id, kind, next_sequence) VALUES (?, ?, ?)
+ON CONFLICT(session_id, kind) DO UPDATE SET next_sequence = excluded.next_sequence
 `
 
 type UpsertEventCursorParams struct {
-	StreamID     string
+	SessionID    string
 	Kind         string
 	NextSequence int64
 }
 
 func (q *Queries) UpsertEventCursor(ctx context.Context, arg UpsertEventCursorParams) error {
-	_, err := q.db.ExecContext(ctx, upsertEventCursor, arg.StreamID, arg.Kind, arg.NextSequence)
+	_, err := q.db.ExecContext(ctx, upsertEventCursor, arg.SessionID, arg.Kind, arg.NextSequence)
 	return err
 }
 
@@ -919,100 +1573,100 @@ func (q *Queries) UpsertPopulation(ctx context.Context, arg UpsertPopulationPara
 	return err
 }
 
-const upsertSession = `-- name: UpsertSession :exec
-
-INSERT INTO sessions (
-    name, parent_session_name, root_session_name, resource_id, alias,
-    workflow, workspace_dir, population_workflow, population_name,
-    created_at, updated_at, record_json
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(name) DO UPDATE SET
-    parent_session_name = excluded.parent_session_name,
-    root_session_name = excluded.root_session_name,
-    resource_id = excluded.resource_id,
-    alias = excluded.alias,
-    workflow = excluded.workflow,
-    workspace_dir = excluded.workspace_dir,
-    population_workflow = excluded.population_workflow,
-    population_name = excluded.population_name,
-    created_at = excluded.created_at,
-    updated_at = excluded.updated_at,
-    record_json = excluded.record_json
+const upsertSessionChannelHealth = `-- name: UpsertSessionChannelHealth :exec
+INSERT INTO session_channel_health (
+    session_id, kind, consecutive_failures, first_failure_at,
+    last_failure_at, last_channel, last_error, escalated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(session_id, kind) DO UPDATE SET
+    consecutive_failures = excluded.consecutive_failures,
+    first_failure_at = excluded.first_failure_at,
+    last_failure_at = excluded.last_failure_at,
+    last_channel = excluded.last_channel,
+    last_error = excluded.last_error,
+    escalated_at = excluded.escalated_at
 `
 
-type UpsertSessionParams struct {
-	Name               string
-	ParentSessionName  sql.NullString
-	RootSessionName    sql.NullString
-	ResourceID         sql.NullString
-	Alias              sql.NullString
-	Workflow           string
-	WorkspaceDir       sql.NullString
-	PopulationWorkflow sql.NullString
-	PopulationName     sql.NullString
-	CreatedAt          string
-	UpdatedAt          string
-	RecordJson         string
+type UpsertSessionChannelHealthParams struct {
+	SessionID           string
+	Kind                string
+	ConsecutiveFailures int64
+	FirstFailureAt      string
+	LastFailureAt       string
+	LastChannel         sql.NullString
+	LastError           sql.NullString
+	EscalatedAt         sql.NullString
 }
 
-// Sessions
-func (q *Queries) UpsertSession(ctx context.Context, arg UpsertSessionParams) error {
-	_, err := q.db.ExecContext(ctx, upsertSession,
-		arg.Name,
-		arg.ParentSessionName,
-		arg.RootSessionName,
-		arg.ResourceID,
-		arg.Alias,
-		arg.Workflow,
-		arg.WorkspaceDir,
-		arg.PopulationWorkflow,
-		arg.PopulationName,
-		arg.CreatedAt,
-		arg.UpdatedAt,
-		arg.RecordJson,
+func (q *Queries) UpsertSessionChannelHealth(ctx context.Context, arg UpsertSessionChannelHealthParams) error {
+	_, err := q.db.ExecContext(ctx, upsertSessionChannelHealth,
+		arg.SessionID,
+		arg.Kind,
+		arg.ConsecutiveFailures,
+		arg.FirstFailureAt,
+		arg.LastFailureAt,
+		arg.LastChannel,
+		arg.LastError,
+		arg.EscalatedAt,
 	)
 	return err
 }
 
 const upsertTaskInstance = `-- name: UpsertTaskInstance :one
 INSERT INTO task_instances (
-    id, session_name, instance_name, task_id, scope, status, sequence,
-    resource, named, finalized_at, record_json
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(session_name, instance_name) DO UPDATE SET
+    id, session_id, instance_name, task_id, scope, status, sequence,
+    resource, named, inputs_json, outputs_json, state_json,
+    resource_observation_json, resource_observed_at, extra_done_when_json,
+    error, setup_at, failed_at, cleaned_at, finalized_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(session_id, instance_name) DO UPDATE SET
     task_id = excluded.task_id,
     scope = excluded.scope,
     status = excluded.status,
     sequence = excluded.sequence,
     resource = excluded.resource,
     named = excluded.named,
-    finalized_at = excluded.finalized_at,
-    record_json = excluded.record_json
+    inputs_json = excluded.inputs_json,
+    outputs_json = excluded.outputs_json,
+    state_json = excluded.state_json,
+    resource_observation_json = excluded.resource_observation_json,
+    resource_observed_at = excluded.resource_observed_at,
+    extra_done_when_json = excluded.extra_done_when_json,
+    error = excluded.error,
+    setup_at = excluded.setup_at,
+    failed_at = excluded.failed_at,
+    cleaned_at = excluded.cleaned_at,
+    finalized_at = excluded.finalized_at
 RETURNING id
 `
 
 type UpsertTaskInstanceParams struct {
-	ID           string
-	SessionName  string
-	InstanceName string
-	TaskID       string
-	Scope        string
-	Status       string
-	Sequence     int64
-	Resource     sql.NullString
-	Named        bool
-	FinalizedAt  sql.NullString
-	RecordJson   string
+	ID                      string
+	SessionID               string
+	InstanceName            string
+	TaskID                  string
+	Scope                   string
+	Status                  string
+	Sequence                int64
+	Resource                sql.NullString
+	Named                   bool
+	InputsJson              sql.NullString
+	OutputsJson             sql.NullString
+	StateJson               sql.NullString
+	ResourceObservationJson sql.NullString
+	ResourceObservedAt      sql.NullString
+	ExtraDoneWhenJson       sql.NullString
+	Error                   sql.NullString
+	SetupAt                 sql.NullString
+	FailedAt                sql.NullString
+	CleanedAt               sql.NullString
+	FinalizedAt             sql.NullString
 }
 
-// UpsertTaskInstance preserves the existing id when (session_name,
-// instance_name) already has a row (an ordinary Put/Update of a live
-// instance) and keeps the freshly minted candidate id only when inserting
-// a genuinely new row; RETURNING id reports whichever one now applies.
 func (q *Queries) UpsertTaskInstance(ctx context.Context, arg UpsertTaskInstanceParams) (string, error) {
 	row := q.db.QueryRowContext(ctx, upsertTaskInstance,
 		arg.ID,
-		arg.SessionName,
+		arg.SessionID,
 		arg.InstanceName,
 		arg.TaskID,
 		arg.Scope,
@@ -1020,8 +1674,17 @@ func (q *Queries) UpsertTaskInstance(ctx context.Context, arg UpsertTaskInstance
 		arg.Sequence,
 		arg.Resource,
 		arg.Named,
+		arg.InputsJson,
+		arg.OutputsJson,
+		arg.StateJson,
+		arg.ResourceObservationJson,
+		arg.ResourceObservedAt,
+		arg.ExtraDoneWhenJson,
+		arg.Error,
+		arg.SetupAt,
+		arg.FailedAt,
+		arg.CleanedAt,
 		arg.FinalizedAt,
-		arg.RecordJson,
 	)
 	var id string
 	err := row.Scan(&id)

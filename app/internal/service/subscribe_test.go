@@ -11,6 +11,7 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/state"
+	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
 // writeSubscribeProvider drops a provider with a resolver + a subscribe hook
@@ -117,7 +118,18 @@ args    = ["-c", 'printf "%%s" "$1" > "$2"', "provider", { from = "session.branc
 	cfg := &config.Config{BaseDir: baseDir}
 	store := state.NewStore(t.TempDir())
 	now := time.Now()
-	if err := store.Put(&domain.Session{Name: "org/repo-7", Branch: "issue/7", CreatedAt: now, UpdatedAt: now}); err != nil {
+	if err := store.Put(&domain.Session{
+		Name: "org/repo-7",
+		Tasks: map[string]*contract.TaskState{
+			contract.WorkflowPseudoNodeID: {
+				Scope:   contract.TaskScopeSession,
+				Status:  contract.TaskStatusProduced,
+				Outputs: map[string]any{"branch": "issue/7"},
+			},
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
 		t.Fatalf("seed session: %v", err)
 	}
 

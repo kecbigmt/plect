@@ -3,10 +3,10 @@ package service
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/domain"
-	"github.com/kecbigmt/plecture/app/internal/eventlog"
 	"github.com/kecbigmt/plecture/app/internal/state"
 	"github.com/kecbigmt/plecture/contracts/event"
 )
@@ -262,11 +262,15 @@ func TestEventPageRejectsCursorAcrossSessionDeleteAndRecreateUnderSameName(t *te
 		t.Fatalf("setup page: err=%v cursor=%q", err, page.NextCursor)
 	}
 
-	if err := store.Delete(session); err != nil {
-		t.Fatalf("delete: %v", err)
+	if err := store.Destroy(session); err != nil {
+		t.Fatalf("destroy: %v", err)
 	}
-	if _, err := eventlog.NewStore(store.Dir()).NewStream(session); err != nil {
-		t.Fatalf("new stream on recreate: %v", err)
+	// EnsureLiveSession's lazy-create is reserved for a name that has never
+	// gone through `plect create` at all; a destroyed name is recreated the
+	// same way a real one is (store.Put), not by publishing to it.
+	now := time.Now()
+	if err := store.Put(&domain.Session{Name: session, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("recreate: %v", err)
 	}
 	if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote}); err != nil {
 		t.Fatalf("publish after recreate: %v", err)
