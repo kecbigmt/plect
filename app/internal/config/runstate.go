@@ -30,8 +30,8 @@ func (c *Config) ResolveSessionWorkflow(s *domain.Session) (*WorkflowFile, error
 }
 
 // runScopeCache memoizes CurrentPlanRunScopedNodeSet by (workflow,
-// workspaceDirPath); a pointer field since Config is copied by value in
-// tests and an embedded sync.Mutex would lock-copy.
+// workspaceDirPath); a pointer field since an embedded sync.Mutex would
+// lock-copy Config, which tests copy by value.
 type runScopeCache struct {
 	mu    sync.Mutex
 	byKey map[runScopeCacheKey]runScopeCacheEntry
@@ -81,9 +81,8 @@ func (c *Config) runScopeCacheInstance() *runScopeCache {
 // legitimately empty node set (ok=true).
 // Memoized per (workflow, workspaceDirPath) for this *Config's lifetime:
 // dispatch/reactor Supervisor.reconcile calls RunScopeUp every ~1s poll per
-// up session, re-resolving the workflow and task definitions from scratch
-// just to answer it; a new *Config (config.Live's own refresh) invalidates
-// the cache.
+// up session, re-resolving the workflow and task definitions from scratch to
+// answer it; a new *Config (config.Live's own refresh) invalidates the cache.
 func (c *Config) CurrentPlanRunScopedNodeSet(s *domain.Session) (set map[string]bool, ok bool) {
 	key := runScopeCacheKey{workflow: s.Workflow, workspaceDirPath: s.WorkspaceDirPath}
 	cache := c.runScopeCacheInstance()
