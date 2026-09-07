@@ -15,9 +15,6 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// countingConn tallies every QueryContext/ExecContext call SQLite's driver
-// makes on the connection it wraps into queryCount, so a test can assert
-// how many SQL round trips one Go-level call actually issues.
 type countingConn struct {
 	*sqlite3.SQLiteConn
 }
@@ -50,9 +47,11 @@ func (d *countingDriver) Open(dsn string) (driver.Conn, error) {
 
 const countingDriverName = "sqlite3-persistence-query-count-test"
 
-// queryCount is process-global because database/sql.Register is: this
-// package's tests never run this driver concurrently with itself, so one
-// counter reset per measurement (resetQueryCount) is race-free.
+// queryCount is a package-level counter, not a field on countingDriver,
+// because sql.Register takes a driver.Driver value with no per-instance
+// identity a later sql.Open(countingDriverName, ...) call could recover:
+// every test in this package that opens this driver name shares it, which
+// is safe only because none of them run concurrently with each other.
 var queryCount int64
 
 func init() {
@@ -67,10 +66,6 @@ func readQueryCount() int64 {
 	return atomic.LoadInt64(&queryCount)
 }
 
-// openCountingTestDB opens and migrates a database exactly like
-// migratedTestDB, then reopens its read/write pools against countingDriver
-// against the same file, so queryCount subsequently tallies every SQL call
-// issued through it.
 func openCountingTestDB(t *testing.T) *DB {
 	t.Helper()
 	path := PathIn(t.TempDir())
@@ -108,11 +103,6 @@ func openCountingTestDB(t *testing.T) *DB {
 	return db
 }
 
-// TestAllSessions_QueryCountDoesNotScaleWithSessionCount is a committed
-// regression guard for AllSessions' N+1: it fails at the revision before
-// batching landed, where AllSessions issued loadSessionExtras' queries once
-// per row, so query count grew linearly with the number of bare (no
-// parent/children/tasks/channel health) sessions rather than staying fixed.
 func TestAllSessions_QueryCountDoesNotScaleWithSessionCount(t *testing.T) {
 	measure := func(t *testing.T, bareCount int) int64 {
 		db := openCountingTestDB(t)

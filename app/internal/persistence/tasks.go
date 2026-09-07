@@ -199,10 +199,6 @@ func loadTasksBatch(ctx context.Context, q sqlcgen.DBTX, sessionIDs []string) (n
 		m[r.LeafID] = judge
 	}
 
-	// A session with a row in either table gets both maps pre-seeded
-	// (possibly empty), matching loadTasks' own per-session guard: it makes
-	// both maps unconditionally as soon as either input table is non-empty
-	// for that session, rather than making only the one with rows.
 	known := make(map[string]bool)
 	for _, row := range nodeRows {
 		known[row.SessionID] = true
