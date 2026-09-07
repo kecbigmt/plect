@@ -131,6 +131,17 @@ func TestRun_ImportsAFullLegacyDirectoryAndRoundTrips(t *testing.T) {
 	if _, err := os.Stat(report.DBPath); err != nil {
 		t.Fatalf("stat promoted database: %v", err)
 	}
+	destEntries, err := os.ReadDir(destDir)
+	if err != nil {
+		t.Fatalf("ReadDir(destDir): %v", err)
+	}
+	var destNames []string
+	for _, e := range destEntries {
+		destNames = append(destNames, e.Name())
+	}
+	if len(destNames) != 2 {
+		t.Errorf("destDir contents = %v, want exactly storage.db and state.json (no orphaned temp-database gate sidecars)", destNames)
+	}
 	markerData, err := os.ReadFile(report.MarkerPath)
 	if err != nil {
 		t.Fatalf("read rejection marker: %v", err)
@@ -242,6 +253,13 @@ func TestRun_DryRunValidatesWithoutPromoting(t *testing.T) {
 	}
 	if _, err := os.Stat(report.MarkerPath); !os.IsNotExist(err) {
 		t.Errorf("stat %s = %v, want not-exist (dry run must not write the marker)", report.MarkerPath, err)
+	}
+	leftover, err := os.ReadDir(destDir)
+	if err != nil {
+		t.Fatalf("ReadDir(destDir): %v", err)
+	}
+	if len(leftover) != 0 {
+		t.Errorf("destDir contents = %v, want empty (a dry run must not leave its temporary database or gate lock files behind)", leftover)
 	}
 }
 

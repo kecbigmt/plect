@@ -106,9 +106,10 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 	}
 	defer func() {
 		db.Close()
-		if !opts.DryRun && !report.Promoted {
-			removeDatabaseFiles(tmpPath)
-		}
+		// Idempotent regardless of outcome: a promoted run already renamed
+		// the main file away, so this only clears its now-orphaned gate
+		// sidecars; a dry run or a failure clears everything at tmpPath.
+		removeDatabaseFiles(tmpPath)
 	}()
 	if err := db.Migrate(ctx); err != nil {
 		return report, fmt.Errorf("legacyimport: migrate temporary database: %w", err)
@@ -234,8 +235,7 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 	if err := os.Rename(tmpPath, report.DBPath); err != nil {
 		return report, fmt.Errorf("legacyimport: promote temporary database: %w", err)
 	}
-	report.Promoted = true
-	removeDatabaseFiles(tmpPath) // best-effort: only stray -wal/-shm siblings may remain
+	report.Promoted = true // the deferred cleanup above still clears tmpPath's now-orphaned gate sidecars
 
 	if err := atomicfile.Write(report.MarkerPath, []byte(rejectionMarker)); err != nil {
 		return report, fmt.Errorf("legacyimport: write legacy rejection marker: %w", err)
@@ -310,11 +310,16 @@ func sortedKeys(m map[string]int64) []string {
 	return keys
 }
 
-// removeDatabaseFiles removes path and its WAL-mode siblings (-wal, -shm).
-// Absence of any of them is not an error.
+// removeDatabaseFiles removes path, its WAL-mode siblings (-wal, -shm), and
+// persistence's own gate sidecars (.access.lock, .coordination.lock,
+// .migration.json — see gate.go's newAccessGate), all of which are named
+// after the temporary import path and would otherwise litter the
+// destination directory once that path stops existing. Absence of any of
+// them is not an error.
 func removeDatabaseFiles(path string) error {
-	for _, p := range []string{path, path + "-wal", path + "-shm"} {
-		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+	suffixes := []string{"", "-wal", "-shm", ".access.lock", ".coordination.lock", ".migration.json"}
+	for _, suffix := range suffixes {
+		if err := os.Remove(path + suffix); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 	}
