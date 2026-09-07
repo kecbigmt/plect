@@ -85,7 +85,8 @@ definition does not exist without a top-level `[<id>]` table and its `kind`.
 ## Discovery
 
 Each trusted config layer has a definition root: a plugin's `config/`
-directory or the user config home excluding reserved root files.
+directory, the user config home excluding reserved root files, or a trusted
+project's `.plect/` directory excluding its project marker.
 
 Within a definition root, every `.toml` file that is not a reserved root file
 is read recursively in lexicographic order by slash-separated relative path. A
@@ -96,8 +97,20 @@ Subdirectories are author organization only: one definition per file and
 kind-named directories such as `config/effects/` are equally valid and mean the
 same thing.
 
-The reserved root files are `config.toml`, `catalogs.toml`, and `plect.lock`.
-They are not definition files.
+The user config home's reserved root files are `config.toml`, `catalogs.toml`,
+and `plect.lock`. They are not definition files. A project definition root
+reserves `.plect/project.toml`; it contains exactly the required marker:
+
+```toml
+schema_version = 3
+```
+
+No fields other than `schema_version` are valid there, and it never contributes
+a definition. Its version declares the dialect of that selected project
+definition layer only. The global configuration dialect remains the
+`schema_version` in `config.toml`; neither declaration governs the other.
+A missing marker version or a version the binary does not know is a load error
+under the same dialect comparison rules as `config.toml`.
 
 Cross-file array-of-table entries append in traversal order while preserving
 in-file order. Cross-file duplicate definition ids in one layer are load
@@ -108,7 +121,8 @@ Invocation selects an optional project definition layer before workflow setup:
 the nearest ancestor with `.plect/project.toml` is its project root. Only that
 root's `.plect/` tree participates; no higher ancestor and no generated
 checkout participates. The project root must be listed as trusted in the
-machine configuration. See [`config.md`](config.md).
+machine configuration, or be explicitly trusted by an interactive invocation;
+chains and populations cannot grant that trust. See [`config.md`](config.md).
 
 ## Namespaces
 

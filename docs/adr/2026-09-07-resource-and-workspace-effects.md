@@ -42,8 +42,8 @@ name from that name plus an optional caller-supplied tag. No tag uses the
 resource instance name unchanged; a tag is non-empty, validated as one session
 name segment, and the resulting name must be unused unless it resolves to the
 same entry resource and tag. The recorded entry resource, tag, and selected
-configuration context are the dispatch and storage authority; adding a task
-does not rename or retarget the session.
+project root are the dispatch and storage authority; adding a task does not
+rename or retarget the session.
 
 Effects assemble an environment under their ordinary dependency graph. An
 environment can include a conversation, a terminal, credentials, and a
@@ -65,14 +65,21 @@ inherits its resident's value. This gives setup no unstated dependency on a
 directory it is creating or a daemon's cwd. A workflow without
 `workdir` has no default directory. Cleanup uses the directory selected for
 that node's setup; if it has disappeared, cleanup fails and records that fact.
-It never falls back to the invocation directory or another node's directory.
-There are no per-node or per-action cwd overrides.
+A probe launch failure there invalidates the node, attempts cleanup in the
+stored directory, and retains the failed record and allocation if cleanup also
+cannot launch. An explicit later `up` may reconstruct that node and its
+prerequisites from the latest desired workflow; it never falls back to the
+invocation directory or another node's directory. There are no per-node or
+per-action cwd overrides.
 
 `[workflow.outputs]` and `outputs_schema` are the public projection record.
-They bind declared values from node outputs after setup and are persisted with
-the session. `workflow.outputs.*` remains the only workflow-output root for
-display, task instructions, downstream node bindings, and channel delivery;
-it is not an effect lifecycle and does not create a pseudo-node.
+They bind declared values when their source node outputs exist and are persisted
+with the session. A consumer of a public output depends on its underlying
+producer nodes; those expanded dependencies join cycle detection and
+preparation-graph derivation before default-workdir edges. `workflow.outputs.*`
+remains the only workflow-output root for display, task instructions, downstream
+node bindings, and channel delivery; it is not an effect lifecycle and does not
+create a pseudo-node.
 
 The initiating caller selects the optional initial task. `plect up`, a chain,
 and a population each select at most one compatible task; omission creates an
@@ -108,9 +115,10 @@ not authorize destructive cleanup.
 
 The implementation also has to define validators, storage migration, resource
 operation surfaces, session-name collision diagnostics, public-output
-persistence, graph construction, vanished-directory cleanup behavior, and
-task/chain/population compatibility. Existing runtime tests validate the old
-dialect, not this decision. The operational procedure is
+persistence, graph construction, desired-workflow reconciliation, execution
+records, vanished-directory cleanup behavior, and task/chain/population
+compatibility. Existing runtime tests validate the old dialect, not this
+decision. The operational procedure is
 [`resource-and-workspace-effects-migration.md`](../migrations/resource-and-workspace-effects-migration.md).
 
 ## Alternatives considered

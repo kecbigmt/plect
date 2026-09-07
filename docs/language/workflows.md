@@ -27,8 +27,14 @@ name, environment, or session lifetime.
 ## Nodes, work directory, and public outputs
 
 Nodes are ordinary effects. A projection from `nodes.<id>.outputs.*` creates a
-dependency edge; `blocks` states a reverse edge. A workflow has no provider
-node or special lifecycle.
+dependency edge; `blocks` states a reverse edge. A reference to
+`workflow.outputs.*` expands to the producing node references in that public
+output's binding, so a consumer depends on those producing nodes too. Public
+outputs are evaluable as soon as their source node outputs exist; persistence
+does not add a lifecycle node. The expanded edges participate in cycle detection
+and in the explicit graph used to derive preparation nodes, before
+default-workdir edges are added. A workflow has no provider node or special
+lifecycle.
 
 `workdir`, when present, is exactly one projection from a node output and must
 resolve to an absolute local filesystem directory path. Environments without a
@@ -71,14 +77,20 @@ per-node or per-action cwd overrides.
 Cleanup uses the directory chosen for its node setup. If that directory has
 vanished, cleanup records a failure and does not run in any fallback directory.
 This preserves cleanup actions' directory boundary. Down, repeated up, and
-destroy use the same rule.
+destroy use the same rule. A liveness probe whose launch needs that vanished
+directory fails to launch, invalidates the node, and attempts cleanup in the
+stored setup directory. If that cleanup also fails, the failed execution record
+and its allocation remain durable. A later explicit `up` may reconstruct the
+invalidated node and its prerequisites using the latest desired workflow;
+`--force-recreate` is for a caller who needs to rebuild a record that has not
+been invalidated. No recovery action runs cleanup in a substitute directory.
 
 `[<id>.outputs]` is the workflow's explicit public projection record;
-`outputs_schema` declares it. Each binding is evaluated from durable node
-outputs after setup. `workflow.outputs.*` is persisted on the session and is
-the only workflow-output root for display, instructions, node inputs, and
-channel delivery. It replaces the former provider output path without creating
-an `@workflow` pseudo-node.
+`outputs_schema` declares it. Each binding is evaluable from node outputs as
+soon as its sources have been produced and is persisted on the session.
+`workflow.outputs.*` is the only workflow-output root for display,
+instructions, node inputs, and channel delivery. It replaces the former
+provider output path without creating an `@workflow` pseudo-node.
 
 ```toml
 [pull_review.outputs]
@@ -124,6 +136,33 @@ population-produced sessions, independently of population up/down events.
 
 `body` carries a bounded stderr or error tail only for `failed`; persisted
 outputs remain the authority for produced and cleaned nodes.
+
+## Desired workflow and execution records
+
+The workflow loaded from the session's selected project root is the latest
+desired workflow. It is reloaded for each desired operation and a population
+reload; a changed digest is reported, not rejected. It never tears down or
+rebuilds a node on its own.
+
+Each setup attempt has a session-owned execution record, including partial and
+failed attempts. It records the cleanup declaration, setup inputs and outputs,
+setup directory, and resolved plugin version and reference. The local
+session-state store is the trust boundary for those records: it alone protects
+their writes, and records are not signed. Plugin executables and instruction
+sidecars named by an unreleased record remain available until release.
+
+The current operation supplies `force` and plugin-owned cleanup inputs; it does
+not replace the record's cleanup declaration. A record that still matches a
+desired node remains in use. New nodes are set up from the latest desired
+workflow. A changed node effect, resolved setup inputs, scope, or execution
+directory requires reconstruction; the diagnostic directs the caller to
+`--force-recreate`. A node removed from the desired workflow is not set up
+again, but its record remains available for cleanup and release. Thus a
+declaration revision takes effect immediately for future setup and population
+policy, while an existing node's execution contract changes only by
+reconstruction. Population reload follows the same rule: its current policy
+controls future evaluation, while members and their provenance remain retained
+as specified below.
 
 ## Display
 

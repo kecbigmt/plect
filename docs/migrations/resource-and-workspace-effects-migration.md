@@ -18,14 +18,18 @@ node/output records.
 
 ```bash
 CONFIG_ROOT="${PLECT_CONFIG_HOME:-$HOME/.config/plect}"
-STATE_ROOT="${PLECT_STATE_HOME:-$HOME/.local/state/plect}"
+DATA_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/plect"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 cp -a "$CONFIG_ROOT" "$CONFIG_ROOT.resource-effects-backup.$STAMP"
-cp -a "$STATE_ROOT" "$STATE_ROOT.resource-effects-backup.$STAMP"
+cp -a "$DATA_ROOT" "$DATA_ROOT.resource-effects-backup.$STAMP"
 ```
 
 For each project root, copy its `.plect/` tree to a sibling backup before
 placing a project marker or consolidating configuration.
+
+`PLECT_CONFIG_HOME` is the supported override for the global configuration
+tree. Durable state is under `XDG_DATA_HOME` as shown above; this procedure
+does not name a state-directory override.
 
 ## Convert declarations and workflows
 
@@ -49,15 +53,25 @@ placing a project marker or consolidating configuration.
 ## Establish project contexts
 
 For every intended project configuration, choose one project root, consolidate
-only that root's intended `.plect/` definitions, and add
-`.plect/project.toml`. Add the root's canonical path to
+only that root's intended `.plect/` definitions, and add this marker:
+
+```toml
+schema_version = 3
+```
+
+It contains no definitions or other fields and declares only the selected
+project layer's dialect. Add the root's canonical path to
 `trusted_project_roots` in the machine configuration. Do not preserve ancestor
 fragments or copy configuration from a generated checkout.
 
-Migrate existing sessions to their recorded project root, layer revisions, and
-effective digest before running lifecycle operations. An old session whose
-context cannot be reconstructed is stopped and requires an operator-selected
-context after backup; it must not fall back to a caller cwd.
+Migrate existing sessions to their recorded project root, initial layer
+revisions and digest, and node execution records before running lifecycle
+operations. An execution record retains cleanup definitions, setup inputs and
+outputs, the execution directory, and resolved plugin version and reference,
+including partial or failed setup. Preserve every executable and instruction
+sidecar referenced by an unreleased record. An old session whose context cannot
+be reconstructed is stopped and requires an operator-selected context after
+backup; it must not fall back to a caller cwd.
 
 ## Verify and recover
 

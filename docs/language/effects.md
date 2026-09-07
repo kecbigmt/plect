@@ -117,7 +117,12 @@ triggering session; and a population inherits the resident's recorded value.
 All other nodes execute setup and liveness in the declared directory. Effects
 cannot override either directory per node or action. Cleanup uses the directory
 its setup used; a vanished directory is a cleanup failure, not an invitation to
-run elsewhere.
+run elsewhere. A probe launch failure caused by that directory invalidates the
+node, then cleanup attempts the stored directory and records its failure if it
+cannot launch there either. The failed record and allocation remain durable;
+an explicit later `up` may reconstruct the invalidated node and its
+prerequisites from the latest desired workflow. `--force-recreate` is reserved
+for rebuilding a node that has not been invalidated.
 
 ## Outputs are production records
 

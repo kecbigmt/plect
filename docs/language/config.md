@@ -47,15 +47,28 @@ ancestor containing `.plect/project.toml` is its project root. When its
 canonical path is in `trusted_project_roots`, that root's `.plect/` definition
 tree composes after plugins and the machine-owned global layer. No other
 ancestor is read, and a generated checkout is never a configuration source.
-An untrusted root contributes nothing and is reported as a trust error.
 
-The resolved project root, participating layer revisions, and effective digest
-are recorded in each session. Later lifecycle, task, observation, and delivery
-operations use that record rather than their caller's cwd. A configuration
-change creates a new context for later sessions only; a missing or changed
-recorded context fails closed. Chains inherit their triggering session's
-context. A resident population inherits the context captured when the resident
-started, not its process cwd.
+An interactive invocation encountering an unlisted root displays its canonical
+path, explains that project definitions can execute commands, and asks whether
+to trust it. Yes writes the canonical root to `trusted_project_roots` and
+continues that invocation; no stops it. A non-interactive invocation stops
+with instructions to add that canonical root to `trusted_project_roots`.
+Chains and populations cannot grant trust, and a trust failure never selects a
+global workflow. Trust is a root property, not a digest property; removing a
+root revokes use of its project definitions for future desired operations.
+
+A session records its selected project root, participating layer revisions,
+and effective digest at creation. Later operations use that root rather than
+their caller's cwd, but load the latest valid definitions at the recorded root.
+They compare and report a changed digest; a digest mismatch neither fails an
+operation nor destroys or rebuilds nodes. The current workflow is the desired
+state used for reconciliation. Nodes already set up retain execution records
+used for their cleanup. If a desired revision requires a node to be rebuilt,
+the diagnostic directs the caller to `--force-recreate`. If the recorded root
+cannot be read, desired operations fail with an actionable error and do not
+select another root; record-based cleanup and release remain available. Chains
+inherit their triggering session's root. A resident population inherits the
+root captured when the resident started, not its process cwd.
 
 `max_up_children` applies one machine-wide capacity key to every session with
 no real parent, including sessions placed in an explicit `root:*` sibling
