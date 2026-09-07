@@ -63,7 +63,9 @@ func (rc *runScopeCache) put(key runScopeCacheKey, entry runScopeCacheEntry) {
 	rc.byKey[key] = entry
 }
 
-// runScopeCacheInstance lazily creates c's cache via CompareAndSwap.
+// CompareAndSwap here races safely against concurrent first callers:
+// dispatch and reactor Supervisor.reconcile each reach a fresh Config's
+// cache from their own goroutine.
 func (c *Config) runScopeCacheInstance() *runScopeCache {
 	if rc := c.runScopeCache.Load(); rc != nil {
 		return rc

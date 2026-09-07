@@ -94,14 +94,12 @@ type Config struct {
 	catalogRegistrations *plugins.CatalogRegistrations
 	catalogLock          *plugins.Lockfile
 	catalogCacheRoot     string
-	// runScopeCache memoizes CurrentPlanRunScopedNodeSet's per-session run
-	// scope resolution for this Config's lifetime.
-	runScopeCache    atomic.Pointer[runScopeCache]
-	Detached         bool           `toml:"detached"`
-	Channels         []string       `toml:"channels"`
-	InputsSchema     map[string]any `toml:"inputs_schema"`
-	InputsSchemaFile string         `toml:"inputs_schema_file"`
-	BaseDir          string         `toml:"-"`
+	runScopeCache        atomic.Pointer[runScopeCache]
+	Detached             bool           `toml:"detached"`
+	Channels             []string       `toml:"channels"`
+	InputsSchema         map[string]any `toml:"inputs_schema"`
+	InputsSchemaFile     string         `toml:"inputs_schema_file"`
+	BaseDir              string         `toml:"-"`
 	// SessionGuard is a per-session dispatch boundary sourced from the
 	// PLECT_SESSION_GUARD environment variable (not config.toml). When set, a
 	// `plect up` may only produce a *resolved session name* that

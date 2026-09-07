@@ -771,11 +771,6 @@ func TestUp_StaleNodeCleanupFailurePreservesInspectableState(t *testing.T) {
 	})), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// A retry is a fresh `plect up` process in production, which loads its
-	// own Config from scratch; rebuild cfg here to match instead of reusing
-	// the first call's, whose task-definition read is now memoized for its
-	// own lifetime (discoverLayers' cache).
-	cfg = &config.Config{WorkspaceDirsRoot: cfg.WorkspaceDirsRoot, BaseDir: cfg.BaseDir}
 	result, err := Up(cfg, store, UpParams{Identifier: sessionName})
 	if err != nil {
 		t.Fatalf("retry Up: %v", err)
