@@ -13,10 +13,8 @@ import (
 // still be inserted with that column present.
 const eventTablesVersion = 20260906143514
 
-// seedEventRow inserts one event_streams row and one events row directly via
-// raw SQL (columns given explicitly, delivery_mode included only when
-// present) so a test can seed a row under a schema version its migrated
-// state has already moved past.
+// seedEventRow uses raw SQL rather than AppendEvent: AppendEvent's generated
+// insert targets only the current, already-migrated column set.
 func seedEventRow(t *testing.T, db *DB, ctx context.Context, streamID, session, eventID string, when time.Time, withDeliveryMode bool) {
 	t.Helper()
 	if _, err := db.write.ExecContext(ctx,
@@ -42,10 +40,9 @@ func seedEventRow(t *testing.T, db *DB, ctx context.Context, streamID, session, 
 	}
 }
 
-// assertEventRowIntact reads session's events back through the package's own
-// query path and checks every field seedEventRow set survived, including
-// time and metadata — a column-drop migration that silently truncated or
-// reordered a retained column would still pass a check limited to id/type.
+// assertEventRowIntact checks every retained field, not just id and type: a
+// column-drop migration that silently truncated or reordered one would
+// otherwise pass unnoticed.
 func assertEventRowIntact(t *testing.T, db *DB, ctx context.Context, session, eventID string, when time.Time) {
 	t.Helper()
 	evs, seqs, err := db.ListEventsFrom(ctx, session, 0)
