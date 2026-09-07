@@ -67,11 +67,12 @@ jobs:
           echo "affected_plugins=$affected_plugins" >> "$GITHUB_OUTPUT"
           echo "web_ci=$web_ci" >> "$GITHUB_OUTPUT"
 
-  # gofmt, go-install, provider-boundary, comment-references, and
-  # instruction-orphans are whole-repo invariant checks, not per-module
-  # builds, so they stay unconditional: a docs-only diff still gets exactly
-  # this lint set, and nothing from build-test/integration-test/readme-verify
-  # below, which the changes job gates instead.
+  # gofmt, go-install, provider-boundary, comment-references,
+  # instruction-orphans, and check-all are whole-repo invariant checks, not
+  # per-module builds, so they stay unconditional: a docs-only diff still
+  # gets exactly this lint set, and nothing from
+  # build-test/integration-test/readme-verify below, which the changes job
+  # gates instead.
   gofmt:
     name: gofmt
     runs-on: ubuntu-latest
@@ -176,6 +177,24 @@ jobs:
         run: ./scripts/check-instruction-orphans_selftest.sh
       - name: Check every task instruction sidecar is referenced
         run: ./scripts/check-instruction-orphans.sh
+
+  # This proves check-all.sh's own sequencing/failure-naming against a
+  # fixture; the individual checks it wraps are exercised for real by the
+  # jobs above, so re-running check-all.sh itself against this repository
+  # here would only duplicate their coverage.
+  check-all:
+    name: check-all
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Prove check-all.sh sequences its steps and stops naming the first failure
+        run: ./scripts/check-all_selftest.sh
 
   gh-guard:
     name: gh-guard
@@ -504,6 +523,7 @@ jobs:
       - comment-references
       - comment-density
       - instruction-orphans
+      - check-all
       - gh-guard
       - web-api-contract
       - web-app-build

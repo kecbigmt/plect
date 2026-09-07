@@ -1,50 +1,74 @@
 #!/usr/bin/env bash
-# check-all.sh has no root-override env var like the other checkers here:
-# it is inherently whole-repo scoped (go vet/go test on real modules, the
-# real check-*.sh scripts). So this exercises it against a disposable
-# worktree of the repository's own HEAD rather than a synthetic fixture.
+# Exercises check-all.sh's own sequencing and failure-naming, not the
+# sub-checks' logic (each already has its own *_selftest.sh): a small
+# synthetic fixture, scanned via CHECK_ALL_ROOT, keeps this fast instead of
+# re-running the real repository's own go vet/go test through it.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+checker="$root/scripts/check-all.sh"
+go_version="$(go env GOVERSION | sed 's/^go//')"
 
-worktree=""
-cleanup() {
-  if [ -n "$worktree" ]; then
-    git -C "$root" worktree remove --force "$worktree" >/dev/null 2>&1 || true
-    rm -rf "$worktree"
-  fi
-}
-trap cleanup EXIT
+fixture=""
+trap 'rm -rf "$fixture"' EXIT
+fixture="$(mktemp -d)"
 
-# A worktree under the system tmpdir breaks this environment's `go build`
-# VCS stamping (it collides with Go's own GOTMPDIR default), so this uses a
-# sibling of the repository root instead, matching how this repository's
-# own development worktrees are already laid out.
-worktree="$(mktemp -d "$(dirname "$root")/check-all-selftest.XXXXXX")"
-rmdir "$worktree"
-git -C "$root" worktree add --detach -q "$worktree" HEAD
-base_sha="$(git -C "$root" rev-parse HEAD)"
+mkdir -p "$fixture/app" "$fixture/contracts/state" \
+  "$fixture/.claude/skills" "$fixture/.agents/skills"
+
+cat > "$fixture/app/go.mod" <<EOF
+module app
+
+go $go_version
+EOF
+cat > "$fixture/app/main.go" <<'EOF'
+package main
+
+func main() {}
+EOF
+
+cat > "$fixture/contracts/state/go.mod" <<EOF
+module contracts/state
+
+go $go_version
+EOF
+cat > "$fixture/contracts/state/state.go" <<'EOF'
+package state
+EOF
+
+printf 'placeholder\n' > "$fixture/CLAUDE.md"
+ln -s "CLAUDE.md" "$fixture/AGENTS.md"
+
+(
+  cd "$fixture"
+  git init -q
+  git config user.email test@example.com
+  git config user.name test
+  git add -A
+  git commit -q -m base
+)
+base_sha="$(git -C "$fixture" rev-parse HEAD)"
 
 run_check() {
-  (cd "$worktree" && ./scripts/check-all.sh "$base_sha")
+  CHECK_ALL_ROOT="$fixture" "$checker" "$base_sha"
 }
 
 if ! run_check >/tmp/check-all-selftest-clean.log 2>&1; then
-  echo "FAIL: check-all.sh failed against a clean worktree" >&2
+  echo "FAIL: check-all.sh failed against a clean fixture" >&2
   cat /tmp/check-all-selftest-clean.log >&2
   exit 1
 fi
 if ! grep -q "check-all.sh: all checks passed" /tmp/check-all-selftest-clean.log; then
-  echo "FAIL: check-all.sh did not report success on a clean worktree" >&2
+  echo "FAIL: check-all.sh did not report success on a clean fixture" >&2
   cat /tmp/check-all-selftest-clean.log >&2
   exit 1
 fi
-echo "ok: check-all.sh exits 0 and reports success on a clean worktree"
+echo "ok: check-all.sh exits 0 and reports success on a clean fixture"
 
 # Seed a comment-density violation (block-length above the checker's
 # threshold of 8) in a real commit, so check-comment-density.sh's
 # base/head diff actually sees it.
-cat >>"$worktree/app/internal/traceid/traceid.go" <<'EOF'
+cat >>"$fixture/app/main.go" <<'EOF'
 
 // comment line 1 of a seeded density violation
 // comment line 2 of a seeded density violation
@@ -57,7 +81,7 @@ cat >>"$worktree/app/internal/traceid/traceid.go" <<'EOF'
 // comment line 9 of a seeded density violation
 func seededDensityViolation() int { return 0 }
 EOF
-git -C "$worktree" -c user.email=test@example.com -c user.name=test \
+git -C "$fixture" -c user.email=test@example.com -c user.name=test \
   commit -q -am "seed a comment-density violation for check-all_selftest.sh"
 
 if run_check >/tmp/check-all-selftest-dirty.log 2>&1; then
