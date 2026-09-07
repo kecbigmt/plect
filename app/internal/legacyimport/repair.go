@@ -114,10 +114,10 @@ func RepairImportedSessions(ctx context.Context, opts RepairOptions) (*RepairRep
 // sessions table, matching EventStreamSessions' own query, bypassing
 // persistence.Open entirely -- see the DryRun branch above for why.
 func listSessionNamesReadOnly(dbPath string) ([]string, error) {
-	// immutable=1 (not just mode=ro) avoids creating -wal/-shm, trusting
-	// nothing else writes concurrently -- safe only because every plect
-	// process must already be stopped (see this command's --help text).
-	db, err := sql.Open("sqlite3", "file:"+dbPath+"?mode=ro&immutable=1&_busy_timeout=5000")
+	// Not immutable=1: a stopped-but-not-cleanly-shut-down process can leave
+	// committed rows sitting in -wal, uncheckpointed into dbPath itself, and
+	// immutable=1 would silently read only the stale main file and miss them.
+	db, err := sql.Open("sqlite3", "file:"+dbPath+"?mode=ro&_busy_timeout=5000")
 	if err != nil {
 		return nil, fmt.Errorf("open %s read-only: %w", dbPath, err)
 	}
