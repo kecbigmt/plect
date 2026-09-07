@@ -381,6 +381,16 @@ supported refusal above. A database at schema zero carries none of that risk
 the embedded target without needing the flag. A release-stamped build keeps
 today's automatic migration in every case, flag or not.
 
+Any packager building plect from source, not only the release pipeline's own
+matrix build, must inject the version the same way: a source build that
+skips `-ldflags "-X github.com/kecbigmt/plecture/app/internal/version.Current=<version>"`
+leaves `Current` at its unstamped placeholder and is a development build by
+this section's definition, regardless of what version string the packaging
+system otherwise derives (a Nix flake revision, a distribution's own package
+version, ...) for purposes outside this binary. Such a build refuses implicit
+migration of an existing store exactly as above until the packager passes
+that flag.
+
 The resident service keeps pools but uses the persistence access gate around
 each database operation, not around the process lifetime. Its HTTP event
 routes answer an unavailable/retryable response while a migration blocks an
