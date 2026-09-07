@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/pprof"
 	"slices"
 	"strconv"
 	"time"
@@ -63,7 +64,29 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "ok")
 	})
+	registerPprofRoutes(mux)
 	return s.auth(mux)
+}
+
+// registerPprofRoutes exposes net/http/pprof's handlers under /debug/pprof/
+// on this server's own mux, rather than importing net/http/pprof for its
+// package-level DefaultServeMux registration side effect: the daemon has no
+// other use for DefaultServeMux, and registering here keeps every pprof
+// route behind s.auth like the rest of the bus API — the resident process
+// otherwise has no way to obtain a goroutine dump or CPU profile short of a
+// SIGQUIT (which kills it, per issue #498) or a restart. Trust boundary:
+// identical to /v1/events and /v1/stream — the UDS socket's 0600 permission
+// is the boundary with no PLECT_BUS_TOKEN set, and the bearer token is the
+// boundary when one is configured (e.g. a bus proxied to a browser).
+func registerPprofRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /debug/pprof/", pprof.Index)
+	mux.HandleFunc("GET /debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("GET /debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("GET /debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("GET /debug/pprof/trace", pprof.Trace)
+	for _, name := range []string{"goroutine", "heap", "allocs", "block", "mutex", "threadcreate"} {
+		mux.Handle("GET /debug/pprof/"+name, pprof.Handler(name))
+	}
 }
 
 func (s *Server) auth(next http.Handler) http.Handler {

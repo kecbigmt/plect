@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sync/atomic"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -93,11 +94,18 @@ type Config struct {
 	catalogRegistrations *plugins.CatalogRegistrations
 	catalogLock          *plugins.Lockfile
 	catalogCacheRoot     string
-	Detached             bool           `toml:"detached"`
-	Channels             []string       `toml:"channels"`
-	InputsSchema         map[string]any `toml:"inputs_schema"`
-	InputsSchemaFile     string         `toml:"inputs_schema_file"`
-	BaseDir              string         `toml:"-"`
+	// layerCache backs discoverLayers' memoization; see layerResultCache
+	// and discoverLayers in discover.go.
+	layerCache atomic.Pointer[layerResultCache]
+	// discoverLayerFn overrides discoverLayer for tests, matching the
+	// deadmanFn/tickFn seam convention elsewhere: nil means the real
+	// discoverLayer.
+	discoverLayerFn  func(layerDir) ([]*lang.Definition, error)
+	Detached         bool           `toml:"detached"`
+	Channels         []string       `toml:"channels"`
+	InputsSchema     map[string]any `toml:"inputs_schema"`
+	InputsSchemaFile string         `toml:"inputs_schema_file"`
+	BaseDir          string         `toml:"-"`
 	// SessionGuard is a per-session dispatch boundary sourced from the
 	// PLECT_SESSION_GUARD environment variable (not config.toml). When set, a
 	// `plect up` may only produce a *resolved session name* that

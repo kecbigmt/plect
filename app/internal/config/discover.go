@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/kecbigmt/plecture/app/internal/lang"
 )
@@ -89,14 +90,100 @@ func (l layerDir) scope() layerScope {
 	}
 }
 
+// layerResultCache memoizes a Config's own discoverLayers results, keyed by
+// workspaceDirPath. Only successful results are cached: a transient read
+// error (e.g. a momentarily unreadable directory) must keep retrying on the
+// next call rather than sticking for the rest of this Config's lifetime.
+//
+// Reached only through Config.layerResultCache, which hands out this pointer
+// via atomic compare-and-swap: Config itself is copied by value in places
+// (test fixture tables), and a sync.Mutex embedded directly in Config would
+// make every such copy a lock copy. Putting the mutex behind a pointer field
+// keeps Config copyable while the cache instance underneath stays shared and
+// singular for the *Config those copies were taken from.
+type layerResultCache struct {
+	mu     sync.Mutex
+	byPath map[string][]discoveredLayer
+}
+
+func (lc *layerResultCache) get(path string) ([]discoveredLayer, bool) {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	layers, ok := lc.byPath[path]
+	return layers, ok
+}
+
+func (lc *layerResultCache) put(path string, layers []discoveredLayer) {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	if lc.byPath == nil {
+		lc.byPath = make(map[string][]discoveredLayer)
+	}
+	lc.byPath[path] = layers
+}
+
+func (lc *layerResultCache) evict(path string) {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	delete(lc.byPath, path)
+}
+
+// layerResultCache lazily creates c's own cache instance on first use,
+// racing safely with concurrent first callers via CompareAndSwap (dispatch
+// and reactor supervisors each reach a fresh *Config's cache independently,
+// on their own goroutine, for the same session).
+func (c *Config) layerResultCache() *layerResultCache {
+	if lc := c.layerCache.Load(); lc != nil {
+		return lc
+	}
+	lc := &layerResultCache{}
+	if !c.layerCache.CompareAndSwap(nil, lc) {
+		lc = c.layerCache.Load()
+	}
+	return lc
+}
+
+// resolveLayers is discoverLayers with an escape hatch: fresh forces this
+// call to evict whatever is cached for workspaceDirPath first, so it re-walks
+// and re-parses from disk and then repopulates the cache with what it found.
+// A session-up transition (dispatch/reactor's buildDispatcher/buildReactor)
+// and sessionReactor.refreshTickConfig's wedge-recovery re-read both
+// document an on-disk edit becoming visible without waiting for the next
+// config.Live swap; every other caller passes false and takes whatever is
+// memoized.
+func (c *Config) resolveLayers(workspaceDirPath string, fresh bool) ([]discoveredLayer, error) {
+	if fresh {
+		c.layerResultCache().evict(workspaceDirPath)
+	}
+	return c.discoverLayers(workspaceDirPath)
+}
+
 // discoverLayers reads every cascade layer's definition root once, in
 // shallowest-first order. workspaceDirPath selects the ancestor overlays; an
 // empty one means the trusted base layers alone, which is what a caller
 // outside any workspace directory sees.
+//
+// The result is memoized per workspaceDirPath for this *Config's lifetime:
+// dispatch.Supervisor and reactor.Supervisor each re-evaluate RunScopeUp for
+// every up session on every ~1s poll tick, and each evaluation used to
+// re-walk and re-parse every definition file on disk from scratch. What
+// invalidates the cache is a new *Config (config.Live swaps one in on its own
+// refresh interval) or an explicit resolveLayers(path, fresh=true) eviction;
+// every Config field this package reads otherwise (definition roots, plugin
+// dirs) is set once at construction and never mutated afterward, so a cached
+// layer set never goes stale any other way.
 func (c *Config) discoverLayers(workspaceDirPath string) ([]discoveredLayer, error) {
+	cache := c.layerResultCache()
+	if cached, ok := cache.get(workspaceDirPath); ok {
+		return cached, nil
+	}
+	fn := c.discoverLayerFn
+	if fn == nil {
+		fn = discoverLayer
+	}
 	out := make([]discoveredLayer, 0, len(c.PluginDirs)+2)
 	for _, layer := range c.definitionRoots(workspaceDirPath) {
-		defs, err := discoverLayer(layer)
+		defs, err := fn(layer)
 		if err != nil {
 			return nil, err
 		}
@@ -105,6 +192,7 @@ func (c *Config) discoverLayers(workspaceDirPath string) ([]discoveredLayer, err
 		}
 		out = append(out, discoveredLayer{layer: layer, defs: defs})
 	}
+	cache.put(workspaceDirPath, out)
 	return out, nil
 }
 

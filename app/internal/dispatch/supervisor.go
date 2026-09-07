@@ -112,7 +112,12 @@ func (sup *Supervisor) buildDispatcher(name string, s *domain.Session) (*session
 		return nil, true
 	}
 	cfg := sup.cfg()
-	workflows, err := cfg.LoadWorkflows(s.WorkspaceDirPath)
+	// Fresh, not the memoized read: this only runs on a session-up
+	// transition, and NewSupervisor's cfg-getter doc already promises a
+	// plugin/config change since this session last came up is visible here
+	// without a daemon restart — a cached, possibly-stale read would break
+	// that promise for up to a whole config.Live refresh interval.
+	workflows, err := cfg.LoadWorkflowsFresh(s.WorkspaceDirPath)
 	if err != nil {
 		return nil, false
 	}
@@ -123,7 +128,7 @@ func (sup *Supervisor) buildDispatcher(name string, s *domain.Session) (*session
 	if len(wf.Event.Channel) == 0 {
 		return nil, true
 	}
-	defs, err := cfg.LoadChannels()
+	defs, err := cfg.LoadChannelsFresh()
 	if err != nil {
 		return nil, false
 	}

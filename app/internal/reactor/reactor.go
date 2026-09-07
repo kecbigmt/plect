@@ -311,7 +311,7 @@ func (r *sessionReactor) refreshTickConfig() {
 	if cfg == nil || s == nil {
 		return
 	}
-	tc, err := resolveTickConfig(cfg, s)
+	tc, err := resolveTickConfig(cfg, s, true)
 	if err != nil {
 		slog.Default().Warn("reactor: re-resolve [tick] failed; keeping the previous declaration", "session", r.session, "error", err)
 		return

@@ -411,3 +411,93 @@ func firstFrame(t *testing.T, baseURL, session, lastEventID string) (string, eve
 	t.Fatal("no frame received")
 	return "", event.Event{}
 }
+
+// The bus exposed no way to see where a runaway daemon's CPU went short of a
+// restart (issue #498): these three tests are the diagnostic surface's
+// acceptance criteria — a goroutine dump and a CPU profile obtained over the
+// bus's existing UDS server, without restarting it, under the same auth
+// boundary as every other route.
+
+func TestBus_PprofIndexServed(t *testing.T) {
+	_, baseURL, _ := newTestBus(t, "")
+	resp, err := http.Get(baseURL + "/debug/pprof/")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "goroutine") {
+		t.Errorf("pprof index body = %q, want it to list the goroutine profile", body)
+	}
+}
+
+func TestBus_PprofGoroutineDump(t *testing.T) {
+	_, baseURL, _ := newTestBus(t, "")
+	resp, err := http.Get(baseURL + "/debug/pprof/goroutine?debug=1")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "goroutine profile") {
+		t.Errorf("goroutine profile body = %q, want a goroutine profile dump", body)
+	}
+}
+
+// A CPU profile is the acceptance criterion's other half ("a goroutine and
+// 10-second CPU profile are obtained without restarting the bus"); one
+// second is enough to prove the route captures samples without slowing this
+// test down to match the acceptance criterion's own 10s figure.
+func TestBus_PprofCPUProfileCaptured(t *testing.T) {
+	_, baseURL, _ := newTestBus(t, "")
+	resp, err := http.Get(baseURL + "/debug/pprof/profile?seconds=1")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if len(body) == 0 {
+		t.Error("CPU profile body is empty, want a non-empty pprof-format profile")
+	}
+}
+
+// pprof must sit behind the same bearer-token boundary as every other bus
+// route (the UDS socket's own 0600 perms are the boundary when no token is
+// configured) — a diagnostic surface that skips auth would let anyone who
+// can reach a token-protected bus (e.g. one proxied to a browser) dump its
+// memory and call stacks.
+func TestBus_PprofRequiresAuthWhenTokenSet(t *testing.T) {
+	_, baseURL, _ := newTestBus(t, "s3cret")
+
+	resp, err := http.Get(baseURL + "/debug/pprof/")
+	if err != nil {
+		t.Fatalf("get without token: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status without token = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, baseURL+"/debug/pprof/", nil)
+	req.Header.Set("Authorization", "Bearer s3cret")
+	authed, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("get with token: %v", err)
+	}
+	defer authed.Body.Close()
+	if authed.StatusCode != http.StatusOK {
+		t.Fatalf("status with token = %d, want %d", authed.StatusCode, http.StatusOK)
+	}
+}
