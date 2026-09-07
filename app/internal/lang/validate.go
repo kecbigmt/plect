@@ -319,7 +319,7 @@ func (v Validation) validateWorkflow(def *Definition, pos Position) error {
 		field  string
 		fields []string
 	}{
-		{"tick", []string{"on", "heartbeat", "max_heartbeat"}},
+		{"tick", []string{"on", "heartbeat", "max_heartbeat", "backoff_reset"}},
 		{"healthcheck", []string{"period", "stall_threshold", "renotify_every"}},
 	} {
 		raw, ok := def.Body[clock.field]

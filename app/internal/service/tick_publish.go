@@ -58,13 +58,19 @@ func publishTickAction(cfg *config.Config, store *state.Store, sessionName strin
 		if repeatsUnchangedState(c, trigger) {
 			return nil, nil
 		}
+		meta := unmetItemsMetadata(instance, action.UnmetItems)
+		if len(action.LiveChildren) > 0 {
+			if b, err := json.Marshal(action.LiveChildren); err == nil {
+				meta["live_children"] = string(b)
+			}
+		}
 		if _, err := EventPublish(cfg, store, sessionName, EventPublishParams{
 			Type:      event.TypeUserEmit,
 			Direction: event.Outbound,
 			Source:    event.SourceTick,
 			Summary:   action.Summary,
 			Body:      action.Body,
-			Metadata:  unmetItemsMetadata(instance, action.UnmetItems),
+			Metadata:  meta,
 		}); err != nil {
 			return nil, err
 		}

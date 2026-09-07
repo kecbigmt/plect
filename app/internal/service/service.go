@@ -405,6 +405,30 @@ func persistedHealth(s *domain.Session) (domain.HealthState, string) {
 	return domain.HealthState(s.Health.LastState), s.Health.LastReason
 }
 
+// liveChildrenOf never itself runs a probe: Health is whatever the periodic
+// healthcheck sweep already persisted.
+func liveChildrenOf(cfg *config.Config, allSessions map[string]*domain.Session, name string) []LiveChild {
+	var out []LiveChild
+	for _, childName := range childNames(allSessions, name) {
+		child := allSessions[childName]
+		if sessionRunState(cfg, child) != domain.RunUp {
+			continue
+		}
+		health, _ := persistedHealth(child)
+		minutes := 0
+		if !child.LastTickAt.IsZero() {
+			minutes = int(time.Since(child.LastTickAt).Minutes())
+		}
+		out = append(out, LiveChild{
+			Name:             childName,
+			Run:              domain.RunUp,
+			Health:           health,
+			MinutesSinceTick: minutes,
+		})
+	}
+	return out
+}
+
 func sessionHealthReport(cfg *config.Config, store *state.Store, name string) (HealthReport, domain.HealthState) {
 	report, err := EvaluateHealth(cfg, store, name)
 	if err != nil {

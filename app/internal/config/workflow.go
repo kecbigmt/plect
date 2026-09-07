@@ -103,6 +103,24 @@ type TickConfig struct {
 	// see no fingerprint change and no inbound event. Zero means the
 	// reactor's default (4h) applies — declaring it is optional.
 	MaxHeartbeat Duration
+	BackoffReset []string
+}
+
+const (
+	TickBackoffResetInbound      = "inbound"
+	TickBackoffResetFingerprint  = "fingerprint"
+	TickBackoffResetLiveChildren = "live_children"
+)
+
+var ValidBackoffResetNames = []string{TickBackoffResetInbound, TickBackoffResetFingerprint, TickBackoffResetLiveChildren}
+
+var DefaultBackoffReset = []string{TickBackoffResetInbound, TickBackoffResetFingerprint}
+
+func (t TickConfig) BackoffResetOrDefault() []string {
+	if len(t.BackoffReset) > 0 {
+		return t.BackoffReset
+	}
+	return DefaultBackoffReset
 }
 
 // DefaultMaxHeartbeat caps the quiet-tick backoff interval when a workflow's

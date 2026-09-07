@@ -1,6 +1,7 @@
 package service
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/kecbigmt/plecture/app/internal/domain"
@@ -132,6 +133,59 @@ func TestTickSession_HeartbeatRepublishesUnchangedReviewRequired(t *testing.T) {
 
 	if got := tickEventCount(t, store, "owner/repo-1", event.TypeTickReviewRequired); got != 2 {
 		t.Fatalf("review_required events = %d, want 2 (one per heartbeat sweep)", got)
+	}
+}
+
+func TestTickSession_HeartbeatKickListsLiveDirectChildren(t *testing.T) {
+	store := testStore(t)
+	cfg := checkScenarioConfig(t, 4)
+	seedPendingJudgeWork(t, store, "owner/repo-1")
+	setCheckStatus(t, store, "owner/repo-1", "FAILURE")
+	seedSessionWithNodes(t, store, "owner/repo-1-child", "owner/repo", 1, "", map[string]*contract.TaskState{
+		"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced},
+	})
+	setParent(t, store, "owner/repo-1-child", "owner/repo-1")
+
+	result, err := TickSession(cfg, store, TickParams{SessionName: "owner/repo-1", Trigger: TickTriggerHeartbeat})
+	if err != nil {
+		t.Fatalf("TickSession: %v", err)
+	}
+	if len(result.Actions) != 1 || result.Actions[0].Action != "kick" {
+		t.Fatalf("actions = %+v, want kick", result.Actions)
+	}
+	action := result.Actions[0]
+	if len(action.LiveChildren) != 1 || action.LiveChildren[0].Name != "owner/repo-1-child" {
+		t.Fatalf("LiveChildren = %+v, want one entry for owner/repo-1-child", action.LiveChildren)
+	}
+	if action.LiveChildren[0].Run != domain.RunUp {
+		t.Errorf("LiveChildren[0].Run = %q, want up", action.LiveChildren[0].Run)
+	}
+	if !strings.Contains(action.Body, "owner/repo-1-child") {
+		t.Errorf("kick body = %q, want it to list the live child", action.Body)
+	}
+}
+
+// The live-children payload is heartbeat-scoped, matching backoff_reset's
+// own "live_children" condition, which only the heartbeat sweep evaluates.
+func TestTickSession_EventTriggeredKickOmitsLiveChildren(t *testing.T) {
+	store := testStore(t)
+	cfg := checkScenarioConfig(t, 4)
+	seedPendingJudgeWork(t, store, "owner/repo-1")
+	setCheckStatus(t, store, "owner/repo-1", "FAILURE")
+	seedSessionWithNodes(t, store, "owner/repo-1-child", "owner/repo", 1, "", map[string]*contract.TaskState{
+		"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced},
+	})
+	setParent(t, store, "owner/repo-1-child", "owner/repo-1")
+
+	result, err := TickSession(cfg, store, TickParams{SessionName: "owner/repo-1", Trigger: TickTriggerEvent})
+	if err != nil {
+		t.Fatalf("TickSession: %v", err)
+	}
+	if len(result.Actions) != 1 || result.Actions[0].Action != "kick" {
+		t.Fatalf("actions = %+v, want kick", result.Actions)
+	}
+	if len(result.Actions[0].LiveChildren) != 0 {
+		t.Errorf("LiveChildren = %+v, want none for an event-triggered kick", result.Actions[0].LiveChildren)
 	}
 }
 

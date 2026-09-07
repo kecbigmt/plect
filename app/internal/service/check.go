@@ -88,6 +88,14 @@ type CheckAction struct {
 	Fingerprint         string           `json:"fingerprint,omitempty"`
 	EscalationKind      string           `json:"escalation_kind,omitempty"`
 	HeartbeatChanged    bool             `json:"-"`
+	LiveChildren        []LiveChild      `json:"live_children,omitempty"`
+}
+
+type LiveChild struct {
+	Name             string             `json:"name"`
+	Run              domain.RunState    `json:"run"`
+	Health           domain.HealthState `json:"health,omitempty"`
+	MinutesSinceTick int                `json:"minutes_since_tick"`
 }
 
 type CheckResult struct {
@@ -184,6 +192,10 @@ func evaluateSessionActions(cfg *config.Config, store *state.Store, sessionName 
 	if err != nil {
 		return "", nil, nil, nil, err
 	}
+	var liveChildren []LiveChild
+	if trigger == TickTriggerHeartbeat {
+		liveChildren = liveChildrenOf(cfg, allSessions, resolvedName)
+	}
 	merged := domain.MergedTasks(session)
 	var computed []computedAction
 	var chainPlan []ChainSpawn
@@ -200,7 +212,7 @@ func evaluateSessionActions(cfg *config.Config, store *state.Store, sessionName 
 		if doc.DoneWhen == nil && len(doc.Chains) == 0 && len(st.ExtraDoneWhen) == 0 {
 			continue
 		}
-		action, spawns, derr := evaluateDocumentInstance(cfg, store, doc, resolvedName, session, key, st, allSessions, trigger)
+		action, spawns, derr := evaluateDocumentInstance(cfg, store, doc, resolvedName, session, key, st, allSessions, trigger, liveChildren)
 		if derr != nil {
 			return "", nil, nil, nil, derr
 		}

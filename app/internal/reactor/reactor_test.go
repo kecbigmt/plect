@@ -755,6 +755,178 @@ func TestSessionReactor_QuietTickBackoffGrows(t *testing.T) {
 	}
 }
 
+func TestSessionReactor_BackoffResetLiveChildrenHoldsIntervalWhileChildUp(t *testing.T) {
+	const heartbeat = 10 * time.Millisecond
+	r, st, _ := newTestReactor(t, config.TickConfig{
+		Heartbeat:    config.Duration{Duration: heartbeat},
+		BackoffReset: []string{"inbound", "fingerprint", "live_children"},
+	})
+	tickCount := 0
+	r.tickFn = func(cfg *config.Config, store *state.Store, params service.TickParams) (*service.CheckResult, error) {
+		tickCount++
+		return service.TickSession(cfg, store, params)
+	}
+	if err := st.Put(&domain.Session{
+		Name:          "o/r-1-child",
+		ParentSession: "o/r-1",
+		Nodes: map[string]*contract.TaskState{
+			"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	sweep := func() {
+		if err := st.Update("o/r-1", func(s *domain.Session) error {
+			s.LastTickAt = time.Now().Add(-heartbeat - time.Millisecond)
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		r.checkHeartbeat(ctx)
+	}
+
+	for i := 1; i <= 3; i++ {
+		sweep()
+		if tickCount != i {
+			t.Fatalf("sweep %d: tickCount = %d, want %d", i, tickCount, i)
+		}
+		if n := st.Get("o/r-1").TickBackoff.ConsecutiveUnchanged; n != 0 {
+			t.Fatalf("sweep %d: ConsecutiveUnchanged = %d, want 0 (held by the live child)", i, n)
+		}
+	}
+}
+
+// A condition is peeked before gating, not only persisted after a tick fires.
+func TestSessionReactor_BackoffResetLiveChildrenOverridesCappedIntervalOnceChildComesUp(t *testing.T) {
+	const heartbeat = 10 * time.Millisecond
+	const maxHeartbeat = 200 * time.Millisecond
+	r, st, _ := newTestReactor(t, config.TickConfig{
+		Heartbeat:    config.Duration{Duration: heartbeat},
+		MaxHeartbeat: config.Duration{Duration: maxHeartbeat},
+		BackoffReset: []string{"inbound", "fingerprint", "live_children"},
+	})
+	tickCount := 0
+	r.tickFn = func(cfg *config.Config, store *state.Store, params service.TickParams) (*service.CheckResult, error) {
+		tickCount++
+		return service.TickSession(cfg, store, params)
+	}
+	ctx := context.Background()
+
+	// n=4's capped interval (160ms) is far beyond the heartbeat (10ms) elapsed below.
+	if err := st.Update("o/r-1", func(s *domain.Session) error {
+		s.TickBackoff = &contract.TickBackoff{ConsecutiveUnchanged: 4}
+		s.LastTickAt = time.Now().Add(-heartbeat - time.Millisecond)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.checkHeartbeat(ctx)
+	if tickCount != 0 {
+		t.Fatalf("sweep before any child is up: tickCount = %d, want 0 (capped interval not yet elapsed)", tickCount)
+	}
+
+	if err := st.Put(&domain.Session{
+		Name:          "o/r-1-child",
+		ParentSession: "o/r-1",
+		Nodes: map[string]*contract.TaskState{
+			"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	r.checkHeartbeat(ctx)
+	if tickCount != 1 {
+		t.Fatalf("sweep once the child is up: tickCount = %d, want 1 (due at heartbeat, not the capped interval)", tickCount)
+	}
+	if n := st.Get("o/r-1").TickBackoff.ConsecutiveUnchanged; n != 0 {
+		t.Fatalf("ConsecutiveUnchanged after the tick = %d, want 0 (persisted reset)", n)
+	}
+}
+
+func TestSessionReactor_BackoffResetLiveChildrenGrowsOnceChildIsDown(t *testing.T) {
+	const heartbeat = 10 * time.Millisecond
+	const maxHeartbeat = 40 * time.Millisecond
+	r, st, _ := newTestReactor(t, config.TickConfig{
+		Heartbeat:    config.Duration{Duration: heartbeat},
+		MaxHeartbeat: config.Duration{Duration: maxHeartbeat},
+		BackoffReset: []string{"inbound", "fingerprint", "live_children"},
+	})
+	r.tickFn = service.TickSession
+	if err := st.Put(&domain.Session{
+		Name:          "o/r-1-child",
+		ParentSession: "o/r-1",
+		Nodes: map[string]*contract.TaskState{
+			"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusCleaned},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	rewindAndSweep := func(n int) {
+		interval := config.BackoffInterval(heartbeat, maxHeartbeat, n)
+		if err := st.Update("o/r-1", func(s *domain.Session) error {
+			s.LastTickAt = time.Now().Add(-interval - time.Millisecond)
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		r.checkHeartbeat(ctx)
+	}
+
+	rewindAndSweep(0)
+	if n := st.Get("o/r-1").TickBackoff.ConsecutiveUnchanged; n != 1 {
+		t.Fatalf("first sweep with the child already down: ConsecutiveUnchanged = %d, want 1", n)
+	}
+	rewindAndSweep(1)
+	if n := st.Get("o/r-1").TickBackoff.ConsecutiveUnchanged; n != 2 {
+		t.Fatalf("second sweep with the child already down: ConsecutiveUnchanged = %d, want 2 — the interval doubles as today", n)
+	}
+}
+
+func TestSessionReactor_BackoffResetDefaultIgnoresLiveChildren(t *testing.T) {
+	const heartbeat = 10 * time.Millisecond
+	const maxHeartbeat = 40 * time.Millisecond
+	r, st, _ := newTestReactor(t, config.TickConfig{
+		Heartbeat:    config.Duration{Duration: heartbeat},
+		MaxHeartbeat: config.Duration{Duration: maxHeartbeat},
+	})
+	r.tickFn = service.TickSession
+	if err := st.Put(&domain.Session{
+		Name:          "o/r-1-child",
+		ParentSession: "o/r-1",
+		Nodes: map[string]*contract.TaskState{
+			"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	rewindAndSweep := func(n int) {
+		interval := config.BackoffInterval(heartbeat, maxHeartbeat, n)
+		if err := st.Update("o/r-1", func(s *domain.Session) error {
+			s.LastTickAt = time.Now().Add(-interval - time.Millisecond)
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		r.checkHeartbeat(ctx)
+	}
+
+	rewindAndSweep(0)
+	if n := st.Get("o/r-1").TickBackoff.ConsecutiveUnchanged; n != 1 {
+		t.Fatalf("first sweep: ConsecutiveUnchanged = %d, want 1 despite the live child — live_children is not in the default reset set", n)
+	}
+	rewindAndSweep(1)
+	if n := st.Get("o/r-1").TickBackoff.ConsecutiveUnchanged; n != 2 {
+		t.Fatalf("second sweep: ConsecutiveUnchanged = %d, want 2 — the interval doubles as today", n)
+	}
+}
+
 // TestSessionReactor_QuietTickBackoffResetsOnInbound proves AC3/AC5: an
 // inbound event since the last sweep resets ConsecutiveUnchanged to 0 even
 // though nothing else changed, so the next interval is heartbeat again.
