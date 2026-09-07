@@ -129,7 +129,7 @@ func RetainLayerCleanup(l Layer) json.RawMessage {
 		From: l.From, BindOutputs: l.BindOutputs,
 	})
 	if err != nil {
-		// Plain config-loaded data; cannot fail in practice.
+		// l's fields carry no compiled internals, so this cannot fail.
 		return nil
 	}
 	return encoded
