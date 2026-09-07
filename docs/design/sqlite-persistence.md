@@ -520,12 +520,12 @@ heartbeat position imports under `heartbeat`.
 
 ## One-time importer inventory
 
-This inventory describes the shape the one-time importer (not yet built)
-targets: every `sessions`/`node_instances`/`task_instances` destination
-column below is this design's own named-column schema (no `record_json`),
-and a legacy incarnation reference resolves to a minted `sessions.id`. A
-later change works out the exact per-column legacy-JSON-field mapping;
-this table records only the source-side validation contract.
+The one-time importer targets every `sessions`/`node_instances`/
+`task_instances` destination column below as this design's own
+named-column schema (no `record_json`), with a legacy incarnation
+reference resolving to a minted `sessions.id`. This table records the
+source-side validation contract; the exact per-column legacy-JSON-field
+mapping is a separate concern from that contract.
 
 The import command runs only against an operator-created backup while writers
 are stopped. It builds and validates a temporary database, validates it again,

@@ -29,9 +29,6 @@ args    = ["-c", `+fmt.Sprintf("%q", script)+`, "provider"]
 `)
 }
 
-// TestCreate_LeavesSessionStatusDown covers the create=down leg of the
-// session lifecycle's status transitions: a freshly created session is
-// never anything but down.
 func TestCreate_LeavesSessionStatusDown(t *testing.T) {
 	store := testStore(t)
 	workdir := filepath.Join(t.TempDir(), "wd")
@@ -63,7 +60,6 @@ echo '{"workspace_dir":"%s"}'
 	}
 }
 
-// TestUp_SuccessfulLaunchSetsStatusUp covers the successful-Up=up leg.
 func TestUp_SuccessfulLaunchSetsStatusUp(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -87,9 +83,8 @@ func TestUp_SuccessfulLaunchSetsStatusUp(t *testing.T) {
 	}
 }
 
-// TestUp_FailedLaunchLeavesStatusDown covers the failed-Up-remains-down
-// leg: the runtime failure model's failure-atomic guarantee extends to
-// the persisted status, not just task state.
+// The runtime failure model's failure-atomic guarantee extends to the
+// persisted status, not just task state.
 func TestUp_FailedLaunchLeavesStatusDown(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -110,7 +105,6 @@ func TestUp_FailedLaunchLeavesStatusDown(t *testing.T) {
 	}
 }
 
-// TestDown_SetsStatusDown covers the Down=down leg.
 func TestDown_SetsStatusDown(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -136,5 +130,35 @@ func TestDown_SetsStatusDown(t *testing.T) {
 	}
 	if s := store.Get(sessionName); s.Status != contract.SessionStatusDown {
 		t.Fatalf("Status after Down = %q, want %q", s.Status, contract.SessionStatusDown)
+	}
+}
+
+// A force-recreate tears its existing runtime down before rebuilding it,
+// so a failure anywhere in that rebuild (here: the fixture workflow
+// declares no workspace provider, so provider setup fails every time)
+// must not leave status stuck at its pre-recreate up.
+func TestUp_FailedForceRecreateFromUpSessionSetsStatusDown(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	store := testStore(t)
+	sessionName := "work-23"
+	cfg := writeWorkflowFixture(t, t.TempDir(), "default",
+		[]taskFixture{{id: "runtime", scope: "run", setup: `echo '{}'`, cleanup: "true"}},
+		[]nodeFixture{{id: "runtime"}},
+	)
+	seedSession(t, store, sessionName, "acct", 23, "default", nil)
+	if _, err := Up(cfg, store, UpParams{Identifier: sessionName}); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if s := store.Get(sessionName); s.Status != contract.SessionStatusUp {
+		t.Fatalf("precondition: Status after Up = %q, want %q", s.Status, contract.SessionStatusUp)
+	}
+
+	if _, err := Up(cfg, store, UpParams{Identifier: sessionName, ForceRecreate: true}); err == nil {
+		t.Fatal("Up --force-recreate: want an error (fixture workflow declares no workspace provider)")
+	}
+	if s := store.Get(sessionName); s.Status != contract.SessionStatusDown {
+		t.Fatalf("Status after failed force-recreate = %q, want %q", s.Status, contract.SessionStatusDown)
 	}
 }
