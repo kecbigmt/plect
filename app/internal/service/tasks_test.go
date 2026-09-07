@@ -533,6 +533,41 @@ func TestUp_ProducesSessionScopedNodeAddedAfterSessionCreation(t *testing.T) {
 	}
 }
 
+// A `--name` dynamic instance may legally take an uninstantiated node's id
+// (the collision check only looks at existing state, not the workflow's
+// declared node ids — see lifecycle_teardown.go's identical rule for
+// teardown). Up must not treat that entry as the node's own: it must neither
+// corrupt the dynamic instance nor duplicate it into session.Nodes.
+func TestUp_NodeIDTakenByNamedDynamicInstanceIsExcludedFromNodes(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	store := testStore(t)
+	sessionName := "org/repo-17"
+	cfg := writeWorkflowFixture(t, t.TempDir(), "default",
+		[]taskFixture{{id: "gh_guard", scope: "session", setup: `echo '{"dir":"the-guard-dir"}'`}},
+		[]nodeFixture{{id: "gh_guard"}},
+	)
+	seedSessionWithNodes(t, store, sessionName, "org/repo", 17, "default", nil)
+
+	if _, err := TaskSetup(cfg, store, TaskSetupParams{TaskID: "gh_guard", SessionName: sessionName, Name: "gh_guard"}); err != nil {
+		t.Fatalf("TaskSetup: %v", err)
+	}
+
+	if _, err := Up(cfg, store, UpParams{Identifier: sessionName}); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	persisted := store.Get(sessionName)
+	if persisted.Nodes["gh_guard"] != nil {
+		t.Fatalf("gh_guard node = %+v, want absent (the id is taken by the named dynamic instance)", persisted.Nodes["gh_guard"])
+	}
+	dyn := persisted.Tasks["gh_guard"]
+	if dyn == nil || dyn.Outputs["dir"] != "the-guard-dir" || dyn.Name != "gh_guard" {
+		t.Fatalf("dynamic instance gh_guard = %+v, want its own setup outputs untouched", dyn)
+	}
+}
+
 func TestUp_CleansAndDropsProducedNodeRemovedFromWorkflow(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")

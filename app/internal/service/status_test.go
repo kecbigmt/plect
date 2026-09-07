@@ -263,3 +263,49 @@ all = [
 		t.Fatalf("Chains = %+v, want one entry for chain \"review\"", w.Chains)
 	}
 }
+
+// TestTombstoneStatusResult_ReportsNodesAndTasksSeparately pins a tombstone
+// migrated by docs/migrations/tombstone-nodes-tasks-migration.md's procedure
+// (a real tombstone.json blob with the split "nodes"/"tasks" keys that
+// procedure produces): the node entries (@workflow, tmux) must report
+// dynamic=false and the dynamic instance (review#1) dynamic=true, the same
+// distinction the pre-split flat map's per-entry field used to carry.
+func TestTombstoneStatusResult_ReportsNodesAndTasksSeparately(t *testing.T) {
+	const migratedTombstoneJSON = `{
+		"session_name": "org/repo-1",
+		"resource_id": "https://github.com/org/repo/issues/1",
+		"workflow": "default",
+		"nodes": {
+			"@workflow": {"scope": "session", "status": "cleaned", "outputs": {"branch": "issue/1"}},
+			"tmux": {"scope": "run", "status": "cleaned", "outputs": {}}
+		},
+		"tasks": {
+			"review#1": {"scope": "session", "status": "produced", "task_id": "review", "resource": "pr-1", "outputs": {"checks_status": "SUCCESS"}}
+		},
+		"created_at": "2026-01-01T00:00:00Z",
+		"updated_at": "2026-01-02T00:00:00Z",
+		"destroyed_at": "2026-01-03T00:00:00Z"
+	}`
+	var tomb contract.Tombstone
+	if err := json.Unmarshal([]byte(migratedTombstoneJSON), &tomb); err != nil {
+		t.Fatalf("unmarshal migrated tombstone: %v", err)
+	}
+	if len(tomb.Nodes) != 2 || len(tomb.Tasks) != 1 {
+		t.Fatalf("Nodes/Tasks = %d/%d, want 2/1", len(tomb.Nodes), len(tomb.Tasks))
+	}
+
+	result := tombstoneStatusResult(&tomb)
+	byInstance := make(map[string]StatusTask, len(result.Work))
+	for _, w := range result.Work {
+		byInstance[w.Instance] = w
+	}
+	if got := byInstance["tmux"]; got.IsTask {
+		t.Errorf("tmux.IsTask = %v, want false (a workflow node)", got.IsTask)
+	}
+	if got := byInstance["review#1"]; !got.IsTask {
+		t.Errorf("review#1.IsTask = %v, want true (a dynamic instance)", got.IsTask)
+	}
+	if got := byInstance["review#1"]; got.Resource != "pr-1" {
+		t.Errorf("review#1.Resource = %q, want pr-1", got.Resource)
+	}
+}

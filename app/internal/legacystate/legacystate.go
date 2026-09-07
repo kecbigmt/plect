@@ -90,7 +90,7 @@ func legacyDynamicFlags(data []byte) map[string]map[string]bool {
 	var raw struct {
 		Sessions map[string]struct {
 			Tasks map[string]struct {
-				Dynamic bool `json:"dynamic"`
+				IsTask bool `json:"dynamic"`
 			} `json:"tasks"`
 		} `json:"sessions"`
 	}
@@ -101,7 +101,7 @@ func legacyDynamicFlags(data []byte) map[string]map[string]bool {
 	for name, session := range raw.Sessions {
 		flags := make(map[string]bool, len(session.Tasks))
 		for key, t := range session.Tasks {
-			flags[key] = t.Dynamic
+			flags[key] = t.IsTask
 		}
 		out[name] = flags
 	}

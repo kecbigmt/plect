@@ -83,7 +83,7 @@ type StatusTask struct {
 	TaskID   string         `json:"task_id,omitempty"`
 	Scope    string         `json:"scope"`
 	Status   string         `json:"status"`
-	Dynamic  bool           `json:"dynamic,omitempty"`
+	IsTask   bool           `json:"dynamic,omitempty"`
 	Name     string         `json:"name,omitempty"`
 	Resource string         `json:"resource,omitempty"`
 	Outputs  map[string]any `json:"outputs,omitempty"`
@@ -304,7 +304,7 @@ func statusTaskViews(cfg *config.Config, declarations taskDeclarations, session 
 			TaskID:    it.taskID,
 			Scope:     it.scope,
 			Status:    it.status,
-			Dynamic:   it.dynamic,
+			IsTask:    it.dynamic,
 			Name:      it.name,
 			Resource:  it.resource,
 			Outputs:   it.outputs,
@@ -345,7 +345,7 @@ func tombstoneStatusResult(tomb *contract.Tombstone) *StatusResult {
 				TaskID:            st.TaskID,
 				Scope:             st.Scope,
 				Status:            st.Status,
-				Dynamic:           dynamic,
+				IsTask:            dynamic,
 				Name:              st.Name,
 				Resource:          st.Resource,
 				Outputs:           st.Outputs,

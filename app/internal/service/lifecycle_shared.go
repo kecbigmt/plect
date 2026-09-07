@@ -33,13 +33,23 @@ func runWorkflowSetup(prov config.WorkspaceProviderConfig, vars effect.WorkflowH
 	return outputs, err
 }
 
+// A --name dynamic instance may legally occupy a node's id before that node
+// is ever produced (nameCollides only checks existing state), so runNodeSetup
+// excludes any such id from ordered before running or writing back setup
+// results — its merged entry is really that instance's record, not a node's.
 func runNodeSetup(ctx context.Context, ordered []task.Resolved, vars task.SessionVars, session *domain.Session, observer task.Observer) error {
+	nodesOnly := make([]task.Resolved, 0, len(ordered))
+	for _, r := range ordered {
+		if session.Tasks[r.NodeID] == nil {
+			nodesOnly = append(nodesOnly, r)
+		}
+	}
 	merged := domain.MergedTasks(session)
-	err := task.RunSetup(ctx, ordered, vars, merged, observer)
+	err := task.RunSetup(ctx, nodesOnly, vars, merged, observer)
 	if session.Nodes == nil {
 		session.Nodes = make(map[string]*contract.TaskState)
 	}
-	for _, r := range ordered {
+	for _, r := range nodesOnly {
 		if st, ok := merged[r.NodeID]; ok {
 			session.Nodes[r.NodeID] = st
 		}

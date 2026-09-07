@@ -139,7 +139,7 @@ type TaskInstanceView struct {
 	TaskID            string                  `json:"task_id,omitempty"`
 	Scope             string                  `json:"scope"`
 	Status            string                  `json:"status"`
-	Dynamic           bool                    `json:"dynamic,omitempty"`
+	IsTask            bool                    `json:"dynamic,omitempty"`
 	Name              string                  `json:"name,omitempty"`
 	Resource          string                  `json:"resource,omitempty"`
 	DoneWhen          *task.DoneWhenResult    `json:"done_when,omitempty"`
@@ -247,7 +247,7 @@ func taskViews(cfg *config.Config, declarations taskDeclarations, session *domai
 			TaskID:    it.taskID,
 			Scope:     it.scope,
 			Status:    it.status,
-			Dynamic:   it.dynamic,
+			IsTask:    it.dynamic,
 			Name:      it.name,
 			Resource:  it.resource,
 			DoneWhen:  it.doneWhen,
