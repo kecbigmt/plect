@@ -48,6 +48,14 @@ identifier no resolver matches selects a workflow explicitly (see
 			// first would refuse before that flag ever took effect.
 			return nil
 		}
+		if cmd == storageImportCmd {
+			// legacyimport.Run targets a directory with no live database yet
+			// (often the same default path this hook would otherwise touch)
+			// and refuses if one already exists; auto-creating an empty
+			// storage.db here first would make that refusal fire on every
+			// invocation, including the documented default cutover command.
+			return nil
+		}
 		if err := state.NewStore("").CheckReadable(); err != nil {
 			return err
 		}

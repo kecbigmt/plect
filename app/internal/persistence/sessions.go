@@ -252,33 +252,11 @@ func (db *DB) writeSessionTx(ctx context.Context, tx *sql.Tx, s *domain.Session)
 	}
 
 	if existingID == "" {
-		if err := q.InsertSession(ctx, sqlcgen.InsertSessionParams{
-			ID:                       candidateID,
-			Name:                     s.Name,
-			Status:                   status,
-			DestroyedAt:              formatTimeNull(s.DestroyedAt),
-			ParentSessionID:          parentCol,
-			RootSessionID:            rootCol,
-			ResourceID:               nullString(s.ResourceID),
-			Alias:                    nullString(s.Alias),
-			Workflow:                 s.Workflow,
-			WorkspaceDir:             nullString(s.WorkspaceDirPath),
-			PopulationWorkflow:       populationWorkflow,
-			PopulationName:           populationName,
-			InputsJson:               inputsJSON,
-			HealthLastCheckedAt:      health.lastCheckedAt,
-			HealthLastActivityAt:     health.lastActivityAt,
-			HealthLastFingerprint:    health.lastFingerprint,
-			HealthLastState:          health.lastState,
-			HealthLastReason:         health.lastReason,
-			HealthLastNotifiedAt:     health.lastNotifiedAt,
-			HealthNotifyCount:        health.notifyCount,
-			TickConsecutiveUnchanged: tickConsecutiveUnchanged,
-			TickLastFingerprint:      tickLastFingerprint,
-			LastTickAt:               formatTimeNull(s.LastTickAt),
-			CreatedAt:                formatTime(s.CreatedAt),
-			UpdatedAt:                formatTime(s.UpdatedAt),
-		}); err != nil {
+		params, err := insertSessionParams(candidateID, status, parentCol, rootCol, populationWorkflow, populationName, inputsJSON, health, tickConsecutiveUnchanged, tickLastFingerprint, s)
+		if err != nil {
+			return err
+		}
+		if err := q.InsertSession(ctx, params); err != nil {
 			return fmt.Errorf("insert session %q: %w", s.Name, err)
 		}
 	} else if err := q.UpdateSessionByID(ctx, sqlcgen.UpdateSessionByIDParams{
@@ -314,6 +292,75 @@ func (db *DB) writeSessionTx(ctx context.Context, tx *sql.Tx, s *domain.Session)
 		return err
 	}
 	return writeChannelHealthTx(ctx, q, candidateID, s.ChannelValidationHealth, s.ChannelDeliveryHealth)
+}
+
+// insertSessionParams builds InsertSession's parameters from already-resolved
+// column values, shared by writeSessionTx's insert branch and ImportSession
+// so the two never disagree about which Go field feeds which column.
+func insertSessionParams(id, status string, parentCol, rootCol, populationWorkflow, populationName, inputsJSON sql.NullString, health healthColumns, tickConsecutiveUnchanged sql.NullInt64, tickLastFingerprint sql.NullString, s *domain.Session) (sqlcgen.InsertSessionParams, error) {
+	return sqlcgen.InsertSessionParams{
+		ID:                       id,
+		Name:                     s.Name,
+		Status:                   status,
+		DestroyedAt:              formatTimeNull(s.DestroyedAt),
+		ParentSessionID:          parentCol,
+		RootSessionID:            rootCol,
+		ResourceID:               nullString(s.ResourceID),
+		Alias:                    nullString(s.Alias),
+		Workflow:                 s.Workflow,
+		WorkspaceDir:             nullString(s.WorkspaceDirPath),
+		PopulationWorkflow:       populationWorkflow,
+		PopulationName:           populationName,
+		InputsJson:               inputsJSON,
+		HealthLastCheckedAt:      health.lastCheckedAt,
+		HealthLastActivityAt:     health.lastActivityAt,
+		HealthLastFingerprint:    health.lastFingerprint,
+		HealthLastState:          health.lastState,
+		HealthLastReason:         health.lastReason,
+		HealthLastNotifiedAt:     health.lastNotifiedAt,
+		HealthNotifyCount:        health.notifyCount,
+		TickConsecutiveUnchanged: tickConsecutiveUnchanged,
+		TickLastFingerprint:      tickLastFingerprint,
+		LastTickAt:               formatTimeNull(s.LastTickAt),
+		CreatedAt:                formatTime(s.CreatedAt),
+		UpdatedAt:                formatTime(s.UpdatedAt),
+	}, nil
+}
+
+// ImportSession inserts s as a brand-new row under the given id (a preserved
+// legacy identity, or a freshly minted one) instead of minting a fresh ULID
+// itself, and leaves parent_session_id/root_session_id NULL: resolving a
+// parent link needs that parent's own row, which an unordered import pass
+// cannot guarantee exists yet. A later PutSession(ctx, s) call, once every
+// row exists, resolves ParentSession and writes s.Tasks/channel health.
+func (db *DB) ImportSession(ctx context.Context, id string, s *domain.Session) error {
+	return db.WithImmediateTx(ctx, func(tx *sql.Tx) error {
+		q := sqlcgen.New(tx)
+
+		var populationWorkflow, populationName sql.NullString
+		if s.Population != nil {
+			populationWorkflow = sql.NullString{String: s.Population.Workflow, Valid: true}
+			populationName = sql.NullString{String: s.Population.Name, Valid: true}
+		}
+		status := s.Status
+		if status == "" {
+			status = contract.SessionStatusDown
+		}
+		health := sessionHealthColumns(s.Health)
+		tickConsecutiveUnchanged, tickLastFingerprint := sessionTickColumns(s.TickBackoff)
+		inputsJSON, err := marshalJSONMap(s.Inputs)
+		if err != nil {
+			return fmt.Errorf("marshal session %q inputs: %w", s.Name, err)
+		}
+		params, err := insertSessionParams(id, status, sql.NullString{}, sql.NullString{}, populationWorkflow, populationName, inputsJSON, health, tickConsecutiveUnchanged, tickLastFingerprint, s)
+		if err != nil {
+			return err
+		}
+		if err := q.InsertSession(ctx, params); err != nil {
+			return fmt.Errorf("import session %q: %w", s.Name, err)
+		}
+		return nil
+	})
 }
 
 // healthColumns is sessionHealthColumns' result: one *HealthState's health_* column values.

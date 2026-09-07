@@ -28,3 +28,9 @@ func newULID() string {
 	}
 	return id.String()
 }
+
+// NewULID mints a session/task-instance-shaped id, exported for the one-time
+// legacy importer: a legacy session whose events/<session>/.gen file is
+// absent or empty still needs a durable id, minted the same way every other
+// id this package assigns is.
+func NewULID() string { return newULID() }

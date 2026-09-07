@@ -219,3 +219,33 @@ func TestParse_LoadsPopulationsAndUpReservations(t *testing.T) {
 		t.Fatalf("up reservation = %+v", res)
 	}
 }
+
+func TestParse_ExposesHeartbeatLogPositionSideChannel(t *testing.T) {
+	data := []byte(`{
+  "version": 7,
+  "sessions": {
+    "case1": {
+      "session_name": "case1",
+      "tick_backoff": {"last_fingerprint": "abc", "last_log_position": 4096}
+    },
+    "case2": {
+      "session_name": "case2"
+    }
+  }
+}`)
+	sf, err := Parse(data)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got, want := sf.HeartbeatLogPositions["case1"], int64(4096); got != want {
+		t.Fatalf("HeartbeatLogPositions[case1] = %d, want %d", got, want)
+	}
+	if _, ok := sf.HeartbeatLogPositions["case2"]; ok {
+		t.Fatalf("HeartbeatLogPositions[case2] should be absent (no tick_backoff)")
+	}
+	// The typed Session itself carries no trace of the field: it is a pure
+	// side channel, not a promoted domain field.
+	if sf.Sessions["case1"].TickBackoff == nil || sf.Sessions["case1"].TickBackoff.LastFingerprint != "abc" {
+		t.Fatalf("case1.TickBackoff = %+v, want LastFingerprint preserved", sf.Sessions["case1"].TickBackoff)
+	}
+}

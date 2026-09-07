@@ -1,10 +1,7 @@
 // Package legacystate parses the state.json envelope core wrote before the
-// SQLite cutover (see docs/design/sqlite-persistence.md). No command wires
-// this package into any live path — a fresh database starts empty and the
-// one-time importer does not exist yet — it exists solely so that future
-// importer has a validated, in-memory form of a pre-cutover data directory
-// to translate into SQLite rows. This is a byte-slice parser, not a file
-// reader: the importer owns locating and reading the operator-supplied
+// SQLite cutover (see docs/design/sqlite-persistence.md); app/internal/
+// legacyimport is its one live consumer. This is a byte-slice parser, not a
+// file reader: the importer owns locating and reading the operator-supplied
 // backup.
 package legacystate
 
@@ -24,9 +21,10 @@ const SupportedVersion = 7
 
 // StateFile is the parsed, validated form of a state.json envelope.
 type StateFile struct {
-	Sessions       map[string]*domain.Session
-	Populations    map[string]*domain.PopulationState
-	UpReservations map[string]domain.UpReservation
+	Sessions              map[string]*domain.Session
+	Populations           map[string]*domain.PopulationState
+	UpReservations        map[string]domain.UpReservation
+	HeartbeatLogPositions map[string]int64 // see parseHeartbeatLogPositions
 }
 
 // Parse decodes and validates a complete state.json byte slice: it rejects
@@ -64,9 +62,10 @@ func Parse(data []byte) (*StateFile, error) {
 	}
 
 	sf := &StateFile{
-		Sessions:       make(map[string]*domain.Session, len(parsed.Sessions)),
-		Populations:    parsed.Populations,
-		UpReservations: parsed.UpReservations,
+		Sessions:              make(map[string]*domain.Session, len(parsed.Sessions)),
+		Populations:           parsed.Populations,
+		UpReservations:        parsed.UpReservations,
+		HeartbeatLogPositions: parseHeartbeatLogPositions(data),
 	}
 	for name, session := range parsed.Sessions {
 		if session == nil {
@@ -79,6 +78,31 @@ func Parse(data []byte) (*StateFile, error) {
 	normalizeSessionTree(sf.Sessions)
 
 	return sf, nil
+}
+
+// parseHeartbeatLogPositions re-scans data for a field contract.TickBackoff no longer declares.
+func parseHeartbeatLogPositions(data []byte) map[string]int64 {
+	var raw struct {
+		Sessions map[string]struct {
+			TickBackoff *struct {
+				LastLogPosition int64 `json:"last_log_position"`
+			} `json:"tick_backoff"`
+		} `json:"sessions"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil
+	}
+	var positions map[string]int64
+	for name, session := range raw.Sessions {
+		if session.TickBackoff == nil {
+			continue
+		}
+		if positions == nil {
+			positions = make(map[string]int64)
+		}
+		positions[name] = session.TickBackoff.LastLogPosition
+	}
+	return positions
 }
 
 // ValidateVersion reports whether got is the one legacy envelope version
