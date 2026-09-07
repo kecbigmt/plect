@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -71,6 +72,27 @@ func TestBus_ListFilter(t *testing.T) {
 	desc, _, err := c.List(ctx, "o/r-1", event.OrderDesc, "", event.Filter{})
 	if err != nil || len(desc) != 2 || desc[0].Type != "slack.message" {
 		t.Fatalf("desc order: %v %+v", err, desc)
+	}
+}
+
+// A client still naming the retired delivery_mode field must be told loudly
+// that it does nothing, rather than have json.Unmarshal silently drop the
+// key and leave the client believing its delivery preference was honored.
+func TestBus_PublishRejectsDeliveryModeField(t *testing.T) {
+	_, baseURL, _ := newTestBus(t, "")
+
+	body := `{"session_name": "owner/repo-1", "type": "user.note", "delivery_mode": "push"}`
+	resp, err := http.Post(baseURL+"/v1/events", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
+	}
+	msg, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(msg), "delivery_mode") {
+		t.Errorf("error message = %q, want it to name delivery_mode", msg)
 	}
 }
 

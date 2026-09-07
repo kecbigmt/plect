@@ -8,8 +8,10 @@ enum EventDirection {
 }
 
 /// Whether a terminal event was pushed one hop to a parent/ancestor, or is an
-/// ordinary pull-only record read via this history endpoint —
-/// `contracts/event.DeliveryMode`. Absent normalizes to pull.
+/// ordinary pull-only record read via this history endpoint. Derived from
+/// whether `type` carries the `plect.terminal.` prefix
+/// (`contracts/event.TypeTerminalPrefix`), not a stored field. Absent
+/// normalizes to pull.
 enum EventDeliveryMode {
   push,
   pull,

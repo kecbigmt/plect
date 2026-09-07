@@ -1,6 +1,7 @@
 package webapi
 
 import (
+	"strings"
 	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/domain"
@@ -90,18 +91,21 @@ func EventFromDomain(ev event.Event) webapiv1.Event {
 		Summary:      ev.Summary,
 		Body:         optionalString(ev.Body),
 		Metadata:     optionalStringMap(ev.Metadata),
-		DeliveryMode: deliveryMode(ev.DeliveryMode),
+		DeliveryMode: deliveryMode(ev),
 	}
 }
 
-// deliveryMode returns nil for the zero DeliveryMode (pull, the default for
-// every ordinary progress event) rather than the empty string: the wire field
-// is optional, and "" is not one of EventDeliveryMode's members.
-func deliveryMode(m event.DeliveryMode) *webapiv1.EventDeliveryMode {
-	if m == "" {
+// deliveryMode reports push only for a terminal event (pushed one hop into
+// its receiver's own log by the terminal-event-propagation ADR) and nil
+// otherwise: the wire field is optional, "" is not one of EventDeliveryMode's
+// members, and there is no longer a stored field to project — the type's own
+// plect.terminal. prefix is the only fact that distinguishes a pushed signal
+// from an ordinary pull-only progress event.
+func deliveryMode(ev event.Event) *webapiv1.EventDeliveryMode {
+	if !strings.HasPrefix(ev.Type, event.TypeTerminalPrefix) {
 		return nil
 	}
-	v := webapiv1.EventDeliveryMode(m)
+	v := webapiv1.Push
 	return &v
 }
 

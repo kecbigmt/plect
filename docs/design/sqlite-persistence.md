@@ -83,7 +83,7 @@ nothing beyond its columns serializes to `"{}"`.
 | `up_reservations` | `child_session_name` primary key; nullable `parent_session_name`, `virtual_root`, `pid`, `reserved_at` | none | `state.json` `up_reservations` |
 | `pending_deliveries` | `(session_name, resource_id, operation)` primary key; `operation` is subscribe or unsubscribe | none | `pending_delivery.json` |
 | `event_streams` | `id` (ULID) primary key; `(session_name, created_at DESC)` index, not unique | none | each event directory and its `.gen` file |
-| `events` | `id` primary key; `(stream_id, sequence)` unique and references `event_streams(id)`; `direction` CHECK IN `inbound`/`outbound`/`internal`; `metadata_json` CHECK `json_valid` | type, source, direction, summary, body, metadata, delivery mode, and recorded time | each `log.jsonl` record |
+| `events` | `id` primary key; `(stream_id, sequence)` unique and references `event_streams(id)`; `direction` CHECK IN `inbound`/`outbound`/`internal`; `metadata_json` CHECK `json_valid` | type, source, direction, summary, body, metadata, and recorded time | each `log.jsonl` record |
 | `event_cursors` | `(stream_id, kind)` primary key and stream foreign key (`ON DELETE CASCADE`); `kind` CHECK IN `delivery`/`tick`/`heartbeat`; `next_sequence` | none | `.cursor.<consumer>`, `TickBackoff.LastLogPosition` |
 | `session_tombstones` | `session_name` primary key; `destroyed_at` | tombstone session snapshot | `tombstone.json` |
 
@@ -244,8 +244,7 @@ CREATE TABLE events (
     direction TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound', 'internal')),
     summary TEXT NOT NULL,
     body TEXT NOT NULL DEFAULT '',
-    metadata_json TEXT NOT NULL CHECK (json_valid(metadata_json)),
-    delivery_mode TEXT NOT NULL
+    metadata_json TEXT NOT NULL CHECK (json_valid(metadata_json))
 );
 
 CREATE UNIQUE INDEX events_stream_id_sequence ON events(stream_id, sequence);
@@ -281,8 +280,8 @@ WHERE stream_id = ?;
 -- name: InsertEvent :exec
 INSERT INTO events (
     id, stream_id, sequence, time, type, source, direction,
-    summary, body, metadata_json, delivery_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    summary, body, metadata_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 ```
 
 ## Transaction boundaries

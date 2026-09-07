@@ -196,8 +196,8 @@ func (q *Queries) HasEventCursor(ctx context.Context, arg HasEventCursorParams) 
 }
 
 const insertEvent = `-- name: InsertEvent :exec
-INSERT INTO events (id, stream_id, sequence, time, type, source, direction, summary, body, metadata_json, delivery_mode)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO events (id, stream_id, sequence, time, type, source, direction, summary, body, metadata_json)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertEventParams struct {
@@ -211,7 +211,6 @@ type InsertEventParams struct {
 	Summary      string
 	Body         string
 	MetadataJson string
-	DeliveryMode string
 }
 
 func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) error {
@@ -226,7 +225,6 @@ func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) error 
 		arg.Summary,
 		arg.Body,
 		arg.MetadataJson,
-		arg.DeliveryMode,
 	)
 	return err
 }
@@ -479,7 +477,7 @@ func (q *Queries) ListEventStreamSessions(ctx context.Context) ([]string, error)
 }
 
 const listEventsFromByStream = `-- name: ListEventsFromByStream :many
-SELECT id, sequence, time, type, source, direction, summary, body, metadata_json, delivery_mode
+SELECT id, sequence, time, type, source, direction, summary, body, metadata_json
 FROM events WHERE stream_id = ? AND sequence >= ? ORDER BY sequence
 `
 
@@ -498,7 +496,6 @@ type ListEventsFromByStreamRow struct {
 	Summary      string
 	Body         string
 	MetadataJson string
-	DeliveryMode string
 }
 
 func (q *Queries) ListEventsFromByStream(ctx context.Context, arg ListEventsFromByStreamParams) ([]ListEventsFromByStreamRow, error) {
@@ -520,7 +517,6 @@ func (q *Queries) ListEventsFromByStream(ctx context.Context, arg ListEventsFrom
 			&i.Summary,
 			&i.Body,
 			&i.MetadataJson,
-			&i.DeliveryMode,
 		); err != nil {
 			return nil, err
 		}

@@ -194,8 +194,8 @@ func (c *Client) streamOnce(ctx context.Context, session, streamID string, since
 	return lastStreamID, lastSeq, count, sc.Err()
 }
 
-// addFilterParams encodes the type/source/direction/delivery_mode/limit
-// selection shared by the list and stream query shapes.
+// addFilterParams encodes the type/source/direction/limit selection shared
+// by the list and stream query shapes.
 func addFilterParams(q url.Values, f Filter) {
 	if len(f.Types) > 0 {
 		q.Set("types", strings.Join(f.Types, ","))
@@ -205,9 +205,6 @@ func addFilterParams(q url.Values, f Filter) {
 	}
 	if f.Direction != "" {
 		q.Set("direction", string(f.Direction))
-	}
-	if f.DeliveryMode != "" {
-		q.Set("delivery_mode", string(f.DeliveryMode))
 	}
 	if f.Limit > 0 {
 		q.Set("limit", strconv.Itoa(f.Limit))

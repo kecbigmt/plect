@@ -27,7 +27,6 @@ var (
 	eventDirection string
 	eventLimit     int
 	eventSubtree   string
-	eventDelivery  string
 
 	evPubType    string
 	evPubSource  string
@@ -202,11 +201,10 @@ func validateScopeArgs(args []string) error {
 
 func buildEventFilter() event.Filter {
 	return event.Filter{
-		Types:        splitTypesArg(eventTypes),
-		Sources:      event.SplitCSV(eventSource),
-		Direction:    event.Direction(eventDirection),
-		DeliveryMode: event.DeliveryMode(eventDelivery),
-		Limit:        eventLimit,
+		Types:     splitTypesArg(eventTypes),
+		Sources:   event.SplitCSV(eventSource),
+		Direction: event.Direction(eventDirection),
+		Limit:     eventLimit,
 	}
 }
 
@@ -225,11 +223,21 @@ func printEventTable(cmd *cobra.Command, evs []event.Event) {
 	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "TIME\tTYPE\tSOURCE\tDELIVERY\tSUMMARY\tID")
 	for _, ev := range evs {
-		delivery := string(ev.DeliveryMode.Normalize())
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			ev.Time.Format("2006-01-02 15:04:05"), ev.Type, ev.Source, delivery, ev.Summary, ev.ID)
+			ev.Time.Format("2006-01-02 15:04:05"), ev.Type, ev.Source, deliveryLabel(ev), ev.Summary, ev.ID)
 	}
 	w.Flush()
+}
+
+// deliveryLabel derives the DELIVERY column display from ev.Type rather than
+// a stored field: a terminal signal is pushed one hop into its receiver's
+// own log by the terminal-event-propagation ADR, and that prefix is the only
+// fact distinguishing it from an ordinary pull-only progress event.
+func deliveryLabel(ev event.Event) string {
+	if strings.HasPrefix(ev.Type, event.TypeTerminalPrefix) {
+		return "push"
+	}
+	return "pull"
 }
 
 func printJSON(v any) error {
@@ -263,7 +271,6 @@ func init() {
 	eventListCmd.Flags().StringArrayVar(&eventTypes, "type", nil, "Filter by type glob (repeatable and/or comma-separated, e.g. widget.*)")
 	eventListCmd.Flags().StringVar(&eventSource, "source", "", "Filter by source (comma-separated)")
 	eventListCmd.Flags().StringVar(&eventDirection, "direction", "", "Filter by direction (inbound|outbound|internal)")
-	eventListCmd.Flags().StringVar(&eventDelivery, "delivery-mode", "", "Filter by delivery mode (push|pull)")
 	eventListCmd.Flags().IntVar(&eventLimit, "limit", 0, "Max events to return (0 = all)")
 	eventListCmd.Flags().StringVar(&eventSubtree, "subtree", "", "Cross-session view: list events for the session tree rooted at this url|session (root + descendants), in time order (no session arg)")
 
@@ -281,7 +288,6 @@ func init() {
 	eventTailCmd.Flags().StringArrayVar(&eventTypes, "type", nil, "Filter by type glob (repeatable and/or comma-separated)")
 	eventTailCmd.Flags().StringVar(&eventSource, "source", "", "Filter by source (comma-separated)")
 	eventTailCmd.Flags().StringVar(&eventDirection, "direction", "", "Filter by direction")
-	eventTailCmd.Flags().StringVar(&eventDelivery, "delivery-mode", "", "Filter by delivery mode (push|pull)")
 	eventTailCmd.Flags().StringVar(&eventSubtree, "subtree", "", "Cross-session view: follow events for the session tree rooted at this url|session (root + descendants), later children included (no session arg)")
 
 	eventCmd.AddCommand(eventListCmd, eventShowCmd, eventPublishCmd, eventTailCmd)

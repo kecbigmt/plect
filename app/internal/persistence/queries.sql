@@ -195,11 +195,11 @@ SELECT DISTINCT session_name FROM event_streams ORDER BY session_name;
 SELECT COALESCE(MAX(sequence), 0) + 1 FROM events WHERE stream_id = ?;
 
 -- name: InsertEvent :exec
-INSERT INTO events (id, stream_id, sequence, time, type, source, direction, summary, body, metadata_json, delivery_mode)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO events (id, stream_id, sequence, time, type, source, direction, summary, body, metadata_json)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: ListEventsFromByStream :many
-SELECT id, sequence, time, type, source, direction, summary, body, metadata_json, delivery_mode
+SELECT id, sequence, time, type, source, direction, summary, body, metadata_json
 FROM events WHERE stream_id = ? AND sequence >= ? ORDER BY sequence;
 
 -- name: HasEventCursor :one

@@ -52,47 +52,6 @@ func TestFilterMatch(t *testing.T) {
 	}
 }
 
-func TestFilterMatchDeliveryMode(t *testing.T) {
-	pushed := Event{Type: TypeTerminalDone, DeliveryMode: DeliveryModePush}
-	pulled := Event{Type: "acme.ci_status"}
-
-	cases := []struct {
-		name string
-		f    Filter
-		ev   Event
-		want bool
-	}{
-		{"empty delivery filter matches push", Filter{}, pushed, true},
-		{"empty delivery filter matches pull (zero value)", Filter{}, pulled, true},
-		{"delivery hit", Filter{DeliveryMode: DeliveryModePush}, pushed, true},
-		{"delivery miss (pull requested, push event)", Filter{DeliveryMode: DeliveryModePull}, pushed, false},
-		{"delivery miss (push requested, zero-value pull event)", Filter{DeliveryMode: DeliveryModePush}, pulled, false},
-		{"pull filter matches an event with empty (unset) delivery_mode", Filter{DeliveryMode: DeliveryModePull}, pulled, true},
-	}
-	for _, c := range cases {
-		if got := c.f.Match(c.ev); got != c.want {
-			t.Errorf("%s: Match = %v, want %v", c.name, got, c.want)
-		}
-	}
-}
-
-func TestDeliveryModeNormalize(t *testing.T) {
-	cases := []struct {
-		name string
-		m    DeliveryMode
-		want DeliveryMode
-	}{
-		{"empty normalizes to pull", "", DeliveryModePull},
-		{"pull stays pull", DeliveryModePull, DeliveryModePull},
-		{"push stays push", DeliveryModePush, DeliveryModePush},
-	}
-	for _, c := range cases {
-		if got := c.m.Normalize(); got != c.want {
-			t.Errorf("%s: Normalize() = %q, want %q", c.name, got, c.want)
-		}
-	}
-}
-
 func TestPlectEventNamespaceConstants(t *testing.T) {
 	cases := map[string]string{
 		"source":          SourcePlect,
