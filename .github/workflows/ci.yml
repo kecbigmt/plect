@@ -444,8 +444,22 @@ jobs:
       # go test run but is exactly the coverage that would otherwise let a
       # spec-encoding test like TestIntegration_DestroyRefusesWhenWorkspaceDirDirty
       # rot unnoticed.
-      - name: go test -tags integration
-        run: go test -tags integration ./...
+      #
+      # `./...` would also re-run every untagged unit test in every other
+      # package a second time, duplicating build-test (app) for no
+      # additional coverage; deriving the package list from the tag itself
+      # (rather than hard-coding it) means a new `//go:build integration`
+      # file is picked up here without a workflow edit.
+      - name: go test -tags integration (tagged packages only)
+        run: |
+          # Normalized to exactly one "./" prefix: go test treats a bare
+          # "internal/foo" as an import path rather than a directory, and
+          # grep's own "./" prefixing on a "." search target is not
+          # consistent across grep implementations.
+          pkgs="$(grep -rl --include='*_test.go' 'go:build integration' . | xargs -n1 dirname | sort -u | sed 's#^\(\./\)\?#./#')"
+          echo "Tagged packages:"
+          echo "$pkgs"
+          go test -tags integration $pkgs
         working-directory: app
       - name: go vet -tags integration
         run: go vet -tags integration ./...

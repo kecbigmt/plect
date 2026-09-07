@@ -4,10 +4,12 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/kecbigmt/plecture/app/internal/config"
@@ -16,6 +18,18 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/state"
 	"github.com/kecbigmt/plecture/app/internal/task"
 	contract "github.com/kecbigmt/plecture/contracts/state"
+)
+
+// sharedWorkspaceProviderBinariesOnce guards buildSharedWorkspaceProviderBinaries;
+// sharedWorkspaceProviderBinariesDir/Err hold its result for every caller in
+// this test binary run. Left for the OS/CI runner to reclaim rather than
+// removed explicitly: the directory's lifetime is the test binary process's,
+// and every consumer of this package's integration tests (CI, a disposable
+// worktree) is itself torn down at the end of that run.
+var (
+	sharedWorkspaceProviderBinariesOnce sync.Once
+	sharedWorkspaceProviderBinariesDir  string
+	sharedWorkspaceProviderBinariesErr  error
 )
 
 // shippedGithubWorkspaceProvider loads the workspace provider config that
@@ -81,33 +95,68 @@ func resolveGoToolCaches() []string {
 	return []string{"GOMODCACHE=" + lines[0], "GOCACHE=" + lines[1]}
 }
 
-// buildWorkspaceProviderBinaries compiles the plect CLI and the two
-// executables the GitHub catalog plugin ships (github-worktree,
-// github-watcher) into a temp directory, prepends it to PATH (`plect`
-// itself is still resolved that way), and returns the mounted-plugin entry
-// an effect.WorkflowHookVars/effect.SubscribeHookVars.Plugins needs so the shipped hooks'
-// `{{bin ...}}` references resolve to the code in this working tree.
+// workspaceProviderBinaries lists the plect CLI and the executables the
+// GitHub catalog plugin ships (github-worktree, github-watcher,
+// gh-app-token), each built from its own module.
+var workspaceProviderBinaries = []struct{ moduleDir, pkg, name string }{
+	{"app", "./cmd/plect", "plect"},
+	{filepath.Join("plugins", "github", "src"), "./cmd/github-worktree", "github-worktree"},
+	{filepath.Join("plugins", "github", "src"), "./cmd/github-watcher", "github-watcher"},
+	{filepath.Join("plugins", "github", "src"), "./cmd/gh-app-token", "gh-app-token"},
+}
+
+// buildSharedWorkspaceProviderBinaries compiles workspaceProviderBinaries
+// exactly once per test binary run, into a directory that outlives any
+// single test's t.TempDir(). Every workspace-provider fixture in this
+// package mounts these same four binaries, and a per-test rebuild of all
+// four was this package's dominant integration-test cost.
+func buildSharedWorkspaceProviderBinaries(root string) (string, error) {
+	sharedWorkspaceProviderBinariesOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "plect-workspace-provider-bin-")
+		if err != nil {
+			sharedWorkspaceProviderBinariesErr = err
+			return
+		}
+		for _, b := range workspaceProviderBinaries {
+			cmd := exec.Command("go", "build", "-o", filepath.Join(dir, b.name), b.pkg)
+			cmd.Dir = filepath.Join(root, b.moduleDir)
+			cmd.Env = append(os.Environ(), goToolCaches...)
+			cmd.Stdout = os.Stderr
+			cmd.Stderr = os.Stderr
+			if err := cmd.Run(); err != nil {
+				sharedWorkspaceProviderBinariesErr = fmt.Errorf("build %s: %w", b.name, err)
+				return
+			}
+		}
+		sharedWorkspaceProviderBinariesDir = dir
+	})
+	return sharedWorkspaceProviderBinariesDir, sharedWorkspaceProviderBinariesErr
+}
+
+// buildWorkspaceProviderBinaries symlinks the shared, once-built binaries
+// (see buildSharedWorkspaceProviderBinaries) into a fresh per-test
+// directory, prepends it to PATH (`plect` itself is still resolved that
+// way), and returns the mounted-plugin entry an
+// effect.WorkflowHookVars/effect.SubscribeHookVars.Plugins needs so the
+// shipped hooks' `{{bin ...}}` references resolve to the code in this
+// working tree. A fresh directory per test (rather than returning the
+// shared one directly) keeps each test's own config/workspaces writes
+// (e.g. shippedGithubWorkspaceProvider) from colliding with another test's.
 func buildWorkspaceProviderBinaries(t *testing.T, root string) []plugins.Mounted {
 	t.Helper()
+	sharedDir, err := buildSharedWorkspaceProviderBinaries(root)
+	if err != nil {
+		t.Fatalf("build workspace provider binaries: %v", err)
+	}
 	binDir := filepath.Join(t.TempDir(), "bin")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	build := func(moduleDir, pkg, out string) {
-		t.Helper()
-		cmd := exec.Command("go", "build", "-o", filepath.Join(binDir, out), pkg)
-		cmd.Dir = filepath.Join(root, moduleDir)
-		cmd.Env = append(os.Environ(), goToolCaches...)
-		cmd.Stdout = os.Stderr
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			t.Fatalf("build %s: %v", out, err)
+	for _, b := range workspaceProviderBinaries {
+		if err := os.Symlink(filepath.Join(sharedDir, b.name), filepath.Join(binDir, b.name)); err != nil {
+			t.Fatalf("symlink %s: %v", b.name, err)
 		}
 	}
-	build("app", "./cmd/plect", "plect")
-	build(filepath.Join("plugins", "github", "src"), "./cmd/github-worktree", "github-worktree")
-	build(filepath.Join("plugins", "github", "src"), "./cmd/github-watcher", "github-watcher")
-	build(filepath.Join("plugins", "github", "src"), "./cmd/gh-app-token", "gh-app-token")
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	return []plugins.Mounted{{
@@ -119,6 +168,39 @@ func buildWorkspaceProviderBinaries(t *testing.T, root string) []plugins.Mounted
 			{Name: "gh-app-token", Path: "gh-app-token"},
 		}},
 	}}
+}
+
+// TestBuildWorkspaceProviderBinaries_BuildsOnce pins the invariant this
+// package's integration-test wall time depends on: two mount requests must
+// share one compiled set of binaries rather than each triggering its own
+// `go build`.
+func TestBuildWorkspaceProviderBinaries_BuildsOnce(t *testing.T) {
+	root := repoRoot(t)
+	buildWorkspaceProviderBinaries(t, root)
+	firstDir, err := buildSharedWorkspaceProviderBinaries(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstInfo, err := os.Stat(filepath.Join(firstDir, "plect"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	buildWorkspaceProviderBinaries(t, root)
+	secondDir, err := buildSharedWorkspaceProviderBinaries(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondDir != firstDir {
+		t.Fatalf("shared binaries directory changed between calls: %q vs %q", firstDir, secondDir)
+	}
+	secondInfo, err := os.Stat(filepath.Join(secondDir, "plect"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !secondInfo.ModTime().Equal(firstInfo.ModTime()) {
+		t.Error("plect was rebuilt on a second mount request; workspace-provider binaries must build exactly once per test binary run")
+	}
 }
 
 // setupHomeRepo builds the bare-ish layout the github workspace provider
