@@ -44,7 +44,6 @@ var mcpListenCmd = &cobra.Command{
 		// needn't compute one itself.
 		var guard string
 		socketPath := mcpListenSocket
-		usingFallbackDefault := false
 		if mcpListenSession != "" {
 			g, err := service.SessionGuardForOwnSession(mcpListenSession)
 			if err != nil {
@@ -52,17 +51,15 @@ var mcpListenCmd = &cobra.Command{
 			}
 			guard = g
 			if socketPath == "" {
-				socketPath = defaultSessionMcpListenSocket(mcpListenSession)
-				usingFallbackDefault = os.Getenv("XDG_RUNTIME_DIR") == ""
+				path, err := resolveSessionSocket(mcpListenSession, fallbackRuntimeSocketRoot())
+				if err != nil {
+					return err
+				}
+				socketPath = path
 			}
 		}
 		if socketPath == "" {
 			return fmt.Errorf("--socket is required (or pass --session to derive the per-session default)")
-		}
-		if usingFallbackDefault {
-			if err := ensurePrivateFallbackRoot(fallbackRuntimeSocketRoot()); err != nil {
-				return err
-			}
 		}
 
 		if err := os.MkdirAll(filepath.Dir(socketPath), 0o755); err != nil {
@@ -91,16 +88,32 @@ var mcpListenCmd = &cobra.Command{
 	},
 }
 
+// resolveSessionSocket derives sessionName's listen socket path, hardening
+// fallbackRoot first when the derived path falls back to it. Deciding the
+// path and hardening its root in one function, rather than a caller
+// re-deriving "did we fall back" on its own from $XDG_RUNTIME_DIR, is what
+// keeps the two from silently drifting out of sync.
+func resolveSessionSocket(sessionName, fallbackRoot string) (string, error) {
+	path, needsPrivateRoot := defaultSessionMcpListenSocket(sessionName, fallbackRoot)
+	if needsPrivateRoot {
+		if err := ensurePrivateFallbackRoot(fallbackRoot); err != nil {
+			return "", err
+		}
+	}
+	return path, nil
+}
+
 // defaultSessionMcpListenSocket derives a per-session socket path under
 // $XDG_RUNTIME_DIR. sessionName often contains "/" (e.g. "team/project"),
 // which filepath.Join turns into nested directories rather than a flat
 // filename. Without $XDG_RUNTIME_DIR (e.g. macOS), it falls back to
-// fallbackRuntimeSocketRoot instead of the too-long os.TempDir().
-func defaultSessionMcpListenSocket(sessionName string) string {
+// fallbackRoot instead of the too-long os.TempDir(); needsPrivateRoot
+// reports that case, so resolveSessionSocket knows to harden fallbackRoot.
+func defaultSessionMcpListenSocket(sessionName, fallbackRoot string) (path string, needsPrivateRoot bool) {
 	if rt := os.Getenv("XDG_RUNTIME_DIR"); rt != "" {
-		return filepath.Join(rt, "plect-mcp", sessionName+".sock")
+		return filepath.Join(rt, "plect-mcp", sessionName+".sock"), false
 	}
-	return filepath.Join(fallbackRuntimeSocketRoot(), sessionName+".sock")
+	return filepath.Join(fallbackRoot, sessionName+".sock"), true
 }
 
 // fallbackRuntimeSocketRoot embeds the current uid: unlike $XDG_RUNTIME_DIR,
@@ -135,8 +148,15 @@ func ensurePrivateFallbackRoot(root string) error {
 	if !ok {
 		return fmt.Errorf("private socket directory %s: cannot verify its owner on this platform", root)
 	}
-	if stat.Uid != uint32(os.Getuid()) {
-		return fmt.Errorf("private socket directory %s is owned by uid %d, not the current user", root, stat.Uid)
+	return checkPrivateDirOwner(root, stat.Uid)
+}
+
+// checkPrivateDirOwner is split out of ensurePrivateFallbackRoot so the
+// owner-mismatch rejection is unit-testable: chown-ing a directory to
+// another uid needs privileges a test does not have.
+func checkPrivateDirOwner(root string, ownerUID uint32) error {
+	if ownerUID != uint32(os.Getuid()) {
+		return fmt.Errorf("private socket directory %s is owned by uid %d, not the current user", root, ownerUID)
 	}
 	return nil
 }
