@@ -27,18 +27,17 @@ const cancellationCharChildSleep = 8 * time.Second
 // that long, so a tighter budget fails even when it works as designed.
 const cancellationCharKillBudget = effect.CancelWaitDelay + 2*time.Second
 
-// A hung child that never escapes its process group must die from the group
-// kill itself, well before effect.CancelWaitDelay's pipe-close fallback would
-// even engage. Only assertGroupKillFast checks against this; the escaped-
-// grandchild test intentionally exercises the fallback and is bounded by
-// cancellationCharKillBudget alone.
+// Threshold for assertGroupKillFast; see its doc comment for the rationale.
 const cancellationCharFastKillBudget = effect.CancelWaitDelay / 2
 
-// assertGroupKillFast fails the test if a hung child (same process group)
-// took long enough to return that the WaitDelay fallback, not the group
-// kill, must have been what actually ended it. Gated to linux: this bound
-// has been flaky on darwin's scheduler in CI, so darwin relies on
-// cancellationCharKillBudget alone.
+// assertGroupKillFast fails the test if a hung child in the same process
+// group as the executor took long enough to return that the WaitDelay
+// fallback, not the group kill, must have been what actually ended it — a
+// regression the wider cancellationCharKillBudget alone can't catch, since
+// it also passes a run that fell all the way through to WaitDelay. Gated to
+// linux, where the bound is deterministic; darwin's scheduler has made it
+// flaky in CI, so darwin relies on cancellationCharKillBudget alone (the
+// escaped-grandchild test covers that fallback path deliberately).
 func assertGroupKillFast(t *testing.T, elapsed time.Duration, opName string) {
 	t.Helper()
 	if runtime.GOOS != "linux" {
