@@ -119,14 +119,12 @@ func loadTasks(ctx context.Context, q sqlcgen.DBTX, sessionID string) (nodes, ta
 	return nodes, tasks, nil
 }
 
-// loadTasksBatch is loadTasks generalized over many sessions at once,
-// batched by session_id via one IN-clause query per original query rather
-// than one query per session. A session with a row in either input table
-// gets both maps pre-seeded (possibly empty), matching loadTasks' own
-// per-session guard: reflect.DeepEqual treats nil and an empty map as
-// different, which the batched-vs-GetSession equivalence test caught.
-// Layer rows key on (session_id, node_id), since node_id alone is not
-// globally unique the way a task_instances.id is.
+// loadTasksBatch pre-seeds both maps (possibly empty) for a session with a
+// row in either input table, rather than leaving one nil: a caller
+// comparing this against loadTasks' own per-session output for equality
+// would otherwise see a nil map and an empty map as different values. Layer
+// rows key on (session_id, node_id), since node_id alone is not globally
+// unique the way a task_instances.id is.
 func loadTasksBatch(ctx context.Context, q sqlcgen.DBTX, sessionIDs []string) (nodesBySession, tasksBySession map[string]map[string]*contract.TaskState, err error) {
 	if len(sessionIDs) == 0 {
 		return nil, nil, nil

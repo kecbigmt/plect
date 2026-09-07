@@ -65,9 +65,6 @@ func loadChannelHealth(ctx context.Context, q *sqlcgen.Queries, sessionID string
 	return validation, delivery, nil
 }
 
-// loadChannelHealthBatch is loadChannelHealth generalized over many sessions
-// at once, batched by session_id via an IN clause instead of one query per
-// session; see loadTasksBatch's own doc comment for the shared rationale.
 func loadChannelHealthBatch(ctx context.Context, q *sqlcgen.Queries, sessionIDs []string) (validationBySession, deliveryBySession map[string]*contract.ChannelHealth, err error) {
 	if len(sessionIDs) == 0 {
 		return nil, nil, nil

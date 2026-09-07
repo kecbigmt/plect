@@ -639,9 +639,6 @@ func (db *DB) loadSessionExtras(ctx context.Context, q sqlcgen.DBTX, s *domain.S
 	return nil
 }
 
-// loadSessionExtrasBatch is loadSessionExtras generalized over many
-// sessions at once: each sub-load runs once for the whole slice, batched
-// by session id, instead of once per session (see AllSessions' comment).
 func (db *DB) loadSessionExtrasBatch(ctx context.Context, q sqlcgen.DBTX, sessions []*domain.Session) error {
 	if len(sessions) == 0 {
 		return nil
