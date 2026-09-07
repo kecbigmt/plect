@@ -1,5 +1,7 @@
 ---
-supersedes: 2026-09-07-resource-and-workspace-effects
+supersedes:
+  - 2026-09-07-resource-and-workspace-effects
+  - 2026-09-07-invocation-project-context
 ---
 
 # Minimum cleanup contract for execution records

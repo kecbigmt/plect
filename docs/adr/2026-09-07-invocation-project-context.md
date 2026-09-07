@@ -1,3 +1,7 @@
+---
+superseded_by: 2026-09-08-minimum-cleanup-contract
+---
+
 # Invocation-selected project configuration context
 
 ## Context
