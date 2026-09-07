@@ -44,11 +44,16 @@ func loadTasks(ctx context.Context, q sqlcgen.DBTX, sessionID string) (nodes, ta
 	if err != nil {
 		return nil, nil, fmt.Errorf("list node execution dependencies for %q: %w", sessionID, err)
 	}
-	nodeDepsByNodeID := map[string][]string{}
+	// Keyed by the dependent's own execution_id, not its node_id: a
+	// cleaned-and-recreated node's superseded execution can still have
+	// dependency rows of its own (nothing prunes them until the node
+	// itself is pruned), and grouping by node_id would merge a stale
+	// generation's edges into the current one's DependsOn.
+	nodeDepsByExecutionID := map[string][]string{}
 	for _, r := range nodeDepRows {
-		nodeDepsByNodeID[r.NodeID] = append(nodeDepsByNodeID[r.NodeID], r.DependsOnNodeID)
+		nodeDepsByExecutionID[r.ExecutionID] = append(nodeDepsByExecutionID[r.ExecutionID], r.DependsOnNodeID)
 	}
-	for _, deps := range nodeDepsByNodeID {
+	for _, deps := range nodeDepsByExecutionID {
 		sort.Strings(deps)
 	}
 
@@ -108,7 +113,7 @@ func loadTasks(ctx context.Context, q sqlcgen.DBTX, sessionID string) (nodes, ta
 			return nil, nil, fmt.Errorf("parse node execution %q/%q layers: %w", sessionID, row.NodeID, err)
 		}
 		ts.Layers = layers
-		ts.DependsOn = nodeDepsByNodeID[row.NodeID]
+		ts.DependsOn = nodeDepsByExecutionID[row.ID]
 		nodes[row.NodeID] = ts
 	}
 	tasks = make(map[string]*contract.TaskState, len(instanceRows))
@@ -133,6 +138,149 @@ func loadTasks(ctx context.Context, q sqlcgen.DBTX, sessionID string) (nodes, ta
 		tasks[row.InstanceName] = ts
 	}
 	return nodes, tasks, nil
+}
+
+// loadTasksBatch pre-seeds both maps (possibly empty) for a session with a
+// row in either input table, rather than leaving one nil: a caller
+// comparing this against loadTasks' own per-session output for equality
+// would otherwise see a nil map and an empty map as different values. Node
+// layer and dependency rows key on execution_id, not node_id: node_id is a
+// workflow-declared identifier, not unique across sessions, but an
+// execution_id is generated fresh per row the way a task_instances.id is.
+func loadTasksBatch(ctx context.Context, q sqlcgen.DBTX, sessionIDs []string) (nodesBySession, tasksBySession map[string]map[string]*contract.TaskState, err error) {
+	if len(sessionIDs) == 0 {
+		return nil, nil, nil
+	}
+	queries := sqlcgen.New(q)
+
+	nodeRows, err := queries.ListCurrentNodeExecutionsForSessions(ctx, sessionIDs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list node executions: %w", err)
+	}
+	instanceRows, err := queries.ListTaskInstancesForSessions(ctx, sessionIDs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list task instances: %w", err)
+	}
+	if len(nodeRows) == 0 && len(instanceRows) == 0 {
+		return nil, nil, nil
+	}
+
+	nodeLayerRows, err := queries.ListNodeExecutionLayersForSessions(ctx, sessionIDs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list node execution layers: %w", err)
+	}
+	nodeLayersByExecutionID := map[string][]sqlcgen.NodeExecutionLayer{}
+	for _, r := range nodeLayerRows {
+		nodeLayersByExecutionID[r.ExecutionID] = append(nodeLayersByExecutionID[r.ExecutionID], r)
+	}
+
+	nodeDepRows, err := queries.ListNodeExecutionDependenciesForSessions(ctx, sessionIDs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list node execution dependencies: %w", err)
+	}
+	nodeDepsByExecutionID := map[string][]string{}
+	for _, r := range nodeDepRows {
+		nodeDepsByExecutionID[r.ExecutionID] = append(nodeDepsByExecutionID[r.ExecutionID], r.DependsOnNodeID)
+	}
+	for _, deps := range nodeDepsByExecutionID {
+		sort.Strings(deps)
+	}
+
+	taskLayerRows, err := queries.ListTaskInstanceLayersForSessions(ctx, sessionIDs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list task instance layers: %w", err)
+	}
+	taskLayersByInstanceID := map[string][]sqlcgen.TaskInstanceLayer{}
+	for _, r := range taskLayerRows {
+		taskLayersByInstanceID[r.TaskInstanceID] = append(taskLayersByInstanceID[r.TaskInstanceID], r)
+	}
+
+	doneWhenRows, err := queries.ListTaskDoneWhenStatesForSessions(ctx, sessionIDs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list done_when states: %w", err)
+	}
+	doneWhenByInstanceID := make(map[string]sqlcgen.TaskDoneWhenState, len(doneWhenRows))
+	for _, r := range doneWhenRows {
+		doneWhenByInstanceID[r.TaskInstanceID] = r
+	}
+
+	unsatisfiedRows, err := queries.ListTaskDoneWhenUnsatisfiedItemsForSessions(ctx, sessionIDs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list done_when unsatisfied items: %w", err)
+	}
+	unsatisfiedByInstanceID := map[string][]string{}
+	for _, r := range unsatisfiedRows {
+		unsatisfiedByInstanceID[r.TaskInstanceID] = append(unsatisfiedByInstanceID[r.TaskInstanceID], r.Item)
+	}
+
+	judgeRows, err := queries.ListTaskDoneWhenJudgesForSessions(ctx, sessionIDs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list done_when judges: %w", err)
+	}
+	judgesByInstanceID := make(map[string]map[string]*contract.DoneWhenJudge)
+	for _, r := range judgeRows {
+		judge, err := judgeFromRow(r)
+		if err != nil {
+			return nil, nil, err
+		}
+		m := judgesByInstanceID[r.TaskInstanceID]
+		if m == nil {
+			m = make(map[string]*contract.DoneWhenJudge)
+			judgesByInstanceID[r.TaskInstanceID] = m
+		}
+		m[r.LeafID] = judge
+	}
+
+	known := make(map[string]bool)
+	for _, row := range nodeRows {
+		known[row.SessionID] = true
+	}
+	for _, row := range instanceRows {
+		known[row.SessionID] = true
+	}
+	nodesBySession = make(map[string]map[string]*contract.TaskState, len(known))
+	tasksBySession = make(map[string]map[string]*contract.TaskState, len(known))
+	for sid := range known {
+		nodesBySession[sid] = make(map[string]*contract.TaskState)
+		tasksBySession[sid] = make(map[string]*contract.TaskState)
+	}
+
+	for _, row := range nodeRows {
+		ts, err := nodeExecutionFromRow(row)
+		if err != nil {
+			return nil, nil, fmt.Errorf("parse node execution %q/%q: %w", row.SessionID, row.NodeID, err)
+		}
+		layers, err := layersFromNodeExecutionRows(nodeLayersByExecutionID[row.ID])
+		if err != nil {
+			return nil, nil, fmt.Errorf("parse node execution %q/%q layers: %w", row.SessionID, row.NodeID, err)
+		}
+		ts.Layers = layers
+		ts.DependsOn = nodeDepsByExecutionID[row.ID]
+		nodesBySession[row.SessionID][row.NodeID] = ts
+	}
+
+	for _, row := range instanceRows {
+		ts, err := taskInstanceFromRow(row)
+		if err != nil {
+			return nil, nil, fmt.Errorf("parse task instance %q/%q: %w", row.SessionID, row.InstanceName, err)
+		}
+		layers, err := layersFromTaskRows(taskLayersByInstanceID[row.ID])
+		if err != nil {
+			return nil, nil, fmt.Errorf("parse task instance %q/%q layers: %w", row.SessionID, row.InstanceName, err)
+		}
+		ts.Layers = layers
+
+		if dw, ok := doneWhenByInstanceID[row.ID]; ok {
+			doneWhen, err := doneWhenFromRow(dw, unsatisfiedByInstanceID[row.ID], judgesByInstanceID[row.ID])
+			if err != nil {
+				return nil, nil, fmt.Errorf("parse done_when %q/%q: %w", row.SessionID, row.InstanceName, err)
+			}
+			ts.DoneWhen = doneWhen
+		}
+		tasks := tasksBySession[row.SessionID]
+		tasks[row.InstanceName] = ts
+	}
+	return nodesBySession, tasksBySession, nil
 }
 
 // writeTasksTx reconciles node_instances/node_executions against nodes and
