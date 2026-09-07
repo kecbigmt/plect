@@ -368,6 +368,29 @@ bounded period and otherwise refuses without accessing data. A database whose
 goose ledger contains a version newer than the binary embeds always refuses
 normal and migration access with an upgrade instruction and makes no change.
 
+A development build — one `app/internal/version.IsDevelopmentBuild` reports
+true for, because the release pipeline never stamped it — additionally
+refuses to advance a database it did not create: a ledger already holding an
+applied migration (schema version greater than zero) behind the embedded
+migration set. The refusal names both schema versions and points at
+`XDG_DATA_HOME` (isolate onto a scratch database) and
+`plect storage migrate --allow-dev-build` (migrate this one deliberately) as
+the two ways to proceed, and makes no change, the same as the newer-than-
+supported refusal above. A database at schema zero carries none of that risk
+— this call is the one creating it — so a development build migrates it to
+the embedded target without needing the flag. A release-stamped build keeps
+today's automatic migration in every case, flag or not.
+
+Any packager building plect from source, not only the release pipeline's own
+matrix build, must inject the version the same way: a source build that
+skips `-ldflags "-X github.com/kecbigmt/plecture/app/internal/version.Current=<version>"`
+leaves `Current` at its unstamped placeholder and is a development build by
+this section's definition, regardless of what version string the packaging
+system otherwise derives (a Nix flake revision, a distribution's own package
+version, ...) for purposes outside this binary. Such a build refuses implicit
+migration of an existing store exactly as above until the packager passes
+that flag.
+
 The resident service keeps pools but uses the persistence access gate around
 each database operation, not around the process lifetime. Its HTTP event
 routes answer an unavailable/retryable response while a migration blocks an

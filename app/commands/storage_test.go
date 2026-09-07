@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,6 +77,85 @@ func TestStorageMigrate_IsANoOpOnASecondRun(t *testing.T) {
 	}
 	if !strings.Contains(second, "schema version") {
 		t.Errorf("second run output = %q, want it to still report the schema version", second)
+	}
+}
+
+func TestStorageMigrate_AllowDevBuildFlagStillCreatesAndReportsSchemaVersion(t *testing.T) {
+	fakeHome := t.TempDir()
+	t.Setenv("HOME", fakeHome)
+	t.Setenv("XDG_DATA_HOME", "")
+	t.Cleanup(func() { storageMigrateAllowDevBuild = false })
+
+	out, err := execRoot(t, "storage", "migrate", "--allow-dev-build")
+	if err != nil {
+		t.Fatalf("Execute() error = %v; output:\n%s", err, out)
+	}
+
+	dbPath := persistence.PathIn(filepath.Join(fakeHome, ".local", "share", "plect"))
+	if _, statErr := os.Stat(dbPath); statErr != nil {
+		t.Fatalf("storage.db not created at %s: %v", dbPath, statErr)
+	}
+	if !strings.Contains(out, "schema version") {
+		t.Errorf("output = %q, want it to mention the resulting schema version", out)
+	}
+}
+
+// seedRealBehindSchemaDatabase brings fakeHome's storage.db to one real
+// migration short of target, so the guard sees a genuinely behind-schema
+// store rather than a fresh one.
+func seedRealBehindSchemaDatabase(t *testing.T, fakeHome string) {
+	t.Helper()
+	dbPath := persistence.PathIn(filepath.Join(fakeHome, ".local", "share", "plect"))
+	if err := persistence.SeedWithMigrationsForTest(context.Background(), dbPath, persistence.RealMigrationsMinusLatestForTest()); err != nil {
+		t.Fatalf("SeedWithMigrationsForTest: %v", err)
+	}
+}
+
+func TestStorageMigrate_RefusesARealBehindSchemaDatabaseWithoutTheFlag(t *testing.T) {
+	fakeHome := t.TempDir()
+	t.Setenv("HOME", fakeHome)
+	t.Setenv("XDG_DATA_HOME", "")
+	seedRealBehindSchemaDatabase(t, fakeHome)
+
+	out, err := execRoot(t, "storage", "migrate")
+	if err == nil {
+		t.Fatalf("storage migrate against a real behind-schema database unexpectedly succeeded; output:\n%s", out)
+	}
+	if !strings.Contains(err.Error(), "development build") {
+		t.Errorf("error = %q, want it to mention a development build", err)
+	}
+}
+
+func TestStorageMigrate_AllowDevBuildFlagMigratesARealBehindSchemaDatabase(t *testing.T) {
+	fakeHome := t.TempDir()
+	t.Setenv("HOME", fakeHome)
+	t.Setenv("XDG_DATA_HOME", "")
+	t.Cleanup(func() { storageMigrateAllowDevBuild = false })
+	seedRealBehindSchemaDatabase(t, fakeHome)
+
+	out, err := execRoot(t, "storage", "migrate", "--allow-dev-build")
+	if err != nil {
+		t.Fatalf("storage migrate --allow-dev-build: %v; output:\n%s", err, out)
+	}
+	if !strings.Contains(out, "schema version") {
+		t.Errorf("output = %q, want it to mention the resulting schema version", out)
+	}
+}
+
+func TestRootPersistentPreRun_RefusesARealBehindSchemaDatabaseForUnrelatedCommands(t *testing.T) {
+	fakeHome := t.TempDir()
+	t.Setenv("HOME", fakeHome)
+	t.Setenv("XDG_DATA_HOME", "")
+	t.Setenv(confighome.EnvVar, "")
+	t.Setenv(confighome.XDGEnvVar, "")
+	seedRealBehindSchemaDatabase(t, fakeHome)
+
+	out, err := execRoot(t, "config", "show")
+	if err == nil {
+		t.Fatalf("config show against a real behind-schema database unexpectedly succeeded; output:\n%s", out)
+	}
+	if !strings.Contains(err.Error(), "development build") {
+		t.Errorf("error = %q, want it to mention a development build", err)
 	}
 }
 
