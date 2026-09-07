@@ -280,16 +280,27 @@ func indexPredicate(t *testing.T, ctx context.Context, handle *sql.DB, index str
 	return normalizeSQLFragment(createSQL.String[where+len("WHERE"):])
 }
 
-// maskStringLiterals masks string-literal content so callers can search
-// for keywords and count parens without a literal's own contents (which
-// are free to contain "CHECK", "WHERE", or a stray paren) being mistaken
-// for syntax; the result stays the same length, so an index found in it
-// still locates the same character in s.
+// maskStringLiterals masks string-literal content, and `--` line-comment
+// content, so callers can search for keywords and count parens without a
+// literal's own contents (which are free to contain "CHECK", "WHERE", or a
+// stray paren) or a comment's own prose (schema.sql's table bodies carry
+// why-not comments, and ordinary English apostrophes like "it's" would
+// otherwise be mistaken for a string literal's opening quote and desync
+// every string/comment boundary found afterward) being mistaken for
+// syntax; the result stays the same length, so an index found in it still
+// locates the same character in s.
 func maskStringLiterals(s string) string {
 	b := []byte(s)
 	inString := false
+	inComment := false
 	for i := 0; i < len(b); i++ {
 		switch {
+		case inComment:
+			if b[i] == '\n' {
+				inComment = false
+				continue
+			}
+			b[i] = 'x'
 		case inString && b[i] == '\'':
 			if i+1 < len(b) && b[i+1] == '\'' {
 				// A doubled '' is SQL's escape for a literal quote inside
@@ -301,6 +312,9 @@ func maskStringLiterals(s string) string {
 			}
 			inString = false
 		case inString:
+			b[i] = 'x'
+		case b[i] == '-' && i+1 < len(b) && b[i+1] == '-':
+			inComment = true
 			b[i] = 'x'
 		case b[i] == '\'':
 			inString = true
@@ -760,6 +774,24 @@ func TestExtractChecks_DistinguishesLiteralCase(t *testing.T) {
 	}
 	if upper[0] == lower[0] {
 		t.Fatalf("extractChecks did not distinguish string literal case: both normalized to %q", upper[0])
+	}
+}
+
+// TestExtractChecks_IgnoresApostrophesInsideLineComments is the regression
+// for a table body carrying an ordinary English why-not comment: an
+// apostrophe there (e.g. "it's") must not be mistaken for a string
+// literal's opening quote, which would desync string/comment tracking for
+// every CHECK constraint declared after it.
+func TestExtractChecks_IgnoresApostrophesInsideLineComments(t *testing.T) {
+	const createTable = `CREATE TABLE t (
+		-- note is optional; it's never required. CHECK constraints follow.
+		note TEXT,
+		CHECK (note <> '')
+	)`
+
+	got := extractChecks(createTable)
+	if len(got) != 1 || got[0] != "(note <> '')" {
+		t.Fatalf("extractChecks(...) = %v, want exactly [\"(note <> '')\"]", got)
 	}
 }
 
