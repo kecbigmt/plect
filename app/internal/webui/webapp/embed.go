@@ -1,11 +1,11 @@
-// Package webapp embeds the Web UI shell served under /app/. dist/ (Vite's
-// output) is gitignored except for a placeholder dist/.gitkeep: go:embed
-// fails to compile on a directory with zero matching files, so something
-// must always be there. app/internal/webui/server.go checks at runtime
-// whether dist/index.html — a real build — is actually present.
+// Package webapp embeds the Web UI shell served under /app/. static/dist/
+// (Vite's output) is gitignored and entirely untracked; static/unbuilt.html,
+// its tracked sibling, keeps go:embed — a compile-time check, not a
+// runtime one — always satisfied. app/internal/webui/server.go checks at
+// runtime whether static/dist/index.html — a real build — is present.
 package webapp
 
 import "embed"
 
-//go:embed all:dist
+//go:embed static
 var FS embed.FS

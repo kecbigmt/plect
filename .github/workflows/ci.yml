@@ -89,9 +89,10 @@ jobs:
             exit 1
           fi
 
-  # app/internal/webui/webapp/embed.go embeds a committed dist/.gitkeep
-  # placeholder (dist/'s real content is gitignored) so go:embed always has
-  # something to compile against — the invariant this job guards is that
+  # app/internal/webui/webapp/embed.go embeds a committed
+  # static/unbuilt.html placeholder (static/dist/, Vite's real output, is
+  # gitignored and untracked) so go:embed always has something to compile
+  # against — the invariant this job guards is that
   # building the app module never needs Node, on every PR. The changes
   # job's per-module map can route around app's own build-test entry (e.g.
   # a web/app-only change whose rebuilt dist happens to be byte-identical
@@ -246,8 +247,9 @@ jobs:
           }
         working-directory: app/internal/webapi
 
-  # app/internal/webui/webapp/dist/ is gitignored and built only by the
-  # release workflow and by web-browser-acceptance below; this job's
+  # app/internal/webui/webapp/static/dist/ is gitignored and untracked,
+  # built only by the release workflow and by web-browser-acceptance below;
+  # this job's
   # invariant is narrower — that the pinned frontend dependency graph can
   # build and test from source, not that a generated artifact matches one
   # committed to Git. Gated on WEB_CI for the same reason web-api-contract

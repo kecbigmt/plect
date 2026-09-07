@@ -14,8 +14,12 @@ on:
         required: true
         type: string
 
+# verify-tag and build run verification scripts, go test, and npm lifecycle
+# scripts against untrusted-ish inputs; a write-capable token has no
+# business being visible to any of that. Only publish calls gh release
+# create, so only publish declares contents: write, below.
 permissions:
-  contents: write
+  contents: read
 
 env:
   GO_VERSION: "1.25.6"
@@ -108,6 +112,8 @@ jobs:
   publish:
     needs: build
     if: github.event_name == 'push'
+    permissions:
+      contents: write
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0

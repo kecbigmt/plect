@@ -52,16 +52,17 @@ mutating request echoes it back as `X-CSRF-Token`. `src/lib/bootstrap.ts` and
 ## Build
 
 ```sh
-pnpm build   # tsc --noEmit && vite build -> ../../app/internal/webui/webapp/dist/
+pnpm build   # tsc --noEmit && vite build -> ../../app/internal/webui/webapp/static/dist/
 ```
 
-The output is gitignored (only a `dist/.gitkeep` placeholder is committed,
-so `go install`'s installability invariant still compiles from committed
-module source alone — see `app/internal/webui/webapp/embed.go`). Without
-this build, `plect-web` serves a plain "Web UI not built" notice on every
-`/app/` route instead of the shell. CI's `web-app-build` job
-(`.github/workflows/ci.yml`) builds and tests this package from source on
-every production-path change, without comparing its output to Git.
+The output is gitignored and entirely untracked (a sibling,
+`static/unbuilt.html`, is committed instead, so `go install`'s
+installability invariant still compiles from committed module source
+alone — see `app/internal/webui/webapp/embed.go`). Without this build,
+`plect-web` serves that placeholder with HTTP 503 on every `/app/` route
+instead of the shell. CI's `web-app-build` job (`.github/workflows/ci.yml`)
+builds and tests this package from source on every production-path change,
+without comparing its output to Git.
 
 ## Testing
 

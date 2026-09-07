@@ -13,16 +13,18 @@ import (
 // on whatever happens to be embedded in webapp.FS on disk.
 func builtWebApp() fstest.MapFS {
 	return fstest.MapFS{
-		"dist/index.html": &fstest.MapFile{Data: []byte(
+		"static/unbuilt.html": &fstest.MapFile{Data: []byte("unused when built")},
+		"static/dist/index.html": &fstest.MapFile{Data: []byte(
 			`<html><body><div id="root"></div><script src="/app/assets/app.js"></script></body></html>`,
 		)},
-		"dist/assets/app.js": &fstest.MapFile{Data: []byte("// app\n")},
+		"static/dist/assets/app.js": &fstest.MapFile{Data: []byte("// app\n")},
 	}
 }
 
-// notBuiltWebApp mirrors what's actually committed to Git.
+// notBuiltWebApp mirrors what's actually committed to Git: static/dist/
+// (Vite's gitignored output) doesn't exist at all.
 func notBuiltWebApp() fstest.MapFS {
-	return fstest.MapFS{"dist/.gitkeep": &fstest.MapFile{}}
+	return fstest.MapFS{"static/unbuilt.html": &fstest.MapFile{Data: []byte("Web UI not built notice")}}
 }
 
 func getWebApp(t *testing.T, root fs.FS, path string) *httptest.ResponseRecorder {
@@ -92,8 +94,9 @@ func TestWebApp_RequiresAuthWhenConfigured(t *testing.T) {
 	}
 }
 
-// dist/ with only .gitkeep — no index.html — is what a plain source build
-// actually has (see embed.go); every /app/ route must fall back the same way.
+// static/dist/ (Vite's output) not existing at all — no index.html — is
+// what a plain source build actually has (see embed.go); every /app/ route
+// must fall back the same way.
 func TestWebApp_ServesNotBuiltNoticeWhenDistHasNoIndex(t *testing.T) {
 	for _, path := range []string{"/app/", "/app/sessions/some-session", "/app/assets/app.js"} {
 		rec := getWebApp(t, notBuiltWebApp(), path)

@@ -118,9 +118,7 @@ type Server struct {
 	// busClientFn, when set, overrides how the live-timeline handler reaches the
 	// bus (tests point it at an httptest bus instead of a Unix socket).
 	busClientFn func() *event.Client
-	// webAppFS, when set, overrides the embedded Web UI build handleWebApp
-	// serves — tests substitute a synthetic fs.FS for both the built and
-	// not-built states instead of depending on what happens to be on disk.
+	// webAppFS, when set, lets tests substitute handleWebApp's filesystem.
 	webAppFS fs.FS
 }
 
@@ -346,12 +344,14 @@ func (s *Server) handleWebApp() http.Handler {
 	if root == nil {
 		root = webapp.FS
 	}
-	dist, err := fs.Sub(root, "dist")
+	// static/dist/ (Vite's gitignored output) may not exist at all; fs.Sub
+	// tolerates that fine, so only the fs.Stat below needs to check.
+	dist, err := fs.Sub(root, "static/dist")
 	if err != nil {
-		panic(err) // dist/ (even just its placeholder) is always embedded; a missing one is a build bug, not a runtime condition.
+		panic(err)
 	}
 	if _, err := fs.Stat(dist, "index.html"); err != nil {
-		return webAppNotBuiltHandler()
+		return webAppNotBuiltHandler(root)
 	}
 	fileServer := http.StripPrefix("/app/", http.FileServerFS(dist))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -376,17 +376,16 @@ func (s *Server) handleWebApp() http.Handler {
 	})
 }
 
-// webAppNotBuiltHandler serves every /app/ route the same 503 when dist/
-// has no index.html — a plain source build rather than a release archive
-// or a local pnpm build (see app/internal/webui/webapp/embed.go). The rest
-// of the server (API, login) is unaffected.
-func webAppNotBuiltHandler() http.Handler {
-	const body = `<!doctype html>
-<html><body><p>Web UI not built; run pnpm build in web/ (the release archive includes it).</p></body></html>
-`
+// webAppNotBuiltHandler serves static/unbuilt.html with HTTP 503 on every
+// /app/ route; other routes (API, login) are unaffected.
+func webAppNotBuiltHandler(root fs.FS) http.Handler {
+	notice, err := fs.ReadFile(root, "static/unbuilt.html")
+	if err != nil {
+		panic(err) // static/unbuilt.html is always embedded; a missing one is a build bug.
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusServiceUnavailable)
-		fmt.Fprint(w, body)
+		w.Write(notice)
 	})
 }
