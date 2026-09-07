@@ -20,7 +20,8 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
   build: {
-    // Committed and go:embed'd from here — see app/internal/webui/webapp.
+    // Gitignored; go:embed'd from here by a -tags webembed build — see
+    // app/internal/webui/webapp.
     outDir: "../../app/internal/webui/webapp/dist",
     emptyOutDir: true,
   },

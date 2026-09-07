@@ -338,15 +338,11 @@ func buttonClass(variant any) string {
 // an error page — the same reason any single-page app's server needs a
 // catch-all.
 func (s *Server) handleWebApp() http.Handler {
-	dist, err := fs.Sub(webapp.FS, "dist")
-	if err != nil {
-		panic(err) // the embedded build always contains dist/; a missing one is a build bug, not a runtime condition.
-	}
-	fileServer := http.StripPrefix("/app/", http.FileServerFS(dist))
+	fileServer := http.StripPrefix("/app/", http.FileServerFS(webapp.FS))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimPrefix(r.URL.Path, "/app/")
 		if name != "" {
-			if _, err := fs.Stat(dist, name); err != nil {
+			if _, err := fs.Stat(webapp.FS, name); err != nil {
 				name = "" // unknown path: fall through to the directory below
 			}
 		}

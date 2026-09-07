@@ -16,8 +16,8 @@ This package is a member of the `web/` pnpm workspace alongside
   (`app/internal/webui`) — unchanged, and remains the production entry until
   an explicit later cutover.
 - `/app/` (this package's development/review entry) serves this shell,
-  embedded from a committed build. It carries no compatibility promise
-  beyond this milestone.
+  embedded from a build produced at release time (see Build below). It
+  carries no compatibility promise beyond this milestone.
 
 Both sit behind the same `authMiddleware`/`csrfMiddleware` chain
 (`app/internal/webui/security.go`): an unauthenticated navigation to `/app/`
@@ -55,11 +55,14 @@ mutating request echoes it back as `X-CSRF-Token`. `src/lib/bootstrap.ts` and
 pnpm build   # tsc --noEmit && vite build -> ../../app/internal/webui/webapp/dist/
 ```
 
-The output is committed (see `app/internal/webui/webapp/embed.go` for why:
-`go install`'s installability invariant compiles from committed module
-source, with no path to run `pnpm build`). CI's `web-app-build` job
-(`.github/workflows/ci.yml`) rebuilds and fails on any diff against the
-committed `dist/`.
+The output is gitignored, not committed: `go install`'s installability
+invariant compiles from committed module source alone, so
+`app/internal/webui/webapp` embeds a committed placeholder shell by default
+and only picks up a real `dist/` when built with `-tags webembed` (see that
+package's `embed.go`). The release workflow builds this package before
+compiling `plect-web` with that tag; CI's `web-app-build` job
+(`.github/workflows/ci.yml`) builds and tests it from source on every
+production-path change, without comparing its output to Git.
 
 ## Testing
 

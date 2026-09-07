@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Plecture</title>
+  </head>
+  <body>
+    <div id="root">
+      <p>This plect-web was built from source without the Plecture Web UI.</p>
+      <p>Install a release archive for the full Web UI, or build it from source:</p>
+      <pre>pnpm --dir web/app install --frozen-lockfile
+pnpm --dir web/app build
+go build -C app -tags webembed ./cmd/plect-web</pre>
+    </div>
+    <script type="module" src="/app/assets/placeholder.js"></script>
+  </body>
+</html>

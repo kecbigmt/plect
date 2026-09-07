@@ -159,13 +159,13 @@ check "a web/ workspace-root file (e.g. the shared lockfile) -> web_ci only" \
 # app/internal/webapi/** and app/internal/webui/** are already app/** for
 # build-test/integration-test purposes; the reverse edge these two cases
 # guard is that they additionally set WEB_CI, since they consume web/api's
-# generated contract and web/app's committed build respectively.
+# generated contract and web/app's Vite build respectively.
 check "app/internal/webapi/** -> app build-test + integration-test + web_ci" \
   'app/internal/webapi/handler.go' \
   $'FULL_RUN=false\nBUILD_TEST_MATRIX=["app"]\nINTEGRATION_TEST=true\nREADME_VERIFY=false\nAFFECTED_PLUGINS=[]\nWEB_CI=true'
 
 check "app/internal/webui/** -> app build-test + integration-test + web_ci" \
-  'app/internal/webui/webapp/dist/index.html' \
+  'app/internal/webui/webapp/embed.go' \
   $'FULL_RUN=false\nBUILD_TEST_MATRIX=["app"]\nINTEGRATION_TEST=true\nREADME_VERIFY=false\nAFFECTED_PLUGINS=[]\nWEB_CI=true'
 
 # The frozen visual reference is prose under docs/, not production source:
