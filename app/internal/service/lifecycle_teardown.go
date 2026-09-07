@@ -61,12 +61,12 @@ type teardownItem struct {
 	r   task.Resolved
 }
 
-// unifiedTeardownList merges every retained unreleased node execution with
-// every dynamic instance into one dependency-ordered Resolved list (see
+// unifiedTeardownList merges every unreleased node execution with every
+// dynamic instance into one dependency-ordered Resolved list (see
 // orderTeardownItems); the @workflow pseudo-node releases last, via the
 // workspace provider cleanup hook. Static nodes are enumerated from
 // session.Nodes, not plan, so a node the current workflow no longer
-// declares is still torn down using what it retained (resolveNodeCleanup).
+// declares is still torn down (resolveNodeCleanup).
 func unifiedTeardownList(cfg *config.Config, session *domain.Session, runOnly bool) ([]task.Resolved, error) {
 	defs, err := cfg.LoadTaskDefinitions(session.WorkspaceDirPath)
 	if err != nil {
@@ -129,11 +129,8 @@ func unifiedTeardownList(cfg *config.Config, session *domain.Session, runOnly bo
 	return orderTeardownItems(items), nil
 }
 
-// resolveNodeCleanup resolves r's cleanup recipe from the current config
-// tree by r.TaskID -- cleanup code is never read back from the database and
-// replayed, only ever resolved fresh from project-trusted config. ok is
-// false when no such definition exists any more, in which case r carries no
-// cleanup recipe at all.
+// resolveNodeCleanup resolves r's cleanup recipe fresh from config by
+// r.TaskID. ok is false when no such definition exists any more.
 func resolveNodeCleanup(r *task.Resolved, defs map[string]config.TaskDefinition) bool {
 	def, ok := defs[r.TaskID]
 	if !ok {

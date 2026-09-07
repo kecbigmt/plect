@@ -1,7 +1,6 @@
 -- +goose Up
 -- Hand-written under a one-time owner exception to schema.sql's Atlas-only
--- rule (see sqlite-persistence.md's "Node execution identity" section).
--- PRAGMA foreign_keys is a no-op inside goose's transaction, so
+-- rule. PRAGMA foreign_keys is a no-op inside goose's transaction, so
 -- node_instances is renamed (never dropped) before node_executions' FK
 -- names the live table.
 PRAGMA foreign_keys = off;
