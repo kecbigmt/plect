@@ -76,7 +76,6 @@ type followerHandle struct {
 	done   chan struct{}
 }
 
-// awaitPredecessor reports false (caller should return) if ctx ends first.
 func awaitPredecessor(ctx context.Context, predecessorDone <-chan struct{}) bool {
 	if predecessorDone == nil {
 		return true
@@ -192,7 +191,7 @@ func resolveTickConfig(cfg *config.Config, s *domain.Session) (config.TickConfig
 
 // reconcile starts a sessionReactor per up session, a sessionForwarder per
 // down-but-not-destroyed one (exact complements over RunScopeUp), stopping
-// whichever no longer applies. A reactor->forwarder handoff wires
+// whichever no longer applies. Either direction's handoff wires
 // predecessorDone rather than blocking here (see awaitPredecessor).
 func (sup *Supervisor) reconcile(ctx context.Context, active, forwarding map[string]followerHandle, wg *sync.WaitGroup) {
 	cfg := sup.cfg()
@@ -208,6 +207,9 @@ func (sup *Supervisor) reconcile(ctx context.Context, active, forwarding map[str
 		up := cfg.RunScopeUp(s)
 		if _, running := active[name]; !running && up {
 			r := sup.buildReactor(name, s)
+			if h, ok := forwarding[name]; ok {
+				r.predecessorDone = h.done
+			}
 			rctx, cancel := context.WithCancel(ctx)
 			done := make(chan struct{})
 			active[name] = followerHandle{cancel: cancel, done: done}

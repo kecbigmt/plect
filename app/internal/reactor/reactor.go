@@ -91,6 +91,11 @@ type sessionReactor struct {
 	// channelHealthEvery defaults to channelHealthInterval; overridable in
 	// tests, mirroring healthcheckEvery.
 	channelHealthEvery time.Duration
+	// predecessorDone gates run below via awaitPredecessor (supervisor.go):
+	// an outgoing sessionForwarder could otherwise still be mid-relay when
+	// this reactor starts, forwarding an event only this reactor should
+	// handle once the session is up.
+	predecessorDone <-chan struct{}
 }
 
 // effectiveLogger falls back to slog.Default() for a test-constructed
@@ -104,7 +109,17 @@ func (r *sessionReactor) effectiveLogger() *slog.Logger {
 }
 
 func (r *sessionReactor) run(ctx context.Context) {
+	// Seeded before awaitPredecessor, not after: reactorConsumer's first-ever
+	// seed commits "the log's tail right now", so seeding it only once a
+	// possibly slow predecessor is confirmed gone would swallow anything
+	// that arrived during that wait. Seeding immediately narrows the window
+	// to ordinary goroutine-scheduling latency instead. A session with a
+	// prior up period already has this cursor seeded, so this is a no-op
+	// there regardless of ordering.
 	seedCursor(r.log, r.session)
+	if !awaitPredecessor(ctx, r.predecessorDone) {
+		return
+	}
 	startGen, _ := r.log.StreamID(r.session)
 	wake := r.hub.Watch(r.session)
 	defer wake.Close()

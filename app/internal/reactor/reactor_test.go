@@ -213,6 +213,33 @@ func TestSessionReactor_ResourceForwardedAlwaysTriggers(t *testing.T) {
 	waitLastTickAt(t, st, "o/r-1", floor)
 }
 
+// Mirrors sessionForwarder's own predecessor-wait proof in forward_test.go.
+// reactorConsumer is pre-seeded (as reactor.go's own seedCursor already
+// would have done on this session's first-ever up, long before the down
+// period that produced the outgoing forwarder this reactor is now handing
+// off from) so this test exercises the realistic path, not seedCursor's own
+// separate first-ever-seed case.
+func TestSessionReactor_WaitsForPredecessorBeforeTouchingTheLog(t *testing.T) {
+	r, st, log := newTestReactor(t, config.TickConfig{On: []string{"resource.*"}})
+	if err := log.CommitCursor("o/r-1", reactorConsumer, 0); err != nil {
+		t.Fatal(err)
+	}
+	predecessorDone := make(chan struct{})
+	r.predecessorDone = predecessorDone
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { r.run(ctx); close(done) }()
+	defer func() { cancel(); <-done }()
+
+	floor := time.Now()
+	log.Append(event.Event{SessionName: "o/r-1", Type: "resource.updated", Direction: event.Inbound})
+	assertNeverTicked(t, st, "o/r-1", floor)
+
+	close(predecessorDone)
+	waitLastTickAt(t, st, "o/r-1", floor)
+}
+
 // TestSessionReactor_HeartbeatSweepTicksAfterElapsed proves a session with no
 // `on` declared still ticks once `heartbeat` has elapsed since its last
 // tick, using a shortened heartbeatInterval so the test doesn't wait a full
@@ -720,6 +747,87 @@ on = ["resource.*"]
 	close(release)
 	<-rdone
 	waitForFirstDrain(t, log, "o/r-1")
+}
+
+// The reverse direction: an in-flight forwarder plus a rapid down-up
+// reversal, mirroring the stuck-reactor test above.
+func TestSupervisor_ReactorWaitsWhileTheOutgoingForwarderIsStillMidRelay(t *testing.T) {
+	pluginDir := t.TempDir()
+	writeClaudeRunTask(t, filepath.Join(pluginDir, "config"))
+	writeFile(t, filepath.Join(pluginDir, "config", "workflows", "reactive.toml"), `
+[reactive]
+kind = "workflow"
+[[reactive.nodes]]
+id   = "claude"
+uses = "claude"
+[reactive.tick]
+on = ["resource.*"]
+`)
+	cfg := &config.Config{PluginDirs: []string{pluginDir}}
+	st := state.NewStore(t.TempDir())
+	if err := st.Put(&domain.Session{Name: "o/r-1", Workflow: "reactive"}); err != nil {
+		t.Fatal(err)
+	}
+	log := eventlog.NewStore(st.Dir())
+	hub := sessionhub.NewRegistry(log, sessionhub.WithPollInterval(2*time.Millisecond))
+	defer hub.Close()
+	sup := NewSupervisor(func() *config.Config { return cfg }, st, log, hub)
+
+	f := sup.buildForwarder("o/r-1")
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	var enterOnce sync.Once
+	f.forwardFn = func(*config.Config, *state.Store, string, event.Event) (bool, error) {
+		enterOnce.Do(func() { close(entered) })
+		<-release
+		return true, nil
+	}
+	fctx, fcancel := context.WithCancel(context.Background())
+	fdone := make(chan struct{})
+	go func() { f.run(fctx); close(fdone) }()
+
+	log.Append(event.Event{SessionName: "o/r-1", ID: "ev-1", Type: "resource.updated", Direction: event.Inbound})
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("forwarder's relay never entered")
+	}
+
+	if err := st.Update("o/r-1", func(s *domain.Session) error {
+		if s.Nodes == nil {
+			s.Nodes = map[string]*contract.TaskState{}
+		}
+		s.Nodes["claude"] = &contract.TaskState{Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	forwarding := map[string]followerHandle{"o/r-1": {cancel: fcancel, done: fdone}}
+	active := map[string]followerHandle{}
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	defer func() {
+		for _, h := range active {
+			h.cancel()
+		}
+	}()
+
+	sup.reconcile(context.Background(), active, forwarding, &wg)
+	if _, ok := active["o/r-1"]; !ok {
+		t.Fatal("reactor not started for the up session")
+	}
+	// reactorConsumer's own first-ever seed runs before the predecessor wait
+	// (reactor.go); wait for it to land before appending below, so that
+	// event lands after the seed rather than racing it.
+	waitForCursorSeed(t, log, "o/r-1")
+
+	floor := time.Now()
+	log.Append(event.Event{SessionName: "o/r-1", ID: "during-handoff", Type: "resource.updated", Direction: event.Inbound})
+	assertNeverTicked(t, st, "o/r-1", floor)
+
+	close(release)
+	<-fdone
+	waitLastTickAt(t, st, "o/r-1", floor)
 }
 
 // TestBackoffInterval covers the pure doubling/cap arithmetic the quiet-tick
