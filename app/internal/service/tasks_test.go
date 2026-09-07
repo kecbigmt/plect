@@ -16,6 +16,7 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/eventlog"
 	"github.com/kecbigmt/plecture/app/internal/lang"
+	"github.com/kecbigmt/plecture/app/internal/persistence"
 	"github.com/kecbigmt/plecture/app/internal/state"
 	taskpkg "github.com/kecbigmt/plecture/app/internal/task"
 	"github.com/kecbigmt/plecture/contracts/event"
@@ -24,10 +25,11 @@ import (
 
 func TestPutBestEffort_PutFailureLogsWarningWithoutPanicking(t *testing.T) {
 	dir := t.TempDir()
-	// store.db exists as a directory, so Store.Put's open of it fails — this
-	// pins the best-effort swallow at putBestEffort: a broken store must not
-	// panic or block the caller, but the failure must not be invisible either.
-	if err := os.MkdirAll(filepath.Join(dir, "store.db"), 0o755); err != nil {
+	// storage.db exists as a directory, so Store.Put's open of it fails —
+	// this pins the best-effort swallow at putBestEffort: a broken store must
+	// not panic or block the caller, but the failure must not be invisible
+	// either.
+	if err := os.MkdirAll(persistence.PathIn(dir), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	store := state.NewStore(dir)
@@ -1694,7 +1696,7 @@ func TestDestroy_BlocksWhenChildrenExist(t *testing.T) {
 // map would let Destroy silently orphan real children instead of aborting.
 func TestDestroy_FailsClosedWhenStoreUnreadable(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "store.db"), []byte("not a database"), 0644); err != nil {
+	if err := os.WriteFile(persistence.PathIn(dir), []byte("not a database"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	store := state.NewStore(dir)

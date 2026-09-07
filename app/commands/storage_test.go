@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/kecbigmt/plecture/app/internal/confighome"
+	"github.com/kecbigmt/plecture/app/internal/persistence"
 )
 
 func TestStorageMigrate_CreatesAndReportsSchemaVersion(t *testing.T) {
@@ -19,9 +20,9 @@ func TestStorageMigrate_CreatesAndReportsSchemaVersion(t *testing.T) {
 		t.Fatalf("Execute() error = %v; output:\n%s", err, out)
 	}
 
-	dbPath := filepath.Join(fakeHome, ".local", "share", "plect", "store.db")
+	dbPath := persistence.PathIn(filepath.Join(fakeHome, ".local", "share", "plect"))
 	if _, statErr := os.Stat(dbPath); statErr != nil {
-		t.Fatalf("store.db not created at %s: %v", dbPath, statErr)
+		t.Fatalf("storage.db not created at %s: %v", dbPath, statErr)
 	}
 	if !strings.Contains(out, "schema version") {
 		t.Errorf("output = %q, want it to mention the resulting schema version", out)
@@ -46,7 +47,7 @@ func TestStorageMigrate_IsANoOpOnASecondRun(t *testing.T) {
 	}
 }
 
-func TestRootPersistentPreRun_CreatesStoreDBForEveryCommand(t *testing.T) {
+func TestRootPersistentPreRun_CreatesStorageDBForEveryCommand(t *testing.T) {
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)
 	t.Setenv("XDG_DATA_HOME", "")
@@ -57,8 +58,8 @@ func TestRootPersistentPreRun_CreatesStoreDBForEveryCommand(t *testing.T) {
 		t.Fatalf("Execute() error = %v; output:\n%s", err, out)
 	}
 
-	dbPath := filepath.Join(fakeHome, ".local", "share", "plect", "store.db")
+	dbPath := persistence.PathIn(filepath.Join(fakeHome, ".local", "share", "plect"))
 	if _, statErr := os.Stat(dbPath); statErr != nil {
-		t.Fatalf("store.db not created by an unrelated command's PersistentPreRunE: %v", statErr)
+		t.Fatalf("storage.db not created by an unrelated command's PersistentPreRunE: %v", statErr)
 	}
 }

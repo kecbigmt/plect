@@ -65,7 +65,7 @@ func (s *Store) Dir() string {
 // command goes through), sharing the connection pool with any eventlog.Store
 // over the same directory rather than each holding its own.
 func (s *Store) dbHandle() (*persistence.DB, error) {
-	db, err := persistence.EnsureCurrentShared(context.Background(), filepath.Join(s.dir, "store.db"))
+	db, err := persistence.EnsureCurrentShared(context.Background(), persistence.PathIn(s.dir))
 	if err != nil {
 		return nil, fmt.Errorf("state: open database: %w", err)
 	}

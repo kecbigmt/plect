@@ -10,6 +10,7 @@ import (
 
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/domain"
+	"github.com/kecbigmt/plecture/app/internal/persistence"
 	"github.com/kecbigmt/plecture/app/internal/state"
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
@@ -354,7 +355,7 @@ func TestReserveChildCapSlot_ForceRecreateReservationStillBlocksASibling(t *test
 // parent exists.
 func TestReserveChildCapSlot_FailsClosedWhenParentUnreadable(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "store.db"), []byte("not a database"), 0o644); err != nil {
+	if err := os.WriteFile(persistence.PathIn(dir), []byte("not a database"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	store := state.NewStore(dir)

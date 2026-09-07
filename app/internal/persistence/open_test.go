@@ -3,13 +3,12 @@ package persistence
 import (
 	"context"
 	"database/sql"
-	"path/filepath"
 	"testing"
 )
 
 func openTestDB(t *testing.T) *DB {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "store.db")
+	path := PathIn(t.TempDir())
 	db, err := Open(path)
 	if err != nil {
 		t.Fatalf("Open: %v", err)

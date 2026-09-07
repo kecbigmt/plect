@@ -3,7 +3,6 @@ package persistence
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -48,7 +47,7 @@ SELECT 1;
 
 func testDBPath(t *testing.T) string {
 	t.Helper()
-	return filepath.Join(t.TempDir(), "store.db")
+	return PathIn(t.TempDir())
 }
 
 func TestEnsureCurrent_FreshDatabaseMigratesToTarget(t *testing.T) {

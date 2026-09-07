@@ -17,7 +17,7 @@ func TestNewLiveService_RefusesADatabaseNewerThanSupported(t *testing.T) {
 	dataHome := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", dataHome)
 
-	dbPath := filepath.Join(dataHome, "plect", "store.db")
+	dbPath := persistence.PathIn(filepath.Join(dataHome, "plect"))
 	seed, err := persistence.EnsureCurrent(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("seed EnsureCurrent: %v", err)
@@ -70,7 +70,7 @@ func TestLiveServiceListSurfacesStateVersionMismatch(t *testing.T) {
 // counterpart of the retired state.json version-mismatch fixture.
 func writeDatabaseNewerThanBinarySupports(t *testing.T, dir string) {
 	t.Helper()
-	db, err := persistence.Open(filepath.Join(dir, "store.db"))
+	db, err := persistence.Open(persistence.PathIn(dir))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

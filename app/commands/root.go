@@ -44,7 +44,7 @@ identifier no resolver matches selects a workflow explicitly (see
 		if err := state.NewStore("").CheckReadable(); err != nil {
 			return err
 		}
-		// Keeps store.db's own schema current independently of the
+		// Keeps storage.db's own schema current independently of the
 		// state.json check above, which covers session/task state only.
 		db, err := persistence.EnsureCurrent(cmd.Context(), persistence.DefaultPath())
 		if err != nil {
