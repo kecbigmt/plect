@@ -92,6 +92,15 @@ SELECT id FROM sessions WHERE name = ? ORDER BY created_at ASC;
 -- caller must delete those first.
 DELETE FROM sessions WHERE id = ?;
 
+-- name: ClearParentReferencesToID :exec
+-- parent_session_id/root_session_id are ON DELETE NO ACTION: a caller must
+-- sever every inbound reference to an id before DeleteSessionByID, or the
+-- delete is rejected outright.
+UPDATE sessions SET parent_session_id = NULL WHERE parent_session_id = ?;
+
+-- name: ClearRootReferencesToID :exec
+UPDATE sessions SET root_session_id = NULL WHERE root_session_id = ?;
+
 -- name: SessionEverExistedByName :one
 SELECT EXISTS(SELECT 1 FROM sessions WHERE name = ?);
 

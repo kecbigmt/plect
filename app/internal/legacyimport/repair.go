@@ -12,9 +12,11 @@ import (
 
 // RepairOptions configures one RepairImportedSessions call.
 type RepairOptions struct {
-	SourceDir string // the legacy backup an earlier `plect storage import` used
+	// SourceDir's state.json is the only source of truth for which names
+	// are legitimate: storage.db alone cannot tell a ghost row from a real one.
+	SourceDir string
 	DestDir   string // the plect data directory holding the storage.db to repair
-	DryRun    bool   // report without writing (no backup, no delete)
+	DryRun    bool   // opens the database read-only, skipping backup and delete entirely
 }
 
 // RepairReport counts what one RepairImportedSessions call found and did.
@@ -33,10 +35,9 @@ func (r *RepairReport) String() string {
 }
 
 // RepairImportedSessions is the one-time fix for a host that ran an
-// importer version old enough to have materialized a row for an
-// events/-only legacy session (see Run, which now skips those entirely):
-// every session storage.db holds that the backup's state.json does not name
-// is deleted outright, along with its events and every incarnation.
+// importer version old enough to still materialize a row for an
+// events/-only legacy session (see Run): every session storage.db holds
+// that the backup's state.json does not name is deleted outright.
 func RepairImportedSessions(ctx context.Context, opts RepairOptions) (*RepairReport, error) {
 	report := &RepairReport{}
 
@@ -59,19 +60,27 @@ func RepairImportedSessions(ctx context.Context, opts RepairOptions) (*RepairRep
 		return report, fmt.Errorf("legacyimport: stat %s: %w", dbPath, statErr)
 	}
 
-	if !opts.DryRun {
+	// Open, not EnsureCurrent, for DryRun: migrating as a side effect of
+	// opening would make "reports without writing anything" false.
+	var db *persistence.DB
+	if opts.DryRun {
+		db, err = persistence.Open(dbPath)
+		if err != nil {
+			return report, fmt.Errorf("legacyimport: open %s: %w", dbPath, err)
+		}
+	} else {
 		backupPath, err := backupDatabaseFiles(dbPath)
 		if err != nil {
 			return report, fmt.Errorf("legacyimport: back up %s: %w", dbPath, err)
 		}
 		report.BackupPath = backupPath
-	}
 
-	// EnsureCurrent may itself migrate the schema, so it opens only once
-	// the backup above already exists to precede that write.
-	db, err := persistence.EnsureCurrent(ctx, dbPath)
-	if err != nil {
-		return report, fmt.Errorf("legacyimport: open %s: %w", dbPath, err)
+		// Opens only once the backup above exists, so EnsureCurrent's own
+		// migration can never land ahead of it.
+		db, err = persistence.EnsureCurrent(ctx, dbPath)
+		if err != nil {
+			return report, fmt.Errorf("legacyimport: open %s: %w", dbPath, err)
+		}
 	}
 	defer db.Close()
 

@@ -233,10 +233,10 @@ func TestRootPersistentPreRun_DoesNotPreCreateStorageDBForStorageImport(t *testi
 	}
 }
 
-// TestRootPersistentPreRun_DoesNotPreCreateStorageDBForStorageRepair: the
-// same pre-run carve-out storage import already has -- repair must back up
-// --data-home's own storage.db before anything opens or migrates it, and
-// this hook opening the default path first would risk exactly that.
+// TestRootPersistentPreRun_DoesNotPreCreateStorageDBForStorageRepair: repair
+// must be the first thing to open or migrate --data-home's storage.db so its
+// own backup covers whatever that first open does, so this command needs
+// the same PersistentPreRunE carve-out storage import already has.
 func TestRootPersistentPreRun_DoesNotPreCreateStorageDBForStorageRepair(t *testing.T) {
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)

@@ -200,13 +200,8 @@ func (db *DB) DestroySession(ctx context.Context, name string, destroyedAt time.
 	})
 }
 
-// PurgeSessionByName permanently erases every incarnation of name: its
-// events (node/task instances, channel health, and event cursors cascade
-// from the row itself) and its up-slot reservation, if any. Unlike
-// DestroySession, nothing about name survives -- only
-// legacyimport.RepairImportedSessions calls this, to remove a ghost row a
-// buggy importer left with no legitimate state.json entry behind it; a real
-// session already visible to an operator is always retired via Destroy.
+// PurgeSessionByName erases every incarnation of name, its events, and its
+// up-slot reservation -- unlike DestroySession, nothing survives.
 func (db *DB) PurgeSessionByName(ctx context.Context, name string) error {
 	return db.WithImmediateTx(ctx, func(tx *sql.Tx) error {
 		q := sqlcgen.New(tx)
@@ -215,6 +210,15 @@ func (db *DB) PurgeSessionByName(ctx context.Context, name string) error {
 			return fmt.Errorf("purge session %q: list incarnations: %w", name, err)
 		}
 		for _, id := range ids {
+			// A kept row's parent/root id can legitimately point at this
+			// id; ON DELETE NO ACTION would reject the delete below.
+			ref := sql.NullString{String: id, Valid: true}
+			if err := q.ClearParentReferencesToID(ctx, ref); err != nil {
+				return fmt.Errorf("purge session %q: clear parent references to %s: %w", name, id, err)
+			}
+			if err := q.ClearRootReferencesToID(ctx, ref); err != nil {
+				return fmt.Errorf("purge session %q: clear root references to %s: %w", name, id, err)
+			}
 			if err := q.DeleteEventsForSession(ctx, id); err != nil {
 				return fmt.Errorf("purge session %q: delete events for incarnation %s: %w", name, id, err)
 			}

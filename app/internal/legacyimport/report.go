@@ -5,8 +5,11 @@ import "fmt"
 // Report counts what one Run call found, even when Run also returns an
 // error: a rejected import still explains itself.
 type Report struct {
-	Sessions           int
-	SkippedEventOnly   int // events/<name> with no state.json entry: no row, no events imported
+	Sessions int
+	// SkippedEventOnly is visibility only: an events/<name> directory with
+	// no state.json entry adds nothing to Sessions or Events, so an
+	// operator would otherwise have no way to see it was left behind.
+	SkippedEventOnly   int
 	Events             int
 	InternalBackfilled int // see SessionLog.InternalBackfilled
 	Cursors            int

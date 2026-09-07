@@ -10,6 +10,27 @@ import (
 	"database/sql"
 )
 
+const clearParentReferencesToID = `-- name: ClearParentReferencesToID :exec
+UPDATE sessions SET parent_session_id = NULL WHERE parent_session_id = ?
+`
+
+// parent_session_id/root_session_id are ON DELETE NO ACTION: a caller must
+// sever every inbound reference to an id before DeleteSessionByID, or the
+// delete is rejected outright.
+func (q *Queries) ClearParentReferencesToID(ctx context.Context, parentSessionID sql.NullString) error {
+	_, err := q.db.ExecContext(ctx, clearParentReferencesToID, parentSessionID)
+	return err
+}
+
+const clearRootReferencesToID = `-- name: ClearRootReferencesToID :exec
+UPDATE sessions SET root_session_id = NULL WHERE root_session_id = ?
+`
+
+func (q *Queries) ClearRootReferencesToID(ctx context.Context, rootSessionID sql.NullString) error {
+	_, err := q.db.ExecContext(ctx, clearRootReferencesToID, rootSessionID)
+	return err
+}
+
 const countLiveSessionsNamed = `-- name: CountLiveSessionsNamed :one
 SELECT COUNT(*) FROM sessions WHERE name = ? AND status <> 'destroyed'
 `

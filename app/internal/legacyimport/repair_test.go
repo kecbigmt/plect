@@ -259,3 +259,47 @@ func TestRepairImportedSessions_BacksUpEvenWhenOpeningTheDatabaseFails(t *testin
 		t.Errorf("backup schema version = %d, want %d (its pre-open state)", backupVersion, behindVersion)
 	}
 }
+
+// TestRepairImportedSessions_DryRunDoesNotMigrateTheDatabase is the
+// regression test for a real bug: DryRun called EnsureCurrent the same as a
+// real run, so it could migrate the schema even though it documents itself
+// as reporting "without writing anything."
+func TestRepairImportedSessions_DryRunDoesNotMigrateTheDatabase(t *testing.T) {
+	sourceDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sourceDir, "state.json"), []byte(`{"version":7,"sessions":{}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	destDir := t.TempDir()
+	ctx := context.Background()
+	dbPath := persistence.PathIn(destDir)
+
+	if err := persistence.SeedWithMigrationsForTest(ctx, dbPath, persistence.RealMigrationsMinusLatestForTest()); err != nil {
+		t.Fatalf("seed behind-schema db: %v", err)
+	}
+	behindDB, err := persistence.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	behindVersion, err := behindDB.Version(ctx)
+	behindDB.Close()
+	if err != nil {
+		t.Fatalf("read behind-schema version: %v", err)
+	}
+
+	if _, err := RepairImportedSessions(ctx, RepairOptions{SourceDir: sourceDir, DestDir: destDir, DryRun: true}); err != nil {
+		t.Fatalf("RepairImportedSessions (dry-run): %v", err)
+	}
+
+	afterDB, err := persistence.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterVersion, err := afterDB.Version(ctx)
+	afterDB.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterVersion != behindVersion {
+		t.Errorf("schema version after dry run = %d, want unchanged %d", afterVersion, behindVersion)
+	}
+}

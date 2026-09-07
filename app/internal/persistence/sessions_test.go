@@ -1036,6 +1036,48 @@ func TestEnsureLiveSession_RefusesToResurrectADestroyedName(t *testing.T) {
 	}
 }
 
+// TestPurgeSessionByName_ClearsInboundParentAndRootReferencesFirst is the
+// regression test for a real bug: parent_session_id/root_session_id are
+// ON DELETE NO ACTION, so a kept session whose legacy parent had itself
+// been destroyed pre-cutover (an ordinary shape) pointed at the row being
+// purged and blocked the delete outright until those references were
+// cleared first.
+func TestPurgeSessionByName_ClearsInboundParentAndRootReferencesFirst(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	if err := db.PutSession(ctx, &domain.Session{Name: "ghost", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("PutSession(ghost): %v", err)
+	}
+	if err := db.PutSession(ctx, &domain.Session{Name: "real-child", ParentSession: "ghost", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("PutSession(real-child): %v", err)
+	}
+	if err := db.PutSession(ctx, &domain.Session{Name: "real-root-child", ParentSession: "root:ghost", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("PutSession(real-root-child): %v", err)
+	}
+
+	if err := db.PurgeSessionByName(ctx, "ghost"); err != nil {
+		t.Fatalf("PurgeSessionByName(ghost): %v", err)
+	}
+
+	child, err := db.GetSession(ctx, "real-child")
+	if err != nil || child == nil {
+		t.Fatalf("GetSession(real-child) after purge: %v, %v", child, err)
+	}
+	if child.ParentSession != "" {
+		t.Errorf("real-child.ParentSession = %q after purging its parent, want empty", child.ParentSession)
+	}
+
+	var rootRaw sql.NullString
+	if err := db.write.QueryRowContext(ctx, `SELECT root_session_id FROM sessions WHERE name = ?`, "real-root-child").Scan(&rootRaw); err != nil {
+		t.Fatalf("read real-root-child.root_session_id: %v", err)
+	}
+	if rootRaw.Valid {
+		t.Errorf("real-root-child.root_session_id = %q after purging the session it pointed at, want NULL", rootRaw.String)
+	}
+}
+
 func TestPurgeSessionByName_RemovesTheRowItsEventsAndItsReservation(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
