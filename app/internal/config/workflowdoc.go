@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/kecbigmt/plecture/app/internal/lang"
 )
@@ -324,6 +326,21 @@ func tickFrom(body map[string]any) (*TickConfig, error) {
 			return nil, fmt.Errorf("tick: %w", err)
 		}
 		*field.field = value
+	}
+	if _, declared := tbl["backoff_reset"]; declared {
+		names, err := stringList(tbl, "backoff_reset")
+		if err != nil {
+			return nil, fmt.Errorf("tick: %w", err)
+		}
+		if len(names) == 0 {
+			return nil, fmt.Errorf("tick: `backoff_reset` must not be empty; valid names: %s", strings.Join(ValidBackoffResetNames, ", "))
+		}
+		for _, name := range names {
+			if !slices.Contains(ValidBackoffResetNames, name) {
+				return nil, fmt.Errorf("tick: `backoff_reset` names %q, not one of: %s", name, strings.Join(ValidBackoffResetNames, ", "))
+			}
+		}
+		tick.BackoffReset = names
 	}
 	return tick, nil
 }

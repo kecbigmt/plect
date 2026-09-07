@@ -6,11 +6,12 @@ import (
 	"strings"
 
 	"github.com/kecbigmt/plecture/app/internal/config"
+	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/task"
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-func checkActionForResult(sessionName, instance, resource string, dw *config.DoneWhen, st *contract.TaskState, result task.DoneWhenResult, trigger TickTrigger) CheckAction {
+func checkActionForResult(sessionName, instance, resource string, dw *config.DoneWhen, st *contract.TaskState, result task.DoneWhenResult, trigger TickTrigger, liveChildren []LiveChild) CheckAction {
 	heartbeatBudget := doneWhenHeartbeatBudget(dw)
 	heartbeatTicks := 0
 	heartbeatEscalations := 0
@@ -107,6 +108,9 @@ func checkActionForResult(sessionName, instance, resource string, dw *config.Don
 	if hint := mergeableStateHint(observedState(st)); hint != "" {
 		body += "\n\n" + hint
 	}
+	if len(liveChildren) > 0 {
+		body += "\n\n" + liveChildrenBulletList(liveChildren)
+	}
 	return CheckAction{
 		SessionName:      sessionName,
 		Instance:         instance,
@@ -119,6 +123,7 @@ func checkActionForResult(sessionName, instance, resource string, dw *config.Don
 		Summary:          fmt.Sprintf("done_when unsatisfied for %s", instance),
 		Body:             body,
 		Fingerprint:      fingerprint,
+		LiveChildren:     liveChildren,
 	}
 }
 
@@ -351,6 +356,22 @@ func unmetItemBulletList(items []CheckUnmetItem) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+func liveChildrenBulletList(children []LiveChild) string {
+	lines := make([]string, 0, len(children)+1)
+	lines = append(lines, "Live children:")
+	for _, c := range children {
+		lines = append(lines, fmt.Sprintf("- %s (run=%s health=%s last_tick=%dm ago)", c.Name, c.Run, orUndeclared(c.Health), c.MinutesSinceTick))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func orUndeclared(h domain.HealthState) domain.HealthState {
+	if h == "" {
+		return domain.HealthUndeclared
+	}
+	return h
 }
 
 func reviewRequiredBody(instance string, heartbeatTicks, heartbeatBudget int, reviewerCommand string, items []CheckUnmetItem, judgeCmds []string, warnings []string) string {

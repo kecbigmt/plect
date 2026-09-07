@@ -199,6 +199,36 @@ the judge builtin trigger. `on` lists event-type globs; `heartbeat` ticks after
 that quiet duration; and `max_heartbeat` caps quiet-tick backoff. Omitting all
 of them leaves manual ticks and the judge builtin as the only drivers.
 
+`backoff_reset` names which conditions reset the quiet-tick backoff counter to
+0 at a heartbeat sweep, holding the interval at `heartbeat`:
+
+- `"inbound"` — an inbound event arrived since the last heartbeat sweep.
+- `"fingerprint"` — the session's own composite done_when fingerprint changed.
+- `"live_children"` — at least one session directly parented on this one is
+  up. Read from the sessions table only; no probe, no child fingerprint.
+
+Each declared condition is evaluated at both points the reactor consults the
+backoff counter: before gating a heartbeat sweep (so a condition holding
+*right now* makes the next tick due at `heartbeat`, not whatever interval the
+counter had already grown to) and after a tick actually runs (so the counter
+itself persists as reset). `"inbound"` and `"fingerprint"` hold when they
+occurred since the last heartbeat sweep; `"live_children"` holds when it is
+true at that instant.
+
+The default, when `backoff_reset` is absent, is `["inbound", "fingerprint"]`.
+Declaring the field replaces that default wholesale rather than adding to it,
+so `backoff_reset = ["fingerprint"]` means inbound no longer resets. The list
+must not be empty, and every name must be one of the three above — either
+failure is a load-time error, since a tick that can never reset is a
+misdeclaration. `[tick]` is workflow-level only: `config.toml` has no
+defaults mechanism a workflow-level `[tick]` field falls back to, so there is
+no global default for `backoff_reset`.
+
+A heartbeat sweep's `kick` action body lists the session's up direct children
+(name, run state, health, minutes since their own last tick) when any exist,
+independent of `backoff_reset` — enough for the dispatcher receiving the kick
+to decide which children it can safely bring down.
+
 `[<id>.healthcheck]` declares `period`, `stall_threshold`, and
 `renotify_every`. It controls sampling cadence, not what health means; effect
 `[health]` declarations define that meaning. `tick` and `healthcheck` are

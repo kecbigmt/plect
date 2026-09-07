@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -896,6 +897,91 @@ heartbeat = "30m"
 	tick := got["shared"].Tick
 	if tick == nil || tick.Heartbeat.Duration != 30*time.Minute || len(tick.On) != 0 {
 		t.Fatalf("tick = %+v, want the deeper (ancestor) layer's declaration to win wholesale", tick)
+	}
+}
+
+func TestLoadWorkflows_TickBackoffResetDefaultsToInboundAndFingerprint(t *testing.T) {
+	baseDir := t.TempDir()
+	writeFile(t, filepath.Join(baseDir, "workflows", "w.toml"), `
+[w]
+kind = "workflow"
+[w.tick]
+heartbeat = "15m"
+`)
+	cfg := &Config{BaseDir: baseDir}
+	got, err := cfg.LoadWorkflows(t.TempDir())
+	if err != nil {
+		t.Fatalf("LoadWorkflows: %v", err)
+	}
+	tick := got["w"].Tick
+	if tick == nil {
+		t.Fatal("expected a [tick] table")
+	}
+	want := []string{"inbound", "fingerprint"}
+	if got := tick.BackoffResetOrDefault(); !slices.Equal(got, want) {
+		t.Errorf("BackoffResetOrDefault() = %v, want %v", got, want)
+	}
+}
+
+func TestLoadWorkflows_TickBackoffResetDeclaredReplacesDefault(t *testing.T) {
+	baseDir := t.TempDir()
+	writeFile(t, filepath.Join(baseDir, "workflows", "w.toml"), `
+[w]
+kind = "workflow"
+[w.tick]
+heartbeat     = "15m"
+backoff_reset = ["fingerprint", "live_children"]
+`)
+	cfg := &Config{BaseDir: baseDir}
+	got, err := cfg.LoadWorkflows(t.TempDir())
+	if err != nil {
+		t.Fatalf("LoadWorkflows: %v", err)
+	}
+	tick := got["w"].Tick
+	if tick == nil {
+		t.Fatal("expected a [tick] table")
+	}
+	want := []string{"fingerprint", "live_children"}
+	if got := tick.BackoffResetOrDefault(); !slices.Equal(got, want) {
+		t.Errorf("BackoffResetOrDefault() = %v, want %v", got, want)
+	}
+}
+
+func TestLoadWorkflows_TickBackoffResetRejectsEmptyList(t *testing.T) {
+	baseDir := t.TempDir()
+	writeFile(t, filepath.Join(baseDir, "workflows", "w.toml"), `
+[w]
+kind = "workflow"
+[w.tick]
+heartbeat     = "15m"
+backoff_reset = []
+`)
+	cfg := &Config{BaseDir: baseDir}
+	_, err := cfg.LoadWorkflows(t.TempDir())
+	if err == nil {
+		t.Fatal("expected LoadWorkflows to reject an empty backoff_reset — a tick that can never reset is a misdeclaration")
+	}
+	if !strings.Contains(err.Error(), "backoff_reset") {
+		t.Errorf("unexpected message: %v", err)
+	}
+}
+
+func TestLoadWorkflows_TickBackoffResetRejectsUnknownName(t *testing.T) {
+	baseDir := t.TempDir()
+	writeFile(t, filepath.Join(baseDir, "workflows", "w.toml"), `
+[w]
+kind = "workflow"
+[w.tick]
+heartbeat     = "15m"
+backoff_reset = ["nope"]
+`)
+	cfg := &Config{BaseDir: baseDir}
+	_, err := cfg.LoadWorkflows(t.TempDir())
+	if err == nil {
+		t.Fatal("expected LoadWorkflows to reject an unknown backoff_reset name")
+	}
+	if !strings.Contains(err.Error(), "nope") {
+		t.Errorf("unexpected message: %v", err)
 	}
 }
 

@@ -353,15 +353,8 @@ func (r *sessionReactor) checkHeartbeat(ctx context.Context) {
 		if s.TickBackoff != nil {
 			n = s.TickBackoff.ConsecutiveUnchanged
 		}
-		lastLogPosition, err := r.log.ReadCursor(r.session, heartbeatConsumer)
-		if err != nil {
-			slog.Default().Warn("reactor: read heartbeat cursor failed; treating as unset", "session", r.session, "error", err)
-		}
-		// Peek for inbound before gating: inbound is otherwise only observed
-		// inside updateBackoff, which runs only after a tick fires — so a
-		// capped interval would hide inbound for the full cap instead of
-		// heartbeat.
-		if inbound, _ := r.hasInboundSince(lastLogPosition); inbound {
+		// A condition holding now gates like n=0, or a capped interval would hide it.
+		if r.evaluateBackoffReset().holds {
 			n = 0
 		}
 		if time.Since(s.LastTickAt) < config.BackoffInterval(r.tick.Heartbeat.Duration, r.tick.MaxHeartbeatOrDefault(), n) {
@@ -417,17 +410,15 @@ func (r *sessionReactor) checkChannelHealth(ctx context.Context) {
 	}
 }
 
-// updateBackoff runs right after any tick (doTick, regardless of trigger) and
-// decides whether the next interval resets to heartbeat (a change occurred)
-// or keeps growing (quiet). "Change" is fingerprint diff or an inbound event
-// since the last sweep — self-emitted events are never
-// Inbound (see direction normalization in service.EventPublish), so an
-// orchestrator publishing to its own session every tick does not reset its
-// own backoff.
-func (r *sessionReactor) updateBackoff(ctx context.Context) {
-	if ctx.Err() != nil {
-		return
-	}
+type backoffResetSnapshot struct {
+	holds       bool
+	fingerprint string
+	cursorNext  int64
+}
+
+// evaluateBackoffReset is read-only, so calling it twice per sweep is safe.
+func (r *sessionReactor) evaluateBackoffReset() backoffResetSnapshot {
+	resetOn := r.tick.BackoffResetOrDefault()
 	previousPosition, err := r.log.ReadCursor(r.session, heartbeatConsumer)
 	if err != nil {
 		slog.Default().Warn("reactor: read heartbeat cursor failed; treating as unset", "session", r.session, "error", err)
@@ -435,16 +426,32 @@ func (r *sessionReactor) updateBackoff(ctx context.Context) {
 	fingerprint := r.compositeFingerprint()
 	inbound, next := r.hasInboundSince(previousPosition)
 	prev := r.lastFingerprint()
-	changed := inbound || fingerprint != prev
-	if err := r.log.CommitCursor(r.session, heartbeatConsumer, next); err != nil {
+	holds := (slices.Contains(resetOn, config.TickBackoffResetInbound) && inbound) ||
+		(slices.Contains(resetOn, config.TickBackoffResetFingerprint) && fingerprint != prev)
+	if !holds && slices.Contains(resetOn, config.TickBackoffResetLiveChildren) {
+		live, err := r.hasLiveDirectChild()
+		if err != nil {
+			r.effectiveLogger().Warn("reactor: check live direct children failed; not resetting backoff for it", "session", r.session, "error", err)
+		}
+		holds = live
+	}
+	return backoffResetSnapshot{holds: holds, fingerprint: fingerprint, cursorNext: next}
+}
+
+func (r *sessionReactor) updateBackoff(ctx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
+	snap := r.evaluateBackoffReset()
+	if err := r.log.CommitCursor(r.session, heartbeatConsumer, snap.cursorNext); err != nil {
 		r.effectiveLogger().Warn("reactor: commit heartbeat cursor failed", "session", r.session, "error", err)
 	}
 	if err := r.state.Update(r.session, func(s *domain.Session) error {
 		if s.TickBackoff == nil {
 			s.TickBackoff = &contract.TickBackoff{}
 		}
-		s.TickBackoff.LastFingerprint = fingerprint
-		if changed {
+		s.TickBackoff.LastFingerprint = snap.fingerprint
+		if snap.holds {
 			s.TickBackoff.ConsecutiveUnchanged = 0
 		} else {
 			s.TickBackoff.ConsecutiveUnchanged++
@@ -453,6 +460,20 @@ func (r *sessionReactor) updateBackoff(ctx context.Context) {
 	}); err != nil {
 		r.effectiveLogger().Warn("reactor: update tick backoff failed", "session", r.session, "error", err)
 	}
+}
+
+// hasLiveDirectChild reads the sessions table only, no probe.
+func (r *sessionReactor) hasLiveDirectChild() (bool, error) {
+	sessions, err := r.state.AllE()
+	if err != nil {
+		return false, err
+	}
+	for _, s := range sessions {
+		if s != nil && s.ParentSession == r.session && r.cfg.RunScopeUp(s) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (r *sessionReactor) lastFingerprint() string {

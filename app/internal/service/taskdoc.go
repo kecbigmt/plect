@@ -333,7 +333,7 @@ func renderInstruction(cfg *config.Config, session *domain.Session, doc config.T
 // predicate against the pair of live roots it reads. A document owns no
 // lifecycle, so there are no layers to compose and no per-layer patience to
 // account for: one document, one predicate, one budget.
-func evaluateDocumentInstance(cfg *config.Config, store *state.Store, doc config.TaskDocument, resolvedName string, session *domain.Session, key string, st *contract.TaskState, allSessions map[string]*domain.Session, trigger TickTrigger) (*computedAction, []ChainSpawn, *Error) {
+func evaluateDocumentInstance(cfg *config.Config, store *state.Store, doc config.TaskDocument, resolvedName string, session *domain.Session, key string, st *contract.TaskState, allSessions map[string]*domain.Session, trigger TickTrigger, liveChildren []LiveChild) (*computedAction, []ChainSpawn, *Error) {
 	dw, err := effectiveDoneWhen(doc.DoneWhen, st)
 	if err != nil {
 		return nil, nil, &Error{Code: ErrExecutionFailed, Message: err.Error()}
@@ -347,7 +347,7 @@ func evaluateDocumentInstance(cfg *config.Config, store *state.Store, doc config
 			lastAction, lastFingerprint = st.DoneWhen.LastAction, st.DoneWhen.LastFingerprint
 		}
 		eval = task.EvaluateTaskDoneWhenWithContext(dw, live, doneWhenEvalContext(resolvedName, st, allSessions))
-		action := checkActionForResult(resolvedName, key, sessionResourceForCheck(session, st), dw, st, eval, trigger)
+		action := checkActionForResult(resolvedName, key, sessionResourceForCheck(session, st), dw, st, eval, trigger, liveChildren)
 		if action.Action != "" {
 			computed = &computedAction{instance: key, action: action, lastAction: lastAction, lastFingerprint: lastFingerprint, result: eval}
 		}
