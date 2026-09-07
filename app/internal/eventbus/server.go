@@ -69,15 +69,10 @@ func (s *Server) Routes() http.Handler {
 }
 
 // registerPprofRoutes exposes net/http/pprof's handlers under /debug/pprof/
-// on this server's own mux, rather than importing net/http/pprof for its
-// package-level DefaultServeMux registration side effect: the daemon has no
-// other use for DefaultServeMux, and registering here keeps every pprof
-// route behind s.auth like the rest of the bus API — the resident process
-// otherwise has no way to obtain a goroutine dump or CPU profile short of a
-// SIGQUIT (which kills it, per issue #498) or a restart. Trust boundary:
-// identical to /v1/events and /v1/stream — the UDS socket's 0600 permission
-// is the boundary with no PLECT_BUS_TOKEN set, and the bearer token is the
-// boundary when one is configured (e.g. a bus proxied to a browser).
+// on this server's own mux, not on net/http/pprof's package-level
+// DefaultServeMux, so every pprof route stays behind s.auth like the rest of
+// the bus API rather than bypassing it. See docs/design/resident-daemon-diagnostics.md
+// for the trust boundary this shares with every other route.
 func registerPprofRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /debug/pprof/", pprof.Index)
 	mux.HandleFunc("GET /debug/pprof/cmdline", pprof.Cmdline)

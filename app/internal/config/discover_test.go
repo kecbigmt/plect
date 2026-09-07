@@ -7,9 +7,8 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/lang"
 )
 
-// countingDiscoverLayer wraps discoverLayer with an invocation counter, the
-// same seam pattern reactor.Supervisor's deadmanFn/tickFn use to make a
-// dependency observable from a test.
+// countingDiscoverLayer wraps discoverLayer with an invocation counter,
+// matching reactor.Supervisor's deadmanFn/tickFn test seam convention.
 func countingDiscoverLayer(calls *int) func(layerDir) ([]*lang.Definition, error) {
 	return func(l layerDir) ([]*lang.Definition, error) {
 		*calls++
@@ -17,13 +16,9 @@ func countingDiscoverLayer(calls *int) func(layerDir) ([]*lang.Definition, error
 	}
 }
 
-// TestDiscoverLayers_CachesRepeatedCallsWithSameWorkspaceDirPath is the
-// regression for the reconcile hot path: dispatch.Supervisor and
-// reactor.Supervisor each call RunScopeUp (-> discoverLayers) for every up
-// session on every 1s poll tick, so an uncached discoverLayers re-walks and
-// re-parses every definition file on disk once per session per tick. The
-// call count below must stay flat as the number of reconcile-style passes
-// grows, not scale with it.
+// The reconcile hot path (dispatch/reactor Supervisor.reconcile -> RunScopeUp
+// -> discoverLayers) calls this once per up session per ~1s poll tick, so the
+// call count below must stay flat as passes grow, not scale with them.
 func TestDiscoverLayers_CachesRepeatedCallsWithSameWorkspaceDirPath(t *testing.T) {
 	base := writeRunScopedWorkflow(t)
 	var calls int
@@ -40,10 +35,9 @@ func TestDiscoverLayers_CachesRepeatedCallsWithSameWorkspaceDirPath(t *testing.T
 	}
 }
 
-// TestDiscoverLayers_CachesPerWorkspaceDirPathIndependently checks the cache
-// key is the workspace dir path: two different sessions (different
-// workspaceDirPath) must not collide on one cache entry, and each is still
-// only computed once no matter how many times it is asked for again.
+// Two sessions with different workspaceDirPath must not collide on one
+// cache entry, and each is still only computed once no matter how often
+// it's asked for again.
 func TestDiscoverLayers_CachesPerWorkspaceDirPathIndependently(t *testing.T) {
 	base := writeRunScopedWorkflow(t)
 	var calls int
@@ -85,13 +79,8 @@ func TestDiscoverLayers_CachesPerWorkspaceDirPathIndependently(t *testing.T) {
 	}
 }
 
-// TestLoadWorkflowsFresh_SeesAnEditTheCachedReadWouldMiss is the config-level
-// half of the regression covered end-to-end by
-// dispatch.TestSupervisor_ValidationRecoveryOnNextUpClearsStreak and
-// reactor.TestRefreshTickConfig_KeepsAndAdopts: a session-up transition and
-// refreshTickConfig's wedge recovery both must see an on-disk edit made since
-// the *Config was constructed, not the memoized result discoverLayers
-// otherwise returns for the rest of this Config's lifetime.
+// Config-level half of the regression dispatch.TestSupervisor_ValidationRecoveryOnNextUpClearsStreak
+// and reactor.TestRefreshTickConfig_KeepsAndAdopts cover end-to-end.
 func TestLoadWorkflowsFresh_SeesAnEditTheCachedReadWouldMiss(t *testing.T) {
 	base := writeRunScopedWorkflow(t)
 	cfg := &Config{BaseDir: base}

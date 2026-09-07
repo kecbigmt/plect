@@ -412,12 +412,6 @@ func firstFrame(t *testing.T, baseURL, session, lastEventID string) (string, eve
 	return "", event.Event{}
 }
 
-// The bus exposed no way to see where a runaway daemon's CPU went short of a
-// restart (issue #498): these three tests are the diagnostic surface's
-// acceptance criteria — a goroutine dump and a CPU profile obtained over the
-// bus's existing UDS server, without restarting it, under the same auth
-// boundary as every other route.
-
 func TestBus_PprofIndexServed(t *testing.T) {
 	_, baseURL, _ := newTestBus(t, "")
 	resp, err := http.Get(baseURL + "/debug/pprof/")
@@ -450,10 +444,8 @@ func TestBus_PprofGoroutineDump(t *testing.T) {
 	}
 }
 
-// A CPU profile is the acceptance criterion's other half ("a goroutine and
-// 10-second CPU profile are obtained without restarting the bus"); one
-// second is enough to prove the route captures samples without slowing this
-// test down to match the acceptance criterion's own 10s figure.
+// One second, not the acceptance criterion's 10, is enough to prove the
+// route captures samples without slowing this test down to match it.
 func TestBus_PprofCPUProfileCaptured(t *testing.T) {
 	_, baseURL, _ := newTestBus(t, "")
 	resp, err := http.Get(baseURL + "/debug/pprof/profile?seconds=1")
@@ -473,11 +465,8 @@ func TestBus_PprofCPUProfileCaptured(t *testing.T) {
 	}
 }
 
-// pprof must sit behind the same bearer-token boundary as every other bus
-// route (the UDS socket's own 0600 perms are the boundary when no token is
-// configured) — a diagnostic surface that skips auth would let anyone who
-// can reach a token-protected bus (e.g. one proxied to a browser) dump its
-// memory and call stacks.
+// pprof must sit behind the same bearer-token boundary as every other route,
+// not skip it and let anyone reaching a token-protected bus dump its state.
 func TestBus_PprofRequiresAuthWhenTokenSet(t *testing.T) {
 	_, baseURL, _ := newTestBus(t, "s3cret")
 
