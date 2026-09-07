@@ -1,6 +1,7 @@
 package persistence
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"strings"
@@ -55,7 +56,7 @@ func TestEnsureCurrent_FreshDatabaseMigratesToTarget(t *testing.T) {
 	path := testDBPath(t)
 	fsys := migrationFixture(map[string]string{"00001_a.sql": migrationA, "00002_b.sql": migrationBOK})
 
-	db, err := ensureCurrent(ctx, path, fsys)
+	db, err := ensureCurrent(ctx, path, fsys, false, false)
 	if err != nil {
 		t.Fatalf("ensureCurrent: %v", err)
 	}
@@ -83,13 +84,13 @@ func TestEnsureCurrent_AlreadyCurrentReturnsWithoutError(t *testing.T) {
 	path := testDBPath(t)
 	fsys := migrationFixture(map[string]string{"00001_a.sql": migrationA})
 
-	first, err := ensureCurrent(ctx, path, fsys)
+	first, err := ensureCurrent(ctx, path, fsys, false, false)
 	if err != nil {
 		t.Fatalf("first ensureCurrent: %v", err)
 	}
 	first.Close()
 
-	second, err := ensureCurrent(ctx, path, fsys)
+	second, err := ensureCurrent(ctx, path, fsys, false, false)
 	if err != nil {
 		t.Fatalf("second ensureCurrent: %v", err)
 	}
@@ -104,18 +105,140 @@ func TestEnsureCurrent_AlreadyCurrentReturnsWithoutError(t *testing.T) {
 	}
 }
 
+func TestEnsureCurrent_DevBuildRefusesToMigrateAnExistingDatabaseBehindSchema(t *testing.T) {
+	ctx := context.Background()
+	path := testDBPath(t)
+	behind := migrationFixture(map[string]string{"00001_a.sql": migrationA})
+	ahead := migrationFixture(map[string]string{"00001_a.sql": migrationA, "00002_b.sql": migrationBOK})
+
+	seed, err := ensureCurrent(ctx, path, behind, false, false)
+	if err != nil {
+		t.Fatalf("seed ensureCurrent: %v", err)
+	}
+	seed.Close()
+
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read seeded database: %v", err)
+	}
+
+	db, err := ensureCurrent(ctx, path, ahead, true, false)
+	if err == nil {
+		db.Close()
+		t.Fatal("ensureCurrent for a dev build against an existing database behind schema unexpectedly succeeded")
+	}
+	if db != nil {
+		t.Errorf("db = %v, want nil on refusal", db)
+	}
+	for _, want := range []string{"development build", "schema 1", "migrate it to 2", "--allow-dev-build"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to mention %q", err, want)
+		}
+	}
+
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read database after refusal: %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Error("database file changed after a dev-build refusal, want byte-identical")
+	}
+
+	marker, merr := readMarker(newAccessGate(path).markerPath)
+	if merr != nil {
+		t.Fatalf("readMarker: %v", merr)
+	}
+	if marker != nil {
+		t.Errorf("marker = %+v, want none: a dev-build refusal must never become a migrator", marker)
+	}
+}
+
+func TestEnsureCurrent_DevBuildWithAllowDevBuildMigratesAnExistingDatabase(t *testing.T) {
+	ctx := context.Background()
+	path := testDBPath(t)
+	behind := migrationFixture(map[string]string{"00001_a.sql": migrationA})
+	ahead := migrationFixture(map[string]string{"00001_a.sql": migrationA, "00002_b.sql": migrationBOK})
+
+	seed, err := ensureCurrent(ctx, path, behind, false, false)
+	if err != nil {
+		t.Fatalf("seed ensureCurrent: %v", err)
+	}
+	seed.Close()
+
+	db, err := ensureCurrent(ctx, path, ahead, true, true)
+	if err != nil {
+		t.Fatalf("ensureCurrent with allowDevBuild: %v", err)
+	}
+	defer db.Close()
+
+	current, target, err := db.version(ctx)
+	if err != nil {
+		t.Fatalf("version: %v", err)
+	}
+	if current != target || current != 2 {
+		t.Fatalf("version = (%d, %d), want (2, 2)", current, target)
+	}
+}
+
+func TestEnsureCurrent_DevBuildCreatingAFreshDatabaseNeedsNoFlag(t *testing.T) {
+	ctx := context.Background()
+	path := testDBPath(t)
+	fsys := migrationFixture(map[string]string{"00001_a.sql": migrationA, "00002_b.sql": migrationBOK})
+
+	db, err := ensureCurrent(ctx, path, fsys, true, false)
+	if err != nil {
+		t.Fatalf("ensureCurrent for a dev build creating a fresh database: %v", err)
+	}
+	defer db.Close()
+
+	current, target, err := db.version(ctx)
+	if err != nil {
+		t.Fatalf("version: %v", err)
+	}
+	if current != target || current != 2 {
+		t.Fatalf("version = (%d, %d), want (2, 2): a database this call creates carries none of the incident's risk", current, target)
+	}
+}
+
+func TestEnsureCurrent_ReleaseBuildMigratesAnExistingDatabaseAutomatically(t *testing.T) {
+	ctx := context.Background()
+	path := testDBPath(t)
+	behind := migrationFixture(map[string]string{"00001_a.sql": migrationA})
+	ahead := migrationFixture(map[string]string{"00001_a.sql": migrationA, "00002_b.sql": migrationBOK})
+
+	seed, err := ensureCurrent(ctx, path, behind, false, false)
+	if err != nil {
+		t.Fatalf("seed ensureCurrent: %v", err)
+	}
+	seed.Close()
+
+	db, err := ensureCurrent(ctx, path, ahead, false, false)
+	if err != nil {
+		t.Fatalf("ensureCurrent for a release build against an existing database behind schema: %v", err)
+	}
+	defer db.Close()
+
+	current, target, err := db.version(ctx)
+	if err != nil {
+		t.Fatalf("version: %v", err)
+	}
+	if current != target || current != 2 {
+		t.Fatalf("version = (%d, %d), want (2, 2): a release build migrates automatically", current, target)
+	}
+}
+
 func TestEnsureCurrent_RefusesAndDoesNotModifyADatabaseNewerThanSupported(t *testing.T) {
 	ctx := context.Background()
 	path := testDBPath(t)
 
-	newer, err := ensureCurrent(ctx, path, migrationFixture(map[string]string{"00001_a.sql": migrationA, "00002_b.sql": migrationBOK}))
+	newer, err := ensureCurrent(ctx, path, migrationFixture(map[string]string{"00001_a.sql": migrationA, "00002_b.sql": migrationBOK}), false, false)
 	if err != nil {
 		t.Fatalf("migrate to newer schema: %v", err)
 	}
 	newer.Close()
 
 	older := migrationFixture(map[string]string{"00001_a.sql": migrationA})
-	db, err := ensureCurrent(ctx, path, older)
+	db, err := ensureCurrent(ctx, path, older, false, false)
 	if err == nil {
 		db.Close()
 		t.Fatal("ensureCurrent with an older migration set unexpectedly succeeded")
@@ -155,7 +278,7 @@ func TestEnsureCurrent_InterruptedMigrationPreservesEvidenceAndResumesAfterFix(t
 	path := testDBPath(t)
 	broken := migrationFixture(map[string]string{"00001_a.sql": migrationA, "00002_b.sql": migrationBBroken})
 
-	db, err := ensureCurrent(ctx, path, broken)
+	db, err := ensureCurrent(ctx, path, broken, false, false)
 	if err == nil {
 		db.Close()
 		t.Fatal("ensureCurrent with a broken second migration unexpectedly succeeded")
@@ -201,7 +324,7 @@ func TestEnsureCurrent_InterruptedMigrationPreservesEvidenceAndResumesAfterFix(t
 	verify.Close()
 
 	fixed := migrationFixture(map[string]string{"00001_a.sql": migrationA, "00002_b.sql": migrationBOK})
-	resumed, err := ensureCurrent(ctx, path, fixed)
+	resumed, err := ensureCurrent(ctx, path, fixed, false, false)
 	if err != nil {
 		t.Fatalf("ensureCurrent after fixing the migration: %v", err)
 	}
@@ -303,7 +426,7 @@ func TestEnsureCurrent_ConcurrentFreshOpenNeverCollides(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			dbs[i], errs[i] = ensureCurrent(ctx, path, fsys)
+			dbs[i], errs[i] = ensureCurrent(ctx, path, fsys, false, false)
 		}(i)
 	}
 	wg.Wait()
@@ -342,7 +465,7 @@ func TestEnsureCurrent_ConcurrentStartupOnlyOneMigratesAndBothSucceed(t *testing
 	// processes racing to apply a pending migration to an already-existing
 	// database — from the fresh-open race
 	// TestEnsureCurrent_ConcurrentFreshOpenNeverCollides covers separately.
-	seed, err := ensureCurrent(ctx, path, migrationFixture(map[string]string{"00001_a.sql": migrationA}))
+	seed, err := ensureCurrent(ctx, path, migrationFixture(map[string]string{"00001_a.sql": migrationA}), false, false)
 	if err != nil {
 		t.Fatalf("seed ensureCurrent: %v", err)
 	}
@@ -356,7 +479,7 @@ func TestEnsureCurrent_ConcurrentStartupOnlyOneMigratesAndBothSucceed(t *testing
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			dbs[i], errs[i] = ensureCurrent(ctx, path, fsys)
+			dbs[i], errs[i] = ensureCurrent(ctx, path, fsys, false, false)
 		}(i)
 	}
 	wg.Wait()

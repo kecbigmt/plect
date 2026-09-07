@@ -79,6 +79,25 @@ func TestStorageMigrate_IsANoOpOnASecondRun(t *testing.T) {
 	}
 }
 
+func TestStorageMigrate_AllowDevBuildFlagStillCreatesAndReportsSchemaVersion(t *testing.T) {
+	fakeHome := t.TempDir()
+	t.Setenv("HOME", fakeHome)
+	t.Setenv("XDG_DATA_HOME", "")
+
+	out, err := execRoot(t, "storage", "migrate", "--allow-dev-build")
+	if err != nil {
+		t.Fatalf("Execute() error = %v; output:\n%s", err, out)
+	}
+
+	dbPath := persistence.PathIn(filepath.Join(fakeHome, ".local", "share", "plect"))
+	if _, statErr := os.Stat(dbPath); statErr != nil {
+		t.Fatalf("storage.db not created at %s: %v", dbPath, statErr)
+	}
+	if !strings.Contains(out, "schema version") {
+		t.Errorf("output = %q, want it to mention the resulting schema version", out)
+	}
+}
+
 func TestRootPersistentPreRun_CreatesStorageDBForEveryCommand(t *testing.T) {
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)
