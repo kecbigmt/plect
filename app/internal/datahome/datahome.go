@@ -4,6 +4,7 @@ package datahome
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -26,13 +27,22 @@ func Resolve() string {
 	return filepath.Join(dataHome, "plect")
 }
 
-// InheritableEnv returns os.Environ() minus EnvVar; XDGEnvVar stays, since other declarations still need it.
+// InheritableEnv returns os.Environ() minus EnvVar; XDGEnvVar stays inherited.
 func InheritableEnv() []string {
+	return filtered(EnvVar)
+}
+
+// IsolatedEnv returns os.Environ() minus both EnvVar and XDGEnvVar.
+func IsolatedEnv() []string {
+	return filtered(EnvVar, XDGEnvVar)
+}
+
+func filtered(drop ...string) []string {
 	env := os.Environ()
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
 		key, _, ok := strings.Cut(kv, "=")
-		if ok && key == EnvVar {
+		if ok && slices.Contains(drop, key) {
 			continue
 		}
 		out = append(out, kv)

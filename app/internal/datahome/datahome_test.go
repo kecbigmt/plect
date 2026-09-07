@@ -63,3 +63,19 @@ func TestInheritableEnv_StripsPlectDataHomeButKeepsXDGDataHome(t *testing.T) {
 		t.Fatalf("InheritableEnv() dropped an unrelated variable, got %v", env)
 	}
 }
+
+func TestIsolatedEnv_StripsBothPlectAndXDGDataHome(t *testing.T) {
+	t.Setenv(EnvVar, "/x")
+	t.Setenv(XDGEnvVar, "/shared")
+	t.Setenv("UNRELATED_VAR", "kept")
+
+	env := IsolatedEnv()
+	for _, kv := range env {
+		if strings.HasPrefix(kv, EnvVar+"=") || strings.HasPrefix(kv, XDGEnvVar+"=") {
+			t.Fatalf("IsolatedEnv() kept %q, want it stripped", kv)
+		}
+	}
+	if !slices.Contains(env, "UNRELATED_VAR=kept") {
+		t.Fatalf("IsolatedEnv() dropped an unrelated variable, got %v", env)
+	}
+}

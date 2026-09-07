@@ -189,13 +189,11 @@ out = { type = "string", required = true }
 	}
 }
 
-// TestDeliver_ProcessStripsPlectDataHomeButKeepsXDGDataHome is this change's
-// regression test: before it, deliverProcess left cmd.Env nil, so a channel
-// command inherited this process's PLECT_DATA_HOME verbatim. XDG_DATA_HOME
-// must still reach the child: see datahome.InheritableEnv's doc comment.
-func TestDeliver_ProcessStripsPlectDataHomeButKeepsXDGDataHome(t *testing.T) {
+// deliverProcess used to leave cmd.Env nil, so a channel command inherited
+// this process's data-home variables verbatim.
+func TestDeliver_ProcessStripsBothDataHomeVars(t *testing.T) {
 	t.Setenv("PLECT_DATA_HOME", "/poisoned")
-	t.Setenv("XDG_DATA_HOME", "/still-inherited")
+	t.Setenv("XDG_DATA_HOME", "/poisoned-xdg")
 
 	out := filepath.Join(t.TempDir(), "env.out")
 	def := channelDef(t, `
@@ -218,11 +216,8 @@ out = { type = "string", required = true }
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(raw), "PLECT_DATA_HOME=") {
-		t.Fatalf("channel command's env leaked PLECT_DATA_HOME:\n%s", raw)
-	}
-	if !strings.Contains(string(raw), "XDG_DATA_HOME=/still-inherited") {
-		t.Fatalf("channel command's env dropped XDG_DATA_HOME, want it still inherited:\n%s", raw)
+	if strings.Contains(string(raw), "PLECT_DATA_HOME=") || strings.Contains(string(raw), "XDG_DATA_HOME=") {
+		t.Fatalf("channel command's env leaked a data-home variable:\n%s", raw)
 	}
 }
 

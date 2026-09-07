@@ -35,33 +35,38 @@ directory and has no sibling to be namespaced against.
 default, and `plect-web` all resolve through this same function, so they
 never disagree about where the store lives.
 
-`datahome.InheritableEnv` returns the current process's environment with
-`PLECT_DATA_HOME` removed (`XDG_DATA_HOME` is deliberately left alone; see
-below). Every child process a declaration starts — a task's setup/cleanup
-action (`app/internal/effect`), a resource observer's poll/subscribe query
-(`app/internal/population`), a channel delivery (`app/internal/channel`),
-and a plugin service (`app/internal/pluginservice`) — builds its
-environment from this base rather than from the raw process environment,
-appending any binding the declaration itself supplies afterward (which
-wins, since a later occurrence of a duplicate key overrides an earlier
-one). This is what keeps a `PLECT_DATA_HOME` relocation from leaking into a
-long-lived child a task's setup starts (a tmux pane's shell, in
-particular): a development build invoked inside that pane resolves the
-default data directory rather than silently reusing whatever data home the
-parent `plect` process was pointed at. Process fan-out that intentionally
-shares the parent's own store (`plect serve` spawning a `plect mcp serve`
-per connection) does not go through this base — sharing the store is the
-point there.
+`datahome` builds a child's base environment two ways: `InheritableEnv`
+removes only `PLECT_DATA_HOME`; `IsolatedEnv` removes both `PLECT_DATA_HOME`
+and `XDG_DATA_HOME`. Every child process a declaration starts appends any
+binding the declaration itself supplies after this base (which wins, since a
+later occurrence of a duplicate key overrides an earlier one), rather than
+building its environment from the raw process environment. Which base a
+path uses depends on whether an existing declaration depends on the child
+inheriting `XDG_DATA_HOME` for its own on-disk state, unrelated to plect's
+own store:
 
-`XDG_DATA_HOME` is not stripped from this base: it is a general-purpose XDG
-variable, and existing declarations already depend on a child inheriting it
-for their own on-disk state unrelated to plect's own store — the shipped
-`github-watcher` service and its observer queries locate their subscription
-registry this way. Stripping it too would need those declarations to gain
-an explicit rebinding mechanism first (today only `PLECT_DATA_HOME` is
-plect-specific enough to strip unconditionally); until then, a wrapper that
-still relocates via `XDG_DATA_HOME` rather than `PLECT_DATA_HOME` keeps
-leaking into these children the same way it always has.
+- `app/internal/effect.ExecHook` (a task's setup/cleanup/health/capture,
+  including a terminal-multiplexer pane's long-lived shell) uses
+  `IsolatedEnv`: a task's setup may start a long-lived child whose own shell
+  must not inherit either variable, since a development build invoked inside
+  it must resolve the default data directory rather than reuse the parent
+  process's.
+- `app/internal/effect.RunHook` (workspace-provider setup/cleanup/subscribe,
+  resource observe/finalize) and `app/internal/population`'s resource-
+  observer poll/subscribe query use `InheritableEnv`: the shipped
+  `github-watcher` service and its poll/subscribe/observe hooks locate their
+  own subscription registry via `XDG_DATA_HOME`, independent of plect's
+  store, and the config language has no per-hook mechanism yet for such a
+  declaration to rebind it explicitly if it were also stripped here.
+- `app/internal/pluginservice` (a supervised service daemon, e.g.
+  `github-watcher`'s own resident process) also uses `InheritableEnv`, for
+  the same reason.
+- `app/internal/channel` (a channel delivery) uses `IsolatedEnv`: no shipped
+  channel destination depends on inheriting either variable.
+
+Process fan-out that intentionally shares the parent's own store (`plect
+serve` spawning a `plect mcp serve` per connection) does not go through
+either base — sharing the store is the point there.
 
 ## Version authority and consumers
 

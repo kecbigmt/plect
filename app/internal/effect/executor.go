@@ -34,14 +34,15 @@ const CancelWaitDelay = 2 * time.Second
 
 // ExecRequest is a single host-process invocation: Argv[0] is the command,
 // Dir is the working directory (applied only if it exists, see hostExecutor),
-// Stdin is optional (nil means "none"), and Env is additions on top of the
-// process's own environment stripped of datahome.EnvVar (see
-// hostExecutor.Run) — nil means no additions.
+// Stdin is optional (nil), Env is additions on top of the process's own
+// environment, and IsolateDataHome picks datahome.IsolatedEnv over
+// InheritableEnv as that base (see ExecHook/RunHook).
 type ExecRequest struct {
-	Argv  []string
-	Dir   string
-	Stdin []byte
-	Env   []string
+	Argv            []string
+	Dir             string
+	Stdin           []byte
+	Env             []string
+	IsolateDataHome bool
 }
 
 // Executor runs an ExecRequest and returns its captured stdout/stderr. The
@@ -69,11 +70,11 @@ func (hostExecutor) Run(ctx context.Context, req ExecRequest) (stdout, stderr []
 	if len(req.Stdin) > 0 {
 		cmd.Stdin = bytes.NewReader(req.Stdin)
 	}
-	// This process's own PLECT_DATA_HOME must not leak into a task's
-	// setup/cleanup process or a long-lived thing it starts, which may
-	// itself invoke a development build of plect. req.Env is appended
-	// after, so a layer's own explicit binding still wins.
-	cmd.Env = append(datahome.InheritableEnv(), req.Env...)
+	base := datahome.InheritableEnv()
+	if req.IsolateDataHome {
+		base = datahome.IsolatedEnv()
+	}
+	cmd.Env = append(base, req.Env...)
 	// Put the child in its own process group and, on cancellation, kill the
 	// whole group rather than just the direct child. A shell script's own
 	// children (e.g. "sleep 5" spawned by "bash -c") don't die with their
@@ -117,25 +118,23 @@ var alwaysHostExecutor Executor = hostExecutor{}
 var defaultExecutor Executor = hostExecutor{}
 
 // requestFor is the one place a resolved lifecycle execution becomes a host
-// invocation: an action arrives already resolved into its argv and standard
-// input, and this adds only the working directory and the environment the
-// enclosing layers inject.
-func requestFor(execution *lang.Execution, workDir string, env []string) ExecRequest {
-	return ExecRequest{Argv: execution.Argv, Stdin: execution.Stdin, Dir: workDir, Env: env}
+// invocation, adding the working directory, injected env, and data-home
+// isolation policy (see docs/design/sqlite-persistence.md, "Data-home
+// resolution").
+func requestFor(execution *lang.Execution, workDir string, env []string, isolateDataHome bool) ExecRequest {
+	return ExecRequest{Argv: execution.Argv, Stdin: execution.Stdin, Dir: workDir, Env: env, IsolateDataHome: isolateDataHome}
 }
 
-// ExecHook runs one resolved execution through the swappable
-// defaultExecutor rather than the pinned alwaysHostExecutor — see the two
-// vars' docs for why the distinction matters. env carries the KEY=VALUE
-// additions the enclosing layers of a nesting chain inject into this
-// execution; it is empty for every plain task.
+// ExecHook runs one resolved execution through the swappable defaultExecutor
+// rather than the pinned alwaysHostExecutor — see the two vars' docs. env
+// carries a nesting chain's KEY=VALUE additions; empty for a plain task.
 func ExecHook(ctx context.Context, execution *lang.Execution, workDir string, env ...string) (stdout, stderr []byte, err error) {
-	return defaultExecutor.Run(ctx, requestFor(execution, workDir, env))
+	return defaultExecutor.Run(ctx, requestFor(execution, workDir, env, true))
 }
 
 // RunHook runs one resolved execution on the host, unconditionally: the path
 // workspace provider setup/cleanup, provider subscribe, and resource
 // observe/finalize take.
 func RunHook(ctx context.Context, execution *lang.Execution, workDir string) (stdout, stderr []byte, err error) {
-	return alwaysHostExecutor.Run(ctx, requestFor(execution, workDir, nil))
+	return alwaysHostExecutor.Run(ctx, requestFor(execution, workDir, nil, false))
 }

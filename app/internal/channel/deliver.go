@@ -191,11 +191,10 @@ func deliverProcess(ctx context.Context, def config.ChannelDefinition, eval lang
 		return fmt.Errorf("channel %s: %w", def.Type, err)
 	}
 	cmd := exec.CommandContext(ctx, execution.Argv[0], execution.Argv[1:]...)
-	// A channel has no way to bind env explicitly, so this is an
-	// unconditional strip: see the datahome package for why a
-	// PLECT_DATA_HOME relocation active in this process must not leak into
-	// a child it starts.
-	cmd.Env = datahome.InheritableEnv()
+	// A channel has no way to bind env explicitly, and no known channel
+	// destination depends on inheriting either data-home variable, so this
+	// is a full, unconditional strip.
+	cmd.Env = datahome.IsolatedEnv()
 	if len(execution.Stdin) > 0 {
 		cmd.Stdin = bytes.NewReader(execution.Stdin)
 	}
