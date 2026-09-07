@@ -341,11 +341,11 @@ func upsertNodeExecutionTx(ctx context.Context, q *sqlcgen.Queries, sessionID, n
 
 	var executionID string
 	if ts.ExecutionID != "" {
-		// A write naming a specific row updates exactly that row, regardless
-		// of its current status -- looking it up by id rather than by "the
-		// current unreleased row for this node_id" is what lets a caller
-		// re-persist an already-cleaned state (a later checkpoint in a
-		// multi-step Destroy, say) without minting a duplicate cleaned row.
+		// Resolved by exact id, not "current unreleased", so a re-persisted
+		// already-cleaned state updates its own row instead of minting a
+		// duplicate; row.Status == cleaned && ts.Status != cleaned means a
+		// different writer already released what this write still thinks
+		// is active.
 		row, err := q.NodeExecutionByID(ctx, ts.ExecutionID)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
@@ -355,12 +355,6 @@ func upsertNodeExecutionTx(ctx context.Context, q *sqlcgen.Queries, sessionID, n
 		case row.SessionID != sessionID || row.NodeID != nodeID:
 			return fmt.Errorf("node %q/%q: execution %q now belongs to %q/%q", sessionID, nodeID, ts.ExecutionID, row.SessionID, row.NodeID)
 		case row.Status == contract.TaskStatusCleaned && ts.Status != contract.TaskStatusCleaned:
-			// The writer's own view (ts.Status) predates the release: it
-			// still thinks this row is active, so proceeding would silently
-			// un-release an execution another writer already finished with.
-			// Re-persisting an already-cleaned state (ts.Status == cleaned
-			// too) is the one case this does not reject -- see
-			// TestPutSession_RewritingAnAlreadyCleanedStateDoesNotDuplicateTheRow.
 			return fmt.Errorf("node %q/%q: execution %q was released by another writer since this write's setup ran", sessionID, nodeID, ts.ExecutionID)
 		}
 		executionID = row.ID
@@ -391,14 +385,10 @@ func upsertNodeExecutionTx(ctx context.Context, q *sqlcgen.Queries, sessionID, n
 			return fmt.Errorf("update node execution %q/%q: %w", sessionID, nodeID, err)
 		}
 	} else {
-		// No claimed identity: either genuinely the node's first attempt, or
-		// (see docs/design/sqlite-persistence.md's "Node execution identity"
-		// section) a same-pass liveness-invalidate-then-rebuild, whose
-		// intermediate "released" transition was never itself persisted. Both
-		// land here as "insert if nothing unreleased exists, else update the
-		// one that does" -- the second case's collapsing into one row rather
-		// than two generations is a known, documented limitation, not
-		// something this branch can safely resolve on the information it has.
+		// No claimed identity: insert if nothing unreleased exists, else
+		// update the one that does -- see docs/design/sqlite-persistence.md's
+		// "Node execution identity" section for the one case (a same-pass
+		// liveness-invalidate-then-rebuild) this cannot fully resolve.
 		current, err := q.CurrentNodeExecution(ctx, sqlcgen.CurrentNodeExecutionParams{SessionID: sessionID, NodeID: nodeID})
 		switch {
 		case errors.Is(err, sql.ErrNoRows):

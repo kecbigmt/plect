@@ -397,11 +397,6 @@ func TestPutSession_RefusesUpdateAgainstAnExecutionAlreadyReleasedByAnotherWrite
 	}
 }
 
-// TestPutSession_RewritingAnAlreadyCleanedStateDoesNotDuplicateTheRow proves
-// re-persisting a state whose ExecutionID names an already-cleaned row
-// updates that same row rather than minting a second cleaned row for it --
-// CurrentNodeExecution excludes cleaned rows, so a lookup keyed only on
-// node_id would otherwise treat the row as absent and insert a duplicate.
 func TestPutSession_RewritingAnAlreadyCleanedStateDoesNotDuplicateTheRow(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
@@ -422,9 +417,6 @@ func TestPutSession_RewritingAnAlreadyCleanedStateDoesNotDuplicateTheRow(t *test
 		t.Fatalf("PutSession (cleaned): %v", err)
 	}
 
-	// A later checkpoint re-persists the same already-cleaned state, still
-	// naming the same row (mirroring service.Destroy's multiple checkpoint
-	// writes of one unchanged session.Nodes map).
 	if err := db.PutSession(ctx, cleaned); err != nil {
 		t.Fatalf("PutSession (re-persist cleaned): %v", err)
 	}
