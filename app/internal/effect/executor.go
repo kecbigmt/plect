@@ -69,13 +69,10 @@ func (hostExecutor) Run(ctx context.Context, req ExecRequest) (stdout, stderr []
 	if len(req.Stdin) > 0 {
 		cmd.Stdin = bytes.NewReader(req.Stdin)
 	}
-	// A PLECT_DATA_HOME relocation active in this process (see the datahome
-	// package) must never leak into a task's setup/cleanup process or the
-	// long-lived thing it starts (a tmux pane's shell, in particular): that
-	// child may itself invoke a development build of plect, which must
-	// resolve the default data directory, not the one this process was
-	// pointed at. req.Env is appended after, so a layer's own explicit
-	// binding for that name still wins.
+	// This process's own PLECT_DATA_HOME must not leak into a task's
+	// setup/cleanup process or a long-lived thing it starts, which may
+	// itself invoke a development build of plect. req.Env is appended
+	// after, so a layer's own explicit binding still wins.
 	cmd.Env = append(datahome.InheritableEnv(), req.Env...)
 	// Put the child in its own process group and, on cancellation, kill the
 	// whole group rather than just the direct child. A shell script's own

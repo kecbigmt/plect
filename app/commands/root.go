@@ -86,8 +86,7 @@ func init() {
 		"Override the runtime data directory (storage.db, the durable event log); else $"+datahome.EnvVar+
 			", else $"+datahome.XDGEnvVar+"/plect, else ~/.local/share/plect. "+
 			"Unlike $"+datahome.XDGEnvVar+", this process never passes $"+datahome.EnvVar+
-			" on to a child it starts (a tmux pane, a task's setup script, a plugin service, "+
-			"a channel command), so a build one of those starts resolves the default data directory.")
+			" on to a child a declaration starts, so a build that child invokes resolves the default data directory.")
 }
 
 func Execute() error {

@@ -40,12 +40,10 @@ echo "stderr marker" >&2
 	}
 }
 
-// TestBuildEnv_StripsPlectDataHomeButKeepsXDGDataHomeUnlessRebound is this
-// change's regression test: before it, buildEnv copied os.Environ()
-// verbatim, so a service inherited the supervisor's PLECT_DATA_HOME
-// unconditionally. XDG_DATA_HOME must still reach the service — an existing
-// one (e.g. github-watcher) already depends on inheriting it for its own
-// unrelated on-disk state; see datahome.InheritableEnv's doc comment.
+// buildEnv used to copy os.Environ() verbatim, so a service inherited the
+// supervisor's PLECT_DATA_HOME unconditionally. XDG_DATA_HOME must still
+// reach the service — an existing one may depend on inheriting it for its
+// own unrelated on-disk state.
 func TestBuildEnv_StripsPlectDataHomeButKeepsXDGDataHomeUnlessRebound(t *testing.T) {
 	t.Setenv("PLECT_DATA_HOME", "/poisoned")
 	t.Setenv("XDG_DATA_HOME", "/still-inherited")

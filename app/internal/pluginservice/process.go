@@ -108,13 +108,10 @@ func (w *serviceLogWriter) logLine(line string) {
 // supervisor's own environment — plugin.toml's `env` field carries only
 // non-secret literals, per the plugin service lifecycle ADR.
 //
-// The supervisor's own PLECT_DATA_HOME (see the datahome package) is
-// dropped before overrides apply, so a plect-specific data-home relocation
-// active in the resident process is not silently inherited by a long-lived
-// service unless plugin.toml's own `env` table rebinds it explicitly.
-// XDG_DATA_HOME is left alone: an existing service (e.g. github-watcher)
-// may already depend on inheriting it for its own unrelated on-disk state —
-// see datahome.InheritableEnv's doc comment.
+// The supervisor's own PLECT_DATA_HOME is dropped before overrides apply,
+// unless plugin.toml's own `env` table rebinds it explicitly. XDG_DATA_HOME
+// is left alone: an existing service may already depend on inheriting it
+// for its own unrelated on-disk state — see datahome.InheritableEnv.
 func buildEnv(overrides map[string]string) []string {
 	merged := make(map[string]string, len(overrides))
 	for _, kv := range os.Environ() {

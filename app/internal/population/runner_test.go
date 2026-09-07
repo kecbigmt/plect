@@ -35,12 +35,10 @@ func TestActionRunnerPollRequiresAJSONArray(t *testing.T) {
 	}
 }
 
-// TestActionRunnerPollStripsPlectDataHomeButKeepsXDGDataHome is this
-// change's regression test: before it, commandContext left cmd.Env nil, so
-// a resource observer's poll query inherited this process's
-// PLECT_DATA_HOME verbatim. XDG_DATA_HOME must still reach the query: the
-// github-watcher observer (among others) depends on inheriting it for its
-// own unrelated on-disk state — see datahome.InheritableEnv's doc comment.
+// commandContext used to leave cmd.Env nil, so a resource observer's poll
+// query inherited this process's PLECT_DATA_HOME verbatim. XDG_DATA_HOME
+// must still reach the query: an existing observer may depend on
+// inheriting it for its own unrelated on-disk state.
 func TestActionRunnerPollStripsPlectDataHomeButKeepsXDGDataHome(t *testing.T) {
 	t.Setenv("PLECT_DATA_HOME", "/poisoned")
 	t.Setenv("XDG_DATA_HOME", "/still-inherited")

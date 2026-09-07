@@ -78,7 +78,7 @@ func TestExecutor_RequestForKeepsEachFormsInvocationShape(t *testing.T) {
 }
 
 // hostExecutor.Run used to leave cmd.Env nil with an empty ExecRequest.Env,
-// inheriting PLECT_DATA_HOME verbatim (issue #503).
+// inheriting PLECT_DATA_HOME verbatim.
 func TestExecutor_HostExecutorStripsPlectDataHomeUnlessEnvRebindsIt(t *testing.T) {
 	t.Setenv("PLECT_DATA_HOME", "/poisoned")
 	t.Setenv("XDG_DATA_HOME", "/still-inherited")
