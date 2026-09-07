@@ -2,7 +2,9 @@ package reactor
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -18,6 +20,49 @@ import (
 	"github.com/kecbigmt/plecture/contracts/event"
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
+
+type onceBuiltBinaries struct {
+	once sync.Once
+	dir  string
+	err  error
+}
+
+func (o *onceBuiltBinaries) build(root string, binaries []struct{ moduleDir, pkg, name string }, env []string) (string, error) {
+	o.once.Do(func() {
+		dir, err := os.MkdirTemp("", "plect-shared-bin-")
+		if err != nil {
+			o.err = err
+			return
+		}
+		o.dir = dir
+		for _, b := range binaries {
+			cmd := exec.Command("go", "build", "-o", filepath.Join(dir, b.name), b.pkg)
+			cmd.Dir = filepath.Join(root, b.moduleDir)
+			cmd.Env = append(os.Environ(), env...)
+			cmd.Stdout = os.Stderr
+			cmd.Stderr = os.Stderr
+			if err := cmd.Run(); err != nil {
+				o.err = fmt.Errorf("build %s: %w", b.name, err)
+				return
+			}
+		}
+	})
+	return o.dir, o.err
+}
+
+func (o *onceBuiltBinaries) cleanup() {
+	if o.dir != "" {
+		os.RemoveAll(o.dir)
+	}
+}
+
+var sharedShippedPluginBinaries onceBuiltBinaries
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	sharedShippedPluginBinaries.cleanup()
+	os.Exit(code)
+}
 
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()

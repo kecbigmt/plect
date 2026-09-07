@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -87,35 +88,43 @@ const (
 	ciStatusEventType  = "github.ci_status" // boundary-allow: real event type the watcher publishes
 )
 
-// buildGithubPluginBinaries compiles plect and the shipped plugin's two
-// executables into a temp bin dir, prepends it to PATH, and returns the
-// mounted-plugin entry the shipped worktree.toml's `{{bin ...}}` references
-// need to resolve. Mirrors app/internal/service's own
-// buildWorkspaceProviderBinaries — duplicated here rather than shared,
+var shippedPluginBinaries = []struct{ moduleDir, pkg, name string }{
+	{"app", "./cmd/plect", "plect"},
+	{filepath.Join("plugins", pluginDirName, "src"), "./cmd/" + worktreeBin, worktreeBin},
+	{filepath.Join("plugins", pluginDirName, "src"), "./cmd/" + watcherBin, watcherBin},
+	{filepath.Join("plugins", pluginDirName, "src"), "./cmd/" + appTokenBin, appTokenBin},
+}
+
+// buildSharedShippedPluginBinaries builds shippedPluginBinaries once per test
+// binary run rather than once per call: this file's two tests each mount a
+// fresh copy, and each was separately rebuilding all four.
+func buildSharedShippedPluginBinaries(root string) (string, error) {
+	return sharedShippedPluginBinaries.build(root, shippedPluginBinaries, goToolCachesForE2E)
+}
+
+// buildGithubPluginBinaries symlinks the shared binaries (see
+// buildSharedShippedPluginBinaries) into a fresh per-test directory and PATH,
+// and returns the mounted-plugin entry the shipped worktree.toml's
+// `{{bin ...}}` references need to resolve. Mirrors app/internal/service's
+// own buildWorkspaceProviderBinaries — duplicated here rather than shared,
 // because that helper is unexported in a package this one cannot import (see
 // the comment on TestE2E_TaskSetupResourceDeliversRealWatcherEventToReactiveTick
 // for why this test lives in this package at all).
 func buildGithubPluginBinaries(t *testing.T, root string) []plugins.Mounted {
 	t.Helper()
+	sharedDir, err := buildSharedShippedPluginBinaries(root)
+	if err != nil {
+		t.Fatalf("build shipped plugin binaries: %v", err)
+	}
 	binDir := filepath.Join(t.TempDir(), "bin")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	build := func(moduleDir, pkg, out string) {
-		t.Helper()
-		cmd := exec.Command("go", "build", "-o", filepath.Join(binDir, out), pkg)
-		cmd.Dir = filepath.Join(root, moduleDir)
-		cmd.Env = append(os.Environ(), goToolCachesForE2E...)
-		cmd.Stdout = os.Stderr
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			t.Fatalf("build %s: %v", out, err)
+	for _, b := range shippedPluginBinaries {
+		if err := os.Symlink(filepath.Join(sharedDir, b.name), filepath.Join(binDir, b.name)); err != nil {
+			t.Fatalf("symlink %s: %v", b.name, err)
 		}
 	}
-	build("app", "./cmd/plect", "plect")
-	build(filepath.Join("plugins", pluginDirName, "src"), "./cmd/"+worktreeBin, worktreeBin)
-	build(filepath.Join("plugins", pluginDirName, "src"), "./cmd/"+watcherBin, watcherBin)
-	build(filepath.Join("plugins", pluginDirName, "src"), "./cmd/"+appTokenBin, appTokenBin)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	return []plugins.Mounted{{
@@ -127,6 +136,74 @@ func buildGithubPluginBinaries(t *testing.T, root string) []plugins.Mounted {
 			{Name: appTokenBin, Path: appTokenBin},
 		}},
 	}}
+}
+
+func TestBuildShippedPluginBinaries_BuildsOnce(t *testing.T) {
+	root := repoRootForE2E(t)
+	buildGithubPluginBinaries(t, root)
+	firstDir, err := buildSharedShippedPluginBinaries(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstInfo, err := os.Stat(filepath.Join(firstDir, "plect"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	buildGithubPluginBinaries(t, root)
+	secondDir, err := buildSharedShippedPluginBinaries(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondDir != firstDir {
+		t.Fatalf("shared binaries directory changed between calls: %q vs %q", firstDir, secondDir)
+	}
+	secondInfo, err := os.Stat(filepath.Join(secondDir, "plect"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !secondInfo.ModTime().Equal(firstInfo.ModTime()) {
+		t.Error("plect was rebuilt on a second mount request; shipped plugin binaries must build exactly once per test binary run")
+	}
+}
+
+const forceSharedBuildFailureEnvVar = "PLECT_TEST_FORCE_SHARED_BUILD_FAILURE"
+
+func TestForceSharedBuildFailure(t *testing.T) {
+	if os.Getenv(forceSharedBuildFailureEnvVar) != "1" {
+		t.Skip("subprocess helper; set " + forceSharedBuildFailureEnvVar + " to run")
+	}
+	dir, err := sharedShippedPluginBinaries.build(repoRootForE2E(t), []struct{ moduleDir, pkg, name string }{
+		{"app", "./cmd/this-package-does-not-exist", "nope"},
+	}, goToolCachesForE2E)
+	if err == nil {
+		t.Fatal("expected an error building a nonexistent package")
+	}
+	os.Stdout.WriteString("SHARED_BIN_DIR=" + dir + "\n")
+}
+
+func TestMain_RemovesTheSharedDirAfterAFailedBuild(t *testing.T) {
+	cmd := exec.Command("go", "test", "-tags", "integration", "-run", "^TestForceSharedBuildFailure$", "-v", "./internal/reactor/...")
+	cmd.Dir = filepath.Join(repoRootForE2E(t), "app")
+	cmd.Env = append(os.Environ(), forceSharedBuildFailureEnvVar+"=1")
+	cmd.Env = append(cmd.Env, goToolCachesForE2E...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("subprocess failed: %v\n%s", err, out)
+	}
+
+	var dir string
+	for _, line := range strings.Split(string(out), "\n") {
+		if after, ok := strings.CutPrefix(line, "SHARED_BIN_DIR="); ok {
+			dir = after
+		}
+	}
+	if dir == "" {
+		t.Fatalf("subprocess output missing SHARED_BIN_DIR=...:\n%s", out)
+	}
+	if _, statErr := os.Stat(dir); !os.IsNotExist(statErr) {
+		t.Errorf("TestMain should have removed %s, stat err = %v", dir, statErr)
+	}
 }
 
 // apiCLIBin is the API CLI binary name the real watcher poller shells out

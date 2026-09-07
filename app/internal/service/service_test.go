@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,6 +24,45 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
+type onceBuiltBinaries struct {
+	once sync.Once
+	dir  string
+	err  error
+}
+
+func (o *onceBuiltBinaries) build(root string, binaries []struct{ moduleDir, pkg, name string }, env []string) (string, error) {
+	o.once.Do(func() {
+		dir, err := os.MkdirTemp("", "plect-shared-bin-")
+		if err != nil {
+			o.err = err
+			return
+		}
+		// Set before any build runs, so a build failing partway through the
+		// list still leaves a directory for cleanup to find.
+		o.dir = dir
+		for _, b := range binaries {
+			cmd := exec.Command("go", "build", "-o", filepath.Join(dir, b.name), b.pkg)
+			cmd.Dir = filepath.Join(root, b.moduleDir)
+			cmd.Env = append(os.Environ(), env...)
+			cmd.Stdout = os.Stderr
+			cmd.Stderr = os.Stderr
+			if err := cmd.Run(); err != nil {
+				o.err = fmt.Errorf("build %s: %w", b.name, err)
+				return
+			}
+		}
+	})
+	return o.dir, o.err
+}
+
+func (o *onceBuiltBinaries) cleanup() {
+	if o.dir != "" {
+		os.RemoveAll(o.dir)
+	}
+}
+
+var sharedWorkspaceProviderBinaries onceBuiltBinaries
+
 // PLECT_CONFIG_HOME and XDG_CONFIG_HOME both outrank HOME in
 // confighome.Resolve()'s precedence, so left ambient either would bypass
 // every test's HOME-based isolation below; PLECT_SESSION_NAME is unset
@@ -31,7 +71,9 @@ func TestMain(m *testing.M) {
 	os.Unsetenv("PLECT_SESSION_NAME")
 	os.Unsetenv(confighome.EnvVar)
 	os.Unsetenv(confighome.XDGEnvVar)
-	os.Exit(m.Run())
+	code := m.Run()
+	sharedWorkspaceProviderBinaries.cleanup()
+	os.Exit(code)
 }
 
 func testStore(t *testing.T) *state.Store {

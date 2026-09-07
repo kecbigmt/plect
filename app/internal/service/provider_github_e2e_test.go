@@ -81,33 +81,40 @@ func resolveGoToolCaches() []string {
 	return []string{"GOMODCACHE=" + lines[0], "GOCACHE=" + lines[1]}
 }
 
-// buildWorkspaceProviderBinaries compiles the plect CLI and the two
-// executables the GitHub catalog plugin ships (github-worktree,
-// github-watcher) into a temp directory, prepends it to PATH (`plect`
-// itself is still resolved that way), and returns the mounted-plugin entry
-// an effect.WorkflowHookVars/effect.SubscribeHookVars.Plugins needs so the shipped hooks'
-// `{{bin ...}}` references resolve to the code in this working tree.
+var workspaceProviderBinaries = []struct{ moduleDir, pkg, name string }{
+	{"app", "./cmd/plect", "plect"},
+	{filepath.Join("plugins", "github", "src"), "./cmd/github-worktree", "github-worktree"},
+	{filepath.Join("plugins", "github", "src"), "./cmd/github-watcher", "github-watcher"},
+	{filepath.Join("plugins", "github", "src"), "./cmd/gh-app-token", "gh-app-token"},
+}
+
+// buildSharedWorkspaceProviderBinaries builds workspaceProviderBinaries once
+// per test binary run: dozens of tests each mount a workspace-provider
+// fixture, and a per-test rebuild of all four was this package's dominant
+// integration-test cost.
+func buildSharedWorkspaceProviderBinaries(root string) (string, error) {
+	return sharedWorkspaceProviderBinaries.build(root, workspaceProviderBinaries, goToolCaches)
+}
+
+// buildWorkspaceProviderBinaries symlinks the shared binaries (see
+// buildSharedWorkspaceProviderBinaries) into a fresh per-test directory and
+// PATH, so a test's own config/workspaces writes don't collide with
+// another test's.
 func buildWorkspaceProviderBinaries(t *testing.T, root string) []plugins.Mounted {
 	t.Helper()
+	sharedDir, err := buildSharedWorkspaceProviderBinaries(root)
+	if err != nil {
+		t.Fatalf("build workspace provider binaries: %v", err)
+	}
 	binDir := filepath.Join(t.TempDir(), "bin")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	build := func(moduleDir, pkg, out string) {
-		t.Helper()
-		cmd := exec.Command("go", "build", "-o", filepath.Join(binDir, out), pkg)
-		cmd.Dir = filepath.Join(root, moduleDir)
-		cmd.Env = append(os.Environ(), goToolCaches...)
-		cmd.Stdout = os.Stderr
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			t.Fatalf("build %s: %v", out, err)
+	for _, b := range workspaceProviderBinaries {
+		if err := os.Symlink(filepath.Join(sharedDir, b.name), filepath.Join(binDir, b.name)); err != nil {
+			t.Fatalf("symlink %s: %v", b.name, err)
 		}
 	}
-	build("app", "./cmd/plect", "plect")
-	build(filepath.Join("plugins", "github", "src"), "./cmd/github-worktree", "github-worktree")
-	build(filepath.Join("plugins", "github", "src"), "./cmd/github-watcher", "github-watcher")
-	build(filepath.Join("plugins", "github", "src"), "./cmd/gh-app-token", "gh-app-token")
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	return []plugins.Mounted{{
@@ -119,6 +126,78 @@ func buildWorkspaceProviderBinaries(t *testing.T, root string) []plugins.Mounted
 			{Name: "gh-app-token", Path: "gh-app-token"},
 		}},
 	}}
+}
+
+func TestBuildWorkspaceProviderBinaries_BuildsOnce(t *testing.T) {
+	root := repoRoot(t)
+	buildWorkspaceProviderBinaries(t, root)
+	firstDir, err := buildSharedWorkspaceProviderBinaries(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstInfo, err := os.Stat(filepath.Join(firstDir, "plect"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	buildWorkspaceProviderBinaries(t, root)
+	secondDir, err := buildSharedWorkspaceProviderBinaries(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondDir != firstDir {
+		t.Fatalf("shared binaries directory changed between calls: %q vs %q", firstDir, secondDir)
+	}
+	secondInfo, err := os.Stat(filepath.Join(secondDir, "plect"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !secondInfo.ModTime().Equal(firstInfo.ModTime()) {
+		t.Error("plect was rebuilt on a second mount request; workspace-provider binaries must build exactly once per test binary run")
+	}
+}
+
+const forceSharedBuildFailureEnvVar = "PLECT_TEST_FORCE_SHARED_BUILD_FAILURE"
+
+// Poisoning the real shared build singleton is safe only in a throwaway
+// process, so this only runs as a subprocess.
+func TestForceSharedBuildFailure(t *testing.T) {
+	if os.Getenv(forceSharedBuildFailureEnvVar) != "1" {
+		t.Skip("subprocess helper; set " + forceSharedBuildFailureEnvVar + " to run")
+	}
+	dir, err := sharedWorkspaceProviderBinaries.build(repoRoot(t), []struct{ moduleDir, pkg, name string }{
+		{"app", "./cmd/this-package-does-not-exist", "nope"},
+	}, goToolCaches)
+	if err == nil {
+		t.Fatal("expected an error building a nonexistent package")
+	}
+	os.Stdout.WriteString("SHARED_BIN_DIR=" + dir + "\n")
+}
+
+// Spawns TestForceSharedBuildFailure as a subprocess so its real TestMain,
+// not a copy of its logic, is what cleans up.
+func TestMain_RemovesTheSharedDirAfterAFailedBuild(t *testing.T) {
+	cmd := exec.Command("go", "test", "-tags", "integration", "-run", "^TestForceSharedBuildFailure$", "-v", "./internal/service/...")
+	cmd.Dir = filepath.Join(repoRoot(t), "app")
+	cmd.Env = append(os.Environ(), forceSharedBuildFailureEnvVar+"=1")
+	cmd.Env = append(cmd.Env, goToolCaches...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("subprocess failed: %v\n%s", err, out)
+	}
+
+	var dir string
+	for _, line := range strings.Split(string(out), "\n") {
+		if after, ok := strings.CutPrefix(line, "SHARED_BIN_DIR="); ok {
+			dir = after
+		}
+	}
+	if dir == "" {
+		t.Fatalf("subprocess output missing SHARED_BIN_DIR=...:\n%s", out)
+	}
+	if _, statErr := os.Stat(dir); !os.IsNotExist(statErr) {
+		t.Errorf("TestMain should have removed %s, stat err = %v", dir, statErr)
+	}
 }
 
 // setupHomeRepo builds the bare-ish layout the github workspace provider
