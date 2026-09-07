@@ -27,7 +27,6 @@ const cancellationCharChildSleep = 8 * time.Second
 // that long, so a tighter budget fails even when it works as designed.
 const cancellationCharKillBudget = effect.CancelWaitDelay + 2*time.Second
 
-// Threshold for assertGroupKillFast; see its doc comment for the rationale.
 const cancellationCharFastKillBudget = effect.CancelWaitDelay / 2
 
 // assertGroupKillFast fails the test if a hung child in the same process
