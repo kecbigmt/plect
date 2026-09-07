@@ -27,7 +27,7 @@ func sampleShow() *service.StatusResult {
 			Health:             domain.HealthHealthy,
 			WorkspaceDirPath:   "/home/dev/workdirs/owner/repo/issue-7",
 			WorkspaceDirExists: true,
-			Conversation:       &domain.Conversation{Source: "Slack", URL: "https://slack.example/thread/1"},
+			Message:            &domain.Message{Text: "running tests", UpdatedAt: time.Now()},
 			AttachCommand:      "some-runtime attach owner/repo-7",
 		},
 	}
@@ -41,7 +41,7 @@ func TestDetail_ShowsSession(t *testing.T) {
 	}
 	body := rec.Body.String()
 	for _, want := range []string{
-		"owner/repo-7", "issue/7", "make the thing work", "Slack",
+		"owner/repo-7", "issue/7", "make the thing work", "running tests",
 		"/home/dev/workdirs/owner/repo/issue-7",
 	} {
 		if !strings.Contains(body, want) {

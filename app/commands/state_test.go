@@ -5,6 +5,17 @@ import (
 	"testing"
 )
 
+// The facts a chat thread's setup once copied into Conversation already live
+// under the effect node's own outputs (thread_ts, channel_id, permalink), so
+// there is nothing left for this command to write.
+func TestStateCommandHasNoSetConversationSubcommand(t *testing.T) {
+	for _, cmd := range stateCmd.Commands() {
+		if cmd.Name() == "set-conversation" {
+			t.Fatal("state command must not expose set-conversation")
+		}
+	}
+}
+
 func TestSetOutputHelpDocumentsRuntimeTaskTarget(t *testing.T) {
 	if !strings.Contains(setOutputCmd.Long, "--task <task-handle>") {
 		t.Fatalf("set-output long help must document --task <task-handle>; got:\n%s", setOutputCmd.Long)

@@ -344,7 +344,6 @@ func recreateSessionRuntime(cfg *config.Config, store *state.Store, sessionName 
 
 	session.Branch = ""
 	session.WorkspaceDirPath = ""
-	session.Conversation = nil
 	session.Message = nil
 	session.Tasks = make(map[string]*contract.TaskState)
 	session.Health = nil

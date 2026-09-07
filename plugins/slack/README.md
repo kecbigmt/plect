@@ -16,9 +16,7 @@ another plugin's package.
   acquires/releases a bare workspace directory for it, with no GitHub
   artifact standing in for the session. See "Workspace provider" below.
 - `config/tasks/slack_thread.toml` — creates one Slack root message through
-  `slack-adapter` and records the conversation with
-  `plect state set-conversation`. Outputs: `thread_ts`, `channel_id`, and
-  `permalink`.
+  `slack-adapter`. Outputs: `thread_ts`, `channel_id`, and `permalink`.
 - `config/tasks/slack_subscribe.toml` — run-scoped effect that registers a
   thread ↔ runtime binding with `slack-adapter` (`POST /subscribe`, undone
   with `DELETE /subscribe` on cleanup), so an `app_mention` in the thread
@@ -76,12 +74,12 @@ either the root message's own permalink or a reply's permalink carrying
 `?thread_ts=<root>&cid=<channel_id>` — to a session named
 `slack/<channel_id>-<root thread_ts digits>`, so both forms of the same
 thread's permalink resolve to the same session. `setup` creates a bare
-directory under `config.workspace_dirs_root` and records the same
-`source=Slack` conversation `slack_thread` writes, so the shipped
-`slack`/`status` channels and `slack_subscribe` effect bind from a session
-this provider backs exactly as they would from one `slack_thread` created.
-`cleanup` removes the directory. Dependencies: `plect` and a POSIX shell —
-no git, and no `slack-adapter` HTTP call, so a workflow that wants a
+directory under `config.workspace_dirs_root` and reports the same
+`channel_id`, `thread_ts`, and `permalink` outputs `slack_thread` reports, so
+the shipped `slack`/`status` channels and `slack_subscribe` effect bind from
+a session this provider backs exactly as they would from one `slack_thread`
+created. `cleanup` removes the directory. Dependencies: `plect` and a POSIX
+shell — no git, and no `slack-adapter` HTTP call, so a workflow that wants a
 repository checkout composes a separate effect for it.
 
 Unlike `official.github.worktree`, this provider declares no
@@ -91,11 +89,10 @@ could bind to or drop a binding from for a thread resource.
 ## Thread contract
 
 `slack_thread` posts whatever `root_text` input it is handed as the root
-message and records the session conversation with `source=Slack`, the
-adapter permalink, and metadata keys `thread_ts` and `channel_id`. It carries
-no opinion about what the thread is for — review, or anything else — and no
-PR-specific inputs: how the root text is framed is the composing workflow's
-concern.
+message and reports the adapter permalink, `thread_ts`, and `channel_id` as
+outputs. It carries no opinion about what the thread is for — review, or
+anything else — and no PR-specific inputs: how the root text is framed is
+the composing workflow's concern.
 
 `examples/review-thread-workflow.toml` shows the review case: it composes
 `root_text` from a PR title, URL, and head sha, then wires `slack_thread`

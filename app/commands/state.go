@@ -8,15 +8,11 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/kecbigmt/plecture/app/internal/config"
-	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/service"
 	"github.com/kecbigmt/plecture/app/internal/state"
 )
 
 var (
-	setConvSource     string
-	setConvURL        string
-	setConvMeta       []string
 	setOutputNode     string
 	setOutputWorkflow bool
 	setOutputTask     string
@@ -26,49 +22,6 @@ var (
 var stateCmd = &cobra.Command{
 	Use:   "state",
 	Short: "Manage session state",
-}
-
-var setConversationCmd = &cobra.Command{
-	Use:   "set-conversation <session-or-url>",
-	Short: "Set the conversation associated with a session",
-	Long: `Set or update the conversation (e.g., a chat thread) linked to a session.
-
-Example:
-  plect state set-conversation session-1 \
-    --source chat-platform \
-    --url "https://example.test/archives/C.../p..." \
-    --meta thread_ts=1234567890.123456 \
-    --meta channel_id=C01ABCDEF`,
-	Args: cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, err := config.Load()
-		if err != nil {
-			return err
-		}
-		store := state.NewStore("")
-
-		metadata := make(map[string]string)
-		for _, m := range setConvMeta {
-			parts := strings.SplitN(m, "=", 2)
-			if len(parts) != 2 {
-				return fmt.Errorf("invalid --meta format %q: expected key=value", m)
-			}
-			metadata[parts[0]] = parts[1]
-		}
-
-		conv := &domain.Conversation{
-			Source:   setConvSource,
-			URL:      setConvURL,
-			Metadata: metadata,
-		}
-
-		if err := service.SetConversation(cfg, store, args[0], conv); err != nil {
-			return err
-		}
-
-		fmt.Fprintf(cmd.ErrOrStderr(), "Conversation set for %s\n", args[0])
-		return nil
-	},
 }
 
 var setMessageCmd = &cobra.Command{
@@ -209,12 +162,6 @@ Example:
 }
 
 func init() {
-	setConversationCmd.Flags().StringVar(&setConvSource, "source", "", "Conversation source (e.g., a chat platform's name)")
-	setConversationCmd.Flags().StringVar(&setConvURL, "url", "", "Permalink URL to the conversation")
-	setConversationCmd.Flags().StringArrayVar(&setConvMeta, "meta", nil, "Metadata key=value pairs (repeatable)")
-	setConversationCmd.MarkFlagRequired("source")
-	setConversationCmd.MarkFlagRequired("url")
-
 	setOutputCmd.Flags().StringVar(&setOutputNode, "node", "", "Target workflow node id")
 	setOutputCmd.Flags().BoolVar(&setOutputWorkflow, "workflow", false, "Target the workflow pseudo-node")
 	setOutputCmd.Flags().StringVar(&setOutputTask, "task", "", "Target a produced runtime task such as review#1")
@@ -225,7 +172,6 @@ func init() {
 	setStateCmd.MarkFlagRequired("instance")
 
 	stateCmd.AddCommand(setStateCmd)
-	stateCmd.AddCommand(setConversationCmd)
 	stateCmd.AddCommand(setMessageCmd)
 	stateCmd.AddCommand(setOutputCmd)
 	rootCmd.AddCommand(stateCmd)

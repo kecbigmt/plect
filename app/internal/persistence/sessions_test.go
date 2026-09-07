@@ -3,6 +3,7 @@ package persistence
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -32,12 +33,9 @@ func TestPutSessionAndGetSession_RoundTripsRelationalAndJSONFields(t *testing.T)
 		ResourceID:       "https://example.test/resource/123",
 		Branch:           "case-123",
 		WorkspaceDirPath: "/tmp/workdirs/case123",
-		Conversation: &domain.Conversation{
-			Source: "example-chat",
-			URL:    "https://example.test/chat/archives/C01/p123",
-			Metadata: map[string]string{
-				"thread_ts": "1234567890.123456",
-			},
+		Message: &domain.Message{
+			Text:      "running tests",
+			UpdatedAt: now,
 		},
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -57,11 +55,44 @@ func TestPutSessionAndGetSession_RoundTripsRelationalAndJSONFields(t *testing.T)
 	if got.Name != session.Name || got.ResourceID != session.ResourceID || got.Branch != session.Branch {
 		t.Errorf("got = %+v, want name/resource_id/branch to match", got)
 	}
-	if got.Conversation == nil || got.Conversation.Source != "example-chat" {
-		t.Fatalf("Conversation not round-tripped through record_json: %+v", got.Conversation)
+	if got.Message == nil || got.Message.Text != "running tests" {
+		t.Fatalf("Message not round-tripped through record_json: %+v", got.Message)
 	}
 	if !got.CreatedAt.Equal(now) || !got.UpdatedAt.Equal(now) {
 		t.Errorf("CreatedAt/UpdatedAt = %v/%v, want %v", got.CreatedAt, got.UpdatedAt, now)
+	}
+}
+
+// Raw record JSON is necessary because the retired field has no typed write
+// path.
+func TestGetSession_DropsALegacyConversationKeyFromRecordJSON(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	if err := db.PutSession(ctx, &domain.Session{
+		Name: "legacy-1", Branch: "issue-1", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("PutSession: %v", err)
+	}
+	legacyRecordJSON := `{"branch":"issue-1","conversation":{"source":"chat-platform","url":"https://example.test/archives/C1/p2"}}`
+	if err := db.WithImmediateTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `UPDATE sessions SET record_json = ? WHERE name = ?`, legacyRecordJSON, "legacy-1")
+		return err
+	}); err != nil {
+		t.Fatalf("seed legacy record_json: %v", err)
+	}
+
+	got, err := db.GetSession(ctx, "legacy-1")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	b, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if strings.Contains(string(b), `"conversation"`) {
+		t.Fatalf("GetSession round-trip = %s, want the legacy conversation key dropped", b)
 	}
 }
 

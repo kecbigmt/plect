@@ -801,7 +801,6 @@ func TestUp_ForceRecreateResetsRuntimeWithoutPrev(t *testing.T) {
 		s.Alias = "resource-alias"
 		s.WorkspaceDirPath = oldWorkdirPath
 		s.Branch = "old-branch"
-		s.Conversation = &contract.Conversation{Source: "chat", URL: "https://example.invalid/old"}
 		s.Message = &contract.Message{Text: "old", UpdatedAt: time.Now()}
 		s.Health = &contract.HealthState{LastCheckedAt: time.Now(), LastReason: "old"}
 		s.LastTickAt = time.Now()
@@ -859,7 +858,7 @@ func TestUp_ForceRecreateResetsRuntimeWithoutPrev(t *testing.T) {
 	if persisted.Branch != "new-branch" {
 		t.Fatalf("Branch = %q, want provider output", persisted.Branch)
 	}
-	if persisted.Conversation != nil || persisted.Message != nil || persisted.Health != nil || !persisted.LastTickAt.IsZero() || persisted.TickBackoff != nil {
+	if persisted.Message != nil || persisted.Health != nil || !persisted.LastTickAt.IsZero() || persisted.TickBackoff != nil {
 		t.Fatalf("runtime observation fields were not cleared: %+v", persisted)
 	}
 	evs, _, _, err := logStore.List(sessionName, 0, event.Filter{})
@@ -953,7 +952,6 @@ func TestUp_ForceRecreateCleanupFailurePreservesInspectableState(t *testing.T) {
 		s.ParentSession = "org/repo-parent"
 		s.WorkspaceDirPath = oldWorkdirPath
 		s.Branch = "old-branch"
-		s.Conversation = &contract.Conversation{Source: "chat", URL: "https://example.invalid/old"}
 		s.Message = &contract.Message{Text: "old", UpdatedAt: time.Now()}
 		s.Health = &contract.HealthState{LastCheckedAt: time.Now(), LastReason: "old"}
 		s.LastTickAt = time.Now()
@@ -994,7 +992,7 @@ func TestUp_ForceRecreateCleanupFailurePreservesInspectableState(t *testing.T) {
 	if persisted.WorkspaceDirPath != oldWorkdirPath || persisted.Branch != "old-branch" {
 		t.Fatalf("runtime session state = (%q, %q), want preserved before reset", persisted.WorkspaceDirPath, persisted.Branch)
 	}
-	if persisted.Conversation == nil || persisted.Message == nil || persisted.Health == nil || persisted.LastTickAt.IsZero() || persisted.TickBackoff == nil {
+	if persisted.Message == nil || persisted.Health == nil || persisted.LastTickAt.IsZero() || persisted.TickBackoff == nil {
 		t.Fatalf("runtime observation fields were reset after cleanup failure: %+v", persisted)
 	}
 	if !fileExists(oldWorkdirPath) {

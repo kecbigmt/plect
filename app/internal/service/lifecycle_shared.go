@@ -39,7 +39,6 @@ func replaceRuntimeState(store *state.Store, sessionName string, session *domain
 	return store.Update(sessionName, func(s *domain.Session) error {
 		s.Branch = session.Branch
 		s.WorkspaceDirPath = session.WorkspaceDirPath
-		s.Conversation = session.Conversation
 		s.Message = session.Message
 		s.Tasks = session.Tasks
 		s.Health = session.Health

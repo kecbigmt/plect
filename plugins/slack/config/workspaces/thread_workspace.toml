@@ -62,12 +62,6 @@ thread_ts="${ts_digits%??????}.${ts_digits#??????????}"
 workspace_dir="$workspace_dirs_root/slack/$channel_id/$thread_ts"
 mkdir -p "$workspace_dir"
 
-plect state set-conversation "$session_name" \
-  --source Slack \
-  --url "$permalink" \
-  --meta "thread_ts=$thread_ts" \
-  --meta "channel_id=$channel_id"
-
 printf '{"workspace_dir":"%s","channel_id":"%s","thread_ts":"%s","permalink":"%s"}\n' \
   "$(json_escape "$workspace_dir")" "$(json_escape "$channel_id")" \
   "$(json_escape "$thread_ts")" "$(json_escape "$permalink")"
