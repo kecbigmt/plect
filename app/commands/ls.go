@@ -61,7 +61,7 @@ var lsCmd = &cobra.Command{
 		fmt.Fprintln(w, "SESSION\tRUN\tHEALTH\tDONE_WHEN\tMESSAGE")
 		for _, e := range entries {
 			health := string(e.Health)
-			if e.Run != "up" {
+			if health == "" {
 				health = "-"
 			}
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", e.SessionName, e.Run, health, service.DoneWhenCell(e.Tasks), formatMessage(e))
