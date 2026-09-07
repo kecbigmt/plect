@@ -308,20 +308,74 @@ func (s *Store) List(session string, since int64, f event.Filter) (evs []event.E
 }
 
 // ListFromStreamID is List's stream-scoped counterpart, reading streamID's own rows directly instead of resolving a session name to its current stream.
-func (s *Store) ListFromStreamID(streamID, session string, since int64) (evs []event.Event, seqs []int64, next int64, err error) {
+func (s *Store) ListFromStreamID(streamID, session string, since int64, f event.Filter) (evs []event.Event, seqs []int64, next int64, err error) {
 	db, err := s.dbHandle()
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	evs, seqs, err = db.ListEventsFromStreamID(context.Background(), streamID, session, max(since, 0))
+	all, allSeqs, err := db.ListEventsFromStreamID(context.Background(), streamID, session, max(since, 0))
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("eventlog: list from stream: %w", err)
 	}
 	next = since
-	if len(seqs) > 0 {
-		next = seqs[len(seqs)-1] + 1
+	for i := range all {
+		next = allSeqs[i] + 1
+		if !f.Match(all[i]) {
+			continue
+		}
+		evs = append(evs, all[i])
+		seqs = append(seqs, allSeqs[i])
+		if f.Limit > 0 && len(evs) >= f.Limit {
+			break
+		}
 	}
 	return evs, seqs, next, nil
+}
+
+// TailFromStreamID is Tail's stream-scoped counterpart — see ListFromStreamID.
+func (s *Store) TailFromStreamID(streamID, session string, f event.Filter, limit int) ([]event.Event, error) {
+	db, err := s.dbHandle()
+	if err != nil {
+		return nil, err
+	}
+	all, _, err := db.ListEventsFromStreamID(context.Background(), streamID, session, 0)
+	if err != nil {
+		return nil, fmt.Errorf("eventlog: tail from stream: %w", err)
+	}
+	var ring []event.Event
+	for _, ev := range all {
+		if !f.Match(ev) {
+			continue
+		}
+		switch {
+		case limit <= 0:
+			ring = append(ring, ev)
+		case len(ring) == limit:
+			copy(ring, ring[1:])
+			ring[limit-1] = ev
+		default:
+			ring = append(ring, ev)
+		}
+	}
+	return ring, nil
+}
+
+// LastIncarnationID returns session's most recently created incarnation's
+// stream id, live or destroyed, or "" if the name has never existed --
+// unlike StreamID, the current still-appendable incarnation only.
+func (s *Store) LastIncarnationID(session string) (string, error) {
+	db, err := s.dbHandle()
+	if err != nil {
+		return "", err
+	}
+	ids, err := db.EventStreamIDsBySession(context.Background(), session)
+	if err != nil {
+		return "", fmt.Errorf("eventlog: last incarnation: %w", err)
+	}
+	if len(ids) == 0 {
+		return "", nil
+	}
+	return ids[len(ids)-1], nil
 }
 
 // ReadFromStream returns the next batch for a caller tracking (streamID, cursor) across repeated calls, resolving the current id and rows in one atomic read so a rotation between two calls is never observed as the old cursor misapplied to the new stream. On a detected rotation the superseded stream's own remaining (now-immutable) tail is drained by id before ever switching. streamID == "" starts at the head; resolvedStreamID == "" only when session has no stream yet.

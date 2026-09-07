@@ -146,6 +146,15 @@ func EventPage(cfg *config.Config, store *state.Store, identifier string, p Even
 	if gerr != nil {
 		return EventPageResult{}, &Error{Code: ErrExecutionFailed, Message: gerr.Error()}
 	}
+	// No live incarnation: fall back to the most recent one ever, rather
+	// than reading an empty page -- the log survives destroy.
+	fallbackID := ""
+	if gen == "" {
+		fallbackID, gerr = log.LastIncarnationID(name)
+		if gerr != nil {
+			return EventPageResult{}, &Error{Code: ErrExecutionFailed, Message: gerr.Error()}
+		}
+	}
 
 	var since int64
 	if p.Cursor != "" {
@@ -160,7 +169,13 @@ func EventPage(cfg *config.Config, store *state.Store, identifier string, p Even
 	}
 
 	if order == event.OrderDesc {
-		evs, lerr := log.Tail(name, p.Filter, p.Filter.Limit)
+		var evs []event.Event
+		var lerr error
+		if fallbackID != "" {
+			evs, lerr = log.TailFromStreamID(fallbackID, name, p.Filter, p.Filter.Limit)
+		} else {
+			evs, lerr = log.Tail(name, p.Filter, p.Filter.Limit)
+		}
 		if lerr != nil {
 			return EventPageResult{}, &Error{Code: ErrExecutionFailed, Message: lerr.Error()}
 		}
@@ -168,7 +183,14 @@ func EventPage(cfg *config.Config, store *state.Store, identifier string, p Even
 		return EventPageResult{Events: evs}, nil
 	}
 
-	evs, _, next, lerr := log.List(name, since, p.Filter)
+	var evs []event.Event
+	var next int64
+	var lerr error
+	if fallbackID != "" {
+		evs, _, next, lerr = log.ListFromStreamID(fallbackID, name, since, p.Filter)
+	} else {
+		evs, _, next, lerr = log.List(name, since, p.Filter)
+	}
 	if lerr != nil {
 		return EventPageResult{}, &Error{Code: ErrExecutionFailed, Message: lerr.Error()}
 	}
@@ -322,7 +344,28 @@ func EventList(cfg *config.Config, store *state.Store, identifier string, since 
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	evs, offs, next, lerr := eventlog.NewStore(store.Dir()).List(name, since, f)
+	log := eventlog.NewStore(store.Dir())
+	gen, gerr := log.StreamID(name)
+	if gerr != nil {
+		return nil, nil, 0, &Error{Code: ErrExecutionFailed, Message: gerr.Error()}
+	}
+	if gen != "" {
+		evs, offs, next, lerr := log.List(name, since, f)
+		if lerr != nil {
+			return nil, nil, 0, &Error{Code: ErrExecutionFailed, Message: lerr.Error()}
+		}
+		return evs, offs, next, nil
+	}
+	// No live incarnation: fall back to the most recent one ever, per this
+	// function's own contract above.
+	last, lerr := log.LastIncarnationID(name)
+	if lerr != nil {
+		return nil, nil, 0, &Error{Code: ErrExecutionFailed, Message: lerr.Error()}
+	}
+	if last == "" {
+		return nil, nil, since, nil
+	}
+	evs, offs, next, lerr := log.ListFromStreamID(last, name, since, f)
 	if lerr != nil {
 		return nil, nil, 0, &Error{Code: ErrExecutionFailed, Message: lerr.Error()}
 	}

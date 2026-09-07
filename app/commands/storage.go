@@ -88,6 +88,44 @@ docs/migrations/ for the full cutover procedure.`,
 	},
 }
 
+var (
+	storageRepairFrom     string
+	storageRepairDataHome string
+	storageRepairDryRun   bool
+)
+
+var storageRepairCmd = &cobra.Command{
+	Use:   "repair-imported-sessions",
+	Short: "One-time fix for a host already imported before events/-only sessions imported as destroyed",
+	Long: `A build older than the fix that made 'plect storage import' mark an
+events/-only legacy session destroyed (rather than a live "down" session)
+left every such session as a ghost row on a host that already ran that
+older import. This command finds them again from the same legacy backup
+--from names, and marks each one destroyed in the already-promoted
+storage.db at --data-home, defaulting to $XDG_DATA_HOME/plect.
+
+It takes a dated backup of storage.db (plus its -wal/-shm siblings, if any)
+before writing anything, unless --dry-run. This command is a stopgap: it can
+be removed once every host has run it, or once v0.3.0 ships, whichever comes
+first.`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		dataHome := storageRepairDataHome
+		if dataHome == "" {
+			dataHome = defaultDataHome()
+		}
+		report, err := legacyimport.RepairImportedSessions(cmd.Context(), legacyimport.RepairOptions{
+			SourceDir: storageRepairFrom,
+			DestDir:   dataHome,
+			DryRun:    storageRepairDryRun,
+		})
+		if report != nil {
+			fmt.Fprintln(cmd.OutOrStdout(), report.String())
+		}
+		return err
+	},
+}
+
 // defaultDataHome is the directory persistence.DefaultPath's storage.db
 // lives in ($XDG_DATA_HOME/plect), derived rather than duplicated so the two
 // never disagree about XDG resolution.
@@ -105,6 +143,12 @@ func init() {
 	storageImportCmd.Flags().BoolVar(&storageImportDryRun, "dry-run", false, "Validate and report without promoting a database or writing the rejection marker")
 	_ = storageImportCmd.MarkFlagRequired("from")
 	storageCmd.AddCommand(storageImportCmd)
+
+	storageRepairCmd.Flags().StringVar(&storageRepairFrom, "from", "", "The same legacy backup directory --from used for the original import")
+	storageRepairCmd.Flags().StringVar(&storageRepairDataHome, "data-home", "", "The plect data directory holding the storage.db to repair (default: $XDG_DATA_HOME/plect)")
+	storageRepairCmd.Flags().BoolVar(&storageRepairDryRun, "dry-run", false, "Report what would be marked without writing anything")
+	_ = storageRepairCmd.MarkFlagRequired("from")
+	storageCmd.AddCommand(storageRepairCmd)
 
 	rootCmd.AddCommand(storageCmd)
 }

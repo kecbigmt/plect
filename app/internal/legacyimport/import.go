@@ -12,6 +12,7 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/legacystate"
 	"github.com/kecbigmt/plecture/app/internal/persistence"
 	"github.com/kecbigmt/plecture/contracts/atomicfile"
+	"github.com/kecbigmt/plecture/contracts/event"
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
@@ -136,12 +137,19 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 		report.PopulationMembers += len(pop.Members)
 	}
 
+	// eventOnlyDestroyedAt: applied in the third pass, once events exist to append.
+	eventOnlyDestroyedAt := make(map[string]time.Time)
+
 	for _, name := range allNames {
 		s, hasState := sf.Sessions[name]
 		if !hasState {
-			// events/<name> exists with no state.json entry: a plain event
-			// target (matching persistence.EnsureLiveSession's own
-			// placeholder), never formally created via `plect create`.
+			// events/<name> exists with no state.json entry: the legacy
+			// store deleted a destroyed session's entry but kept its log.
+			destroyedAt := importTime
+			if sl := sessionLogs[name]; sl != nil && len(sl.Events) > 0 {
+				destroyedAt = sl.Events[len(sl.Events)-1].Time
+			}
+			eventOnlyDestroyedAt[name] = destroyedAt
 			s = &domain.Session{Name: name, Status: contract.SessionStatusDown, CreatedAt: importTime, UpdatedAt: importTime}
 			report.SessionsFromEventLogOnly++
 		}
@@ -213,6 +221,18 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 		}
 	}
 
+	// Third pass: AppendEvent errors against a non-live session, so this
+	// retirement cannot happen in the first pass.
+	for _, name := range allNames {
+		destroyedAt, isEventOnly := eventOnlyDestroyedAt[name]
+		if !isEventOnly {
+			continue
+		}
+		if err := db.DestroySession(ctx, name, destroyedAt); err != nil {
+			return report, fmt.Errorf("legacyimport: session %q: mark destroyed: %w", name, err)
+		}
+	}
+
 	for name, res := range sf.UpReservations {
 		if err := db.ImportUpReservation(ctx, name, res); err != nil {
 			return report, fmt.Errorf("legacyimport: import up-slot reservation %q: %w", name, err)
@@ -223,7 +243,7 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 	if err := db.IntegrityCheck(ctx); err != nil {
 		return report, fmt.Errorf("legacyimport: %w", err)
 	}
-	if err := validateCounts(ctx, db, allNames, sessionLogs, report); err != nil {
+	if err := validateCounts(ctx, db, allNames, sessionLogs, eventOnlyDestroyedAt, report); err != nil {
 		return report, fmt.Errorf("legacyimport: %w", err)
 	}
 
@@ -338,26 +358,48 @@ func removeDatabaseFiles(path string) error {
 // session and event this run intended to import is actually present, the
 // second validation pass docs/design/sqlite-persistence.md's importer
 // section calls for (IntegrityCheck is the first: SQLite's own structural
-// check).
-func validateCounts(ctx context.Context, db *persistence.DB, allNames []string, sessionLogs map[string]*SessionLog, report *Report) error {
-	all, err := db.AllSessions(ctx)
+// check). eventOnlyDestroyedAt names the subset imported as destroyed.
+func validateCounts(ctx context.Context, db *persistence.DB, allNames []string, sessionLogs map[string]*SessionLog, eventOnlyDestroyedAt map[string]time.Time, report *Report) error {
+	live, err := db.AllSessions(ctx)
 	if err != nil {
 		return fmt.Errorf("validate: list sessions: %w", err)
 	}
-	if len(all) != len(allNames) {
-		return fmt.Errorf("validate: database has %d sessions, want %d", len(all), len(allNames))
+	wantLive := len(allNames) - len(eventOnlyDestroyedAt)
+	if len(live) != wantLive {
+		return fmt.Errorf("validate: database has %d live sessions, want %d", len(live), wantLive)
 	}
 	for _, name := range allNames {
-		if _, ok := all[name]; !ok {
+		_, wantDestroyed := eventOnlyDestroyedAt[name]
+		_, isLive := live[name]
+		switch {
+		case wantDestroyed && isLive:
+			return fmt.Errorf("validate: session %q is live, want destroyed", name)
+		case !wantDestroyed && !isLive:
 			return fmt.Errorf("validate: session %q missing from the built database", name)
 		}
 		sl := sessionLogs[name]
 		if sl == nil {
 			continue
 		}
-		evs, _, err := db.ListEventsFrom(ctx, name, 0)
-		if err != nil {
-			return fmt.Errorf("validate: list events for %q: %w", name, err)
+		// ListEventsFrom is live-name-only; a destroyed session needs its incarnation id.
+		var evs []event.Event
+		if wantDestroyed {
+			ids, err := db.EventStreamIDsBySession(ctx, name)
+			if err != nil {
+				return fmt.Errorf("validate: list incarnations for %q: %w", name, err)
+			}
+			if len(ids) == 0 {
+				return fmt.Errorf("validate: destroyed session %q has no incarnation in the built database", name)
+			}
+			evs, _, err = db.ListEventsFromStreamID(ctx, ids[len(ids)-1], name, 0)
+			if err != nil {
+				return fmt.Errorf("validate: list events for %q: %w", name, err)
+			}
+		} else {
+			evs, _, err = db.ListEventsFrom(ctx, name, 0)
+			if err != nil {
+				return fmt.Errorf("validate: list events for %q: %w", name, err)
+			}
 		}
 		if len(evs) != len(sl.Events) {
 			return fmt.Errorf("validate: session %q has %d events in the built database, want %d", name, len(evs), len(sl.Events))

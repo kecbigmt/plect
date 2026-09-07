@@ -422,6 +422,37 @@ func TestEventListUnknownSessionIsEmpty(t *testing.T) {
 	}
 }
 
+// A session destroyed with no later recreate under the same name (its only
+// live-session lookup ever) must keep its event history reachable by name.
+func TestEventListAndPageStillReturnEventsAfterDestroyWithNoRecreate(t *testing.T) {
+	store := state.NewStore(t.TempDir())
+	const session = "owner/repo-7"
+	if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote, Summary: "hello"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Destroy(session); err != nil {
+		t.Fatalf("destroy: %v", err)
+	}
+
+	evs, _, _, err := EventList(nil, store, session, 0, event.Filter{})
+	if err != nil || len(evs) != 1 || evs[0].Summary != "hello" {
+		t.Fatalf("EventList after destroy: err=%v evs=%+v", err, evs)
+	}
+
+	ascPage, err := EventPage(nil, store, session, EventPageParams{})
+	if err != nil || len(ascPage.Events) != 1 || ascPage.Events[0].Summary != "hello" {
+		t.Fatalf("EventPage (asc) after destroy: err=%v page=%+v", err, ascPage)
+	}
+	if ascPage.NextCursor != "" {
+		t.Errorf("NextCursor = %q, want empty (no live generation to resume against)", ascPage.NextCursor)
+	}
+
+	descPage, err := EventPage(nil, store, session, EventPageParams{Order: event.OrderDesc})
+	if err != nil || len(descPage.Events) != 1 || descPage.Events[0].Summary != "hello" {
+		t.Fatalf("EventPage (desc) after destroy: err=%v page=%+v", err, descPage)
+	}
+}
+
 func TestEventResolvesAlias(t *testing.T) {
 	store := state.NewStore(t.TempDir())
 	if err := store.Put(&domain.Session{Name: "owner/repo-7", Alias: "my-feature"}); err != nil {

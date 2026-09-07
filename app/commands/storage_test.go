@@ -6,9 +6,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/confighome"
+	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/persistence"
+	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
 func TestStorageMigrate_CreatesAndReportsSchemaVersion(t *testing.T) {
@@ -227,5 +230,76 @@ func TestRootPersistentPreRun_DoesNotPreCreateStorageDBForStorageImport(t *testi
 	dbPath := persistence.PathIn(filepath.Join(fakeHome, ".local", "share", "plect"))
 	if _, statErr := os.Stat(dbPath); !os.IsNotExist(statErr) {
 		t.Fatalf("stat %s = %v, want not-exist (PersistentPreRunE must not pre-create it for storage import)", dbPath, statErr)
+	}
+}
+
+// TestStorageRepairImportedSessions_MarksGhostsDestroyed exercises the CLI
+// wiring end to end against a storage.db left exactly as the pre-fix
+// importer would leave it: an events/-only legacy session imported live as
+// status="down".
+func TestStorageRepairImportedSessions_MarksGhostsDestroyed(t *testing.T) {
+	t.Cleanup(func() { storageRepairDryRun = false })
+	fakeHome := t.TempDir()
+	t.Setenv("HOME", fakeHome)
+	t.Setenv("XDG_DATA_HOME", "")
+	t.Setenv(confighome.EnvVar, "")
+	t.Setenv(confighome.XDGEnvVar, "")
+
+	backupDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(backupDir, "state.json"), []byte(`{"version":7,"sessions":{}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	eventDir := filepath.Join(backupDir, "events", "ghost-session")
+	if err := os.MkdirAll(eventDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	logLine := `{"id":"01GHOSTEVT0000000000000001","session_name":"ghost-session","time":"2026-01-03T00:00:00.000000000Z","type":"user.note","source":"cli","direction":"internal","summary":"ghost"}` + "\n"
+	if err := os.WriteFile(filepath.Join(eventDir, "log.jsonl"), []byte(logLine), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dbPath := persistence.PathIn(filepath.Join(fakeHome, ".local", "share", "plect"))
+	db, err := persistence.EnsureCurrent(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("seed storage.db: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := db.PutSession(context.Background(), &domain.Session{Name: "ghost-session", Status: contract.SessionStatusDown, CreatedAt: now, UpdatedAt: now}); err != nil {
+		db.Close()
+		t.Fatalf("seed ghost-session: %v", err)
+	}
+	db.Close()
+
+	dryOut, err := execRoot(t, "storage", "repair-imported-sessions", "--from", backupDir, "--dry-run")
+	if err != nil {
+		t.Fatalf("dry-run: %v; output:\n%s", err, dryOut)
+	}
+	if !strings.Contains(dryOut, "would-mark=1") {
+		t.Errorf("dry-run output = %q, want it to report would-mark=1", dryOut)
+	}
+	// cobra flag bindings outlive a single Execute() call (see execRoot's own
+	// doc comment on --config-home), so the real run below must explicitly
+	// reset the bool the dry run just set to true.
+	storageRepairDryRun = false
+
+	out, err := execRoot(t, "storage", "repair-imported-sessions", "--from", backupDir)
+	if err != nil {
+		t.Fatalf("Execute() error = %v; output:\n%s", err, out)
+	}
+	if !strings.Contains(out, "would-mark=1") {
+		t.Errorf("output = %q, want it to report would-mark=1", out)
+	}
+
+	db, err = persistence.EnsureCurrent(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("reopen storage.db: %v", err)
+	}
+	defer db.Close()
+	ghost, err := db.GetSession(context.Background(), "ghost-session")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if ghost != nil {
+		t.Errorf("GetSession(ghost-session) = %+v, want nil (destroyed)", ghost)
 	}
 }

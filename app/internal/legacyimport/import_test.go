@@ -2,11 +2,14 @@ package legacyimport
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strconv"
 	"syscall"
 	"testing"
+
+	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/persistence"
@@ -181,9 +184,34 @@ func TestRun_ImportsAFullLegacyDirectoryAndRoundTrips(t *testing.T) {
 		t.Errorf("child.ID = %q, want a freshly minted id distinct from root's", child.ID)
 	}
 
+	// orphan-events-only has no state.json entry: it must import destroyed,
+	// not as a live down session, so it must not resurface here.
 	orphan, err := db.GetSession(ctx, "orphan-events-only")
-	if err != nil || orphan == nil {
-		t.Fatalf("GetSession(orphan-events-only) = %v, %v", orphan, err)
+	if err != nil {
+		t.Fatalf("GetSession(orphan-events-only): %v", err)
+	}
+	if orphan != nil {
+		t.Errorf("GetSession(orphan-events-only) = %+v, want nil (imported as destroyed, hidden from live lookups)", orphan)
+	}
+	all, err := db.AllSessions(ctx)
+	if err != nil {
+		t.Fatalf("AllSessions: %v", err)
+	}
+	if _, ok := all["orphan-events-only"]; ok {
+		t.Error("AllSessions includes orphan-events-only, want it excluded (destroyed)")
+	}
+	// A destroyed session's events are reachable by incarnation id, not by
+	// live name -- the lookup service.EventList/EventPage fall back to.
+	orphanIDs, err := db.EventStreamIDsBySession(ctx, "orphan-events-only")
+	if err != nil || len(orphanIDs) != 1 {
+		t.Fatalf("EventStreamIDsBySession(orphan-events-only) = %v, %v, want exactly one incarnation", orphanIDs, err)
+	}
+	orphanEvents, _, err := db.ListEventsFromStreamID(ctx, orphanIDs[0], "orphan-events-only", 0)
+	if err != nil {
+		t.Fatalf("ListEventsFromStreamID(orphan-events-only): %v", err)
+	}
+	if len(orphanEvents) != 1 || orphanEvents[0].ID != "01ORPHANEVT00000000000001" {
+		t.Fatalf("orphanEvents = %+v, want the one source event", orphanEvents)
 	}
 
 	rootEvents, _, err := db.ListEventsFrom(ctx, "root-session", 0)
@@ -233,6 +261,38 @@ func TestRun_ImportsAFullLegacyDirectoryAndRoundTrips(t *testing.T) {
 	}
 	if !sawReservation {
 		t.Error("imported up-slot reservation not found")
+	}
+}
+
+// An events/-only directory must import as a destroyed session, with
+// destroyed_at set to its last event's time, not a live "down" one.
+func TestRun_EventLogOnlySessionImportsAsDestroyed(t *testing.T) {
+	sourceDir, _, _ := legacyFixture(t)
+	destDir := t.TempDir()
+	ctx := context.Background()
+
+	if _, err := Run(ctx, Options{SourceDir: sourceDir, DestDir: destDir}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	rawDB, err := sql.Open("sqlite3", persistence.PathIn(destDir))
+	if err != nil {
+		t.Fatalf("open storage.db directly: %v", err)
+	}
+	defer rawDB.Close()
+
+	var status, destroyedAt string
+	if err := rawDB.QueryRowContext(ctx,
+		`SELECT status, destroyed_at FROM sessions WHERE name = ?`, "orphan-events-only",
+	).Scan(&status, &destroyedAt); err != nil {
+		t.Fatalf("query orphan-events-only row: %v", err)
+	}
+	if status != "destroyed" {
+		t.Errorf("status = %q, want destroyed", status)
+	}
+	// The fixture's one orphan-events-only event carries this exact time.
+	if want := "2026-01-03T00:00:00.000000000Z"; destroyedAt != want {
+		t.Errorf("destroyed_at = %q, want %q (its one event's time)", destroyedAt, want)
 	}
 }
 
