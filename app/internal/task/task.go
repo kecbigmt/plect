@@ -693,13 +693,10 @@ func reportCleanupFailure(obs Observer, r Resolved, elapsed time.Duration, err e
 }
 
 // RunSetup executes the setup commands for the provided ordered task list
-// (always workflow DAG nodes) against the given session. Outputs are
-// persisted into tasks, keyed by node id; the caller then copies the touched
-// node ids from tasks into session.Nodes, the collection they actually
-// belong to. tasks must combine every collection Seq is shared across (a
-// session's Nodes and Tasks) — see domain.MergedTasks — since each new node's
-// Seq is stamped from the highest Seq found in it.
-// Stops at the first failure; subsequent tasks in the slice are not run.
+// (always workflow DAG nodes), persisting each result into tasks by node id;
+// the caller copies the touched ids into session.Nodes afterward. tasks must
+// merge the session's Nodes and Tasks, since Seq allocation is shared across
+// both. Stops at the first failure; subsequent tasks in the slice are not run.
 //
 // RunSetup is idempotent: a task whose persisted state is already
 // "produced" is verified before it is reused, not blindly skipped — see
@@ -877,23 +874,16 @@ func withFreshTerminalOutputs(session SessionVars, owner *Resolved, tasks map[st
 	return session
 }
 
-// NextSeq is the exported form of nextSeq, taking every collection Seq must
-// stay monotonic across (a session's Nodes and Tasks maps are two separate
-// collections but share one Seq space) instead of a single map. Callers
-// persisting a dynamic instance re-stamp Seq with this under the state lock,
-// so the value reflects the freshly-read collections rather than the
-// snapshot the setup ran against (atomic read-modify-write).
+// NextSeq is the exported form of nextSeq. It takes every collection (a
+// session's Nodes and Tasks share one Seq space) instead of a single map, so
+// a caller persisting a dynamic instance re-stamps Seq under the state lock
+// against the freshly-read collections, not the snapshot setup ran against.
 func NextSeq(taskMaps ...map[string]*contract.TaskState) int {
 	return nextSeq(taskMaps...)
 }
 
-// nextSeq returns the next instantiation sequence number across every given
-// tasks map: one past the highest Seq currently recorded in any of them. Seq
-// is stamped when a task reaches "produced" (workflow pseudo-node, static
-// node, or dynamic instance), so teardown can reclaim tasks in
-// reverse-instantiation order regardless of scope or origin. Legacy state
-// with no Seq (all zero) leaves later assignments starting at 1; the
-// teardown path falls back to plan order in that case.
+// nextSeq is one past the highest Seq recorded across every given map;
+// legacy state with no Seq (all zero) starts later assignments at 1.
 func nextSeq(taskMaps ...map[string]*contract.TaskState) int {
 	max := 0
 	for _, tasks := range taskMaps {
@@ -946,14 +936,10 @@ func toJSONShape(m map[string]any) map[string]any {
 // depends on the original CLI invocation.
 // Cleanup errors are collected but do not stop the loop — all cleanups attempt.
 //
-// ordered can freely mix workflow-node and dynamic-instance entries (a
-// unified teardown list interleaves both kinds by instantiation Seq), so
-// tasks must combine every collection a targeted key could live in — a
-// session's Nodes and Tasks — see domain.MergedTasks. Every mutation here is
-// through the *TaskState pointer already stored in tasks, never a map
-// assignment, so a caller that built tasks from the session's own
-// Nodes/Tasks maps needs no write-back: the mutation is visible through
-// those maps directly.
+// ordered can freely mix workflow-node and dynamic-instance entries, so
+// tasks must merge every collection a targeted key could live in. Mutation
+// is always through the existing *TaskState pointer, never a map
+// assignment, so a tasks built from session.Nodes/Tasks needs no write-back.
 func RunCleanup(goCtx context.Context, ordered []Resolved, session SessionVars, tasks map[string]*contract.TaskState, observer Observer) error {
 	obs := observerOr(observer)
 	var firstErr error

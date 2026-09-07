@@ -20,11 +20,9 @@ const workflowHookScope = "workflow"
 // pseudo-node is skipped), `prev.*` carries the prior outputs across retries,
 // stdout is the JSON outputs contract.
 //
-// tasks must combine every collection Seq is shared across (a session's Nodes
-// and Tasks) — see domain.MergedTasks — since the pseudo-node's Seq is stamped
-// from the highest Seq found in it; the caller then persists the result key
-// (contract.WorkflowPseudoNodeID) into session.Nodes, the collection the
-// pseudo-node actually belongs to.
+// tasks must merge the session's Nodes and Tasks, since Seq allocation is
+// shared across both; the caller persists the result key
+// (contract.WorkflowPseudoNodeID) into session.Nodes afterward.
 //
 // Additional contract: the outputs MUST contain the reserved `workspace_dir`
 // key (non-empty string) — every downstream consumer (cascade resolution,

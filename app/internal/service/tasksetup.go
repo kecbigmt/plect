@@ -167,10 +167,7 @@ func TaskSetup(cfg *config.Config, store *state.Store, params TaskSetupParams) (
 		}
 		if params.Name != "" {
 			key = params.Name
-			// A `--name` collides against either collection's existing state:
-			// an uninstantiated node leaves its id free for a dynamic instance
-			// to take, but a live node under this name must still be refused.
-			if domain.TaskState(s, key) != nil {
+			if nameCollides(s, key) {
 				collision = true
 				return nil
 			}

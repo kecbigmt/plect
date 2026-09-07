@@ -84,10 +84,8 @@ func Parse(data []byte) (*StateFile, error) {
 
 // legacyDynamicFlags re-derives Dynamic — a per-entry field the version-7
 // envelope wrote but contract.TaskState no longer declares — from the raw
-// bytes, keyed by session name then task/node key. Parse needs it once, to
-// split each legacy session's single flat "tasks" map into today's
-// Nodes/Tasks collections the same way the live store's pre-split
-// composition boundary did.
+// bytes, keyed by session name then task/node key, so Parse can split a flat
+// legacy "tasks" map into today's Nodes/Tasks collections.
 func legacyDynamicFlags(data []byte) map[string]map[string]bool {
 	var raw struct {
 		Sessions map[string]struct {
@@ -110,14 +108,10 @@ func legacyDynamicFlags(data []byte) map[string]map[string]bool {
 	return out
 }
 
-// splitLegacyTasks partitions each session's flat legacy task map — decoded
-// wholesale into Tasks, since Nodes did not exist in the version-7 envelope —
-// into today's Nodes (dynamic == false: the @workflow pseudo-node and static
-// workflow nodes) and Tasks (dynamic == true) collections, using the
-// per-session, per-key dynamic flags legacyDynamicFlags re-derived from the
-// raw bytes. A key legacyDynamicFlags has no record of (should not happen for
-// well-formed input) defaults to a node, matching the pre-split Dynamic
-// field's own zero value.
+// splitLegacyTasks partitions each session's flat legacy task map (decoded
+// wholesale into Tasks, since Nodes did not exist in the version-7 envelope)
+// into today's Nodes/Tasks by dynamicFlagsBySession; an unflagged key
+// defaults to a node, matching the retired field's own zero value.
 func splitLegacyTasks(sessions map[string]*domain.Session, dynamicFlagsBySession map[string]map[string]bool) {
 	for name, session := range sessions {
 		if session == nil || len(session.Tasks) == 0 {

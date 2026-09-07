@@ -46,10 +46,7 @@ func TestPutBestEffort_PutFailureLogsWarningWithoutPanicking(t *testing.T) {
 	}
 }
 
-// seedSession seeds a session whose task map is entirely dynamic instances
-// (session.Tasks) — the common case across the test suite. A fixture that
-// also needs workflow-DAG node production records (session.Nodes), such as
-// the @workflow pseudo-node, calls seedSessionSplit directly.
+// seedSession seeds a session whose fixture is entirely session.Tasks.
 func seedSession(t *testing.T, store interface {
 	Put(*domain.Session) error
 	Dir() string
@@ -58,10 +55,8 @@ func seedSession(t *testing.T, store interface {
 	seedSessionSplit(t, store, sessionName, ownerRepo, number, workflow, nil, tasks)
 }
 
-// seedSessionWithNodes seeds a session whose task map is entirely workflow-DAG
-// node production records (session.Nodes) — the counterpart of seedSession
-// for a fixture that exercises node-keyed behavior (health, terminal binding,
-// teardown-as-node) rather than plect task setup instances.
+// seedSessionWithNodes seeds a session whose fixture is entirely
+// session.Nodes (health, terminal binding, teardown-as-node fixtures).
 func seedSessionWithNodes(t *testing.T, store interface {
 	Put(*domain.Session) error
 	Dir() string
@@ -70,8 +65,8 @@ func seedSessionWithNodes(t *testing.T, store interface {
 	seedSessionSplit(t, store, sessionName, ownerRepo, number, workflow, nodes, nil)
 }
 
-// seedSessionSplit is seedSession/seedSessionWithNodes's shared
-// implementation, for a fixture that needs both collections populated.
+// seedSessionSplit backs seedSession/seedSessionWithNodes for a fixture
+// needing both collections populated.
 func seedSessionSplit(t *testing.T, store interface {
 	Put(*domain.Session) error
 	Dir() string

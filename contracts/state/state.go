@@ -239,15 +239,11 @@ type Session struct {
 	Workflow         string                `json:"workflow,omitempty"`
 	Population       *PopulationProvenance `json:"population,omitempty"`
 	Inputs           map[string]any        `json:"inputs,omitempty"`
-	// Nodes holds workflow DAG node production records, keyed by node id —
+	// Nodes holds workflow DAG node production records, keyed by node id,
 	// including the @workflow pseudo-node (WorkflowPseudoNodeID). Tasks holds
-	// task-document/effect instances created at runtime via
-	// `plect task setup`, keyed by their instance handle (a `--name`, or the
-	// numbered `<task>#<n>` form). The two occupy disjoint key namespaces (a
-	// `--name` collision is checked against both), but which collection a key
-	// lives in is otherwise structural, not derived: a caller that means "the
-	// whole session's task/node state regardless of origin" combines both
-	// (see domain.MergedTasks), rather than assuming either one alone.
+	// `plect task setup` instances, keyed by instance handle (a `--name` or
+	// the numbered `<task>#<n>` form) — a disjoint namespace from node ids (a
+	// `--name` collision is checked against both).
 	Nodes map[string]*TaskState `json:"nodes,omitempty"`
 	Tasks map[string]*TaskState `json:"tasks,omitempty"`
 	// Health is the last probe observation and activity fingerprint core

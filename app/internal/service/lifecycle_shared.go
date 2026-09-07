@@ -16,10 +16,15 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// runWorkflowSetup runs task.RunWorkflowSetup, reading across the whole
-// session (session.Nodes and session.Tasks combined, so Seq allocation stays
-// monotonic across both) and writing the @workflow pseudo-node's result back
-// into session.Nodes, the collection it belongs to.
+// nameCollides reports whether a `--name` is already taken by either of s's
+// collections: an uninstantiated node leaves its id free for a dynamic
+// instance to take, but a live node under this name must still be refused.
+func nameCollides(s *domain.Session, name string) bool {
+	return domain.TaskState(s, name) != nil
+}
+
+// runWorkflowSetup wraps task.RunWorkflowSetup with the merged-read /
+// Nodes-write-back its doc comment requires.
 func runWorkflowSetup(prov config.WorkspaceProviderConfig, vars effect.WorkflowHookVars, session *domain.Session, observer task.Observer) (map[string]any, error) {
 	merged := domain.MergedTasks(session)
 	outputs, err := task.RunWorkflowSetup(prov, vars, merged, observer)
@@ -32,9 +37,8 @@ func runWorkflowSetup(prov config.WorkspaceProviderConfig, vars effect.WorkflowH
 	return outputs, err
 }
 
-// runNodeSetup runs task.RunSetup over ordered (always workflow-DAG nodes),
-// reading across the whole session and writing each entry ordered touches
-// back into session.Nodes, the collection it belongs to.
+// runNodeSetup wraps task.RunSetup with the merged-read / Nodes-write-back
+// its doc comment requires.
 func runNodeSetup(ctx context.Context, ordered []task.Resolved, vars task.SessionVars, session *domain.Session, observer task.Observer) error {
 	merged := domain.MergedTasks(session)
 	err := task.RunSetup(ctx, ordered, vars, merged, observer)
@@ -49,24 +53,19 @@ func runNodeSetup(ctx context.Context, ordered []task.Resolved, vars task.Sessio
 	return err
 }
 
-// runTaskCleanup runs task.RunCleanup over ordered, reading across the whole
-// session — ordered may freely mix workflow-node and dynamic-instance
-// entries (a unified teardown list interleaves both by instantiation Seq).
-// RunCleanup mutates through the *TaskState pointer already stored in
-// session.Nodes/session.Tasks, so no write-back is needed here.
+// runTaskCleanup wraps task.RunCleanup with the merged read its doc comment
+// requires; no write-back, per the same doc comment.
 func runTaskCleanup(ctx context.Context, ordered []task.Resolved, vars task.SessionVars, session *domain.Session, observer task.Observer) error {
 	return task.RunCleanup(ctx, ordered, vars, domain.MergedTasks(session), observer)
 }
 
-// mergeTasks persists the session by overlaying its in-memory node/task
+// mergeTasks persists the session by overlaying its in-memory Nodes/Tasks
 // entries onto the freshly-read on-disk session under the state lock, rather
 // than a blind Put. A nested `plect task setup` subprocess (the initial_task
 // dispatcher) may have written instances straight to disk during the
-// parent's setup pass; a blind Put of the parent's stale maps would drop
-// them. Overlaying keeps both: disk-only keys survive, our keys win on
-// overlap. Non-task fields the parent owns are already persisted (this runs
-// after the create's earlier Put), so only the Nodes/Tasks maps and
-// UpdatedAt need writing back.
+// parent's setup pass; a blind Put would drop them. Overlaying keeps both:
+// disk-only keys survive, ours win on overlap. Every other field the parent
+// owns is already persisted by the create's earlier Put.
 func mergeTasks(store *state.Store, sessionName string, session *domain.Session) error {
 	return store.Update(sessionName, func(s *domain.Session) error {
 		if s.Nodes == nil {

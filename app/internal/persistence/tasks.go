@@ -10,12 +10,9 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// loadTasks assembles a session's Nodes and Tasks maps from two tables:
-// node_instances (static workflow-DAG nodes, including the @workflow
-// pseudo-node) and task_instances (dynamic instances created via
-// `plect task setup`), joined in Go with their layer/done_when/judge child
-// tables. sessionID is the session's surrogate id (sessions.id), not its
-// name.
+// loadTasks assembles a session's Nodes (from node_instances) and Tasks
+// (from task_instances) maps, joined in Go with their layer/done_when/judge
+// child tables. sessionID is the session's surrogate id, not its name.
 func loadTasks(ctx context.Context, q sqlcgen.DBTX, sessionID string) (nodes, tasks map[string]*contract.TaskState, err error) {
 	queries := sqlcgen.New(q)
 
