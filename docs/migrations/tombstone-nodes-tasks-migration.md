@@ -38,38 +38,73 @@ cp -a "$DATA_DIR/events" "$BACKUP_DIR/events"
 ## State changes
 
 Run every step under `set -euo pipefail`. The transform is per-file
-(`events/<session>/tombstone.json`, one per destroyed session) and
-idempotent: a file that already has a top-level `nodes` key is left
-untouched, so re-running this procedure, or running it against a directory
-where some tombstones already migrated, never re-splits an already-split
-file. An entry with no `dynamic` field (the common case for a node, since
-`false` was itself `omitempty`) is treated as a node — the same default the
-retired field's own zero value gave it.
+(`events/<session>/tombstone.json`, one per destroyed session).
+
+The pre-migration shape is discriminated by an explicit per-entry `dynamic`
+key under `tasks`, not by the mere absence of a `nodes` key: a tombstone
+already in the new shape but with only dynamic instances and zero nodes
+ever produced (a legitimate, if unusual, shape — a session-scoped task
+document can be set up before any workflow node ever runs) also has no
+`nodes` key, and a bare `has("nodes")` check would wrongly reclassify its
+already-correct `tasks` entries as nodes. `dynamic` is written only by the
+pre-migration format — this build never writes it — so its presence
+anywhere under `tasks` is unambiguous proof the file predates the split,
+and its absence everywhere is proof the file needs no split, whether that
+is because it is already migrated or because it is new. Only a pre-migration file whose every entry happens to be a workflow node
+(never a dynamic instance, so `dynamic` was never `true` and, being
+`omitempty`, never serialized at all) is indistinguishable from new data by
+this signal. Such a file is left untouched rather than guessed at: it keeps
+reporting every entry as `dynamic: true` (the flat map's own pre-migration
+display bug, unrelated to this migration) until some other write touches
+it, which is a narrow, display-only gap accepted deliberately rather than
+risk corrupting a tombstone this build itself wrote correctly.
+
+An entry with no `dynamic` field, in a file that does need the split,
+defaults to a node — the same default the retired field's own zero value
+gave it. The transform is naturally idempotent: once split, no entry in
+either collection carries `dynamic` any more, so a second run's
+`$needs_split` test is always false and every file is left as-is.
+
+Per file, the instance-key set is captured before and after and compared —
+migrating a session's declared entries into two collections must never
+lose or duplicate one, and this check is what actually enforces that,
+rather than assuming the transform below is total:
 
 ```bash
 set -euo pipefail
 FILTER='
-  if has("nodes") then
-    .
-  else
-    ((.tasks // {}) | with_entries(select(.value.dynamic != true) | .value |= del(.dynamic))) as $nodes
-    | ((.tasks // {}) | with_entries(select(.value.dynamic == true) | .value |= del(.dynamic))) as $tasks
-    | .nodes = $nodes
-    | .tasks = $tasks
-  end
+  ((.tasks // {}) | to_entries | any(.value.dynamic != null)) as $needs_split
+  | if $needs_split then
+      ((.tasks // {}) | with_entries(select(.value.dynamic != true) | .value |= del(.dynamic))) as $found_nodes
+      | ((.tasks // {}) | with_entries(select(.value.dynamic == true) | .value |= del(.dynamic))) as $found_tasks
+      | .nodes = ((.nodes // {}) + $found_nodes)
+      | .tasks = $found_tasks
+    else
+      .
+    end
 '
+KEYSET='[(.nodes // {}), (.tasks // {})] | map(keys) | add | sort'
 find "$DATA_DIR/events" -mindepth 2 -maxdepth 2 -name tombstone.json | while IFS= read -r f; do
+  BEFORE=$(jq -S "$KEYSET" "$f")
   jq "$FILTER" "$f" > "$f.new"
+  AFTER=$(jq -S "$KEYSET" "$f.new")
+  if [ "$BEFORE" != "$AFTER" ]; then
+    echo "migration verification failed: $f — instance keys changed, not replacing" >&2
+    echo "before: $BEFORE" >&2
+    echo "after:  $AFTER" >&2
+    rm -f "$f.new"
+    exit 1
+  fi
   mv "$f.new" "$f"
 done
 ```
 
 ## Verification
 
-For each migrated file, the multiset of instance keys must be unchanged
-(only which of `nodes`/`tasks` a key lives under changed, and the
-per-entry `dynamic` field is gone), and no entry may carry `dynamic` in
-either collection:
+No entry may carry `dynamic` in either collection once every file above
+has been replaced (the key-set guard already ran per file, inline, as part
+of applying the transform — this checks the `dynamic` field is gone, the
+other half of correctness):
 
 ```bash
 find "$DATA_DIR/events" -mindepth 2 -maxdepth 2 -name tombstone.json | while IFS= read -r f; do
@@ -102,13 +137,14 @@ Restart plect only after the restore is complete.
 
 ## Rollout note
 
-This PR's own jq transform was run against a synthetic tombstone.json built
-to match the pre-migration shape (a flat `tasks` map mixing a workflow node,
-a run-scoped node, and a named dynamic instance) rather than a live
-deployment file — none of this deployment's own destroyed sessions predate
-the split. The transform correctly moved the two node entries into `nodes`,
-kept the dynamic instance in `tasks` with `dynamic` removed, and produced
-identical output on a second run (idempotency). `TestTombstoneStatusResult_
+The transform and its key-set guard were run against three synthetic
+tombstone fixtures covering the cases correctness depends on: a
+pre-migration flat map mixing a workflow node, a run-scoped node, and a
+named dynamic instance (split correctly, keys preserved, idempotent on a
+second run); an already-new-shape tombstone holding only dynamic instances
+and no `nodes` key (left untouched — the case a `has("nodes")` discriminator
+would have corrupted); and an already-new-shape tombstone with both
+collections populated (left untouched). `TestTombstoneStatusResult_
 ReportsNodesAndTasksSeparately` (`app/internal/service/status_test.go`)
 pins that a tombstone in the post-migration shape reports each instance's
 `dynamic` field correctly.

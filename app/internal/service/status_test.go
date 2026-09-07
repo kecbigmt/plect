@@ -309,3 +309,32 @@ func TestTombstoneStatusResult_ReportsNodesAndTasksSeparately(t *testing.T) {
 		t.Errorf("review#1.Resource = %q, want pr-1", got.Resource)
 	}
 }
+
+// TestTombstoneStatusResult_TasksOnlyShapeIsNotMistakenForLegacy pins the
+// shape docs/migrations/tombstone-nodes-tasks-migration.md's procedure must
+// leave untouched: a genuinely new tombstone with only dynamic instances and
+// no "nodes" key at all (a session-scoped task document set up before any
+// workflow node ever ran). It must read as entirely dynamic, not as nodes.
+func TestTombstoneStatusResult_TasksOnlyShapeIsNotMistakenForLegacy(t *testing.T) {
+	const tasksOnlyTombstoneJSON = `{
+		"session_name": "org/repo-2",
+		"tasks": {
+			"review#1": {"scope": "session", "status": "produced", "task_id": "review", "resource": "pr-2", "outputs": {}}
+		},
+		"created_at": "2026-01-01T00:00:00Z",
+		"updated_at": "2026-01-02T00:00:00Z",
+		"destroyed_at": "2026-01-03T00:00:00Z"
+	}`
+	var tomb contract.Tombstone
+	if err := json.Unmarshal([]byte(tasksOnlyTombstoneJSON), &tomb); err != nil {
+		t.Fatalf("unmarshal tasks-only tombstone: %v", err)
+	}
+	if len(tomb.Nodes) != 0 || len(tomb.Tasks) != 1 {
+		t.Fatalf("Nodes/Tasks = %d/%d, want 0/1", len(tomb.Nodes), len(tomb.Tasks))
+	}
+
+	result := tombstoneStatusResult(&tomb)
+	if len(result.Work) != 1 || !result.Work[0].IsTask {
+		t.Fatalf("Work = %+v, want one dynamic instance", result.Work)
+	}
+}
