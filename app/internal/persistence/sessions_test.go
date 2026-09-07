@@ -376,13 +376,8 @@ func TestAllSessions_ReturnsEveryLivePutSessionAndExcludesDestroyed(t *testing.T
 }
 
 // TestAllSessions_MatchesGetSessionAcrossParentsChildrenTasksAndChannelHealth
-// is a two-authorities check on AllSessions' batched extras-loading against
-// GetSession's per-row loadSessionExtras for the same rows: every relation
-// loadSessionExtras resolves (parent by parent_session_id, parent by the
-// root: pseudo-parent form, children, channel health, nodes, tasks with
-// layers/done_when/judges) is exercised on a session AllSessions must
-// answer identically to GetSession, since a batching bug would show up as
-// exactly this kind of disagreement between the two paths.
+// guards against AllSessions' batched extras-loading silently disagreeing
+// with GetSession's per-row loadSessionExtras for the same session.
 func TestAllSessions_MatchesGetSessionAcrossParentsChildrenTasksAndChannelHealth(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()

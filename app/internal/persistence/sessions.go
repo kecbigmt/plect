@@ -689,9 +689,9 @@ func (db *DB) loadSessionExtrasBatch(ctx context.Context, q sqlcgen.DBTX, sessio
 	return nil
 }
 
-// resolveParentRootNames batch-resolves every session's ParentSessionID/
-// RootSessionID to a name in one query, keyed by that id (not by the owning
-// session), mirroring deriveParentSession's own two-column lookup.
+// resolveParentRootNames keys its result by the referenced parent/root id,
+// not by the owning session, since the same id can be the parent or root
+// for many sessions and only needs resolving once.
 func resolveParentRootNames(ctx context.Context, q *sqlcgen.Queries, sessions []*domain.Session) (map[string]string, error) {
 	seen := map[string]bool{}
 	ids := make([]string, 0)
@@ -717,10 +717,9 @@ func resolveParentRootNames(ctx context.Context, q *sqlcgen.Queries, sessions []
 	return names, nil
 }
 
-// listLiveChildSessionNamesBatch batch-resolves every session's live
-// children in one query, grouped by parent_session_id; a parent with no
-// live children is simply absent from the returned map, matching
-// loadSessionExtras' own nil-Children convention.
+// listLiveChildSessionNamesBatch leaves a parent id out of the returned map
+// entirely when it has no live children, rather than mapping it to an
+// empty slice, matching loadSessionExtras' own nil-Children convention.
 func listLiveChildSessionNamesBatch(ctx context.Context, q *sqlcgen.Queries, ids []string) (map[string][]string, error) {
 	if len(ids) == 0 {
 		return nil, nil

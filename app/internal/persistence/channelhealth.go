@@ -90,8 +90,6 @@ func loadChannelHealthBatch(ctx context.Context, q *sqlcgen.Queries, sessionIDs 
 	return validationBySession, deliveryBySession, nil
 }
 
-// channelHealthFromRow decodes one session_channel_health row; shared by
-// loadChannelHealth and loadChannelHealthBatch.
 func channelHealthFromRow(row sqlcgen.SessionChannelHealth) (*contract.ChannelHealth, error) {
 	firstFailureAt, err := parseTime(row.FirstFailureAt)
 	if err != nil {
