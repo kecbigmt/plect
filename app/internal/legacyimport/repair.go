@@ -14,8 +14,8 @@ import (
 
 // RepairOptions configures one RepairImportedSessions call.
 type RepairOptions struct {
-	// SourceDir is the same legacy backup Run's SourceDir was; see
-	// newSessionClassifier for how it decides a ghost.
+	// SourceDir's state.json and events/ tree together decide which names
+	// are ghosts: storage.db alone cannot tell a ghost row from a real one.
 	SourceDir string
 	DestDir   string // the plect data directory holding the storage.db to repair
 	DryRun    bool   // previews via persistence.ReadSessionNames, skipping backup and delete entirely
@@ -23,9 +23,9 @@ type RepairOptions struct {
 
 // RepairReport counts what one RepairImportedSessions call found and did.
 type RepairReport struct {
-	WouldDelete int // ghosts deleted, or would be on DryRun
-	Kept        int // sessions the backup's state.json also names
-	NotInBackup int // sessions the backup names nowhere at all (e.g. created after the backup was taken); left untouched
+	WouldDelete int // WouldDelete counts ghosts this call deleted, or would delete on a dry run.
+	Kept        int // Kept counts sessions the backup's state.json also names.
+	NotInBackup int // NotInBackup counts sessions the backup names nowhere at all; it is reported but left untouched.
 	BackupPath  string
 }
 
@@ -109,7 +109,6 @@ func RepairImportedSessions(ctx context.Context, opts RepairOptions) (*RepairRep
 	return report, nil
 }
 
-// sessionClassification is which bucket a session name falls into against the backup.
 type sessionClassification int
 
 const (
@@ -129,11 +128,10 @@ func tallyClassification(report *RepairReport, class sessionClassification) {
 	}
 }
 
-// newSessionClassifier returns a function classifying a storage.db name
-// against sf and sourceDir's events/ tree: kept when state.json names it,
-// ghost when state.json doesn't but events/ still has a directory for it
-// (Run's own skipped events/-only shape), otherwise not-in-backup -- a name
-// the backup knows nothing about, reported but left untouched.
+// A name missing from state.json is ambiguous on its own: a genuine ghost
+// and a session created after the backup was taken are both missing from
+// it, for opposite reasons. The events/ tree resolves the ambiguity, since
+// only a ghost still has a directory there.
 func newSessionClassifier(sourceDir string, sf *legacystate.StateFile) (func(name string) sessionClassification, error) {
 	eventsRoot := filepath.Join(sourceDir, "events")
 	eventDirNames, err := ListLegacySessionDirs(eventsRoot)

@@ -239,12 +239,8 @@ func TestRepairImportedSessions_DeletesGhostsAndBacksUpFirst(t *testing.T) {
 }
 
 // TestRepairImportedSessions_LeavesPostCutoverSessionsUntouched is the
-// regression test for a real bug: a session created after the backup was
-// taken is absent from both the backup's state.json and its events/ tree,
-// so it must not be treated as a ghost -- only a name state.json doesn't
-// have but the backup's events/ tree does is one (see
-// newSessionClassifier). Such a session is reported as not-in-backup and
-// left alone.
+// regression test for a real bug: a session missing from state.json only
+// because it postdates the backup was being deleted as if it were a ghost.
 func TestRepairImportedSessions_LeavesPostCutoverSessionsUntouched(t *testing.T) {
 	sourceDir, destDir := buggyImportedFixture(t)
 	ctx := context.Background()

@@ -261,11 +261,7 @@ func TestRootPersistentPreRun_DoesNotPreCreateStorageDBForStorageRepair(t *testi
 }
 
 // TestStorageRepairImportedSessions_DeletesGhosts exercises the CLI wiring
-// end to end against a storage.db holding a ghost row (a name absent from
-// the legacy backup's state.json but present in its events/ tree) left
-// behind by a pre-fix importer, alongside a session created after the
-// backup was taken (absent from the backup entirely, so not a ghost) that
-// repair must report as not-in-backup and leave untouched.
+// end to end, alongside a post-cutover session repair must leave untouched.
 func TestStorageRepairImportedSessions_DeletesGhosts(t *testing.T) {
 	t.Cleanup(func() { storageRepairDryRun = false })
 	fakeHome := t.TempDir()
