@@ -1290,9 +1290,17 @@ func (q *Queries) ListSessionChannelHealth(ctx context.Context, sessionID string
 }
 
 const listSessionChannelHealthForSessions = `-- name: ListSessionChannelHealthForSessions :many
-SELECT session_id, kind, consecutive_failures, first_failure_at,
-       last_failure_at, last_channel, last_error, escalated_at
-FROM session_channel_health WHERE session_id IN (/*SLICE:session_ids*/?)
+SELECT
+    session_id,
+    kind,
+    consecutive_failures,
+    first_failure_at,
+    last_failure_at,
+    last_channel,
+    last_error,
+    escalated_at
+FROM session_channel_health
+WHERE session_id IN (/*SLICE:session_ids*/?)
 `
 
 func (q *Queries) ListSessionChannelHealthForSessions(ctx context.Context, sessionIds []string) ([]SessionChannelHealth, error) {

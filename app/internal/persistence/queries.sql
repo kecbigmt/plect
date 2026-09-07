@@ -360,9 +360,17 @@ SELECT session_id, kind, consecutive_failures, first_failure_at,
 FROM session_channel_health WHERE session_id = ?;
 
 -- name: ListSessionChannelHealthForSessions :many
-SELECT session_id, kind, consecutive_failures, first_failure_at,
-       last_failure_at, last_channel, last_error, escalated_at
-FROM session_channel_health WHERE session_id IN (sqlc.slice(session_ids));
+SELECT
+    session_id,
+    kind,
+    consecutive_failures,
+    first_failure_at,
+    last_failure_at,
+    last_channel,
+    last_error,
+    escalated_at
+FROM session_channel_health
+WHERE session_id IN (sqlc.slice(session_ids));
 
 -- Up-slot reservations
 
