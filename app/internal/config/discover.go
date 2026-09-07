@@ -90,10 +90,9 @@ func (l layerDir) scope() layerScope {
 	}
 }
 
-// layerResultCache memoizes discoverLayers by workspaceDirPath. Reached via a
-// pointer field, not embedded, since Config is copied by value in test
-// fixture tables and an embedded sync.Mutex would make each copy a lock
-// copy. Only successful results are cached, so a transient error retries.
+// layerResultCache memoizes discoverLayers by workspaceDirPath, reached via
+// a pointer field (not embedded) since Config is copied by value in tests
+// and an embedded sync.Mutex would make each copy a lock copy.
 type layerResultCache struct {
 	mu     sync.Mutex
 	byPath map[string][]discoveredLayer
@@ -134,9 +133,8 @@ func (c *Config) layerResultCache() *layerResultCache {
 	return lc
 }
 
-// resolveLayers is discoverLayers with fresh: true evicting
-// workspaceDirPath's cache entry first, for a caller that must see an
-// on-disk edit immediately (a session-up transition, refreshTickConfig).
+// resolveLayers is discoverLayers with fresh:true evicting
+// workspaceDirPath's cache first, for a caller needing an on-disk edit now.
 func (c *Config) resolveLayers(workspaceDirPath string, fresh bool) ([]discoveredLayer, error) {
 	if fresh {
 		c.layerResultCache().evict(workspaceDirPath)
@@ -148,7 +146,6 @@ func (c *Config) resolveLayers(workspaceDirPath string, fresh bool) ([]discovere
 // shallowest-first order. workspaceDirPath selects the ancestor overlays; an
 // empty one means the trusted base layers alone, which is what a caller
 // outside any workspace directory sees.
-//
 // Memoized per workspaceDirPath for this *Config's lifetime; a new *Config
 // or resolveLayers' fresh eviction invalidates it.
 func (c *Config) discoverLayers(workspaceDirPath string) ([]discoveredLayer, error) {
