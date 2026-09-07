@@ -1,8 +1,5 @@
 name: Agent config CI
 
-# scripts/check-all.sh includes this workflow's check-agent-config.sh step,
-# so a push can be pre-checked before CI sees it.
-
 on:
   pull_request:
     paths:

@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
-# Local equivalent of every check ci.yml and agent-config-ci.yml run before
-# a PR can merge: gofmt, go vet/go test on the modules AGENTS.md documents,
-# and each scripts/check-*.sh those two workflows invoke, with the same
-# arguments they pass. It only invokes the existing scripts — duplicating
-# any one check's logic here would let this and CI drift apart.
+# It only invokes the existing scripts: duplicating any one check's logic
+# here would let this and CI drift apart.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
