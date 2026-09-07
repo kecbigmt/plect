@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/config"
+	"github.com/kecbigmt/plecture/app/internal/effect"
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
@@ -19,11 +20,11 @@ import (
 // must surface to the caller promptly instead of the call blocking for the
 // child's full lifetime.
 
-const cancellationCharChildSleep = 5 * time.Second
+const cancellationCharChildSleep = 8 * time.Second
 
-// Generous relative to real kill latency (tolerates CPU contention), but far
-// under cancellationCharChildSleep, so a kill regression still fails loudly.
-const cancellationCharKillBudget = 3 * time.Second
+// Must exceed effect.CancelWaitDelay: the executor's own fallback can take
+// that long, so a tighter budget fails even when it works as designed.
+const cancellationCharKillBudget = effect.CancelWaitDelay + 2*time.Second
 
 // waitForFile is the synchronization point: a test cancels only once the
 // child has actually started, instead of guessing a wall-clock deadline.
@@ -47,6 +48,47 @@ func hungChildScript(started, marker, trailing string) string {
 		script += "; " + trailing
 	}
 	return script
+}
+
+// `set -m` backgrounds sleep into a new process group a group-wide kill
+// can't reach — a POSIX builtin, unlike `setsid`, which macOS lacks.
+// `started` is written only after backgrounding, so a cancel synced on it
+// can't race ahead of the escape.
+func escapedGrandchildScript(started, marker string) string {
+	return fmt.Sprintf("set -m; sleep %d & touch '%s'; wait; touch '%s'; echo '{}'", int(cancellationCharChildSleep/time.Second), started, marker)
+}
+
+func TestCharacterization_RunSetup_CancelledContext_GrandchildInAnotherProcessGroup_StillBoundedByWaitDelay(t *testing.T) {
+	dir := t.TempDir()
+	started := filepath.Join(dir, "started")
+	marker := filepath.Join(dir, "marker")
+	plan := buildPlan(t,
+		[]taskStub{{id: "a", scope: "run", setup: escapedGrandchildScript(started, marker)}},
+		[]nodeStub{{id: "a"}},
+	)
+	tasks := map[string]*contract.TaskState{}
+	goCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- RunSetup(goCtx, plan.Run, SessionVars{Name: "x", WorkspaceDirPath: dir}, tasks, nil)
+	}()
+
+	waitForFile(t, started)
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatalf("RunSetup: want an error surfaced from the cancelled context, got nil")
+		}
+	case <-time.After(cancellationCharKillBudget):
+		t.Fatalf("RunSetup did not return within %v of cancellation despite effect.CancelWaitDelay=%v bounding the fallback", cancellationCharKillBudget, effect.CancelWaitDelay)
+	}
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Errorf("marker file exists: the shell resumed past wait despite being cancelled")
+	}
 }
 
 func TestCharacterization_RunSetup_CancelledContextKillsHungChild(t *testing.T) {

@@ -23,6 +23,14 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/lang"
 )
 
+// CancelWaitDelay bounds how long a cancelled host invocation's Wait keeps
+// listening for its stdout/stderr pipes to close on their own before forcing
+// them shut (see hostExecutor.Run's Cancel/WaitDelay doc). Exported so a
+// characterization test can size its own timeout budget as this value plus a
+// margin, rather than hard-coding a duration that has to be kept in sync by
+// hand with the one below.
+const CancelWaitDelay = 2 * time.Second
+
 // ExecRequest is a single host-process invocation: Argv[0] is the command,
 // Dir is the working directory (applied only if it exists, see hostExecutor),
 // and Stdin/Env are optional: nil means "none" and "inherit the process
@@ -73,9 +81,20 @@ func (hostExecutor) Run(ctx context.Context, req ExecRequest) (stdout, stderr []
 	// call forever even if the group kill somehow fails to reach it.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		groupErr := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		if groupErr == nil {
+			return nil
+		}
+		// The child's own setpgid(2) (run between fork and exec) can lose the
+		// race against an immediate cancellation, so "-pid" does not yet name
+		// a process group and the group kill above returns ESRCH. Signalling
+		// the pid directly still reaches the child in that narrow window.
+		if directErr := syscall.Kill(cmd.Process.Pid, syscall.SIGKILL); directErr == nil {
+			return nil
+		}
+		return groupErr
 	}
-	cmd.WaitDelay = 5 * time.Second
+	cmd.WaitDelay = CancelWaitDelay
 	err = cmd.Run()
 	return outBuf.Bytes(), errBuf.Bytes(), err
 }
