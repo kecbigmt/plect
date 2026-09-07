@@ -536,6 +536,17 @@
         }
       }
     },
+    "providerHealthTable": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A workspace provider has no scope and never joins the health cycle, so [health] admits alive only; activity is an unknown field.",
+      "properties": {
+        "alive": {
+          "$ref": "#/$defs/aliveAction"
+        }
+      },
+      "$comment": "PLECTURE-CFG-FIELD-UNKNOWN: a workspace provider's [health] admits alive only; activity belongs to the effect kind."
+    },
     "terminalTable": {
       "type": "object",
       "additionalProperties": false,
@@ -1342,8 +1353,29 @@
         },
         "outputs_schema_file": {
           "type": "string"
+        },
+        "health": {
+          "$ref": "#/$defs/providerHealthTable"
         }
-      }
+      },
+      "if": {
+        "required": [
+          "setup"
+        ]
+      },
+      "then": {
+        "required": [
+          "health"
+        ],
+        "properties": {
+          "health": {
+            "required": [
+              "alive"
+            ]
+          }
+        }
+      },
+      "$comment": "PLECTURE-CFG-HEALTH-ALIVE-REQUIRED when setup is declared without [health.alive]."
     },
     "resourceObserverDefinition": {
       "type": "object",

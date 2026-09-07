@@ -153,5 +153,8 @@ args = [
   "provider",
   "%[2]s",
 ]
+
+[%[1]s.health.alive]
+type = "noop"
 `, id, workspaceDir)
 }

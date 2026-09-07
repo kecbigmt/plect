@@ -367,6 +367,9 @@ name  = { expr = "'followup-' + match.id" }
 type    = "exec"
 command = "printf"
 args    = ['{"workdir":"/tmp/followup"}']
+
+[followup.health.alive]
+type = "noop"
 `)
 	const chainResource = "followup://9"
 	writeFile(t, filepath.Join(base, "tasks", "work.toml"), `[work]
@@ -604,6 +607,9 @@ name  = { expr = "'followup-' + match.id" }
 type    = "exec"
 command = "printf"
 args    = ['{"workdir":"/tmp/followup"}']
+
+[followup.health.alive]
+type = "noop"
 `)
 	const chainResource = "followup://21"
 	writeFile(t, filepath.Join(base, "tasks", "work.toml"), `[work]

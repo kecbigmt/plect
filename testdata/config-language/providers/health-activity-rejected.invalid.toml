@@ -1,0 +1,17 @@
+# plect-fixture: result=invalid layer=structural diagnostic=PLECTURE-CFG-FIELD-UNKNOWN entry=definitions
+# reason: a workspace provider has no scope and never joins the health cycle, so [health] admits alive only.
+
+[worktree]
+kind = "workspace_provider"
+
+[worktree.setup]
+type = "exec"
+bin  = "github-worktree"
+args = ["setup", "--resource", { from = "resource.id" }]
+
+[worktree.health.alive]
+type = "noop"
+
+[worktree.health.activity]
+type   = "shell"
+script = 'echo "{\"fingerprint\":\"x\"}"'

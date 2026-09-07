@@ -89,6 +89,8 @@ name = { from = "match.id" }
 type = "exec"
 command = "printf"
 args = ['{"workspace_dir":"%s","branch":"main"}']
+[provider.health.alive]
+type = "noop"
 [provider.outputs_schema]
 type = "object"
 `, cfg.WorkspaceDirsRoot))

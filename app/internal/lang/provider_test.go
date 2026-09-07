@@ -28,6 +28,9 @@ name  = { from = "match.owner" }
 [p.setup]
 type = "exec"
 bin  = "okf-bundle"
+
+[p.health.alive]
+type = "noop"
 `,
 		},
 		{
@@ -40,6 +43,9 @@ name  = { expr = "match.owner + '/' + match.repo" }
 [p.setup]
 type = "exec"
 bin  = "okf-bundle"
+
+[p.health.alive]
+type = "noop"
 `,
 		},
 		{
@@ -52,6 +58,9 @@ name  = { from = "match.repo" }
 [p.setup]
 type = "exec"
 bin  = "okf-bundle"
+
+[p.health.alive]
+type = "noop"
 `,
 			want: CodeFromPath,
 		},
@@ -65,6 +74,9 @@ name  = { expr = "match.owner + '-' + match.number" }
 [p.setup]
 type = "exec"
 bin  = "okf-bundle"
+
+[p.health.alive]
+type = "noop"
 `,
 			want: CodeFromPath,
 		},
@@ -76,6 +88,9 @@ kind = "workspace_provider"
 [p.setup]
 type = "exec"
 bin  = "okf-bundle"
+
+[p.health.alive]
+type = "noop"
 
 [p.cleanup]
 type = "exec"
@@ -98,6 +113,9 @@ kind = "workspace_provider"
 type = "exec"
 bin  = "okf-bundle"
 
+[p.health.alive]
+type = "noop"
+
 [p.cleanup]
 type = "exec"
 bin  = "okf-bundle"
@@ -119,6 +137,9 @@ kind = "workspace_provider"
 [p.setup]
 type = "exec"
 bin  = "okf-bundle"
+
+[p.health.alive]
+type = "noop"
 
 [p.cleanup]
 type   = "shell"
@@ -145,6 +166,9 @@ outputs_schema_file = "outputs.json"
 type = "exec"
 bin  = "okf-bundle"
 
+[p.health.alive]
+type = "noop"
+
 [p.cleanup]
 type = "exec"
 bin  = "okf-bundle"
@@ -162,6 +186,9 @@ outputs_schema_file = "outputs.json"
 [p.setup]
 type = "exec"
 bin  = "okf-bundle"
+
+[p.health.alive]
+type = "noop"
 
 [p.cleanup]
 type = "exec"
@@ -182,6 +209,9 @@ name  = { from = "match.owner" }
 [p.setup]
 type = "exec"
 bin  = "okf-bundle"
+
+[p.health.alive]
+type = "noop"
 `,
 			want:  CodeFieldType,
 			layer: LayerStructural,
@@ -196,6 +226,9 @@ kind = "workspace_provider"
 [p.setup]
 type = "exec"
 bin  = "okf-bundle"
+
+[p.health.alive]
+type = "noop"
 
 [p.cleanup]
 type = "exec"
@@ -212,6 +245,9 @@ kind = "workspace_provider"
 [p.setup]
 type = "exec"
 bin  = "okf-bundle"
+
+[p.health.alive]
+type = "noop"
 
 [p.cleanup]
 type = "exec"

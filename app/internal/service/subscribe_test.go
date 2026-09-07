@@ -34,6 +34,9 @@ type    = "exec"
 command = "printf"
 args    = ['{"workspace_dir":"/tmp/x"}']
 
+[%[1]s.health.alive]
+type = "noop"
+
 [%[1]s.subscribe]
 type    = "exec"
 command = "sh"
@@ -105,6 +108,9 @@ name  = { expr = "match.owner + '/' + match.repo + '-' + match.number" }
 type    = "exec"
 command = "printf"
 args    = ['{"workspace_dir":"/tmp/x"}']
+
+[github.health.alive]
+type = "noop"
 
 [github.subscribe]
 type    = "exec"
@@ -225,6 +231,9 @@ name  = { expr = "match.owner + '/' + match.repo + '-' + match.number" }
 type    = "exec"
 command = "printf"
 args    = ['{"workdir":"/tmp/x"}']
+
+[github.health.alive]
+type = "noop"
 `, ghMatch)
 	if err := os.WriteFile(filepath.Join(providersDir, "github.toml"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
@@ -257,6 +266,9 @@ name  = { expr = "match.owner + '/' + match.repo + '-' + match.number" }
 type    = "exec"
 command = "printf"
 args    = ['{"workdir":"/tmp/x"}']
+
+[github.health.alive]
+type = "noop"
 
 [github.subscribe]
 type    = "exec"

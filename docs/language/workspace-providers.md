@@ -48,6 +48,13 @@ args = [
   { from = "cleanup.inputs.delete_branch", default = "" },
 ]
 
+[worktree.health.alive]
+type   = "shell"
+script = 'test -d "$workspace_dir" && git -C "$workspace_dir" rev-parse --git-dir >/dev/null'
+
+[worktree.health.alive.bind]
+workspace_dir = { from = "self.outputs.workspace_dir" }
+
 [worktree.subscribe]
 type = "exec"
 bin  = "github-watcher"
@@ -95,6 +102,27 @@ context and the resource id: `unsubscribe` reads the session name;
 produced none), so a provider can forward it to whatever delivery mechanism
 it owns.
 
+## Health
+
+A workspace provider with `setup` declares `[health.alive]`: an executable
+probe, as in the worked example above, or, when its produced record is
+deliberately never re-observed, `type = "noop"`. `plect up` runs it against a
+produced provider record before resolving the workspace cascade or compiling
+the plan, and repairs a failed provider by running `cleanup` with `force =
+true` at the force root, then `setup` again, mirroring the rebuilt outputs
+into the session. A workspace provider has no scope and does not join the
+periodic health cycle; unlike an effect's liveness, which composes into a
+session's ongoing health verdict, a lost provider surface is repaired only by
+the next `plect up` that observes it.
+
+`[health]` admits `alive` only. `activity` is an unknown field: a provider
+contributes no scope and casts no activity vote. `alive` observes the same
+roots `cleanup` does, minus the ones a probe has no business reading: the
+provider's own recorded outputs (`self.outputs.<key>`), its resolved inputs
+(`inputs.<key>`), the session name, and the configured workspace-dirs root —
+never `cleanup.inputs.*` or `force`, which belong to an explicit teardown
+rather than a liveness check.
+
 ## Contracts
 
 `inputs_schema` declares the provider's author-declared parameters, set by a
@@ -112,3 +140,7 @@ value.
 - A capture named in `name` exists in `match`.
 - Provider parameters are data; no capability tag appears among them.
 - `cleanup` reads `self.outputs.*` keys the provider's `outputs_schema` declares.
+- A provider that declares `setup` declares `[health.alive]`.
+- `[health]` admits `alive` only; `activity` is an unknown field.
+- `health.alive` reads `self.outputs.*` keys the provider's `outputs_schema`
+  declares, the same rule `cleanup` follows.

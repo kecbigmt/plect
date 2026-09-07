@@ -40,6 +40,9 @@ kind = "workspace_provider"
 [worktree.setup]
 type    = "exec"
 command = "true"
+
+[worktree.health.alive]
+type = "noop"
 `)
 	write(filepath.Join(claudeDir, "config", "tasks", "runtime.toml"), `
 [runtime]

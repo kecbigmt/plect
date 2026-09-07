@@ -98,6 +98,9 @@ type    = "exec"
 command = "printf"
 args    = ['{"workspace_dir":"%s"}', { from = "inputs.layout_root", default = "" }]
 
+[demo_provider.health.alive]
+type = "noop"
+
 [demo_provider.inputs_schema]
 type                 = "object"
 additionalProperties = false
@@ -177,6 +180,9 @@ kind = "workspace_provider"
 [demo_provider.setup]
 type    = "exec"
 command = "acquire"
+
+[demo_provider.health.alive]
+type = "noop"
 
 [demo_provider.inputs_schema]
 type                 = "object"

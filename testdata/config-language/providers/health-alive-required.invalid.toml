@@ -1,0 +1,10 @@
+# plect-fixture: result=invalid layer=structural diagnostic=PLECTURE-CFG-HEALTH-ALIVE-REQUIRED entry=definitions
+# reason: a workspace provider's setup acquires a surface that can vanish, so "not observed" has to be a reviewed choice — a noop action — rather than a declaration nobody wrote.
+
+[worktree]
+kind = "workspace_provider"
+
+[worktree.setup]
+type = "exec"
+bin  = "github-worktree"
+args = ["setup", "--resource", { from = "resource.id" }]

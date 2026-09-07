@@ -10,3 +10,6 @@ name  = { from = "match.owner" }
 type = "exec"
 bin  = "okf-bundle"
 args = ["setup", "--resource", { from = "resource.id" }]
+
+[okf_bundle.health.alive]
+type = "noop"

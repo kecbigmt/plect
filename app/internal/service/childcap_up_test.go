@@ -38,6 +38,9 @@ func capProviderRunning(id, script string) string {
 type    = "exec"
 command = "sh"
 args    = ["-c", `+fmt.Sprintf("%q", script)+`, "provider"]
+
+[%[1]s.health.alive]
+type = "noop"
 `)
 }
 

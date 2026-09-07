@@ -44,6 +44,9 @@ type    = "exec"
 command = "printf"
 args    = ['{"workdir":"/tmp/x"}']
 
+[fixture.health.alive]
+type = "noop"
+
 [fixture.subscribe]
 type    = "exec"
 command = "sh"
@@ -130,6 +133,9 @@ type    = "exec"
 command = "printf"
 args    = ['{"workdir":"/tmp/x"}']
 
+[fixture.health.alive]
+type = "noop"
+
 [fixture.subscribe]
 type    = "exec"
 command = "sh"
@@ -193,6 +199,9 @@ name  = { expr = "match.owner + '/' + match.repo + '-' + match.number" }
 type    = "exec"
 command = "printf"
 args    = ['{"workdir":"/tmp/x"}']
+
+[fixture.health.alive]
+type = "noop"
 
 [fixture.subscribe]
 type    = "exec"

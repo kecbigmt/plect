@@ -1,0 +1,13 @@
+# plect-fixture: result=valid entry=definitions
+# reason: a workspace provider's liveness declaration may be an explicit non-observation instead of an executable probe — the produced record is then reused without executing anything.
+
+[worktree]
+kind = "workspace_provider"
+
+[worktree.setup]
+type = "exec"
+bin  = "github-worktree"
+args = ["setup", "--resource", { from = "resource.id" }]
+
+[worktree.health.alive]
+type = "noop"

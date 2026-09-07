@@ -27,6 +27,13 @@ type = "exec"
 bin  = "okf-bundle"
 args = ["cleanup", "--workspace-dir", { from = "self.outputs.workspace_dir" }]
 
+[local_okf.health.alive]
+type   = "shell"
+script = 'test -d "$workspace_dir"'
+
+[local_okf.health.alive.bind]
+workspace_dir = { from = "self.outputs.workspace_dir" }
+
 [local_okf.outputs_schema]
 type     = "object"
 required = ["workspace_dir", "owner", "concept_id", "concept_path"]

@@ -52,6 +52,25 @@ func (v Validation) providerContracts(def *Definition, pos Position) error {
 			}
 		}
 	}
+	if health, ok := def.Body["health"].(map[string]any); ok {
+		if raw, ok := health["alive"]; ok {
+			action, err := ParseAliveAction(raw, childPos(childPos(pos, "health"), "alive"))
+			if err != nil {
+				return err
+			}
+			outputs, err := contractProperties(def, "outputs_schema", pos)
+			if err != nil {
+				return err
+			}
+			for _, value := range action.values() {
+				for _, path := range valuePaths(value, surfaceProviderHealth) {
+					if err := resolveOutput(path, outputs, childPos(childPos(pos, "health"), "alive")); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
 	return nil
 }
 

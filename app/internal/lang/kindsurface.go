@@ -25,7 +25,7 @@ var kindFields = map[Kind]map[string]bool{
 		"inputs_schema", "inputs_schema_file", "max_up_children", "name",
 		"nodes", "populations", "tick", "workspace_provider", "workspace_provider_inputs"),
 	KindWorkspaceProvider: fieldSet(
-		"cleanup", "inputs_schema", "inputs_schema_file", "match", "name",
+		"cleanup", "health", "inputs_schema", "inputs_schema_file", "match", "name",
 		"outputs_schema", "outputs_schema_file", "setup", "subscribe",
 		"unsubscribe"),
 	KindResourceObserver: fieldSet(

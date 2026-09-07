@@ -79,6 +79,13 @@ script = 'rm -rf "$workspace_dir"'
 [thread_workspace.cleanup.bind]
 workspace_dir = { from = "self.outputs.workspace_dir" }
 
+[thread_workspace.health.alive]
+type   = "shell"
+script = 'test -d "$workspace_dir"'
+
+[thread_workspace.health.alive.bind]
+workspace_dir = { from = "self.outputs.workspace_dir" }
+
 [thread_workspace.outputs_schema]
 type     = "object"
 required = ["workspace_dir", "channel_id", "thread_ts", "permalink"]

@@ -38,6 +38,9 @@ kind = "workspace_provider"
 [okf.setup]
 type    = "exec"
 command = "true"
+
+[okf.health.alive]
+type = "noop"
 `)
 
 	writeCatalogsToml(t, tmpHome, `

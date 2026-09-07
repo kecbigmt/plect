@@ -9,6 +9,9 @@ type = "exec"
 bin  = "github-worktree"
 args = ["setup", "--session", { from = "session.name" }]
 
+[worktree.health.alive]
+type = "noop"
+
 [worktree.cleanup]
 type = "exec"
 bin  = "github-worktree"

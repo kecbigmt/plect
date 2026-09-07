@@ -10,3 +10,6 @@ name  = { expr = "match.owner + '/' + match.repo + '-' + match.number" }
 type = "exec"
 bin  = "github-worktree"
 args = ["setup", "--session", { from = "session.name" }]
+
+[worktree.health.alive]
+type = "noop"

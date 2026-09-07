@@ -62,6 +62,9 @@ type = "exec"
 bin  = "github-worktree"
 args = ["setup", "--resource", { from = "resource.id" }]
 
+[worktree.health.alive]
+type = "noop"
+
 [runtime]
 kind  = "effect"
 scope = "run"

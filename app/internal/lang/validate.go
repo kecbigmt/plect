@@ -234,6 +234,33 @@ func (v Validation) validateProvider(def *Definition, pos Position) error {
 			return err
 		}
 	}
+	hasAlive := false
+	if health, ok := def.Body["health"]; ok {
+		at := childPos(pos, "health")
+		tbl, err := table(health, at)
+		if err != nil {
+			return err
+		}
+		// A provider has no scope, so activity names no consumer here.
+		if err := rejectUnknownFields(tbl, at, "alive"); err != nil {
+			return err
+		}
+		if raw, ok := tbl["alive"]; ok {
+			hasAlive = true
+			aliveAt := childPos(at, "alive")
+			action, err := ParseAliveAction(raw, aliveAt)
+			if err != nil {
+				return err
+			}
+			if err := v.checkAction(action, surfaceProviderHealth, aliveAt); err != nil {
+				return err
+			}
+		}
+	}
+	if _, hasSetup := def.Body["setup"]; hasSetup && !hasAlive {
+		return newDiag(CodeHealthAliveRequired, LayerStructural, childPos(childPos(pos, "health"), "alive"),
+			"a workspace provider with setup declares [health.alive], as an executable probe or as an explicit noop")
+	}
 	return v.providerContracts(def, pos)
 }
 

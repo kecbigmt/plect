@@ -106,6 +106,8 @@ var (
 	surfaceProviderCleanup = newSurface("workspace_provider.cleanup", LayerSemantic,
 		"self.outputs.<key>", "inputs.<key>", "cleanup.inputs.<key>", "session.name",
 		"config.workspace_dirs_root", "force")
+	surfaceProviderHealth = newSurface("workspace_provider.health", LayerSemantic,
+		"self.outputs.<key>", "inputs.<key>", "session.name", "config.workspace_dirs_root")
 	surfaceProviderSubscribe = newSurface("workspace_provider.subscribe", LayerSemantic,
 		"session.name", "session.branch", "resource.id")
 	surfaceProviderUnsubscribe = newSurface("workspace_provider.unsubscribe", LayerSemantic,

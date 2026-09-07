@@ -1841,6 +1841,9 @@ type    = "exec"
 command = "sh"
 args    = ["-c", %[2]q, "provider"%[3]s]
 
+[%[1]s.health.alive]
+type = "noop"
+
 [%[1]s.cleanup]
 type    = "exec"
 command = "sh"

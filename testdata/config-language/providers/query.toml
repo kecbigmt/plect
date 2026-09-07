@@ -10,5 +10,8 @@ name  = { from = "match.id" }
 type    = "exec"
 command = "setup-case"
 
+[query_provider.health.alive]
+type = "noop"
+
 [query_provider.outputs_schema]
 type = "object"

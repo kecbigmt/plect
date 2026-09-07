@@ -205,6 +205,9 @@ kind = "workspace_provider"
 type    = "exec"
 command = "true"
 
+[github.health.alive]
+type = "noop"
+
 [github.subscribe]
 type = "exec"
 bin  = "local/runtime/watcher"

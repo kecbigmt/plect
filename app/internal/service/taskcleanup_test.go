@@ -452,6 +452,9 @@ type    = "exec"
 command = "printf"
 args    = ['{"workdir":"/tmp/x"}']
 
+[github.health.alive]
+type = "noop"
+
 [github.subscribe]
 type    = "exec"
 command = "true"

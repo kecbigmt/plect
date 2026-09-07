@@ -80,6 +80,9 @@ kind = "workspace_provider"
 [worktree.setup]
 type    = "exec"
 command = "` + cmd + `"
+
+[worktree.health.alive]
+type = "noop"
 `
 	}
 	cfg := twoAddressablePlugins(t, filepath.Join("workspaces", "worktree.toml"), provider("a"), provider("b"))

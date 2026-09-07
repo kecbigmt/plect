@@ -8,3 +8,6 @@ kind = "workspace_provider"
 type = "exec"
 bin  = "okf-bundle"
 args = ["setup"]
+
+[local-okf.health.alive]
+type = "noop"

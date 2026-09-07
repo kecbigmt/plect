@@ -152,7 +152,7 @@ the CLI's name would claim the language's rules for one of its consumers.
 | `PLECTURE-CFG-FIRST-OBSERVE-FAILED` | instantiation | The observation instantiation performs failed, so no instance is created; the observer's own error is reported. |
 | `PLECTURE-CFG-BIN-UNKNOWN` | semantic | An executable reference resolves to no declared executable. |
 | `PLECTURE-CFG-TERMINAL-UNAVAILABLE` | semantic | A terminal capability is consumed where no effect in the plan declares that verb. |
-| `PLECTURE-CFG-HEALTH-ALIVE-REQUIRED` | structural | An effect declares `setup` without declaring `[health.alive]`. |
+| `PLECTURE-CFG-HEALTH-ALIVE-REQUIRED` | structural | An effect or workspace provider declares `setup` without declaring `[health.alive]`. |
 | `PLECTURE-CFG-NESTING-CYCLE` | semantic | A nesting chain reaches itself. |
 | `PLECTURE-CFG-NESTING-OUTPUT-MUTABLE` | semantic | A computed nested output is marked mutable. |
 | `PLECTURE-CFG-NESTING-PROJECTION-MISMATCH` | semantic | A direct nested projection disagrees with the inner output's type or mutability. |

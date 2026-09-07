@@ -42,10 +42,13 @@ awk '
 ' $(find "$CONFIG_DIR" .plect -name '*.toml' 2>/dev/null)
 ```
 
-This also matches a `workspace_provider`, which declares `setup` too but is
-outside this rule's scope (workspace providers have no `[health]` surface).
-Check each match's `kind` field before editing it; only a `kind = "effect"`
-match needs a change.
+This also matches a `workspace_provider`, which declares `setup` too and, as
+of
+[`workspace-provider-health-alive-migration.md`](workspace-provider-health-alive-migration.md),
+carries the same `[health.alive]` requirement under its own (narrower)
+`[health]` surface. Check each match's `kind` field: an `effect` match
+follows this document; a `workspace_provider` match follows that one
+instead — its `[health]` admits `alive` only, never `activity`.
 
 ## Satisfy the rule
 

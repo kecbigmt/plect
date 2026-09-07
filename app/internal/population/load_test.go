@@ -47,6 +47,8 @@ name = { from = "match.id" }
 [provider.setup]
 type = "exec"
 command = "true"
+[provider.health.alive]
+type = "noop"
 [provider.outputs_schema]
 type = "object"
 `)

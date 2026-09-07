@@ -17,6 +17,9 @@ const providerSetupHook = `
 type    = "exec"
 command = "true"
 args    = ["setup", { from = "resource.id" }]
+
+[github.health.alive]
+type = "noop"
 `
 
 func TestLoadWorkspaceProviders_GlobalLayer(t *testing.T) {
@@ -58,12 +61,18 @@ kind = "workspace_provider"
 type    = "exec"
 command = "true"
 
+[first.health.alive]
+type = "noop"
+
 [second]
 kind = "workspace_provider"
 
 [second.setup]
 type    = "exec"
 command = "true"
+
+[second.health.alive]
+type = "noop"
 `)
 	got, err := (&Config{BaseDir: baseDir}).LoadWorkspaceProviders()
 	if err != nil {
@@ -89,6 +98,9 @@ kind = "workspace_provider"
 [github.setup]
 type    = "exec"
 command = "plugin"
+
+[github.health.alive]
+type = "noop"
 `)
 	writeProviderDoc(t, baseDir, "github", `
 [github]
@@ -97,6 +109,9 @@ kind = "workspace_provider"
 [github.setup]
 type    = "exec"
 command = "global"
+
+[github.health.alive]
+type = "noop"
 `)
 	got, err := (&Config{BaseDir: baseDir, PluginDirs: []string{pluginDir}}).LoadWorkspaceProviders()
 	if err != nil {
@@ -148,17 +163,17 @@ func TestLoadWorkspaceProviders_RejectedDeclarations(t *testing.T) {
 		},
 		{
 			name: "match without name",
-			body: "[p]\nkind = \"workspace_provider\"\nmatch = '^x'\n\n[p.setup]\ntype = \"exec\"\ncommand = \"true\"\n",
+			body: "[p]\nkind = \"workspace_provider\"\nmatch = '^x'\n\n[p.setup]\ntype = \"exec\"\ncommand = \"true\"\n\n[p.health.alive]\ntype = \"noop\"\n",
 			want: "declared together",
 		},
 		{
 			name: "name without match",
-			body: "[p]\nkind = \"workspace_provider\"\nname = \"n\"\n\n[p.setup]\ntype = \"exec\"\ncommand = \"true\"\n",
+			body: "[p]\nkind = \"workspace_provider\"\nname = \"n\"\n\n[p.setup]\ntype = \"exec\"\ncommand = \"true\"\n\n[p.health.alive]\ntype = \"noop\"\n",
 			want: "declared together",
 		},
 		{
 			name: "match does not compile",
-			body: "[p]\nkind = \"workspace_provider\"\nmatch = '('\nname = \"n\"\n\n[p.setup]\ntype = \"exec\"\ncommand = \"true\"\n",
+			body: "[p]\nkind = \"workspace_provider\"\nmatch = '('\nname = \"n\"\n\n[p.setup]\ntype = \"exec\"\ncommand = \"true\"\n\n[p.health.alive]\ntype = \"noop\"\n",
 			want: "does not compile as a regular expression",
 		},
 		{
@@ -183,7 +198,7 @@ func TestLoadWorkspaceProviders_RejectedDeclarations(t *testing.T) {
 		},
 		{
 			name: "the reserved workspace_dir output declared mutable",
-			body: "[p]\nkind = \"workspace_provider\"\n\n[p.setup]\ntype = \"exec\"\ncommand = \"true\"\n\n[p.outputs_schema.properties.workspace_dir]\ntype = \"string\"\nmutable = true\n",
+			body: "[p]\nkind = \"workspace_provider\"\n\n[p.setup]\ntype = \"exec\"\ncommand = \"true\"\n\n[p.health.alive]\ntype = \"noop\"\n\n[p.outputs_schema.properties.workspace_dir]\ntype = \"string\"\nmutable = true\n",
 			want: "reserved",
 		},
 	}
@@ -287,6 +302,9 @@ name  = { expr = "match.owner + '/' + match.repo" }
 [p.setup]
 type    = "exec"
 command = "true"
+
+[p.health.alive]
+type = "noop"
 `,
 			want: "match.repo",
 		},
@@ -298,6 +316,9 @@ kind = "workspace_provider"
 [p.setup]
 type    = "exec"
 command = "true"
+
+[p.health.alive]
+type = "noop"
 
 [p.cleanup]
 type    = "exec"

@@ -48,6 +48,9 @@ name  = { expr = "match.owner + '/' + match.repo + '-' + match.number" }
 [space.setup]
 type   = "shell"
 script = "mkdir -p `+marker+` && printf '{\"workspace_dir\":\"`+marker+`\"}'"
+
+[space.health.alive]
+type = "noop"
 `)
 	write(filepath.Join("workflows", wfID+".toml"), `
 [`+wfID+`]

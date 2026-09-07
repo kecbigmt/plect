@@ -34,6 +34,13 @@ args = [
   { from = "cleanup.inputs.delete_branch", default = "" },
 ]
 
+[worktree.health.alive]
+type   = "shell"
+script = 'test -d "$workspace_dir" && git -C "$workspace_dir" rev-parse --git-dir >/dev/null'
+
+[worktree.health.alive.bind]
+workspace_dir = { from = "self.outputs.workspace_dir" }
+
 [worktree.subscribe]
 type = "exec"
 bin  = "github-watcher"

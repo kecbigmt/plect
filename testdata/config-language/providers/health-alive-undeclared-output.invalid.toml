@@ -1,0 +1,24 @@
+# plect-fixture: result=invalid layer=semantic diagnostic=PLECTURE-CFG-FROM-PATH entry=definitions
+# reason: health.alive reads the provider's own production records, so a key its outputs_schema does not declare is unresolvable, the same rule cleanup follows.
+
+[worktree]
+kind = "workspace_provider"
+
+[worktree.setup]
+type = "exec"
+bin  = "github-worktree"
+args = ["setup", "--resource", { from = "resource.id" }]
+
+[worktree.health.alive]
+type   = "shell"
+script = 'test -d "$branch"'
+
+[worktree.health.alive.bind]
+branch = { from = "self.outputs.branch" }
+
+[worktree.outputs_schema]
+type     = "object"
+required = ["workspace_dir"]
+
+[worktree.outputs_schema.properties]
+workspace_dir = { type = "string" }

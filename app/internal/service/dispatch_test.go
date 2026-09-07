@@ -36,6 +36,9 @@ func providerRunningScript(id, script string) string {
 type    = "exec"
 command = "sh"
 args    = ["-c", `+fmt.Sprintf("%q", script)+`, "provider"]
+
+[%[1]s.health.alive]
+type = "noop"
 `)
 }
 
@@ -52,6 +55,9 @@ func providerEchoingOutputs(id, outputsJSON string) string {
 type    = "exec"
 command = "printf"
 args    = ['`+outputsJSON+`']
+
+[%[1]s.health.alive]
+type = "noop"
 `)
 }
 
@@ -243,6 +249,9 @@ func TestCreate_IdentityPath(t *testing.T) {
 type    = "exec"
 command = "sh"
 args    = ["-c", `+fmt.Sprintf("%q", "mkdir -p "+workdir+"\nprintf '{\"workspace_dir\":\""+workdir+"\"}'\n")+`, "provider"]
+
+[%[1]s.health.alive]
+type = "noop"
 `))
 
 	result, err := Create(cfg, store, CreateParams{URL: "my-experiment", Workflow: "scratch"})

@@ -51,7 +51,8 @@ func mountResolverOnlyWorkspaceProvider(t *testing.T, cfg *config.Config) {
 		"name  = { expr = \"match.owner + '/' + match.repo + '-' + match.number\" }\n" +
 		// Never invoked (the allowlist check rejects the request first) —
 		// only present because a provider must declare how it acquires.
-		"\n[test_gh.setup]\ntype = \"exec\"\ncommand = \"false\"\n"
+		"\n[test_gh.setup]\ntype = \"exec\"\ncommand = \"false\"\n" +
+		"\n[test_gh.health.alive]\ntype = \"noop\"\n"
 	if err := os.WriteFile(filepath.Join(base, "workspaces", "test_gh.toml"), []byte(workspaceProviderTOML), 0o644); err != nil {
 		t.Fatal(err)
 	}

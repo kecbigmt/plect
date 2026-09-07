@@ -69,6 +69,7 @@ type WorkspaceProviderConfig struct {
 	// `workspace_dir` is reserved always-immutable.
 	OutputsSchema     map[string]any
 	OutputsSchemaFile string
+	Health            *HealthConfig
 	BaseDir           string
 	SourcePath        string
 	// FromPlugin says a plugin layer wrote this definition, which is what
@@ -171,6 +172,9 @@ func workspaceProviderFrom(def *lang.Definition, path string, fromPlugin bool) (
 	if p.Unsubscribe, err = actionField(def, path, "unsubscribe"); err != nil {
 		return p, err
 	}
+	if p.Health, err = providerHealthFrom(def, path); err != nil {
+		return p, err
+	}
 	for _, field := range []struct {
 		key    string
 		schema *map[string]any
@@ -198,6 +202,30 @@ func workspaceProviderFrom(def *lang.Definition, path string, fromPlugin bool) (
 		return p, err
 	}
 	return p, nil
+}
+
+// providerHealthFrom reads a provider's `[health]` table. The language layer
+// has already rejected `activity` and enforced `alive` as mandatory
+// whenever `setup` is declared, so this only needs to read `alive` back,
+// through the same ParseAliveAction the validator used.
+func providerHealthFrom(def *lang.Definition, path string) (*HealthConfig, error) {
+	raw, ok := def.Body["health"]
+	if !ok {
+		return nil, nil
+	}
+	tbl, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("`health` is a table")
+	}
+	raw, ok = tbl["alive"]
+	if !ok {
+		return nil, nil
+	}
+	action, err := lang.ParseAliveAction(raw, lang.Position{File: path, Path: def.ID + ".health.alive"})
+	if err != nil {
+		return nil, err
+	}
+	return &HealthConfig{Alive: action}, nil
 }
 
 // rejectMutableWorkspaceDir fails the load when an outputs schema declares

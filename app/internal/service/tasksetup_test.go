@@ -107,6 +107,9 @@ type    = "exec"
 command = "printf"
 args    = ['{"workdir":"/tmp/x"}']
 
+[github.health.alive]
+type = "noop"
+
 [github.subscribe]
 type    = "exec"
 command = "sh"
@@ -239,6 +242,9 @@ name  = { expr = "match.owner + '/' + match.repo + '-' + match.number" }
 type    = "exec"
 command = "printf"
 args    = ['{"workdir":"/tmp/x"}']
+
+[github.health.alive]
+type = "noop"
 
 [github.subscribe]
 type    = "exec"
