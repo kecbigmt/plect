@@ -38,6 +38,10 @@ action exits zero only when the provider surface exists; noop means the
 provider deliberately does not re-observe its production record. There is no
 core-implicit path check and no new action type.
 
+This decision extends noop's legality to a workspace provider's
+[health].alive action only. The existing restriction remains in force for
+provider setup, cleanup, subscribe, and unsubscribe actions.
+
 The declaration is mandatory because every workspace provider has setup. A
 provider without [health].alive is a load error with the actionable form used
 for setup-bearing effects: a workspace provider with setup declares
