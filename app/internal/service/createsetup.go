@@ -78,33 +78,34 @@ func createWithWorkflowSetup(cfg *config.Config, store *state.Store, params Crea
 			// which declaration produced it, so a plan reloaded later would
 			// look for a workflow that answers to something else.
 			ParentSession: parentSession,
+			Status:        contract.SessionStatusDown,
 			Workflow:      wf.Address,
 			Population:    params.Population,
 			Inputs:        input,
 			Tasks:         make(map[string]*contract.TaskState),
 			CreatedAt:     now,
 		}
-		// Mint this incarnation's event stream before anything touches the
-		// log: AppendEvent/SetEventCursor require a current stream to
-		// already exist rather than silently starting one, so create is the
-		// one place responsible for starting it.
-		if _, err := eventlog.NewStore(store.Dir()).NewStream(sessionName); err != nil {
-			return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to start event stream: %v", err)}
-		}
+	}
+	session.ResourceID = resource
+	session.Alias = alias
+	session.UpdatedAt = now
+
+	existingBeforePut := existing != nil
+	// Record the session before setup so partial failures stay visible. A
+	// genuinely new session's row (and its id) is minted here: unlike the
+	// retired event_streams table, a session's own log is this row, so
+	// nothing can touch it before this Put -- AppendEvent/SetEventCursor
+	// require a live row to already exist rather than silently starting one.
+	if err := store.Put(session); err != nil {
+		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to save session state: %v", err)}
+	}
+	if !existingBeforePut {
 		// Seed the dispatcher's read cursor at this fresh session's empty log tail
 		// so the initial task instruction, appended below during create, is
 		// delivered. The dispatcher only starts once the run scope comes up (after
 		// create returns), by which point its own first-start seed would land past
 		// the instruction and drop it.
 		dispatch.SeedCursor(eventlog.NewStore(store.Dir()), sessionName)
-	}
-	session.ResourceID = resource
-	session.Alias = alias
-	session.UpdatedAt = now
-
-	// Record the session before setup so partial failures stay visible.
-	if err := store.Put(session); err != nil {
-		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to save session state: %v", err)}
 	}
 
 	reused := false
@@ -133,9 +134,9 @@ func createWithWorkflowSetup(cfg *config.Config, store *state.Store, params Crea
 			// consumer (cd/attach/ls/web UI/hooks) reads, so mirror it here.
 			session.WorkspaceDirPath = workspaceDir
 		}
-		if branch, ok := outputs["branch"].(string); ok && branch != "" {
-			session.Branch = branch
-		}
+		// A git-backed provider's own "branch" output (domain.SessionBranch)
+		// needs no mirroring here: it already lives in this @workflow node's
+		// Outputs, which the Put below persists.
 	}
 	if err := store.Put(session); err != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to save session state: %v", err)}
@@ -173,7 +174,7 @@ func createWithWorkflowSetup(cfg *config.Config, store *state.Store, params Crea
 
 	// Binding implies delivery for the session's own resource too, not just
 	// a dynamic task setup's own bound one.
-	if _, errMsg := wireDeliveryOnSetup(cfg, store, sessionName, resource, session.Branch); errMsg != "" {
+	if _, errMsg := wireDeliveryOnSetup(cfg, store, sessionName, resource, domain.SessionBranch(session)); errMsg != "" {
 		slog.Warn("resource delivery wiring failed at session create", "session", sessionName, "resource", resource, "error", errMsg)
 	}
 
@@ -184,7 +185,7 @@ func createWithWorkflowSetup(cfg *config.Config, store *state.Store, params Crea
 	return &CreateResult{
 		SessionName:        sessionName,
 		WorkspaceDirPath:   session.WorkspaceDirPath,
-		Branch:             session.Branch,
+		Branch:             domain.SessionBranch(session),
 		ReusedWorkspaceDir: reused,
 		Tasks:              session.Tasks,
 	}, nil

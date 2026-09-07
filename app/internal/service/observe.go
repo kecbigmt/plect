@@ -108,7 +108,7 @@ func observeInstanceResource(cfg *config.Config, session *domain.Session, doc co
 		result.Error = fmt.Sprintf("instance %q has no resource to observe", key)
 		return nil, result
 	}
-	observed, err := task.ObserveResource(observer, resourceID, session.Branch, session.WorkspaceDirPath, cfg.Plugins)
+	observed, err := task.ObserveResource(observer, resourceID, domain.SessionBranch(session), session.WorkspaceDirPath, cfg.Plugins)
 	if err != nil {
 		result.Error = err.Error()
 		return nil, result

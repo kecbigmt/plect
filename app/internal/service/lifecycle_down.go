@@ -42,6 +42,9 @@ func Down(cfg *config.Config, store *state.Store, params DownParams) (*DownResul
 		session.Tasks = make(map[string]*contract.TaskState)
 	}
 
+	if err := setSessionStatus(store, sessionName, contract.SessionStatusDown); err != nil {
+		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to record session status: %v", err)}
+	}
 	plan, err := buildPlanForSession(cfg, session.WorkspaceDirPath, session)
 	if err != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: err.Error()}
@@ -57,6 +60,7 @@ func Down(cfg *config.Config, store *state.Store, params DownParams) (*DownResul
 	}
 	cleanupErr := task.RunCleanup(context.Background(), teardown, sessionVars(cfg, session, plan), session.Tasks, params.Observer)
 	session.UpdatedAt = time.Now()
+	session.Status = contract.SessionStatusDown
 	if err := store.Put(session); err != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to save session state: %v", err)}
 	}

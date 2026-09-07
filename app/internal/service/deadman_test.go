@@ -120,13 +120,20 @@ func TestCheckHeartbeatDeadman_NeverTickedJudgesStalenessFromCreatedAt(t *testin
 		t.Fatal("escalated for a freshly created session within its grace window")
 	}
 
-	if err := store.Update("owner/repo-1", func(s *domain.Session) error {
-		s.CreatedAt = now.Add(-time.Hour)
-		return nil
+	// CreatedAt is a recorded fact, set once at insert and never revised
+	// (mirroring the persistence layer's own insert-only created_at
+	// column), so an aged-past-its-grace-window session is seeded directly
+	// with an old CreatedAt rather than mutated into one after the fact.
+	if err := store.Put(&domain.Session{
+		Name:      "owner/repo-2",
+		Workflow:  "",
+		Tasks:     runningTasks(),
+		CreatedAt: now.Add(-time.Hour),
+		UpdatedAt: now.Add(-time.Hour),
 	}); err != nil {
 		t.Fatal(err)
 	}
-	escalated, err = CheckHeartbeatDeadman(cfg, store, "owner/repo-1", heartbeatTick(time.Minute), now)
+	escalated, err = CheckHeartbeatDeadman(cfg, store, "owner/repo-2", heartbeatTick(time.Minute), now)
 	if err != nil {
 		t.Fatalf("CheckHeartbeatDeadman: %v", err)
 	}

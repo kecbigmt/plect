@@ -25,14 +25,9 @@ func TestStore_PutAndGet(t *testing.T) {
 	session := &domain.Session{
 		Name:             "owner/repo-123",
 		ResourceID:       "https://example.test/owner/repo/items/123",
-		Branch:           "issue/123",
 		WorkspaceDirPath: "/tmp/workdirs/github.com/owner/repo/issue-123",
-		Message: &domain.Message{
-			Text:      "running tests",
-			UpdatedAt: now,
-		},
-		CreatedAt: now,
-		UpdatedAt: now,
+		CreatedAt:        now,
+		UpdatedAt:        now,
 	}
 
 	if err := store.Put(session); err != nil {
@@ -49,9 +44,6 @@ func TestStore_PutAndGet(t *testing.T) {
 	}
 	if got.ResourceID != session.ResourceID {
 		t.Errorf("ResourceID = %q, want %q", got.ResourceID, session.ResourceID)
-	}
-	if got.Message == nil || got.Message.Text != "running tests" {
-		t.Errorf("Message not persisted correctly")
 	}
 }
 
@@ -85,7 +77,7 @@ func TestStore_CheckReadableAllowsAFreshDataDirectory(t *testing.T) {
 	}
 }
 
-func TestStore_Delete(t *testing.T) {
+func TestStore_Destroy(t *testing.T) {
 	store := NewStore(t.TempDir())
 
 	session := &domain.Session{
@@ -95,12 +87,12 @@ func TestStore_Delete(t *testing.T) {
 	}
 	store.Put(session)
 
-	if err := store.Delete("owner/repo-1"); err != nil {
-		t.Fatalf("Delete() error: %v", err)
+	if err := store.Destroy("owner/repo-1"); err != nil {
+		t.Fatalf("Destroy() error: %v", err)
 	}
 
 	if got := store.Get("owner/repo-1"); got != nil {
-		t.Error("Get() after Delete() should return nil")
+		t.Error("Get() after Destroy() should return nil")
 	}
 }
 
@@ -166,7 +158,12 @@ func TestStore_NormalizeSessionTreeClearsDanglingRootPrefix(t *testing.T) {
 	}
 }
 
-func TestStore_DeleteDetachesSessionTreeLinks(t *testing.T) {
+// TestStore_DestroyRetainsChildrensParentLink proves destroy no longer
+// severs the parent/child link the way a hard delete once did: "work"'s
+// row (and its name) is retained, so "child" still resolves it as its
+// parent, even though "work" no longer appears in a live listing (root's
+// Children, or a plain Get).
+func TestStore_DestroyRetainsChildrensParentLink(t *testing.T) {
 	store := NewStore(t.TempDir())
 	now := time.Now()
 
@@ -180,7 +177,7 @@ func TestStore_DeleteDetachesSessionTreeLinks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := store.Delete("work"); err != nil {
+	if err := store.Destroy("work"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -189,14 +186,17 @@ func TestStore_DeleteDetachesSessionTreeLinks(t *testing.T) {
 		t.Fatal("root missing")
 	}
 	if len(root.Children) != 0 {
-		t.Fatalf("root.Children = %v, want empty after deleting child", root.Children)
+		t.Fatalf("root.Children = %v, want empty (destroyed rows are not live children)", root.Children)
+	}
+	if got := store.Get("work"); got != nil {
+		t.Fatalf("Get(work) after destroy = %+v, want nil (destroyed rows are not live)", got)
 	}
 	child := store.Get("child")
 	if child == nil {
 		t.Fatal("child missing")
 	}
-	if child.ParentSession != "" {
-		t.Fatalf("child.ParentSession = %q, want detached", child.ParentSession)
+	if child.ParentSession != "work" {
+		t.Fatalf("child.ParentSession = %q, want %q (a destroyed parent keeps its children's history intact)", child.ParentSession, "work")
 	}
 }
 
@@ -433,7 +433,7 @@ func TestStore_ReserveUpSlotSupersedesAReservationWithNoLivePID(t *testing.T) {
 	}
 }
 
-func TestStore_DeleteClearsTheSessionsUpReservation(t *testing.T) {
+func TestStore_DestroyClearsTheSessionsUpReservation(t *testing.T) {
 	store := NewStore(t.TempDir())
 	now := time.Now()
 	if err := store.Put(&domain.Session{Name: "childA", CreatedAt: now, UpdatedAt: now}); err != nil {
@@ -441,11 +441,11 @@ func TestStore_DeleteClearsTheSessionsUpReservation(t *testing.T) {
 	}
 	plantReservation(t, store, "childA", UpReservation{Parent: "parent1", At: now, PID: os.Getpid()})
 
-	if err := store.Delete("childA"); err != nil {
-		t.Fatalf("Delete: %v", err)
+	if err := store.Destroy("childA"); err != nil {
+		t.Fatalf("Destroy: %v", err)
 	}
 	if names := reservationNames(t, store); names["childA"] {
-		t.Error("Delete should have cleared childA's reservation")
+		t.Error("Destroy should have cleared childA's reservation")
 	}
 }
 
@@ -596,8 +596,8 @@ func TestStore_UnreadableDatabaseFailsWritesInsteadOfSilentlyInitializing(t *tes
 	if err := store.Update("org/repo-1", func(*domain.Session) error { return nil }); err == nil {
 		t.Fatal("Update() over an unreadable database must fail")
 	}
-	if err := store.Delete("org/repo-1"); err == nil {
-		t.Fatal("Delete() over an unreadable database must fail")
+	if err := store.Destroy("org/repo-1"); err == nil {
+		t.Fatal("Destroy() over an unreadable database must fail")
 	}
 	if _, err := store.AllE(); err == nil {
 		t.Fatal("AllE() over an unreadable database must fail")

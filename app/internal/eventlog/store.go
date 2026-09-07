@@ -40,6 +40,12 @@ type Store struct {
 // e.g. confirming the resident process and writers resolve the same log tree).
 func (s *Store) Root() string { return s.root }
 
+// Dir returns the data directory this store's database lives in, matching
+// state.Store.Dir() — a caller that needs to open a second handle over the
+// same database (a state.Store for the same session, or eventlogtest.
+// NewIncarnation) derives it from here rather than tracking it separately.
+func (s *Store) Dir() string { return s.dir }
+
 // NewStore creates a Store. If dir is empty it defaults to ~/.local/share/plect
 // (honoring XDG_DATA_HOME), matching state.NewStore so both live side by side.
 func NewStore(dir string) *Store {
@@ -112,10 +118,11 @@ func (s *Store) chainAttemptsPath(session string) string {
 }
 func (s *Store) lockPath(session string) string { return filepath.Join(s.sessionDir(session), ".lock") }
 
-// Append writes ev to its session's log and returns the stored event (with ID
-// and Time filled in if absent), its sequence (the replay cursor), and next.
-// A session with no current stream (never created, or a notice about a
-// resource whose admission never went through) gets one started here.
+// Append writes ev to its session's log and returns the stored event (with
+// ID and Time filled in if absent), its sequence (the replay cursor), and
+// next. A session with no live row gets a minimal placeholder row started
+// here, so a name that never went through `plect create` can still be
+// published to (e.g. a cross-session event.publish notice).
 func (s *Store) Append(ev event.Event) (stored event.Event, seq, next int64, err error) {
 	if ev.SessionName == "" {
 		return ev, 0, 0, fmt.Errorf("eventlog: session_name is required")
@@ -136,14 +143,8 @@ func (s *Store) Append(ev event.Event) (stored event.Event, seq, next int64, err
 		return ev, 0, 0, err
 	}
 	ctx := context.Background()
-	id, gerr := db.EventStreamID(ctx, ev.SessionName)
-	if gerr != nil {
-		return ev, 0, 0, fmt.Errorf("eventlog: append: %w", gerr)
-	}
-	if id == "" {
-		if _, cerr := db.CreateEventStream(ctx, ev.SessionName); cerr != nil {
-			return ev, 0, 0, fmt.Errorf("eventlog: append: %w", cerr)
-		}
+	if _, err := db.EnsureLiveSession(ctx, ev.SessionName); err != nil {
+		return ev, 0, 0, fmt.Errorf("eventlog: append: %w", err)
 	}
 	seq, err = db.AppendEvent(ctx, ev)
 	if err != nil {
@@ -483,18 +484,20 @@ func (s *Store) StreamOwner(streamID string) (string, error) {
 	return owner, nil
 }
 
-// NewStream mints a new incarnation's stream for session (a session create,
-// not a down/up or --force-recreate, which resume the current one).
-func (s *Store) NewStream(session string) (string, error) {
+// LatestByType returns the most recent event of type for session's live
+// incarnation, and whether one exists — the status-message reader's
+// primitive (a session's status line is its most recent
+// event.TypeStatusMessage event, not a stored field).
+func (s *Store) LatestByType(session, eventType string) (event.Event, bool, error) {
 	db, err := s.dbHandle()
 	if err != nil {
-		return "", err
+		return event.Event{}, false, err
 	}
-	id, err := db.CreateEventStream(context.Background(), session)
+	ev, ok, err := db.LatestSessionEventByType(context.Background(), session, eventType)
 	if err != nil {
-		return "", fmt.Errorf("eventlog: new stream: %w", err)
+		return event.Event{}, false, fmt.Errorf("eventlog: latest by type: %w", err)
 	}
-	return id, nil
+	return ev, ok, nil
 }
 
 // Follow delivers events from `since`, then polls for new ones until ctx ends.

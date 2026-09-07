@@ -43,7 +43,7 @@ func (db *DB) ReserveUpSlot(ctx context.Context, childName, parentName string, f
 			return domain.ErrUpAlreadyReserved
 		}
 
-		sessionRows, err := q.ListSessions(ctx)
+		sessionRows, err := q.ListLiveSessions(ctx)
 		if err != nil {
 			return fmt.Errorf("list sessions: %w", err)
 		}

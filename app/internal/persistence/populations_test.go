@@ -3,6 +3,7 @@ package persistence
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/kecbigmt/plecture/app/internal/domain"
@@ -127,6 +128,55 @@ func TestUpdatePopulation_MembersMapIsNeverNilInsideFn(t *testing.T) {
 	}
 	if sawNilMembers {
 		t.Error("fn saw a nil Members map; callers index it directly and would panic")
+	}
+}
+
+// TestUpdatePopulation_LastBlockersRoundTripsThroughChildTableInOrder proves
+// LastBlockers survives the population_member_blockers split, in the order
+// recorded (the table's position column, not the row's own insert order).
+func TestUpdatePopulation_LastBlockersRoundTripsThroughChildTableInOrder(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+
+	if err := db.UpdatePopulation(ctx, "wf/pop", func(p *domain.PopulationState) error {
+		p.Members["r1"] = &domain.PopulationMember{ResourceID: "r1", LastBlockers: []string{"open PR", "failing check"}}
+		return nil
+	}); err != nil {
+		t.Fatalf("UpdatePopulation: %v", err)
+	}
+
+	got, err := db.Population(ctx, "wf/pop")
+	if err != nil {
+		t.Fatalf("Population: %v", err)
+	}
+	member := got.Members["r1"]
+	if member == nil {
+		t.Fatal("member r1 missing")
+	}
+	want := []string{"open PR", "failing check"}
+	if len(member.LastBlockers) != len(want) {
+		t.Fatalf("LastBlockers = %v, want %v", member.LastBlockers, want)
+	}
+	for i := range want {
+		if member.LastBlockers[i] != want[i] {
+			t.Errorf("LastBlockers[%d] = %q, want %q", i, member.LastBlockers[i], want[i])
+		}
+	}
+
+	// A later evaluation with fewer blockers replaces the list rather than
+	// accumulating it.
+	if err := db.UpdatePopulation(ctx, "wf/pop", func(p *domain.PopulationState) error {
+		p.Members["r1"].LastBlockers = []string{"open PR"}
+		return nil
+	}); err != nil {
+		t.Fatalf("UpdatePopulation (replace): %v", err)
+	}
+	got, err = db.Population(ctx, "wf/pop")
+	if err != nil {
+		t.Fatalf("Population (after replace): %v", err)
+	}
+	if fmt.Sprint(got.Members["r1"].LastBlockers) != fmt.Sprint([]string{"open PR"}) {
+		t.Fatalf("LastBlockers after replace = %v, want [open PR]", got.Members["r1"].LastBlockers)
 	}
 }
 

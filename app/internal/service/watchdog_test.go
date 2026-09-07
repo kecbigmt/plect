@@ -581,46 +581,6 @@ func TestSessionRunAndHealthState_AliveProbeBacked(t *testing.T) {
 	}
 }
 
-// TestEvaluateHealth_MessageDoesNotAffectHealthOutcome characterizes the
-// current gap the health-deepening plan targets: message is a latched
-// self-report that health evaluation never reads. A session that reports
-// "working" and one that reports "waiting" (or none at all) with the same
-// alive-probe outcome must produce the same health report, because
-// evaluateHealthFor only consults the declared probes, never Message.
-func TestEvaluateHealth_MessageDoesNotAffectHealthOutcome(t *testing.T) {
-	messages := []*domain.Message{
-		nil,
-		{Text: "working"},
-		{Text: "waiting"},
-		{Text: "anything at all"},
-	}
-
-	for _, alive := range []string{"true", "false"} {
-		for _, msg := range messages {
-			store := testStore(t)
-			cfg := aliveFixtureConfig(t, alive)
-			seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
-				"initial": {Scope: contract.TaskScopeRun, TaskID: "runner", Status: contract.TaskStatusProduced},
-			})
-			if err := store.Update("owner/repo-1", func(s *domain.Session) error {
-				s.Message = msg
-				return nil
-			}); err != nil {
-				t.Fatalf("set message: %v", err)
-			}
-
-			report, err := EvaluateHealth(cfg, store, "owner/repo-1")
-			if err != nil {
-				t.Fatalf("EvaluateHealth: %v", err)
-			}
-			wantHealthy := alive == "true"
-			if report.Healthy != wantHealthy {
-				t.Fatalf("alive=%q message=%+v: report.Healthy = %v, want %v (message must not influence health)", alive, msg, report.Healthy, wantHealthy)
-			}
-		}
-	}
-}
-
 // activityFixtureConfig declares the two halves health reads. The run-scoped
 // effect "runner" owns the probes: `[health].alive` fixed at "true", and
 // `[health].activity` the given shell snippet. The task document "gate" owns
@@ -691,13 +651,10 @@ func TestEvaluateHealth_WedgedButAliveProbePassingReadsStalled(t *testing.T) {
 		"gate": gateInstance("no"),
 	})
 	if err := store.Update("owner/repo-1", func(s *domain.Session) error {
-		// LastTickAt far in the past and a stale "waiting" message stand in
-		// for a wedged-but-present execution surface. Neither is read by
-		// health evaluation (see TestEvaluateHealth_MessageDoesNotAffectHealthOutcome)
-		// — the stale activity evidence is what actually drives the
-		// stalled outcome here.
+		// LastTickAt far in the past stands in for a wedged-but-present
+		// execution surface; it is not read by health evaluation, which is
+		// driven entirely by the stale activity evidence below.
 		s.LastTickAt = longAgo
-		s.Message = &domain.Message{Text: "waiting", UpdatedAt: longAgo}
 		s.Health = &contract.HealthState{LastFingerprint: "initial:fp-1", LastActivityAt: longAgo}
 		return nil
 	}); err != nil {

@@ -12,9 +12,50 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/flocktest"
 	"github.com/kecbigmt/plecture/contracts/event"
+	contract "github.com/kecbigmt/plecture/contracts/state"
 )
+
+// newSessionForTest mints a fresh, live session row for session and
+// returns its id.
+func newSessionForTest(t *testing.T, s *Store, session string) string {
+	t.Helper()
+	db, err := s.dbHandle()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	now := time.Now().UTC()
+	if err := db.PutSession(ctx, &domain.Session{Name: session, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	id, err := db.EventStreamID(ctx, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// destroyAndRecreateForTest transitions session's live row to destroyed and
+// creates a fresh one under the same name, a second distinct incarnation.
+func destroyAndRecreateForTest(t *testing.T, s *Store, session string) string {
+	t.Helper()
+	db, err := s.dbHandle()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := db.UpdateSession(ctx, session, func(sess *domain.Session) error {
+		sess.Status = contract.SessionStatusDestroyed
+		sess.DestroyedAt = time.Now().UTC()
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return newSessionForTest(t, s, session)
+}
 
 // TestMain lets a test re-exec itself as a child appender so we can exercise the
 // cross-process flock path (the in-process mutex hides it within one Store).
@@ -526,9 +567,7 @@ func summaryAt(evs []event.Event, i int) string {
 func TestCursorRoundTrip(t *testing.T) {
 	s := NewStore(t.TempDir())
 	const session, consumer = "o/r-1", "delivery"
-	if _, err := s.NewStream(session); err != nil {
-		t.Fatal(err)
-	}
+	newSessionForTest(t, s, session)
 	if off, err := s.ReadCursor(session, consumer); err != nil || off != 0 {
 		t.Fatalf("missing cursor should be 0: off=%d err=%v", off, err)
 	}
@@ -544,9 +583,7 @@ func TestCursorRoundTrip(t *testing.T) {
 func TestHasCursor(t *testing.T) {
 	s := NewStore(t.TempDir())
 	const session, consumer = "o/r-1", "delivery"
-	if _, err := s.NewStream(session); err != nil {
-		t.Fatal(err)
-	}
+	newSessionForTest(t, s, session)
 	if s.HasCursor(session, consumer) {
 		t.Error("HasCursor true before any commit")
 	}
@@ -586,24 +623,17 @@ func TestReadFromStream_TraversesEveryIntermediateIncarnation(t *testing.T) {
 	store := NewStore(t.TempDir())
 	const session = "o/r-1"
 
-	stream1, err := store.NewStream(session)
-	if err != nil {
-		t.Fatalf("new stream 1: %v", err)
-	}
+	stream1 := newSessionForTest(t, store, session)
 	if _, _, _, err := store.Append(event.Event{SessionName: session, Type: "user.note", Body: "s1", Direction: event.Internal}); err != nil {
 		t.Fatalf("append to stream 1: %v", err)
 	}
 
-	if _, err := store.NewStream(session); err != nil {
-		t.Fatalf("new stream 2: %v", err)
-	}
+	destroyAndRecreateForTest(t, store, session)
 	if _, _, _, err := store.Append(event.Event{SessionName: session, Type: "user.note", Body: "s2", Direction: event.Internal}); err != nil {
 		t.Fatalf("append to stream 2: %v", err)
 	}
 
-	if _, err := store.NewStream(session); err != nil {
-		t.Fatalf("new stream 3: %v", err)
-	}
+	destroyAndRecreateForTest(t, store, session)
 	if _, _, _, err := store.Append(event.Event{SessionName: session, Type: "user.note", Body: "s3", Direction: event.Internal}); err != nil {
 		t.Fatalf("append to stream 3: %v", err)
 	}
@@ -632,21 +662,14 @@ func TestReadFromStream_EmptyIntermediateIncarnationDoesNotStopTheWalk(t *testin
 	store := NewStore(t.TempDir())
 	const session = "o/r-1"
 
-	stream1, err := store.NewStream(session)
-	if err != nil {
-		t.Fatalf("new stream 1: %v", err)
-	}
+	stream1 := newSessionForTest(t, store, session)
 	if _, _, _, err := store.Append(event.Event{SessionName: session, Type: "user.note", Body: "s1", Direction: event.Internal}); err != nil {
 		t.Fatalf("append to stream 1: %v", err)
 	}
 
-	if _, err := store.NewStream(session); err != nil {
-		t.Fatalf("new stream 2: %v", err)
-	}
+	destroyAndRecreateForTest(t, store, session)
 
-	if _, err := store.NewStream(session); err != nil {
-		t.Fatalf("new stream 3: %v", err)
-	}
+	destroyAndRecreateForTest(t, store, session)
 	if _, _, _, err := store.Append(event.Event{SessionName: session, Type: "user.note", Body: "s3", Direction: event.Internal}); err != nil {
 		t.Fatalf("append to stream 3: %v", err)
 	}

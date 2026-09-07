@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -20,6 +21,7 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/service"
 	"github.com/kecbigmt/plecture/app/internal/state"
 	"github.com/kecbigmt/plecture/contracts/event"
+	contract "github.com/kecbigmt/plecture/contracts/state"
 	"github.com/mxschmitt/playwright-go"
 )
 
@@ -72,7 +74,13 @@ func TestBrowserAcceptance_LoginNavigatesHierarchyAndShowsHistory(t *testing.T) 
 		Name:          "browser-child",
 		ParentSession: "browser-root",
 		ResourceID:    "https://github.com/browser-accept/issues/2",
-		Branch:        "issue/2",
+		Tasks: map[string]*contract.TaskState{
+			contract.WorkflowPseudoNodeID: {
+				Scope:   contract.TaskScopeSession,
+				Status:  contract.TaskStatusProduced,
+				Outputs: map[string]any{"branch": "issue/2"},
+			},
+		},
 	})
 
 	origin, svc := browserOrigin(t, store, &Config{AuthToken: "s3cr3t-token"})
@@ -511,5 +519,97 @@ func TestBrowserAcceptance_DenseTreeAndLongTimelineRenderBounded(t *testing.T) {
 	if err := expect.Locator(page.GetByText(fmt.Sprintf("dense-event-%02d", eventCount-1))).ToBeVisible(); err != nil {
 		t.Fatalf("most recent event in the long timeline should be present: %v", err)
 	}
+	requireNoConsoleErrors(t, errs)
+}
+
+// Acceptance: against a list large enough to matter (~90 sessions), the list
+// is fetched once per page load; a burst of self-reported status-message
+// events never triggers another request; and a burst of lifecycle events
+// coalesces into exactly one more.
+func TestBrowserAcceptance_SessionListFetchesOnceDespiteEventStorm(t *testing.T) {
+	const sessionCount = 90
+	const statusMessageBurst = 50
+	const target = "browser-storm-00"
+
+	store := state.NewStore(t.TempDir())
+	for i := range sessionCount {
+		seedSession(t, store, &domain.Session{Name: fmt.Sprintf("browser-storm-%02d", i)})
+	}
+	origin, svc := browserOrigin(t, store, &Config{})
+
+	page := newBrowserPage(t)
+	errs := consoleErrors(t, page)
+
+	var mu sync.Mutex
+	sessionListRequests := 0
+	page.OnRequest(func(req playwright.Request) {
+		if req.Method() != http.MethodGet {
+			return
+		}
+		u, err := url.Parse(req.URL())
+		if err != nil || u.Path != "/api/v1/sessions" {
+			return
+		}
+		mu.Lock()
+		sessionListRequests++
+		mu.Unlock()
+	})
+	countSessionListRequests := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return sessionListRequests
+	}
+
+	if _, err := page.Goto(origin + "/app/"); err != nil {
+		t.Fatalf("goto /app/: %v", err)
+	}
+	if err := page.GetByRole("treeitem", playwright.PageGetByRoleOptions{Name: target}).Click(); err != nil {
+		t.Fatalf("select session: %v", err)
+	}
+	if err := page.GetByRole("button", playwright.PageGetByRoleOptions{Name: "Details", Exact: playwright.Bool(true)}).Click(); err != nil {
+		t.Fatalf("open details: %v", err)
+	}
+	details := page.GetByRole("complementary", playwright.PageGetByRoleOptions{Name: "Details"})
+	if err := expect.Locator(details.GetByRole("heading", playwright.LocatorGetByRoleOptions{Name: target, Exact: playwright.Bool(true)})).ToBeVisible(); err != nil {
+		t.Fatalf("detail pane should have loaded before the burst starts: %v", err)
+	}
+	if got := countSessionListRequests(); got != 1 {
+		t.Fatalf("expected exactly one session-list request from page load, got %d", got)
+	}
+
+	for i := range statusMessageBurst {
+		publish(t, svc, target, service.EventPublishParams{
+			Type:    event.TypeStatusMessage,
+			Summary: fmt.Sprintf("status %02d", i),
+			Metadata: map[string]string{
+				"text": fmt.Sprintf("status %02d", i), "cleared": "false", "previous": "",
+			},
+		})
+	}
+	lastStatus := details.GetByText(fmt.Sprintf("status %02d", statusMessageBurst-1))
+	if err := expect.Locator(lastStatus).ToBeVisible(); err != nil {
+		t.Fatalf("detail pane should reflect the last status message: %v", err)
+	}
+	if got := countSessionListRequests(); got != 1 {
+		t.Fatalf("a status-message burst must not trigger any session-list request, got %d total", got)
+	}
+
+	for i := range 3 {
+		publish(t, svc, target, service.EventPublishParams{
+			Type: event.TypeLifecyclePrefix + "task_setup", Summary: fmt.Sprintf("node-%d", i),
+		})
+	}
+	publish(t, svc, target, service.EventPublishParams{Type: event.TypeLifecyclePrefix + "up", Summary: "up"})
+
+	// The client-side coalescing debounce delays the refetch by a few hundred
+	// milliseconds; poll for it rather than assuming a fixed sleep covers it.
+	deadline := time.Now().Add(5 * time.Second)
+	for countSessionListRequests() < 2 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if got := countSessionListRequests(); got != 2 {
+		t.Fatalf("a burst of lifecycle events should coalesce into exactly one more session-list request, got %d total", got)
+	}
+
 	requireNoConsoleErrors(t, errs)
 }

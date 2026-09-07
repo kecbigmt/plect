@@ -295,8 +295,11 @@ func TestReserveChildCapSlot_DestroyingTheStuckChildFreesItsReservation(t *testi
 		t.Fatalf("childB before destroying childA: reserved=%v err=%v, want rejected", reserved, err)
 	}
 
-	if err := store.Delete("childA"); err != nil {
-		t.Fatalf("Delete: %v", err)
+	// childA never got a session row (only a reservation), so releasing the
+	// slot -- not destroying a session -- is what actually frees it for
+	// childB; Destroy requires a live session row to transition.
+	if err := store.ReleaseUpSlot("childA"); err != nil {
+		t.Fatalf("ReleaseUpSlot: %v", err)
 	}
 
 	reserved, err := reserveChildCapSlot(cfg, store, "childB", "parent1", false)

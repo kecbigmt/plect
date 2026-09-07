@@ -6,20 +6,21 @@ import (
 	"testing"
 
 	"github.com/kecbigmt/plecture/app/internal/persistence/sqlcgen"
+	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// seedBareSessionForTest inserts a minimal sessions row so a
-// node_instances/task_instances insert in the same test satisfies its
-// session_name foreign key and fails (or succeeds) only for the reason the
-// test is actually checking.
-func seedBareSessionForTest(t *testing.T, db *DB, name string) {
+// seedBareSessionForTest inserts a minimal, live sessions row and returns
+// its id, satisfying a later insert's session_id foreign key.
+func seedBareSessionForTest(t *testing.T, db *DB, name string) string {
 	t.Helper()
 	q := sqlcgen.New(db.write)
-	if err := q.UpsertSession(context.Background(), sqlcgen.UpsertSessionParams{
-		Name: name, CreatedAt: "2024-01-01T00:00:00Z", UpdatedAt: "2024-01-01T00:00:00Z", RecordJson: "{}",
+	id := newULID()
+	if err := q.InsertSession(context.Background(), sqlcgen.InsertSessionParams{
+		ID: id, Name: name, Status: contract.SessionStatusDown, CreatedAt: "2024-01-01T00:00:00Z", UpdatedAt: "2024-01-01T00:00:00Z",
 	}); err != nil {
 		t.Fatalf("seed session %q: %v", name, err)
 	}
+	return id
 }
 
 // taskInstanceIDForTest reads a task_instances row's own id column directly,
@@ -27,7 +28,13 @@ func seedBareSessionForTest(t *testing.T, db *DB, name string) {
 // test can prove the id itself is stable or fresh across writes.
 func taskInstanceIDForTest(t *testing.T, db *DB, sessionName, instanceName string) string {
 	t.Helper()
-	rows, err := sqlcgen.New(db.write).ListTaskInstances(context.Background(), sessionName)
+	ctx := context.Background()
+	q := sqlcgen.New(db.write)
+	sessionID, err := q.SessionIDByLiveName(ctx, sessionName)
+	if err != nil {
+		t.Fatalf("SessionIDByLiveName(%q): %v", sessionName, err)
+	}
+	rows, err := q.ListTaskInstances(ctx, sessionID)
 	if err != nil {
 		t.Fatalf("ListTaskInstances(%q): %v", sessionName, err)
 	}
@@ -49,26 +56,26 @@ func TestSchema_RejectsOutOfSetScopeAndStatus(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
 	q := sqlcgen.New(db.write)
-	seedBareSessionForTest(t, db, "s1")
+	sessionID := seedBareSessionForTest(t, db, "s1")
 
 	if err := q.InsertNodeInstance(ctx, sqlcgen.InsertNodeInstanceParams{
-		SessionName: "s1", NodeID: "n1", Scope: "bogus", Status: "produced", RecordJson: "{}",
+		SessionID: sessionID, NodeID: "n1", Scope: "bogus", Status: "produced",
 	}); err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
 		t.Fatalf("InsertNodeInstance with bogus scope: err = %v, want a CHECK constraint failure", err)
 	}
 	if err := q.InsertNodeInstance(ctx, sqlcgen.InsertNodeInstanceParams{
-		SessionName: "s1", NodeID: "n1", Scope: "session", Status: "bogus", RecordJson: "{}",
+		SessionID: sessionID, NodeID: "n1", Scope: "session", Status: "bogus",
 	}); err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
 		t.Fatalf("InsertNodeInstance with bogus status: err = %v, want a CHECK constraint failure", err)
 	}
 
 	if _, err := q.UpsertTaskInstance(ctx, sqlcgen.UpsertTaskInstanceParams{
-		ID: newULID(), SessionName: "s1", InstanceName: "i1", Scope: "bogus", Status: "produced", RecordJson: "{}",
+		ID: newULID(), SessionID: sessionID, InstanceName: "i1", Scope: "bogus", Status: "produced",
 	}); err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
 		t.Fatalf("UpsertTaskInstance with bogus scope: err = %v, want a CHECK constraint failure", err)
 	}
 	if _, err := q.UpsertTaskInstance(ctx, sqlcgen.UpsertTaskInstanceParams{
-		ID: newULID(), SessionName: "s1", InstanceName: "i1", Scope: "session", Status: "bogus", RecordJson: "{}",
+		ID: newULID(), SessionID: sessionID, InstanceName: "i1", Scope: "session", Status: "bogus",
 	}); err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
 		t.Fatalf("UpsertTaskInstance with bogus status: err = %v, want a CHECK constraint failure", err)
 	}
@@ -81,10 +88,10 @@ func TestSchema_RejectsOutOfSetJudgeActionAndRelation(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
 	q := sqlcgen.New(db.write)
-	seedBareSessionForTest(t, db, "s1")
+	sessionID := seedBareSessionForTest(t, db, "s1")
 
 	if _, err := q.UpsertTaskInstance(ctx, sqlcgen.UpsertTaskInstanceParams{
-		ID: "task1", SessionName: "s1", InstanceName: "i1", Scope: "session", Status: "produced", RecordJson: "{}",
+		ID: "task1", SessionID: sessionID, InstanceName: "i1", Scope: "session", Status: "produced",
 	}); err != nil {
 		t.Fatalf("seed task instance: %v", err)
 	}
@@ -133,5 +140,30 @@ func TestSchema_RejectsUpReservationsWithBothOrNeitherParentShape(t *testing.T) 
 	if _, err := db.write.ExecContext(ctx,
 		"INSERT INTO up_reservations (child_session_name, parent_session_name, virtual_root, pid, reserved_at) VALUES ('c2', NULL, 0, 1, '2024-01-01T00:00:00.000000000Z')"); err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
 		t.Fatalf("insert with neither parent_session_name nor virtual_root: err = %v, want a CHECK constraint failure", err)
+	}
+}
+
+// TestSchema_RejectsTwoLiveSessionsWithSameName proves the partial unique
+// index sessions_live_name: two rows may share a name only if at most one
+// is live.
+func TestSchema_RejectsTwoLiveSessionsWithSameName(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+	q := sqlcgen.New(db.write)
+
+	if err := q.InsertSession(ctx, sqlcgen.InsertSessionParams{
+		ID: "id1", Name: "dup", Status: contract.SessionStatusDown, CreatedAt: "2024-01-01T00:00:00Z", UpdatedAt: "2024-01-01T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("seed first live session: %v", err)
+	}
+	if _, err := db.write.ExecContext(ctx,
+		"INSERT INTO sessions (id, name, status, workflow, created_at, updated_at) VALUES ('id2', 'dup', 'down', '', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z')"); err == nil {
+		t.Fatal("insert of a second live row with the same name succeeded, want a unique-index failure")
+	}
+
+	// A destroyed row does not block a second live row with the same name.
+	if _, err := db.write.ExecContext(ctx,
+		"INSERT INTO sessions (id, name, status, destroyed_at, workflow, created_at, updated_at) VALUES ('id3', 'dup', 'destroyed', '2024-01-01T00:00:00Z', '', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z')"); err != nil {
+		t.Fatalf("insert of a destroyed row with a name already live: %v, want success", err)
 	}
 }

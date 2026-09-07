@@ -46,19 +46,17 @@ scope = "run"
 // wait on the production 500ms poll interval.
 func newTestReactor(t *testing.T, tc config.TickConfig) (*sessionReactor, *state.Store, *eventlog.Store) {
 	t.Helper()
-	log := eventlog.NewStore(t.TempDir())
+	dir := t.TempDir()
+	log := eventlog.NewStore(dir)
 	hub := sessionhub.NewRegistry(log, sessionhub.WithPollInterval(2*time.Millisecond))
 	t.Cleanup(hub.Close)
-	st := state.NewStore(t.TempDir())
+	st := state.NewStore(dir)
 	if err := st.Put(&domain.Session{
 		Name: "o/r-1",
 		Tasks: map[string]*contract.TaskState{
 			"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced},
 		},
 	}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := log.NewStream("o/r-1"); err != nil {
 		t.Fatal(err)
 	}
 	r := &sessionReactor{

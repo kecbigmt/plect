@@ -111,13 +111,23 @@ func (db *DB) UpdatePopulation(ctx context.Context, key string, fn func(*domain.
 }
 
 func loadPopulationMembers(ctx context.Context, q sqlcgen.DBTX, workflow, name string) (map[string]*domain.PopulationMember, error) {
-	rows, err := sqlcgen.New(q).ListPopulationMembers(ctx, sqlcgen.ListPopulationMembersParams{Workflow: workflow, Name: name})
+	queries := sqlcgen.New(q)
+	rows, err := queries.ListPopulationMembers(ctx, sqlcgen.ListPopulationMembersParams{Workflow: workflow, Name: name})
 	if err != nil {
 		return nil, fmt.Errorf("list population members for %q/%q: %w", workflow, name, err)
 	}
+	blockerRows, err := queries.ListPopulationMemberBlockersForPopulation(ctx, sqlcgen.ListPopulationMemberBlockersForPopulationParams{Workflow: workflow, Name: name})
+	if err != nil {
+		return nil, fmt.Errorf("list population member blockers for %q/%q: %w", workflow, name, err)
+	}
+	blockersByResource := map[string][]string{}
+	for _, b := range blockerRows {
+		blockersByResource[b.ResourceID] = append(blockersByResource[b.ResourceID], b.Reason)
+	}
+
 	members := make(map[string]*domain.PopulationMember, len(rows))
 	for _, row := range rows {
-		member, err := populationMemberFromRow(row)
+		member, err := populationMemberFromRow(row, blockersByResource[row.ResourceID])
 		if err != nil {
 			return nil, err
 		}
@@ -149,14 +159,10 @@ func splitLastDecision(lastDecision string) (kind, reason sql.NullString) {
 	return sql.NullString{String: lastDecision, Valid: true}, sql.NullString{}
 }
 
-func populationMemberFromRow(row sqlcgen.PopulationMember) (*domain.PopulationMember, error) {
+func populationMemberFromRow(row sqlcgen.PopulationMember, blockers []string) (*domain.PopulationMember, error) {
 	var item map[string]any
 	if err := json.Unmarshal([]byte(row.ItemJson), &item); err != nil {
 		return nil, fmt.Errorf("parse population member %q item: %w", row.ResourceID, err)
-	}
-	var blockers []string
-	if err := json.Unmarshal([]byte(row.LastBlockersJson), &blockers); err != nil {
-		return nil, fmt.Errorf("parse population member %q blockers: %w", row.ResourceID, err)
 	}
 	acceptedAt, err := parseTimeNull(row.AcceptedAt)
 	if err != nil {
@@ -190,28 +196,34 @@ func insertPopulationMemberTx(ctx context.Context, q *sqlcgen.Queries, workflow,
 	if err != nil {
 		return fmt.Errorf("marshal population member %q item: %w", resource, err)
 	}
-	blockersJSON, err := json.Marshal(member.LastBlockers)
-	if err != nil {
-		return fmt.Errorf("marshal population member %q blockers: %w", resource, err)
-	}
 	decisionKind, decisionReason := splitLastDecision(member.LastDecision)
 	if err := q.InsertPopulationMember(ctx, sqlcgen.InsertPopulationMemberParams{
-		Workflow:         workflow,
-		Name:             name,
-		ResourceID:       resource,
-		SessionName:      nullString(member.SessionName),
-		Generation:       int64(member.Generation),
-		AcceptedAt:       formatTimeNull(member.AcceptedAt),
-		LastAppearance:   formatTimeNull(member.LastAppearance),
-		LastInbound:      formatTimeNull(member.LastInbound),
-		Tombstoned:       member.Tombstoned,
-		PendingUp:        member.PendingUp,
-		DecisionKind:     decisionKind,
-		DecisionReason:   decisionReason,
-		ItemJson:         string(itemJSON),
-		LastBlockersJson: string(blockersJSON),
+		Workflow:       workflow,
+		Name:           name,
+		ResourceID:     resource,
+		SessionName:    nullString(member.SessionName),
+		Generation:     int64(member.Generation),
+		AcceptedAt:     formatTimeNull(member.AcceptedAt),
+		LastAppearance: formatTimeNull(member.LastAppearance),
+		LastInbound:    formatTimeNull(member.LastInbound),
+		Tombstoned:     member.Tombstoned,
+		PendingUp:      member.PendingUp,
+		DecisionKind:   decisionKind,
+		DecisionReason: decisionReason,
+		ItemJson:       string(itemJSON),
 	}); err != nil {
 		return fmt.Errorf("insert population member %q: %w", resource, err)
+	}
+	for i, reason := range member.LastBlockers {
+		if err := q.InsertPopulationMemberBlocker(ctx, sqlcgen.InsertPopulationMemberBlockerParams{
+			Workflow:   workflow,
+			Name:       name,
+			ResourceID: resource,
+			Position:   int64(i),
+			Reason:     reason,
+		}); err != nil {
+			return fmt.Errorf("insert population member %q blocker %d: %w", resource, i, err)
+		}
 	}
 	return nil
 }

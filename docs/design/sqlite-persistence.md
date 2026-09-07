@@ -39,7 +39,9 @@ a versioned file. Only the importer reads a legacy state envelope.
 The following tables preserve the present runtime data model. Identity,
 relationship, ordering, and lookup values have columns and constraints. Fields
 whose shape is defined by a workflow, hook, observer, or event producer remain
-JSON in the record that owns them.
+JSON in the record that owns them. There is no `record_json` grab-bag column
+on any table: every field a table's row carries either has a named column (or
+a child table) or does not exist as a stored fact.
 
 A column is `NULL` exactly when the domain value it holds can be genuinely
 absent — never observed or resolved yet, or an optional fact. A column that
@@ -52,44 +54,73 @@ untyped affinity alone. Every `*_at` timestamp column is a UTC RFC3339 string
 with exactly nine fractional digits (for example
 `2026-09-06T08:50:42.821423717Z`), or `NULL` when unset — never a
 variable-width fractional part, so lexical order equals time order; see
-`timeconv.go`. A text column holding JSON carries the `_json` suffix
-(`record_json`, `metadata_json`). A `_json` column is declaration-owned: its
-shape comes from a configuration-language or provider schema, and the
-database stores it opaquely, enforcing only well-formedness (a `CHECK
-(json_valid(...))`, e.g. `events.metadata_json`), never its internal
-structure. Core-owned structure is never stored as JSON — it gets relational
-columns instead.
+`timeconv.go`.
 
-`record_json` never duplicates a value a relational column already carries.
-Each table's write path encodes its blob through a persistence-local payload
-type — a struct listing only the fields that genuinely have no column,
-every one of them `omitempty`/`omitzero` — rather than zeroing fields on
-`contracts/state`'s own types and marshaling those directly: a zeroed
-`contract.Session`/`TaskState` still emits its non-`omitempty` fields (an
-empty `session_name`, a year-1 `created_at`) as literal JSON keys, which
-would read as a second, disagreeing authority to anything inspecting the
-blob directly (an importer included). A session or task instance with
-nothing beyond its columns serializes to `"{}"`.
+A text column holding JSON carries the `_json` suffix. Every `_json` column
+is declaration-owned: its shape comes from a configuration-language or
+provider schema, and the database stores it opaquely, enforcing only
+well-formedness (`CHECK (col IS NULL OR json_valid(col))`, or `CHECK
+(json_valid(col))` for a `NOT NULL` one like `events.metadata_json`), never
+its internal structure. Core-owned structure is never stored as JSON — it
+gets relational columns or a child table instead. The one narrow exception is
+`node_instances.done_when_json`: a static workflow node's `done_when` is
+core-owned shape, but declaring one is rare (no shipped workflow node relies
+on it) and it is never relationally queried, so splitting it into the same
+`task_done_when_states`/`task_done_when_judges` shape `task_instances` gets
+would add relational structure with no query that uses it. This is a
+one-off carve-out for that reason alone, not a general license for
+core-owned structure to hide in a `_json` column. The table below
+classifies every `_json` column by its owning declaration:
+
+| Column | Owning declaration |
+| --- | --- |
+| `sessions.inputs_json` | the session's `inputs_schema` (config language) |
+| `node_instances`/`task_instances`.`inputs_json`, `.outputs_json` | the task/effect's `inputs_schema`/`outputs_schema` |
+| `node_instances`/`task_instances`.`state_json` | consumer-defined keys a reviewer or another session records; no declared schema |
+| `node_instances`/`task_instances`.`resource_observation_json` | the resource observer's `state_schema` |
+| `node_instances`/`task_instances`.`extra_done_when_json` | the config-language `done_when` schema (a `--done-when-json` instance override; see `service.judge.go`'s `effectiveDoneWhen`) |
+| `node_instances.done_when_json` | core-owned shape, embedded as a narrow, documented exception (see above) rather than declaration-owned |
+| `node_instance_layers`/`task_instance_layers`.`inputs_json`, `.locals_json`, `.outputs_json` | the nesting layer's own effect declaration |
+| `node_instance_layers`/`task_instance_layers`.`env_json` | the workflow/effect's declared process environment for that layer |
+| `population_members.item_json` | the workspace provider's own resource-item map |
+| `events.metadata_json` | the event producer's own map (a provider's change-type payload, a channel's delivery detail, ...) |
 
 | Table | Key and relational columns | JSON or scalar payload | Source |
 | --- | --- | --- | --- |
-| `sessions` | `name` primary key; nullable `parent_session_name` and `root_session_name`, each referencing `sessions(name)`; nullable `resource_id`, `alias`, `workspace_dir`, `population_workflow`, `population_name` (the pair also references `populations(workflow, name)`); `workflow`, `created_at`, `updated_at` | message, inputs, health, channel-health, tick state, and other session fields | `state.json` `sessions` entries |
-| `node_instances` | `(session_name, node_id)` primary key; session foreign key; `scope`, `status`, `sequence`, nullable `finalized_at` | task id, inputs, outputs, state, observed value, layers, lifecycle timestamps, error, done_when (rare, not relationally queried), and extra completion data | `state.json` `sessions.*.tasks` entries with `dynamic` unset |
-| `task_instances` | `id` (ULID, stable across every write that still names the same `(session_name, instance_name)`; re-minted only when a cleanup removes the row before a later setup recreates it) primary key; `(session_name, instance_name)` unique; session foreign key; `task_id`, `scope`, `status`, `sequence`, nullable `resource`, `named`, nullable `finalized_at` | inputs, outputs, state, observed value, layers, lifecycle timestamps, error, and extra completion data | `state.json` `sessions.*.tasks` entries with `dynamic: true` |
+| `sessions` | `id` (ULID) primary key; `name` (unique only among live rows — see "Session identity and lifecycle"); `status`, nullable `destroyed_at`; nullable `parent_session_id` and `root_session_id`, each referencing `sessions(id)`; nullable `resource_id`, `alias`, `workspace_dir`, `population_workflow`, `population_name` (the pair also references `populations(workflow, name)`); `workflow`, `created_at`, `updated_at` | inputs, health, tick backoff | `state.json` `sessions` entries |
+| `node_instances` | `(session_id, node_id)` primary key; session foreign key; nullable `task_id`, `name`, `resource`; `scope`, `status`, `sequence`, nullable `finalized_at` | inputs, outputs, state, observed value, `done_when` (rare, not relationally queried), extra completion data, error, lifecycle timestamps | `state.json` `sessions.*.tasks` entries with `dynamic` unset |
+| `node_instance_layers` | `(session_id, node_id, position)` primary key; `(session_id, node_id)` foreign key to `node_instances` | inputs, locals, outputs, env, heartbeat counters, lifecycle timestamps, error | `TaskState.Layers` (static node instances) |
+| `task_instances` | `id` (ULID, stable across every write that still names the same `(session_id, instance_name)`; re-minted only when a cleanup removes the row before a later setup recreates it) primary key; `(session_id, instance_name)` unique; session foreign key; `task_id`, `scope`, `status`, `sequence`, nullable `resource`, `named`, nullable `finalized_at` | inputs, outputs, state, observed value, extra completion data, error, lifecycle timestamps | `state.json` `sessions.*.tasks` entries with `dynamic: true` |
+| `task_instance_layers` | `(task_instance_id, position)` primary key; task-instance foreign key | inputs, locals, outputs, env, heartbeat counters, lifecycle timestamps, error | `TaskState.Layers` (dynamic instances) |
 | `task_done_when_states` | `task_instance_id` primary key and foreign key | counters, fingerprints, reason/body, escalation data | `TaskState.DoneWhen` (dynamic instances only) |
+| `task_done_when_unsatisfied_items` | `(task_instance_id, position)` primary key; task-instance foreign key | one unsatisfied-leaf id per row | `DoneWhenState.LastUnsatisfied` |
 | `task_done_when_judges` | `(task_instance_id, leaf_id)` primary key and task-instance foreign key; `judge_session`/nullable `judge_workflow` remain stored facts | action, reason, revision, relation, and creation time | `DoneWhenState.Judges` (dynamic instances only) |
 | `populations` | `(workflow, name)` primary key | none | `state.json` `populations` map key and value |
-| `population_members` | `(workflow, name, resource_id)` primary key and `populations(workflow, name)` foreign key; nullable `session_name` | item, generation, timestamps, flags, `decision_kind`/`decision_reason`, blockers | `PopulationState.Members` |
+| `population_members` | `(workflow, name, resource_id)` primary key and `populations(workflow, name)` foreign key; nullable `session_name` | item, generation, timestamps, flags, `decision_kind`/`decision_reason` | `PopulationState.Members` |
+| `population_member_blockers` | `(workflow, name, resource_id, position)` primary key; foreign key to `population_members` | one blocker reason per row | `PopulationMember.LastBlockers` |
+| `session_channel_health` | `(session_id, kind)` primary key; session foreign key; `kind` CHECK IN `validation`/`delivery` | consecutive failures, first/last failure time, last channel/error, escalation time | `Session.ChannelValidationHealth`/`ChannelDeliveryHealth` |
 | `up_reservations` | `child_session_name` primary key; nullable `parent_session_name`, `virtual_root`, `pid`, `reserved_at` | none | `state.json` `up_reservations` |
 | `pending_deliveries` | `(session_name, resource_id, operation)` primary key; `operation` is subscribe or unsubscribe | none | `pending_delivery.json` |
-| `event_streams` | `id` (ULID) primary key; `(session_name, created_at DESC)` index, not unique | none | each event directory and its `.gen` file |
-| `events` | `id` primary key; `(stream_id, sequence)` unique and references `event_streams(id)`; `direction` CHECK IN `inbound`/`outbound`/`internal`; `metadata_json` CHECK `json_valid` | type, source, direction, summary, body, metadata, and recorded time | each `log.jsonl` record |
-| `event_cursors` | `(stream_id, kind)` primary key and stream foreign key (`ON DELETE CASCADE`); `kind` CHECK IN `delivery`/`tick`/`heartbeat`; `next_sequence` | none | `.cursor.<consumer>`, `TickBackoff.LastLogPosition` |
+| `events` | `id` primary key; `(session_id, sequence)` unique and references `sessions(id)`; `direction` CHECK IN `inbound`/`outbound`/`internal`; `metadata_json` CHECK `json_valid` | type, source, direction, summary, body, metadata, and recorded time | each `log.jsonl` record |
+| `event_cursors` | `(session_id, kind)` primary key and session foreign key (`ON DELETE CASCADE`); `kind` CHECK IN `delivery`/`tick`/`heartbeat`; `next_sequence` | none | `.cursor.<consumer>` |
 | `session_tombstones` | `session_name` primary key; `destroyed_at` | tombstone session snapshot | `tombstone.json` |
+
+`Session.Message` is not a stored field on any table: a session's
+self-reported status line is derived from the most recent
+`plect.status_message` event on its live row (an ordinary `events` row, no
+special table), read via one indexed query — see "Status message" below.
+`Session.Branch` is likewise not a stored field: a checked-out branch is git
+vocabulary, and core stays version-control-agnostic by identity, so the fact
+lives only in the `@workflow` pseudo-node's own `node_instances.outputs_json`
+(a git-backed workspace provider's own setup output), read through
+`domain.SessionBranch` by the handful of call sites that want it.
 
 `population_members.session_name` is a recorded fact, not an enforced foreign
 key: admission can record a member's intended session name before that
-session's own row exists. `Session.Population` (the session-side reference to
+session's own row exists, and before an id could be known for it (unlike
+`sessions.population_workflow`/`population_name` below, there is no later
+point at which this column's value gets promoted to an id — see its own
+comment in `schema.sql`). `Session.Population` (the session-side reference to
 the population that owns this session) is a genuinely separate authority
 from `population_members.session_name`, not a derivable join: the one write
 path that sets it (`population/engine.go`'s admission, via
@@ -97,9 +128,7 @@ path that sets it (`population/engine.go`'s admission, via
 population's own hook *before* it records the member row, so a read between
 those two steps would see a session with no population yet if the field were
 derived by join instead of stored on the session itself.
-`sessions.population_workflow`/`population_name` are that stored reference —
-promoted to nullable columns (not left in `record_json`) so the relationship
-is queryable and constrained the way the ADR requires relationships to be,
+`sessions.population_workflow`/`population_name` are that stored reference,
 with a composite foreign key to `populations(workflow, name)` and `ON DELETE
 SET NULL`. The foreign key is satisfiable at every write: `admit` only runs
 from `Reconcile`, which only runs once `e.state.Population` already found a
@@ -145,19 +174,20 @@ pseudo-node) or a dynamic instance created at runtime via
 `Dynamic` from which table a record came from rather than storing it.
 `task_instances.id` is a ULID minted once when a dynamic instance's row is
 first created and preserved by every later write that still names the same
-`(session_name, instance_name)` — an ordinary `Put`/`Update` upserts the
+`(session_id, instance_name)` — an ordinary `Put`/`Update` upserts the
 row and keeps its existing id. Only a cleanup (the instance disappearing
 from a write's `Tasks` map, so the row is deleted outright) followed by a
 new setup under the same `instance_name` mints a fresh id, which is what
 gives that recreated instance a fresh `task_done_when_states`/
 `task_done_when_judges` history rather than resurfacing the retired
-instance's. Those two tables key off `task_instances.id` and exist only for
-dynamic instances; a static workflow node's `done_when` (declaring one is
-rare, and no shipped workflow node relies on it) stays embedded in
-`node_instances.record_json` instead of being split out.
+instance's. `TaskState.Layers` (a nested effect/task chain's per-layer
+record, ordered outermost-first) splits into `node_instance_layers`/
+`task_instance_layers` by the same static/dynamic distinction, each row's
+`position` column preserving that order — there is no shared polymorphic
+layer table, since the two parents key differently.
 
 `task_done_when_judges` does not store the judged session/instance: the
-owning `task_instances` row's own `(session_name, instance_name)` is always
+owning `task_instances` row's own `(session_id, instance_name)` is always
 the judged side (the one write path that records a verdict always stores it
 on the same session/instance it names as the target), so
 `DoneWhenJudge.TargetSession`/`Instance` are derived from that join at read
@@ -165,37 +195,86 @@ time rather than duplicated as columns. `relation`'s CHECK set is the seven
 `domain.SessionRelation` values; unlike `judge_workflow`, a judge always has
 a computed relation, so there is no eighth "unset" value to admit.
 
-`sessions` represents a real parent with `parent_session_name` and a
-session-local pseudo-root with `root_session_name`; a check constraint permits
-at most one. `children` is derived from those columns and is not stored. A
-session may be deleted without deleting its event streams or tombstone, so
-`event_streams` deliberately has no foreign key to `sessions`. `session_name`
-is not unique: a session create mints a new row each time (see "Event
-positions and cursors" below), so a name created more than once has one row
-per incarnation.
-
-`events.sequence` is a positive, per-stream append position. It is not an
-event identity and it is not a timestamp. A session create mints an
-`event_streams` row — a ULID `id`, its `session_name`, and a `created_at` —
-starting that incarnation's stream; the write transaction that appends an
-event allocates the next sequence within it and inserts the event. The
-unique stream/sequence constraint gives each stream a total append order
-even when separate processes append concurrently. Event IDs remain the
-global deduplication identity and the key used for merged subtree ordering.
-
-Vocabulary: a *cursor* is the opaque encoded token (`event.Cursor`) handed to
-a client; a *position* is the stored plain-integer `next_sequence` a server
-holds on its behalf. `event_cursors` holds three named positions per stream,
-keyed by `kind`: `delivery` (dispatch's channel-delivery cursor) and `tick`
-(the reactor's tick-loop cursor) are delivery commitments (at-least-once — a
-later importer must preserve them exactly), and `heartbeat` (the reactor's
-heartbeat inbound sweep) is an observation high-water mark with no delivery
-meaning (an importer may reset it to the tail instead).
+`Session.ChannelValidationHealth`/`ChannelDeliveryHealth` are two
+independent open-failure-streak trackers of one shape: validation (checked
+once, at a dispatcher's build) and delivery (checked per event) run on
+entirely separate schedules, so a success of one kind must never clear the
+other's still-open streak. `session_channel_health` holds at most one row
+per `(session_id, kind)`; a kind with no open streak simply has no row.
 
 The database does not contain plugin-owned configuration or plugin-private
 state. In particular, plugin catalog and lock files remain configuration, and
 the Slack adapter's subscriber file remains adapter-owned data. These files
 are not part of the runtime import.
+
+## Session identity and lifecycle
+
+Sessions are retained across destroy. `sessions.id` is a ULID minted once,
+by `plect up`/`plect create`, when a session is first created (or recreated
+under a reused name after a prior destroy); it never changes thereafter. A
+session row *is* one incarnation: there is no separate per-incarnation
+table (see "Event positions and cursors" below for how events and cursors
+key off it directly).
+
+`name` stays a mutable label but is unique only among live rows:
+`CREATE UNIQUE INDEX sessions_live_name ON sessions(name) WHERE status <>
+'destroyed'`. A destroyed session's name is therefore free for a later
+create to reuse, minting a new row (new `id`) rather than reviving the old
+one; reads by name always resolve the live row, and a superseded
+incarnation stays reachable only by its own `id`.
+
+`status TEXT CHECK (status IN ('down', 'up', 'destroyed'))` is a lifecycle
+phase, not liveness or health — `domain.HealthState` (a derived runtime
+observation, in the `health_*` columns) and `config.RunScopeUp` (a derived
+fact about which run-scoped tasks are produced) answer those
+separately. Transitions: create leaves a session `down`; `plect up` moves it
+to `up`; `plect down` moves it back to `down`; `plect destroy` moves it to
+`destroyed`, which is terminal and sets `destroyed_at` (`CHECK ((status =
+'destroyed') = (destroyed_at IS NOT NULL))`). A launch that fails leaves
+`down` (failure-atomic, per the runtime failure model). `plect down`/`plect
+up`/`--force-recreate` all keep the same row and `id`; only a destroy
+followed by a same-name create mints a new one.
+
+Because no write path ever deletes a `sessions` row,
+`parent_session_id`/`root_session_id` use `ON DELETE NO ACTION` rather than
+`SET NULL`, and a destroyed parent keeps every child's history — including
+its own parent link — intact: `child.ParentSession` still resolves to the
+destroyed parent's name, even though that parent is absent from a
+live listing (`plect ls`, `plect status`, and the Web UI all hide destroyed
+rows by default). History reads (an event read, or a listing that opts into
+`--all`) take an `id` rather than a name. Retention and purge of destroyed
+rows and their events is a separate, later concern this design does not
+address.
+
+`parent_session_id`/`root_session_id` are resolved against the referenced
+session's live row once — normally at the child's own creation, but a
+session created with no parent yet may still adopt one on a later write,
+since nothing has been resolved to fix in place — and never re-resolved
+after that. A write to a session whose parent columns are already set
+passes them through unchanged regardless of what its in-memory
+`ParentSession` (a name) says, so a parent later destroyed and recreated
+under the same name (a distinct `id`) never retargets an existing child
+onto the new incarnation just because the child itself is written again.
+`contracts/state.Session` carries the resolved `ParentSessionID`/
+`RootSessionID` alongside `ParentSession`, which is a read-side projection
+of them onto the referenced row's current name (with a `root:` prefix for
+`RootSessionID`) — not itself the identity a write resolves against.
+
+## Status message
+
+`Session.Message` is not a stored field: the fact lives entirely in the
+session's `plect.status_message` event stream. The current value is the
+most recent such event on the session's live row; `metadata.cleared =
+"true"` (or an empty `summary`) means no message is set, and the
+event's own `time` is the message's `updated_at`. Readers (`plect ls`'s
+MESSAGE column, `plect status`, the Web UI session list and detail) resolve
+it through one query — `service.LatestStatusMessage`, backed by
+`events_session_id_type_sequence_idx` (`(session_id, type, sequence)`) so
+each lookup is an index seek, not a per-session table scan: `SELECT ...
+FROM events WHERE session_id = ? AND type = 'plect.status_message' ORDER BY
+sequence DESC LIMIT 1`. The writer (`service.SetMessage`) reads the same
+latest event to decide whether the incoming text actually changed before
+appending a new one; a no-op call appends nothing.
 
 ## Schema excerpts
 
@@ -205,9 +284,12 @@ the remaining tables follow the keys in the inventory above.
 
 ```sql
 CREATE TABLE sessions (
-    name TEXT PRIMARY KEY,
-    parent_session_name TEXT REFERENCES sessions(name) ON DELETE SET NULL,
-    root_session_name TEXT REFERENCES sessions(name) ON DELETE SET NULL,
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('down', 'up', 'destroyed')),
+    destroyed_at TEXT,
+    parent_session_id TEXT REFERENCES sessions(id) ON DELETE NO ACTION,
+    root_session_id TEXT REFERENCES sessions(id) ON DELETE NO ACTION,
     resource_id TEXT,
     alias TEXT,
     workflow TEXT NOT NULL,
@@ -216,27 +298,20 @@ CREATE TABLE sessions (
     population_name TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    record_json TEXT NOT NULL,
-    CHECK (NOT (parent_session_name IS NOT NULL AND root_session_name IS NOT NULL)),
-    CHECK (root_session_name IS NULL OR root_session_name <> name),
+    CHECK ((status = 'destroyed') = (destroyed_at IS NOT NULL)),
+    CHECK (NOT (parent_session_id IS NOT NULL AND root_session_id IS NOT NULL)),
+    CHECK (root_session_id IS NULL OR root_session_id <> id),
     CHECK ((population_workflow IS NULL) = (population_name IS NULL)),
     FOREIGN KEY (population_workflow, population_name) REFERENCES populations(workflow, name) ON DELETE SET NULL
 );
 
+CREATE UNIQUE INDEX sessions_live_name ON sessions(name) WHERE status <> 'destroyed';
 CREATE INDEX sessions_alias_idx ON sessions(alias);
-CREATE INDEX sessions_parent_idx ON sessions(parent_session_name);
-
-CREATE TABLE event_streams (
-    id TEXT PRIMARY KEY,
-    session_name TEXT NOT NULL,
-    created_at TEXT NOT NULL
-);
-
-CREATE INDEX event_streams_session_name_created_at ON event_streams(session_name, created_at DESC);
+CREATE INDEX sessions_parent_idx ON sessions(parent_session_id);
 
 CREATE TABLE events (
     id TEXT PRIMARY KEY,
-    stream_id TEXT NOT NULL REFERENCES event_streams(id),
+    session_id TEXT NOT NULL REFERENCES sessions(id),
     sequence INTEGER NOT NULL CHECK (sequence > 0),
     time TEXT NOT NULL,
     type TEXT NOT NULL,
@@ -247,14 +322,15 @@ CREATE TABLE events (
     metadata_json TEXT NOT NULL CHECK (json_valid(metadata_json))
 );
 
-CREATE UNIQUE INDEX events_stream_id_sequence ON events(stream_id, sequence);
-CREATE INDEX events_stream_id_id_idx ON events(stream_id, id);
+CREATE UNIQUE INDEX events_session_id_sequence ON events(session_id, sequence);
+CREATE INDEX events_session_id_id_idx ON events(session_id, id);
+CREATE INDEX events_session_id_type_sequence_idx ON events(session_id, type, sequence);
 
 CREATE TABLE event_cursors (
-    stream_id TEXT NOT NULL REFERENCES event_streams(id) ON DELETE CASCADE,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     kind TEXT NOT NULL CHECK (kind IN ('delivery', 'tick', 'heartbeat')),
     next_sequence INTEGER NOT NULL CHECK (next_sequence >= 0),
-    PRIMARY KEY (stream_id, kind)
+    PRIMARY KEY (session_id, kind)
 );
 ```
 
@@ -262,24 +338,30 @@ The migration history begins with a transaction-only goose migration. Goose
 records the migration version in its ledger in the same transaction as the
 schema changes; migration files do not use a `NO TRANSACTION` directive.
 Migrations are Atlas-generated from `schema.sql` (see
-`app/internal/persistence/doc.go`), so their exact SQL text — quoting,
-per-index `CREATE` statements — is authoritative over any excerpt here.
+`app/internal/persistence/doc.go`) wherever Atlas's own diff is usable
+as-is; a structural change Atlas cannot safely diff against a database
+already holding rows (see `app/internal/persistence/migrations/`'s own
+`20260907002408_...` migration for the case this design's own session-id
+rework hit) is hand-written instead, reaching the identical structural end
+state `schema.sql` declares. Either way the migration file's exact SQL
+text — quoting, per-index `CREATE` statements — is authoritative over any
+excerpt here.
 
 The append query obtains the next sequence inside the caller's write
-transaction. The persistence append method resolves the session's current
-stream first — rejecting the write if none exists — and retries a
-transaction only when SQLite reports a busy conflict; it never calculates a
-position outside the transaction.
+transaction. The persistence append method resolves the session's live row
+first — rejecting the write if none exists — and retries a transaction only
+when SQLite reports a busy conflict; it never calculates a position outside
+the transaction.
 
 ```sql
 -- name: NextEventSequence :one
 SELECT COALESCE(MAX(sequence), 0) + 1
 FROM events
-WHERE stream_id = ?;
+WHERE session_id = ?;
 
 -- name: InsertEvent :exec
 INSERT INTO events (
-    id, stream_id, sequence, time, type, source, direction,
+    id, session_id, sequence, time, type, source, direction,
     summary, body, metadata_json
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 ```
@@ -304,26 +386,27 @@ upgrade.
 | `UpdatePopulation` | Read or create one population and its members, run the callback, then replace that population's members in one write transaction. | Preserves an atomic population snapshot without serializing unrelated sessions. |
 | `ReserveUpSlot` | Delete reservations whose recorded PID is no longer live, read the parent’s active children and reservations, enforce the cap, and insert the child reservation in one write transaction. | Preserves the live-holder rule and the rejection for an already-reserved child. |
 | `ReleaseUpSlot` | Delete the named reservation in one write transaction. | Remains idempotent and best-effort at its existing call sites. |
-| `Delete` | Delete the session, its tasks, completion state, reservations, and parent relation in one write transaction. | Preserves orphaning of children and preserves event history. Tombstone creation remains a separate step until the destroy path is deliberately made one database transaction. |
-| `eventlog.Store.Append` | Starts a stream for a session with none yet (a plain event target, not necessarily one created through Create), then in one write transaction reads `NextEventSequence` from `MAX(sequence)` against the current stream and inserts the event. | Preserves the "publish needs no prior create" contract while keeping each append's own sequence assignment atomic. |
+| `Destroy` | Update the session's live row to `status = 'destroyed'`, `destroyed_at = now` (the same upsert path `Put` uses, since the row's `id` and every other column are untouched), then delete its up-slot reservation, in one write transaction. | Retires the session (hidden from a live listing, its name freed for reuse) without deleting it: its rows, tasks, and event history remain reachable by `id`. |
+| `eventlog.Store.Append` | Resolves the target's live session row, minting a minimal placeholder one first if none exists yet (a plain event target, not necessarily one created through Create), then in one write transaction reads `NextEventSequence` from `MAX(sequence)` against that row and inserts the event. | Preserves the "publish needs no prior create" contract while keeping each append's own sequence assignment atomic. |
 | `CommitCursor` | Upsert one consumer’s next sequence in one write transaction. | Preserves at-least-once dispatch and reactor restart behavior. |
 | `WriteTombstone` | Upsert one tombstone in one write transaction. | Preserves the fail-closed tombstone checkpoint. |
 
-The present status-message path intentionally remains two operations:
-`service.SetMessage` writes the session through `Put` and then appends a
-status event (`app/internal/service/service.go`). A failed append continues to
-report failure after the status write has committed. Lifecycle event recording,
-judge-recorded events, task instruction events, terminal events, and
-population notifications also remain independent best-effort appends where
-their existing callers ignore append failures. This design does not introduce
-event sourcing or claim that every state transition produces an event.
+A session's status line is not part of this table: it is derived entirely
+from its `plect.status_message` event stream (see "Status message" above),
+so `service.SetMessage` is a single append, not a session write plus an
+append — a no-op call (the incoming text matches the latest event) appends
+nothing at all. Lifecycle event recording, judge-recorded events, task
+instruction events, terminal events, and population notifications remain
+independent best-effort appends where their existing callers ignore append
+failures. This design does not introduce event sourcing or claim that every
+state transition produces an event.
 
 Destroy preserves its existing checkpoint order until its service contract is
 changed: external cleanup, session checkpoint, tombstone write, lifecycle
-append, then state deletion (`app/internal/service/lifecycle_destroy.go`). The
-SQLite implementation keeps each database callback atomic but does not collapse
-those independently observable milestones into a new all-or-nothing lifecycle
-transaction.
+append, then the session's `Destroy` status transition
+(`app/internal/service/lifecycle_destroy.go`). The SQLite implementation keeps
+each database callback atomic but does not collapse those independently
+observable milestones into a new all-or-nothing lifecycle transaction.
 
 ## Migration access gate
 
@@ -403,23 +486,21 @@ second storage authority.
 ## Event positions and cursors
 
 An event cursor is the opaque `event.Cursor{Off, Ord, StreamID}` value, with
-`CursorVersion` set to `2`. `Off` is the exclusive logical sequence in the
-selected event stream: `1` starts at the first row, and a cursor after event
-sequence `n` has `Off == n + 1`. `StreamID` is `event_streams.id`, and `Ord`
-is the requested order.
+`CursorVersion` set to `2`. `Off` is the exclusive logical sequence for the
+selected session incarnation: `1` starts at the first row, and a cursor
+after event sequence `n` has `Off == n + 1`. `StreamID` is that
+incarnation's `sessions.id`, opaque to every caller that carries it, and
+`Ord` is the requested order.
 
-An event stream is the log of one session incarnation, not of a session
-name. A session create mints a new `event_streams` row (a fresh `id`,
-`session_name`, `created_at`); a down/up or `--force-recreate` keeps the
-existing session identity, so its stream, `id`, and `events.sequence` all
-continue unchanged. Destroying a session deletes only its `sessions` row —
-`event_streams` has no foreign key to `sessions` — so the destroyed
-incarnation's stream and `events` rows survive, reachable by their own `id`,
-but a later create under the same name is a new session and mints a new
-stream. A read by session name (`plect event list`, the Web API
-history/SSE, dispatcher/reactor cursors, the subtree read) resolves to the
-current stream: the `event_streams` row with the latest `created_at` for
-that name, via `(session_name, created_at DESC)`. A `StreamID` mismatch is
+A session row is the log of one incarnation, not of a session name (see
+"Session identity and lifecycle" above): a session create mints a new row
+(a fresh `id`); a down/up or `--force-recreate` keeps the existing row and
+`id`, so its events and `events.sequence` continue unchanged. Destroying a
+session never deletes its row, so a destroyed incarnation's `events` rows
+survive, reachable by their own `id`, but a later create under the same
+name is a new session with a new `id`. A read by session name (`plect event
+list`, the Web API history/SSE, dispatcher/reactor cursors, the subtree
+read) resolves to the live row for that name. A `StreamID` mismatch is
 therefore the expected outcome of a destroy and same-name recreate: a v2
 cursor issued for the destroyed incarnation fails validation against the
 new one, and the client's recovery path (discard the cursor, refetch
@@ -462,6 +543,13 @@ heartbeat position imports under `heartbeat`.
 
 ## One-time importer inventory
 
+The one-time importer targets every `sessions`/`node_instances`/
+`task_instances` destination column below as this design's own
+named-column schema (no `record_json`), with a legacy incarnation
+reference resolving to a minted `sessions.id`. This table records the
+source-side validation contract; the exact per-column legacy-JSON-field
+mapping is a separate concern from that contract.
+
 The import command runs only against an operator-created backup while writers
 are stopped. It builds and validates a temporary database, validates it again,
 then atomically promotes it as `storage.db`. It never writes JSON and JSONL
@@ -469,10 +557,10 @@ alongside the database. The command reads the following runtime paths.
 
 | Legacy path | Validation and destination |
 | --- | --- |
-| `state.json` | Parse once; require the supported legacy envelope version; validate layer effect identities and tree relationships; import sessions, tasks, completion state, populations, and reservations. Each session's `TickBackoff.LastLogPosition` translates through the same byte-boundary index as a `.cursor.<consumer>` file and imports into `event_cursors` as that session's `heartbeat` position. |
+| `state.json` | Parse once; require the supported legacy envelope version; validate layer effect identities and tree relationships; import sessions, tasks, completion state, populations, and reservations. Each session's legacy `TickBackoff.LastLogPosition` translates through the same byte-boundary index as a `.cursor.<consumer>` file and imports into `event_cursors` as that session's `heartbeat` position. |
 | `state.json.lock` | Confirm it is not held before import; do not copy it. The access gate replaces it. |
 | `events/<escaped-session>/log.jsonl` | Decode complete lines in byte order; reject invalid event identity, session mismatch, duplicate ID, and a malformed complete line; discard only a trailing partial line, matching the live reader; import stream and events. A record with no `direction` imports as `internal`, counted in the import summary. |
-| `events/<escaped-session>/.gen` | Read one trimmed non-empty stream identifier when present and reuse it as `event_streams.id`; otherwise mint a fresh id after recording that no old page cursor survives cutover. |
+| `events/<escaped-session>/.gen` | Read one trimmed non-empty stream identifier when present and reuse it as the imported session row's `id`; otherwise mint a fresh id after recording that no old page cursor survives cutover. |
 | `events/<escaped-session>/.cursor.<consumer>` | Parse a non-negative decimal boundary, validate it against the log boundary index, map `<consumer>` to its `event_cursors.kind` (`dispatcher` imports as `delivery`, `tick-reactor` imports as `tick`), and import the translated position. |
 | `events/<escaped-session>/tombstone.json` | Decode one tombstone, require that its embedded name matches the directory session, and import its snapshot and destruction time. |
 | `events/<escaped-session>/.lock` | Confirm it is not held before import; do not copy it. The database transaction and access gate replace it. |

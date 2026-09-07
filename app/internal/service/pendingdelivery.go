@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	"github.com/kecbigmt/plecture/app/internal/config"
+	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/state"
 	"github.com/kecbigmt/plecture/contracts/atomicfile"
 )
@@ -218,7 +219,7 @@ func flushOnePendingSubscribe(cfg *config.Config, store *state.Store, sessionNam
 	if fresh == nil || !resourceStillNeededBySession(fresh, resource) {
 		return dequeuePendingSubscribe(store, sessionName, resource)
 	}
-	subscribed, subErr := subscribeIfWired(cfg, sessionName, resource, fresh.Branch)
+	subscribed, subErr := subscribeIfWired(cfg, sessionName, resource, domain.SessionBranch(fresh))
 	if subErr != nil {
 		return subErr
 	}

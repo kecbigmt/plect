@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/domain"
@@ -37,14 +38,27 @@ func mergeTasks(store *state.Store, sessionName string, session *domain.Session)
 
 func replaceRuntimeState(store *state.Store, sessionName string, session *domain.Session) error {
 	return store.Update(sessionName, func(s *domain.Session) error {
-		s.Branch = session.Branch
 		s.WorkspaceDirPath = session.WorkspaceDirPath
-		s.Message = session.Message
 		s.Tasks = session.Tasks
 		s.Health = session.Health
 		s.LastTickAt = session.LastTickAt
 		s.TickBackoff = session.TickBackoff
 		s.UpdatedAt = session.UpdatedAt
+		return nil
+	})
+}
+
+// setSessionStatus durably records a lifecycle-status transition on its
+// own, separate from mergeTasks/replaceRuntimeState's narrower field
+// sets. Each call site decides its own timing against what it can
+// already promise at that point: Up sets it to up only once setup has
+// fully succeeded; Down and a force-recreate set it to down as soon as
+// they commit to tearing the runtime down, before attempting to, so
+// every failure after that point already reflects it.
+func setSessionStatus(store *state.Store, sessionName, status string) error {
+	return store.Update(sessionName, func(s *domain.Session) error {
+		s.Status = status
+		s.UpdatedAt = time.Now()
 		return nil
 	})
 }
@@ -100,7 +114,7 @@ func sessionVars(cfg *config.Config, s *domain.Session, plan *task.Plan) task.Se
 		ResourceID:       s.ResourceID,
 		ParentSession:    s.ParentSession,
 		WorkspaceDirPath: s.WorkspaceDirPath,
-		Branch:           s.Branch,
+		Branch:           domain.SessionBranch(s),
 		Inputs:           s.Inputs,
 		Plugins:          cfg.Plugins,
 		Terminal:         terminalBinding(plan, s),

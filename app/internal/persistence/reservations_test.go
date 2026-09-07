@@ -134,19 +134,19 @@ func TestReserveUpSlot_SupersedesAReservationWithNoLivePID(t *testing.T) {
 	}
 }
 
-func TestDeleteSession_ClearsTheSessionsUpReservation(t *testing.T) {
+func TestDestroySession_ClearsTheSessionsUpReservation(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
 	putBareSession(t, db, "childA", "")
 	plantReservationForTest(t, db, "childA", "parent1", currentPID(), time.Now())
 
-	if err := db.DeleteSession(ctx, "childA"); err != nil {
-		t.Fatalf("DeleteSession: %v", err)
+	if err := db.DestroySession(ctx, "childA", time.Now().UTC()); err != nil {
+		t.Fatalf("DestroySession: %v", err)
 	}
 
 	names := reservationNames(t, db)
 	if _, ok := names["childA"]; ok {
-		t.Error("DeleteSession should have cleared childA's reservation")
+		t.Error("DestroySession should have cleared childA's reservation")
 	}
 }
 
