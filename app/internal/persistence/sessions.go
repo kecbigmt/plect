@@ -181,6 +181,53 @@ func (db *DB) sessionEverExisted(ctx context.Context, name string) (bool, error)
 	return existed, err
 }
 
+// PruneReleasedNode reports whether node_id's row was pruned; see
+// queries.sql's DeleteReleasedNodeInstance.
+func (db *DB) PruneReleasedNode(ctx context.Context, sessionName, nodeID string) (bool, error) {
+	var pruned bool
+	err := db.WithImmediateTx(ctx, func(tx *sql.Tx) error {
+		q := sqlcgen.New(tx)
+		sessionID, err := q.SessionIDByLiveName(ctx, sessionName)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("no live session named %q", sessionName)
+			}
+			return fmt.Errorf("resolve session %q: %w", sessionName, err)
+		}
+		affected, err := q.DeleteReleasedNodeInstance(ctx, sqlcgen.DeleteReleasedNodeInstanceParams{SessionID: sessionID, NodeID: nodeID})
+		if err != nil {
+			return fmt.Errorf("prune released node %q/%q: %w", sessionName, nodeID, err)
+		}
+		pruned = affected > 0
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return pruned, nil
+}
+
+// ResetNodes unconditionally discards every node's execution history for
+// sessionName, unlike an ordinary PutSession/UpdateSession write, whose own
+// reconciliation retains a node still unreleased. For --force-recreate's
+// deliberate rebuild only; see service.recreateSessionRuntime.
+func (db *DB) ResetNodes(ctx context.Context, sessionName string) error {
+	return db.WithImmediateTx(ctx, func(tx *sql.Tx) error {
+		q := sqlcgen.New(tx)
+		sessionID, err := q.SessionIDByLiveName(ctx, sessionName)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("no live session named %q", sessionName)
+			}
+			return fmt.Errorf("resolve session %q: %w", sessionName, err)
+		}
+		if err := q.DeleteNodeInstancesForSession(ctx, sessionID); err != nil {
+			return fmt.Errorf("reset nodes for %q: %w", sessionName, err)
+		}
+		return nil
+	})
+}
+
 // DestroySession transitions name's live row to SessionStatusDestroyed
 // (retaining the row and its history) and releases its up-slot
 // reservation, if any.

@@ -133,6 +133,34 @@ func (s *Store) Update(name string, fn func(*domain.Session) error) error {
 	return db.UpdateSession(context.Background(), name, fn)
 }
 
+// PruneReleasedNode reports whether name's node_id row was pruned; see
+// persistence.DB.PruneReleasedNode.
+func (s *Store) PruneReleasedNode(name, nodeID string) (bool, error) {
+	db, err := s.dbHandle()
+	if err != nil {
+		return false, fmt.Errorf("state: prune released node %q/%q: %w", name, nodeID, err)
+	}
+	pruned, err := db.PruneReleasedNode(context.Background(), name, nodeID)
+	if err != nil {
+		return false, fmt.Errorf("state: prune released node %q/%q: %w", name, nodeID, err)
+	}
+	return pruned, nil
+}
+
+// ResetNodes unconditionally discards every node's execution history for
+// name -- see persistence.DB.ResetNodes. It exists only for an explicit
+// whole-runtime reset (--force-recreate), never for an ordinary write.
+func (s *Store) ResetNodes(name string) error {
+	db, err := s.dbHandle()
+	if err != nil {
+		return fmt.Errorf("state: reset nodes %q: %w", name, err)
+	}
+	if err := db.ResetNodes(context.Background(), name); err != nil {
+		return fmt.Errorf("state: reset nodes %q: %w", name, err)
+	}
+	return nil
+}
+
 // Population returns one population's durable state, or nil if key has
 // never been recorded.
 func (s *Store) Population(key string) (*PopulationState, error) {

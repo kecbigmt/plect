@@ -141,6 +141,17 @@ type TaskState struct {
 	Resource string         `json:"resource,omitempty"` // bound --resource at instantiation
 	Name     string         `json:"name,omitempty"`     // --name instance identity (key == name when set)
 	Layers   []LayerState   `json:"layers,omitempty"`   // per-layer record for a nested task; empty for a plain one
+	// DependsOn is the node ids this attempt's setup resolved as
+	// prerequisites, snapshotted so release ordering survives a later
+	// config change; see docs/design/sqlite-persistence.md's "Node
+	// execution identity" section. Node-only.
+	DependsOn []string `json:"depends_on,omitempty"`
+	// ExecutionID is the node_executions row this state was read from, or
+	// empty for a state never yet persisted. A write that intends to update
+	// this exact row in place (a same-declaration retry) carries it forward;
+	// persistence refuses the write instead of silently overwriting a
+	// different generation when the row it would update no longer matches.
+	ExecutionID string `json:"-"`
 	// State is what a task instance holds about itself: the keys a reviewer
 	// or another session records into it, read by a completion predicate as
 	// `self.state.*`. Distinct from Outputs, which is what an effect's setup

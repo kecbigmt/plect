@@ -256,8 +256,13 @@ func cleanupStaleWorkflowNodes(cfg *config.Config, store *state.Store, sessionNa
 	return nil
 }
 
+// persistStaleWorkflowCleanup writes each stale node's TaskState back first
+// (never deleting the map entry itself -- persistence decides whether a
+// released node's row survives, see writeTasksTx), then explicitly prunes
+// whatever reached "cleaned" so it disappears from this same result rather
+// than a later write.
 func persistStaleWorkflowCleanup(store *state.Store, sessionName string, session *domain.Session, stale []task.Resolved) error {
-	return store.Update(sessionName, func(s *domain.Session) error {
+	if err := store.Update(sessionName, func(s *domain.Session) error {
 		if s.Nodes == nil {
 			s.Nodes = make(map[string]*contract.TaskState)
 		}
@@ -266,15 +271,24 @@ func persistStaleWorkflowCleanup(store *state.Store, sessionName string, session
 			if st == nil {
 				continue
 			}
-			if st.Status == contract.TaskStatusCleaned {
-				delete(s.Nodes, r.NodeID)
-				continue
-			}
 			s.Nodes[r.NodeID] = st
 		}
 		s.UpdatedAt = session.UpdatedAt
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	for _, r := range stale {
+		st := session.Nodes[r.NodeID]
+		if st == nil || st.Status != contract.TaskStatusCleaned {
+			continue
+		}
+		if _, err := store.PruneReleasedNode(sessionName, r.NodeID); err != nil {
+			return fmt.Errorf("prune released node %q: %w", r.NodeID, err)
+		}
+		delete(session.Nodes, r.NodeID)
+	}
+	return nil
 }
 
 func staleProducedWorkflowNodes(cfg *config.Config, session *domain.Session, plan *task.Plan) ([]task.Resolved, error) {
@@ -329,7 +343,7 @@ func recreateSessionRuntime(cfg *config.Config, store *state.Store, sessionName 
 	if err := setSessionStatus(store, sessionName, contract.SessionStatusDown); err != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to record session status: %v", err)}
 	}
-	teardown, teardownErr := unifiedTeardownList(cfg, session, teardownPlan, false)
+	teardown, teardownErr := unifiedTeardownList(cfg, session, false)
 	if teardownErr != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: teardownErr.Error()}
 	}
@@ -361,6 +375,14 @@ func recreateSessionRuntime(cfg *config.Config, store *state.Store, sessionName 
 	session.LastTickAt = time.Time{}
 	session.TickBackoff = nil
 	session.UpdatedAt = time.Now()
+	// An ordinary write retains a node still unreleased when a caller merely
+	// stops mentioning it (see docs/design/sqlite-persistence.md's "Node
+	// execution identity" section); --force-recreate means exactly the
+	// opposite here, having just torn every node down above, so it discards
+	// their execution history explicitly instead.
+	if err := store.ResetNodes(sessionName); err != nil {
+		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to reset node state: %v", err)}
+	}
 	if err := replaceRuntimeState(store, sessionName, session); err != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to save session state: %v", err)}
 	}
