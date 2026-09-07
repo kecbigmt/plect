@@ -16,12 +16,9 @@ import (
 )
 
 // legacyConsumerToCursorKind maps a pre-cutover `.cursor.<consumer>` file's
-// consumer name to the destination event_cursors.kind it imports as. These
-// are frozen historical facts (the consumer literals as they were the
-// commit before the SQLite event-store cutover), not today's kind
-// vocabulary, which dispatcher.go/reactor.go coincidentally already share
-// ("delivery"/"tick") — see docs/design/sqlite-persistence.md's importer
-// inventory table.
+// consumer name to its destination event_cursors.kind: frozen historical
+// literals (the commit before the SQLite event-store cutover), not today's
+// dispatcher.go/reactor.go vocabulary they coincidentally already match.
 var legacyConsumerToCursorKind = map[string]string{
 	"dispatcher":   "delivery",
 	"tick-reactor": "tick",
@@ -33,37 +30,28 @@ var legacyConsumerToCursorKind = map[string]string{
 type SessionLog struct {
 	Name  string
 	GenID string
-	// Events is the decoded, in-order log; Events[i]'s destination sequence
-	// is i+1 (AppendEvent assigns sequences the same way on import as on any
-	// other append, since events are imported in original order).
-	Events []event.Event
-	// InternalBackfilled counts events with no direction, which import as
-	// "internal" (see docs/design/sqlite-persistence.md's inventory table).
-	InternalBackfilled int
+	// Events[i]'s destination sequence is i+1: AppendEvent assigns
+	// sequences the same way on import as on any other append.
+	Events             []event.Event
+	InternalBackfilled int // events with no direction, imported as internal
 	// CursorOffsets is each recognized `.cursor.<consumer>` file's raw
-	// legacy byte offset, keyed by destination event_cursors.kind
-	// ("delivery"/"tick"). Translate resolves these (and a session's
-	// tick_backoff.last_log_position "heartbeat" offset) against
-	// lineEndOffsets.
+	// offset, keyed by destination kind ("delivery"/"tick"); Translate
+	// resolves these against lineEndOffsets.
 	CursorOffsets map[string]int64
-	// UnknownFiles are regular files in this session directory this package
-	// does not recognize; a non-empty slice fails validation rather than
-	// silently discarding a prospective durable sidecar.
+	// UnknownFiles are unrecognized regular files; non-empty fails
+	// validation rather than silently discarding a prospective sidecar.
 	UnknownFiles []string
-	// lockPath is checked by the caller (checkNotLocked), not here: reading
-	// a session's files never itself requires holding its lock.
-	lockPath string
+	lockPath     string // checked by the caller (checkNotLocked), not here
 
 	lineEndOffsets []int64 // end byte offset of Events[i]'s source line, ascending
 }
 
-// Translate maps a legacy byte offset (a `.cursor.<consumer>` value, or a
-// session's tick_backoff.last_log_position) to the destination
-// event_cursors.next_sequence it denotes: 0 means "nothing consumed yet"
-// (next_sequence 1); any other valid value is the end boundary of some
-// complete source line, meaning "next_sequence is one past that line's own
-// sequence". An offset that is negative, beyond the log, mid-line, or inside
-// a discarded trailing partial line is invalid.
+// Translate maps a legacy byte offset (a cursor value, or
+// tick_backoff.last_log_position) to the event_cursors.next_sequence it
+// denotes: 0 means next_sequence 1; any other valid value is a complete
+// line's end boundary, meaning next_sequence is one past that line. A
+// negative, out-of-range, mid-line, or discarded-partial-line offset is
+// invalid.
 func (l *SessionLog) Translate(offset int64) (nextSequence int64, ok bool) {
 	if offset == 0 {
 		return 1, true

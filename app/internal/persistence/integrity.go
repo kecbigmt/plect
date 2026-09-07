@@ -6,10 +6,8 @@ import (
 	"fmt"
 )
 
-// IntegrityCheck runs SQLite's own consistency check, returning an error
-// naming every problem `PRAGMA integrity_check` reports (it can report more
-// than one row). The one-time legacy importer runs this against its freshly
-// built temporary database before promoting it.
+// IntegrityCheck runs `PRAGMA integrity_check` and returns an error naming
+// every problem it reports (it can report more than one row).
 func (db *DB) IntegrityCheck(ctx context.Context) error {
 	var problems []string
 	err := db.WithReadTx(ctx, func(tx *sql.Tx) error {
@@ -38,13 +36,12 @@ func (db *DB) IntegrityCheck(ctx context.Context) error {
 	return nil
 }
 
-// Checkpoint merges the WAL file's content back into the main database file
-// and truncates it, so a caller about to move the database file alone (the
-// one-time legacy importer's atomic promotion step) does not leave pending
-// writes stranded in a sidecar `-wal` file the destination path never gets.
-// It runs in autocommit (outside any explicit transaction): SQLite's own
-// TRUNCATE checkpoint needs to reach exclusive access to the WAL itself,
-// which a caller-held BEGIN IMMEDIATE would only get in its own way of.
+// Checkpoint merges the WAL file's content into the main database file and
+// truncates it, so a caller about to move the database file alone does not
+// leave pending writes stranded in a `-wal` sidecar the destination never
+// gets. It runs in autocommit, outside any explicit transaction: a
+// caller-held BEGIN IMMEDIATE would only block the TRUNCATE checkpoint's own
+// need for exclusive WAL access.
 func (db *DB) Checkpoint(ctx context.Context) error {
 	unlock, err := db.enterNormalAccess(ctx)
 	if err != nil {

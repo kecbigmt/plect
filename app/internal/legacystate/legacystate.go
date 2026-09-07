@@ -1,11 +1,9 @@
 // Package legacystate parses the state.json envelope core wrote before the
-// SQLite cutover (see docs/design/sqlite-persistence.md). No command wires
-// this package into any live path — a fresh database starts empty and the
-// one-time importer does not exist yet — it exists solely so that future
-// importer has a validated, in-memory form of a pre-cutover data directory
-// to translate into SQLite rows. This is a byte-slice parser, not a file
-// reader: the importer owns locating and reading the operator-supplied
-// backup.
+// SQLite cutover (see docs/design/sqlite-persistence.md), giving
+// app/internal/legacyimport a validated, in-memory form of a pre-cutover
+// data directory to translate into SQLite rows. This is a byte-slice
+// parser, not a file reader: the importer owns locating and reading the
+// operator-supplied backup.
 package legacystate
 
 import (
@@ -28,12 +26,9 @@ type StateFile struct {
 	Populations    map[string]*domain.PopulationState
 	UpReservations map[string]domain.UpReservation
 	// HeartbeatLogPositions is each session's legacy
-	// tick_backoff.last_log_position (an event-log byte offset), keyed by
-	// session name, for sessions that have one. contract.TickBackoff no
-	// longer declares this field (it was replaced by the heartbeat
-	// event_cursors kind before the SQLite cutover), so json.Unmarshal into
-	// Sessions silently drops it; this side channel is the only place the
-	// value survives for the importer to translate into a heartbeat cursor.
+	// tick_backoff.last_log_position, keyed by session name: the field
+	// contract.TickBackoff dropped, so json.Unmarshal above silently drops
+	// it too, and only this side channel carries it forward.
 	HeartbeatLogPositions map[string]int64
 }
 

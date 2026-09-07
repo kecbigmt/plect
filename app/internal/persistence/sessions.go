@@ -295,10 +295,8 @@ func (db *DB) writeSessionTx(ctx context.Context, tx *sql.Tx, s *domain.Session)
 }
 
 // insertSessionParams builds InsertSession's parameters from already-resolved
-// column values, shared by writeSessionTx's own insert branch (id = a freshly
-// minted ULID, parent/root/population resolved against live rows) and
-// ImportSession (id = a preserved legacy identity, parent/root left NULL for
-// a later resolution pass — see ImportSession).
+// column values, shared by writeSessionTx's insert branch and ImportSession
+// so the two never disagree about which Go field feeds which column.
 func insertSessionParams(id, status string, parentCol, rootCol, populationWorkflow, populationName, inputsJSON sql.NullString, health healthColumns, tickConsecutiveUnchanged sql.NullInt64, tickLastFingerprint sql.NullString, s *domain.Session) (sqlcgen.InsertSessionParams, error) {
 	return sqlcgen.InsertSessionParams{
 		ID:                       id,
@@ -329,17 +327,12 @@ func insertSessionParams(id, status string, parentCol, rootCol, populationWorkfl
 	}, nil
 }
 
-// ImportSession inserts s as a brand-new session row using id as its durable
-// identity (a legacy events/<session>/.gen id, or a freshly minted one where
-// none survived) instead of minting a fresh ULID — the one-time legacy
-// importer's own entry point. It always inserts (import only ever targets a
-// freshly created database) and leaves parent_session_id/root_session_id
-// NULL: id resolution for a parent link depends on that parent's own row
-// existing, which is not guaranteed yet during a single import pass over an
-// unordered session map. A second PutSession(ctx, s) call once every
-// session row exists resolves ParentSession as any other write does, and
-// also writes s.Tasks/channel health, so this method's own effect is scoped
-// to the bare row alone.
+// ImportSession inserts s as a brand-new row under the given id (a preserved
+// legacy identity, or a freshly minted one) instead of minting a fresh ULID
+// itself, and leaves parent_session_id/root_session_id NULL: resolving a
+// parent link needs that parent's own row, which an unordered import pass
+// cannot guarantee exists yet. A later PutSession(ctx, s) call, once every
+// row exists, resolves ParentSession and writes s.Tasks/channel health.
 func (db *DB) ImportSession(ctx context.Context, id string, s *domain.Session) error {
 	return db.WithImmediateTx(ctx, func(tx *sql.Tx) error {
 		q := sqlcgen.New(tx)
