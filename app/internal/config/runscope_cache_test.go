@@ -7,12 +7,9 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/domain"
 )
 
-// The reconcile hot path (dispatch/reactor Supervisor.reconcile -> RunScopeUp
-// -> CurrentPlanRunScopedNodeSet) calls this once per up session per ~1s poll
-// tick, so a second call for the same (workflow, workspaceDirPath) must reuse
-// the first's result rather than re-parsing — proven here by rewriting the
-// workflow file between two calls on the same *Config and checking the
-// second call still sees the pre-edit node set.
+// A second call for the same (workflow, workspaceDirPath) on one *Config
+// must reuse the first's result, proven by rewriting the workflow file
+// between the two calls and checking the second still sees the pre-edit set.
 func TestCurrentPlanRunScopedNodeSet_CachesPerConfigLifetime(t *testing.T) {
 	base := writeRunScopedWorkflow(t)
 	cfg := &Config{BaseDir: base}
@@ -46,9 +43,8 @@ uses = "agent"
 	}
 }
 
-// A new *Config (config.Live's own periodic swap in production) is what
-// invalidates the cache: the same edit as above, read through a fresh
-// *Config, must be seen immediately.
+// A new *Config invalidates the cache: the same edit, read through a fresh
+// one, must be seen immediately.
 func TestCurrentPlanRunScopedNodeSet_NewConfigSeesEdit(t *testing.T) {
 	base := writeRunScopedWorkflow(t)
 	s := &domain.Session{Workflow: "default", WorkspaceDirPath: ""}
@@ -80,12 +76,9 @@ uses = "agent"
 	}
 }
 
-// Two sessions with different workspaceDirPath must not collide on one cache
-// entry. workspaceB carries its own `.plect/workflows/` overlay appending a
-// third run-scoped node to "default", so the two keys' correct answers
-// genuinely differ (2 nodes vs. 3) — a cache that conflated the two keys
-// would return the wrong count for at least one of them, which a same-length
-// assertion could not have caught.
+// workspaceB's own `.plect/workflows/` overlay appends a third run-scoped
+// node, so the two keys' correct answers genuinely differ (2 vs. 3) — a
+// cache conflating them would return the wrong count for one.
 func TestCurrentPlanRunScopedNodeSet_CachesPerWorkspaceDirPathIndependently(t *testing.T) {
 	base := writeRunScopedWorkflow(t)
 	cfg := &Config{BaseDir: base}
