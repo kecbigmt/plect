@@ -97,9 +97,9 @@ Start the current binary and verify session and event reads
 (`plect ls --all`, `plect event list <session>`) look correct against the
 backup's contents. In particular, confirm `plect ls`'s session count equals
 the backup's `state.json` session count (`jq '.sessions | length'
-"$BACKUP_DIR/state.json"`): every `events/`-only session imports as
-destroyed and stays hidden from the listing, so the two must match exactly,
-not merely be close. Then verify that a supported legacy binary — one built
+"$BACKUP_DIR/state.json"`): an `events/`-only session is skipped entirely
+(no row, no events), so the two must match exactly, not merely be close.
+Then verify that a supported legacy binary — one built
 before kecbigmt/plecture#433 (commit `747768e`) — refuses against the marker
 rather than starting fresh, on both a read/startup path and a mutation path:
 
@@ -155,15 +155,16 @@ refetches history on reconnect, per
   `heartbeat` kind the same way. Each byte offset must be `0` or the exact
   end boundary of a complete `log.jsonl` line — a stray or corrupted offset
   fails the import rather than being reinterpreted as a nearby valid one.
-- A session whose only trace is an `events/<session>` directory imports as
-  `status = "destroyed"`, `destroyed_at` set to its last event's time (or the
-  import time itself, for the degenerate case of an empty log): the legacy
-  store deleted a destroyed session's `state.json` entry but kept its event
-  log, so this is what an `events/`-only directory almost always means.
-  Its history stays readable (`plect event list <session>`); it is simply
-  hidden from `plect ls` and excluded from reconcile, like any other
-  destroyed session. A host that already ran an older importer version
-  before this rule shipped needs the one-time
+- A session whose only trace is an `events/<session>` directory is skipped
+  entirely: no `sessions` row, no events. The legacy store deleted a
+  destroyed session's `state.json` entry but kept its event log, so this is
+  what an `events/`-only directory almost always means, and it carries no
+  parent, workflow, resource, inputs, or lifecycle facts to build a session
+  row from. It is counted in the report (`skipped-event-only=N`) so an
+  operator can see what was left behind; the legacy backup itself remains
+  the archive of that history. A host that already ran an older importer
+  version, before this rule shipped, that materialized a row for one of
+  these needs the one-time
   `plect storage repair-imported-sessions --from <legacy backup dir>` fix
   below.
 
@@ -176,14 +177,14 @@ session that needs to be live again; its tasks and history are unaffected.
 
 ## Repairing a host already imported
 
-A host that ran `plect storage import` with an importer version older than
-the fix that made an `events/`-only session import as destroyed left every
-such session as a ghost `status = "down"` row instead: live-but-inert
-entries that inflate `plect ls` and every reconcile tick (see
-kecbigmt/plecture#507). `plect storage repair-imported-sessions` is a
-one-time, single-host fix for that host's already-promoted `storage.db`; it
-is not a standing migration path and can be removed once every host that
-needs it has run it, or once v0.3.0 ships, whichever comes first.
+A host that ran `plect storage import` with an importer version old enough
+to still materialize a row for an `events/`-only legacy session left every
+such session as a ghost row instead: live-but-inert entries that inflate
+`plect ls` and every reconcile tick (see kecbigmt/plecture#507).
+`plect storage repair-imported-sessions` is a one-time, single-host fix for
+that host's already-promoted `storage.db`; it is not a standing migration
+path and can be removed once every host that needs it has run it, or once
+v0.3.0 ships, whichever comes first.
 
 It takes the same `--from <legacy backup dir>` the original import used:
 
@@ -191,11 +192,15 @@ It takes the same `--from <legacy backup dir>` the original import used:
 plect storage repair-imported-sessions --from "$BACKUP_DIR" --dry-run
 ```
 
-Inspect the printed counts (`would-mark` / `already-destroyed` / `kept`).
-`would-mark` is the `events/`-only sessions this run would retire;
-`already-destroyed` is any of those a prior repair run (or a manual fix)
-already retired; `kept` is every session `--from`'s `state.json` also
-names — left untouched either way. A dry run writes nothing. Once the
+Inspect the printed counts (`would-delete` / `kept`). `would-delete` is
+every session `storage.db` holds that `--from`'s `state.json` does not
+name; `kept` is every session it also names. **This is a blunt rule**: a
+session created after cutover with no relation to the buggy import at all
+(a real `plect up`, or one legitimately destroyed post-cutover) is deleted
+the same way a genuine ghost is, because presence in `--from`'s
+`state.json` is the only criterion — there is no narrower signal available
+to tell them apart from a legacy backup alone. Confirm the counts make
+sense for this host before proceeding; a dry run writes nothing. Once the
 report looks right, run it for real:
 
 ```bash
@@ -203,12 +208,11 @@ plect storage repair-imported-sessions --from "$BACKUP_DIR"
 ```
 
 This takes a dated backup of `storage.db` (plus its `-wal`/`-shm` siblings,
-if present) at `--data-home` before marking anything, then transitions each
-`would-mark` session to `status = "destroyed"` with `destroyed_at` set the
-same way the importer sets it (its last event's time). Afterward, `plect
-ls`'s session count should equal `--from`'s `state.json` session count, the
-same invariant the "Cutover verification" section above checks for a fresh
-import.
+if present) at `--data-home` before deleting anything, then deletes each
+`would-delete` session outright — its row, every incarnation, and their
+events. Afterward, `plect ls`'s session count should equal `--from`'s
+`state.json` session count, the same invariant the "Cutover verification"
+section above checks for a fresh import.
 
 ## Recovery
 

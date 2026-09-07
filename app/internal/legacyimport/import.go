@@ -6,14 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/legacystate"
 	"github.com/kecbigmt/plecture/app/internal/persistence"
 	"github.com/kecbigmt/plecture/contracts/atomicfile"
-	"github.com/kecbigmt/plecture/contracts/event"
-	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
 // Options configures one Run call.
@@ -71,8 +68,15 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 		return report, fmt.Errorf("legacyimport: %w", err)
 	}
 
-	sessionLogs := make(map[string]*SessionLog, len(sessionNames))
+	// Only a state.json session's own event log is read: an events/-only
+	// directory carries no parent, workflow, resource, inputs, or lifecycle
+	// facts to build a session row from, so it is skipped and only counted.
+	sessionLogs := make(map[string]*SessionLog, len(sf.Sessions))
 	for _, name := range sessionNames {
+		if _, hasState := sf.Sessions[name]; !hasState {
+			report.SkippedEventOnly++
+			continue
+		}
 		sl, err := ReadSessionDir(eventsRoot, name)
 		if err != nil {
 			return report, fmt.Errorf("legacyimport: %w", err)
@@ -87,7 +91,7 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 		return report, fmt.Errorf("legacyimport: unrecognized files in the legacy events tree, not imported: %v", report.UnknownFiles)
 	}
 
-	allNames := unionSorted(sf.Sessions, sessionLogs)
+	allNames := sortedSessionNames(sf.Sessions)
 
 	if !opts.DryRun {
 		if _, err := os.Stat(report.DBPath); err == nil {
@@ -121,8 +125,6 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 		return report, fmt.Errorf("legacyimport: migrate temporary database: %w", err)
 	}
 
-	importTime := time.Now().UTC()
-
 	for key, pop := range sf.Populations {
 		if pop == nil {
 			continue
@@ -137,23 +139,8 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 		report.PopulationMembers += len(pop.Members)
 	}
 
-	// eventOnlyDestroyedAt: the row must stay live until its events are appended below.
-	eventOnlyDestroyedAt := make(map[string]time.Time)
-
 	for _, name := range allNames {
-		s, hasState := sf.Sessions[name]
-		if !hasState {
-			// events/<name> exists with no state.json entry: the legacy
-			// store deleted a destroyed session's entry but kept its log.
-			destroyedAt := importTime
-			if sl := sessionLogs[name]; sl != nil && len(sl.Events) > 0 {
-				destroyedAt = sl.Events[len(sl.Events)-1].Time
-			}
-			eventOnlyDestroyedAt[name] = destroyedAt
-			s = &domain.Session{Name: name, Status: contract.SessionStatusDown, CreatedAt: importTime, UpdatedAt: importTime}
-			report.SessionsFromEventLogOnly++
-		}
-
+		s := sf.Sessions[name]
 		id := ""
 		if sl := sessionLogs[name]; sl != nil {
 			id = sl.GenID
@@ -207,28 +194,12 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 		}
 	}
 
-	// Second pass: resolve each state.json session's ParentSession and write
-	// its tasks/channel health, now that every session row exists so
-	// resolution never depends on map iteration order (see
-	// persistence.ImportSession).
+	// Second pass: resolve each session's ParentSession and write its
+	// tasks/channel health, now that every session row exists so resolution
+	// never depends on map iteration order (see persistence.ImportSession).
 	for _, name := range allNames {
-		s, hasState := sf.Sessions[name]
-		if !hasState {
-			continue
-		}
-		if err := db.PutSession(ctx, s); err != nil {
+		if err := db.PutSession(ctx, sf.Sessions[name]); err != nil {
 			return report, fmt.Errorf("legacyimport: session %q: resolve parent link: %w", name, err)
-		}
-	}
-
-	// AppendEvent refuses a non-live session, so this waits until now.
-	for _, name := range allNames {
-		destroyedAt, isEventOnly := eventOnlyDestroyedAt[name]
-		if !isEventOnly {
-			continue
-		}
-		if err := db.DestroySession(ctx, name, destroyedAt); err != nil {
-			return report, fmt.Errorf("legacyimport: session %q: mark destroyed: %w", name, err)
 		}
 	}
 
@@ -242,7 +213,7 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 	if err := db.IntegrityCheck(ctx); err != nil {
 		return report, fmt.Errorf("legacyimport: %w", err)
 	}
-	if err := validateCounts(ctx, db, allNames, sessionLogs, eventOnlyDestroyedAt, report); err != nil {
+	if err := validateCounts(ctx, db, allNames, sessionLogs, report); err != nil {
 		return report, fmt.Errorf("legacyimport: %w", err)
 	}
 
@@ -304,25 +275,14 @@ func checkDeliveryLocksNotHeld(sourceDir string) error {
 	return nil
 }
 
-// unionSorted returns every session name appearing in either the parsed
-// state or the legacy event-log tree, sorted for deterministic import order
-// (correctness does not depend on this order — see ImportSession — but a
-// stable order keeps Run's error messages and any future progress log
-// reproducible).
-func unionSorted(sessions map[string]*domain.Session, logs map[string]*SessionLog) []string {
-	seen := make(map[string]bool, len(sessions)+len(logs))
-	var names []string
+// sortedSessionNames returns every state.json session name, sorted for
+// deterministic import order (correctness does not depend on this order —
+// see ImportSession — but a stable order keeps Run's error messages and any
+// future progress log reproducible).
+func sortedSessionNames(sessions map[string]*domain.Session) []string {
+	names := make([]string, 0, len(sessions))
 	for name := range sessions {
-		if !seen[name] {
-			seen[name] = true
-			names = append(names, name)
-		}
-	}
-	for name := range logs {
-		if !seen[name] {
-			seen[name] = true
-			names = append(names, name)
-		}
+		names = append(names, name)
 	}
 	sort.Strings(names)
 	return names
@@ -357,50 +317,26 @@ func removeDatabaseFiles(path string) error {
 // session and event this run intended to import is actually present, the
 // second validation pass docs/design/sqlite-persistence.md's importer
 // section calls for (IntegrityCheck is the first: SQLite's own structural
-// check). eventOnlyDestroyedAt is required too: AllSessions is live-only,
-// so it can't tell a destroyed import from a missing one by itself.
-func validateCounts(ctx context.Context, db *persistence.DB, allNames []string, sessionLogs map[string]*SessionLog, eventOnlyDestroyedAt map[string]time.Time, report *Report) error {
-	live, err := db.AllSessions(ctx)
+// check).
+func validateCounts(ctx context.Context, db *persistence.DB, allNames []string, sessionLogs map[string]*SessionLog, report *Report) error {
+	all, err := db.AllSessions(ctx)
 	if err != nil {
 		return fmt.Errorf("validate: list sessions: %w", err)
 	}
-	wantLive := len(allNames) - len(eventOnlyDestroyedAt)
-	if len(live) != wantLive {
-		return fmt.Errorf("validate: database has %d live sessions, want %d", len(live), wantLive)
+	if len(all) != len(allNames) {
+		return fmt.Errorf("validate: database has %d sessions, want %d", len(all), len(allNames))
 	}
 	for _, name := range allNames {
-		_, wantDestroyed := eventOnlyDestroyedAt[name]
-		_, isLive := live[name]
-		switch {
-		case wantDestroyed && isLive:
-			return fmt.Errorf("validate: session %q is live, want destroyed", name)
-		case !wantDestroyed && !isLive:
+		if _, ok := all[name]; !ok {
 			return fmt.Errorf("validate: session %q missing from the built database", name)
 		}
 		sl := sessionLogs[name]
 		if sl == nil {
 			continue
 		}
-		// A destroyed session has no live row for ListEventsFrom to resolve
-		// by name, so its events are checked by incarnation id instead.
-		var evs []event.Event
-		if wantDestroyed {
-			ids, err := db.EventStreamIDsBySession(ctx, name)
-			if err != nil {
-				return fmt.Errorf("validate: list incarnations for %q: %w", name, err)
-			}
-			if len(ids) == 0 {
-				return fmt.Errorf("validate: destroyed session %q has no incarnation in the built database", name)
-			}
-			evs, _, err = db.ListEventsFromStreamID(ctx, ids[len(ids)-1], name, 0)
-			if err != nil {
-				return fmt.Errorf("validate: list events for %q: %w", name, err)
-			}
-		} else {
-			evs, _, err = db.ListEventsFrom(ctx, name, 0)
-			if err != nil {
-				return fmt.Errorf("validate: list events for %q: %w", name, err)
-			}
+		evs, _, err := db.ListEventsFrom(ctx, name, 0)
+		if err != nil {
+			return fmt.Errorf("validate: list events for %q: %w", name, err)
 		}
 		if len(evs) != len(sl.Events) {
 			return fmt.Errorf("validate: session %q has %d events in the built database, want %d", name, len(evs), len(sl.Events))

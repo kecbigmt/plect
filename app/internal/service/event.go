@@ -146,18 +146,6 @@ func EventPage(cfg *config.Config, store *state.Store, identifier string, p Even
 	if gerr != nil {
 		return EventPageResult{}, &Error{Code: ErrExecutionFailed, Message: gerr.Error()}
 	}
-	// streamID is what a cursor is validated and re-issued against: gen
-	// when live, else the most recent incarnation ever, so a destroyed
-	// session's history stays both readable and pageable by name.
-	streamID := gen
-	usingFallback := false
-	if streamID == "" {
-		streamID, gerr = log.LastIncarnationID(name)
-		if gerr != nil {
-			return EventPageResult{}, &Error{Code: ErrExecutionFailed, Message: gerr.Error()}
-		}
-		usingFallback = streamID != ""
-	}
 
 	var since int64
 	if p.Cursor != "" {
@@ -165,20 +153,14 @@ func EventPage(cfg *config.Config, store *state.Store, identifier string, p Even
 		if derr != nil {
 			return EventPageResult{}, &Error{Code: ErrInvalidInput, Message: derr.Error()}
 		}
-		if verr := cur.Validate(order, streamID); verr != nil {
+		if verr := cur.Validate(order, gen); verr != nil {
 			return EventPageResult{}, &Error{Code: ErrInvalidInput, Message: verr.Error()}
 		}
 		since = cur.Off
 	}
 
 	if order == event.OrderDesc {
-		var evs []event.Event
-		var lerr error
-		if usingFallback {
-			evs, lerr = log.TailFromStreamID(streamID, name, p.Filter, p.Filter.Limit)
-		} else {
-			evs, lerr = log.Tail(name, p.Filter, p.Filter.Limit)
-		}
+		evs, lerr := log.Tail(name, p.Filter, p.Filter.Limit)
 		if lerr != nil {
 			return EventPageResult{}, &Error{Code: ErrExecutionFailed, Message: lerr.Error()}
 		}
@@ -186,22 +168,15 @@ func EventPage(cfg *config.Config, store *state.Store, identifier string, p Even
 		return EventPageResult{Events: evs}, nil
 	}
 
-	var evs []event.Event
-	var next int64
-	var lerr error
-	if usingFallback {
-		evs, _, next, lerr = log.ListFromStreamID(streamID, name, since, p.Filter)
-	} else {
-		evs, _, next, lerr = log.List(name, since, p.Filter)
-	}
+	evs, _, next, lerr := log.List(name, since, p.Filter)
 	if lerr != nil {
 		return EventPageResult{}, &Error{Code: ErrExecutionFailed, Message: lerr.Error()}
 	}
 	res := EventPageResult{Events: evs}
-	// A forward cursor only makes sense once some incarnation exists to
-	// resume against; a name that has never existed at all offers none.
-	if streamID != "" {
-		res.NextCursor = event.Cursor{V: event.CursorVersion, Off: next, Ord: event.OrderAsc, StreamID: streamID}.Encode()
+	// A forward cursor only makes sense once the log exists (gen != ""); without
+	// it there is nothing to resume against and a "" cursor signals "no page".
+	if gen != "" {
+		res.NextCursor = event.Cursor{V: event.CursorVersion, Off: next, Ord: event.OrderAsc, StreamID: gen}.Encode()
 	}
 	return res, nil
 }
@@ -347,28 +322,7 @@ func EventList(cfg *config.Config, store *state.Store, identifier string, since 
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	log := eventlog.NewStore(store.Dir())
-	gen, gerr := log.StreamID(name)
-	if gerr != nil {
-		return nil, nil, 0, &Error{Code: ErrExecutionFailed, Message: gerr.Error()}
-	}
-	if gen != "" {
-		evs, offs, next, lerr := log.List(name, since, f)
-		if lerr != nil {
-			return nil, nil, 0, &Error{Code: ErrExecutionFailed, Message: lerr.Error()}
-		}
-		return evs, offs, next, nil
-	}
-	// No live incarnation: read the most recent one ever instead of List's
-	// empty result, so a destroyed session's history stays reachable.
-	last, lerr := log.LastIncarnationID(name)
-	if lerr != nil {
-		return nil, nil, 0, &Error{Code: ErrExecutionFailed, Message: lerr.Error()}
-	}
-	if last == "" {
-		return nil, nil, since, nil
-	}
-	evs, offs, next, lerr := log.ListFromStreamID(last, name, since, f)
+	evs, offs, next, lerr := eventlog.NewStore(store.Dir()).List(name, since, f)
 	if lerr != nil {
 		return nil, nil, 0, &Error{Code: ErrExecutionFailed, Message: lerr.Error()}
 	}

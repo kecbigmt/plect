@@ -9,6 +9,7 @@ import (
 
 	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/persistence/sqlcgen"
+	"github.com/kecbigmt/plecture/contracts/event"
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
@@ -1032,5 +1033,66 @@ func TestEnsureLiveSession_RefusesToResurrectADestroyedName(t *testing.T) {
 	}
 	if status != contract.SessionStatusDestroyed {
 		t.Fatalf("original row status = %q, want %q", status, contract.SessionStatusDestroyed)
+	}
+}
+
+func TestPurgeSessionByName_RemovesTheRowItsEventsAndItsReservation(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	if err := db.PutSession(ctx, &domain.Session{Name: "ghost", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("PutSession: %v", err)
+	}
+	before, err := db.GetSession(ctx, "ghost")
+	if err != nil || before == nil {
+		t.Fatalf("GetSession before purge: %v, %v", before, err)
+	}
+	if _, err := db.AppendEvent(ctx, event.Event{ID: "e1", SessionName: "ghost", Time: now, Type: "a", Direction: event.Internal}); err != nil {
+		t.Fatalf("AppendEvent: %v", err)
+	}
+	if err := db.ImportUpReservation(ctx, "ghost", domain.UpReservation{Parent: domain.VirtualRootReservationParent, At: now, PID: 1}); err != nil {
+		t.Fatalf("ImportUpReservation: %v", err)
+	}
+
+	if err := db.PurgeSessionByName(ctx, "ghost"); err != nil {
+		t.Fatalf("PurgeSessionByName: %v", err)
+	}
+
+	got, err := db.GetSession(ctx, "ghost")
+	if err != nil {
+		t.Fatalf("GetSession after purge: %v", err)
+	}
+	if got != nil {
+		t.Errorf("GetSession after purge = %+v, want nil", got)
+	}
+
+	var sessionCount int
+	if err := db.write.QueryRowContext(ctx, `SELECT COUNT(*) FROM sessions WHERE id = ?`, before.ID).Scan(&sessionCount); err != nil {
+		t.Fatalf("count sessions: %v", err)
+	}
+	if sessionCount != 0 {
+		t.Error("sessions row still present after purge")
+	}
+	var eventCount int
+	if err := db.write.QueryRowContext(ctx, `SELECT COUNT(*) FROM events WHERE session_id = ?`, before.ID).Scan(&eventCount); err != nil {
+		t.Fatalf("count events: %v", err)
+	}
+	if eventCount != 0 {
+		t.Error("events still present after purge")
+	}
+	var reservationCount int
+	if err := db.write.QueryRowContext(ctx, `SELECT COUNT(*) FROM up_reservations WHERE child_session_name = ?`, "ghost").Scan(&reservationCount); err != nil {
+		t.Fatalf("count up_reservations: %v", err)
+	}
+	if reservationCount != 0 {
+		t.Error("up_reservations row still present after purge")
+	}
+}
+
+func TestPurgeSessionByName_MissingNameIsANoOp(t *testing.T) {
+	db := migratedTestDB(t)
+	if err := db.PurgeSessionByName(context.Background(), "never-existed"); err != nil {
+		t.Fatalf("PurgeSessionByName on a name with no row: %v", err)
 	}
 }

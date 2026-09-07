@@ -200,6 +200,35 @@ func (db *DB) DestroySession(ctx context.Context, name string, destroyedAt time.
 	})
 }
 
+// PurgeSessionByName permanently erases every incarnation of name: its
+// events (node/task instances, channel health, and event cursors cascade
+// from the row itself) and its up-slot reservation, if any. Unlike
+// DestroySession, nothing about name survives -- only
+// legacyimport.RepairImportedSessions calls this, to remove a ghost row a
+// buggy importer left with no legitimate state.json entry behind it; a real
+// session already visible to an operator is always retired via Destroy.
+func (db *DB) PurgeSessionByName(ctx context.Context, name string) error {
+	return db.WithImmediateTx(ctx, func(tx *sql.Tx) error {
+		q := sqlcgen.New(tx)
+		ids, err := q.ListSessionIDsByName(ctx, name)
+		if err != nil {
+			return fmt.Errorf("purge session %q: list incarnations: %w", name, err)
+		}
+		for _, id := range ids {
+			if err := q.DeleteEventsForSession(ctx, id); err != nil {
+				return fmt.Errorf("purge session %q: delete events for incarnation %s: %w", name, id, err)
+			}
+			if err := q.DeleteSessionByID(ctx, id); err != nil {
+				return fmt.Errorf("purge session %q: delete row %s: %w", name, id, err)
+			}
+		}
+		if err := q.DeleteUpReservation(ctx, name); err != nil {
+			return fmt.Errorf("purge session %q: delete up-slot reservation: %w", name, err)
+		}
+		return nil
+	})
+}
+
 func (db *DB) writeSessionTx(ctx context.Context, tx *sql.Tx, s *domain.Session) error {
 	q := sqlcgen.New(tx)
 

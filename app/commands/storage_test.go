@@ -260,11 +260,10 @@ func TestRootPersistentPreRun_DoesNotPreCreateStorageDBForStorageRepair(t *testi
 	}
 }
 
-// TestStorageRepairImportedSessions_MarksGhostsDestroyed exercises the CLI
-// wiring end to end against a storage.db left exactly as the pre-fix
-// importer would leave it: an events/-only legacy session imported live as
-// status="down".
-func TestStorageRepairImportedSessions_MarksGhostsDestroyed(t *testing.T) {
+// TestStorageRepairImportedSessions_DeletesGhosts exercises the CLI wiring
+// end to end against a storage.db holding a ghost row (a name absent from
+// the legacy backup's state.json) left behind by a pre-fix importer.
+func TestStorageRepairImportedSessions_DeletesGhosts(t *testing.T) {
 	t.Cleanup(func() { storageRepairDryRun = false })
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)
@@ -274,14 +273,6 @@ func TestStorageRepairImportedSessions_MarksGhostsDestroyed(t *testing.T) {
 
 	backupDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(backupDir, "state.json"), []byte(`{"version":7,"sessions":{}}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	eventDir := filepath.Join(backupDir, "events", "ghost-session")
-	if err := os.MkdirAll(eventDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	logLine := `{"id":"01GHOSTEVT0000000000000001","session_name":"ghost-session","time":"2026-01-03T00:00:00.000000000Z","type":"user.note","source":"cli","direction":"internal","summary":"ghost"}` + "\n"
-	if err := os.WriteFile(filepath.Join(eventDir, "log.jsonl"), []byte(logLine), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -301,8 +292,8 @@ func TestStorageRepairImportedSessions_MarksGhostsDestroyed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dry-run: %v; output:\n%s", err, dryOut)
 	}
-	if !strings.Contains(dryOut, "would-mark=1") {
-		t.Errorf("dry-run output = %q, want it to report would-mark=1", dryOut)
+	if !strings.Contains(dryOut, "would-delete=1") {
+		t.Errorf("dry-run output = %q, want it to report would-delete=1", dryOut)
 	}
 	// cobra flag bindings outlive a single Execute() call (see execRoot's own
 	// doc comment on --config-home), so the real run below must explicitly
@@ -313,8 +304,8 @@ func TestStorageRepairImportedSessions_MarksGhostsDestroyed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute() error = %v; output:\n%s", err, out)
 	}
-	if !strings.Contains(out, "would-mark=1") {
-		t.Errorf("output = %q, want it to report would-mark=1", out)
+	if !strings.Contains(out, "would-delete=1") {
+		t.Errorf("output = %q, want it to report would-delete=1", out)
 	}
 
 	db, err = persistence.EnsureCurrent(context.Background(), dbPath)
@@ -327,6 +318,6 @@ func TestStorageRepairImportedSessions_MarksGhostsDestroyed(t *testing.T) {
 		t.Fatalf("GetSession: %v", err)
 	}
 	if ghost != nil {
-		t.Errorf("GetSession(ghost-session) = %+v, want nil (destroyed)", ghost)
+		t.Errorf("GetSession(ghost-session) = %+v, want nil (deleted)", ghost)
 	}
 }

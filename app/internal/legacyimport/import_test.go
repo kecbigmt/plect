@@ -112,14 +112,14 @@ func TestRun_ImportsAFullLegacyDirectoryAndRoundTrips(t *testing.T) {
 	if !report.Promoted {
 		t.Fatal("report.Promoted = false, want true")
 	}
-	if report.Sessions != 3 {
-		t.Errorf("report.Sessions = %d, want 3", report.Sessions)
+	if report.Sessions != 2 {
+		t.Errorf("report.Sessions = %d, want 2", report.Sessions)
 	}
-	if report.SessionsFromEventLogOnly != 1 {
-		t.Errorf("report.SessionsFromEventLogOnly = %d, want 1", report.SessionsFromEventLogOnly)
+	if report.SkippedEventOnly != 1 {
+		t.Errorf("report.SkippedEventOnly = %d, want 1", report.SkippedEventOnly)
 	}
-	if report.Events != 4 {
-		t.Errorf("report.Events = %d, want 4", report.Events)
+	if report.Events != 3 {
+		t.Errorf("report.Events = %d, want 3", report.Events)
 	}
 	if report.Cursors != 3 { // delivery + tick + heartbeat, all on root-session
 		t.Errorf("report.Cursors = %d, want 3", report.Cursors)
@@ -184,34 +184,28 @@ func TestRun_ImportsAFullLegacyDirectoryAndRoundTrips(t *testing.T) {
 		t.Errorf("child.ID = %q, want a freshly minted id distinct from root's", child.ID)
 	}
 
-	// orphan-events-only has no state.json entry: it must import destroyed,
-	// not as a live down session, so it must not resurface here.
+	// orphan-events-only has no state.json entry: it is skipped entirely --
+	// no row, no events, not even reachable by incarnation id.
 	orphan, err := db.GetSession(ctx, "orphan-events-only")
 	if err != nil {
 		t.Fatalf("GetSession(orphan-events-only): %v", err)
 	}
 	if orphan != nil {
-		t.Errorf("GetSession(orphan-events-only) = %+v, want nil (imported as destroyed, hidden from live lookups)", orphan)
+		t.Errorf("GetSession(orphan-events-only) = %+v, want nil (skipped, never imported)", orphan)
 	}
 	all, err := db.AllSessions(ctx)
 	if err != nil {
 		t.Fatalf("AllSessions: %v", err)
 	}
 	if _, ok := all["orphan-events-only"]; ok {
-		t.Error("AllSessions includes orphan-events-only, want it excluded (destroyed)")
+		t.Error("AllSessions includes orphan-events-only, want it absent (skipped)")
 	}
-	// A destroyed session's events are reachable by incarnation id, not by
-	// live name -- the lookup service.EventList/EventPage fall back to.
 	orphanIDs, err := db.EventStreamIDsBySession(ctx, "orphan-events-only")
-	if err != nil || len(orphanIDs) != 1 {
-		t.Fatalf("EventStreamIDsBySession(orphan-events-only) = %v, %v, want exactly one incarnation", orphanIDs, err)
-	}
-	orphanEvents, _, err := db.ListEventsFromStreamID(ctx, orphanIDs[0], "orphan-events-only", 0)
 	if err != nil {
-		t.Fatalf("ListEventsFromStreamID(orphan-events-only): %v", err)
+		t.Fatalf("EventStreamIDsBySession(orphan-events-only): %v", err)
 	}
-	if len(orphanEvents) != 1 || orphanEvents[0].ID != "01ORPHANEVT00000000000001" {
-		t.Fatalf("orphanEvents = %+v, want the one source event", orphanEvents)
+	if len(orphanIDs) != 0 {
+		t.Errorf("EventStreamIDsBySession(orphan-events-only) = %v, want none (no row was ever created for it)", orphanIDs)
 	}
 
 	rootEvents, _, err := db.ListEventsFrom(ctx, "root-session", 0)
@@ -264,15 +258,20 @@ func TestRun_ImportsAFullLegacyDirectoryAndRoundTrips(t *testing.T) {
 	}
 }
 
-// An events/-only directory must import as a destroyed session, with
-// destroyed_at set to its last event's time, not a live "down" one.
-func TestRun_EventLogOnlySessionImportsAsDestroyed(t *testing.T) {
+// An events/-only directory carries no parent, workflow, resource, inputs,
+// or lifecycle facts to build a session row from, so the importer skips it
+// entirely rather than materializing an incomplete row for it.
+func TestRun_EventLogOnlySessionIsSkippedEntirely(t *testing.T) {
 	sourceDir, _, _ := legacyFixture(t)
 	destDir := t.TempDir()
 	ctx := context.Background()
 
-	if _, err := Run(ctx, Options{SourceDir: sourceDir, DestDir: destDir}); err != nil {
+	report, err := Run(ctx, Options{SourceDir: sourceDir, DestDir: destDir})
+	if err != nil {
 		t.Fatalf("Run: %v", err)
+	}
+	if report.SkippedEventOnly != 1 {
+		t.Errorf("report.SkippedEventOnly = %d, want 1", report.SkippedEventOnly)
 	}
 
 	rawDB, err := sql.Open("sqlite3", persistence.PathIn(destDir))
@@ -281,18 +280,14 @@ func TestRun_EventLogOnlySessionImportsAsDestroyed(t *testing.T) {
 	}
 	defer rawDB.Close()
 
-	var status, destroyedAt string
+	var count int
 	if err := rawDB.QueryRowContext(ctx,
-		`SELECT status, destroyed_at FROM sessions WHERE name = ?`, "orphan-events-only",
-	).Scan(&status, &destroyedAt); err != nil {
+		`SELECT COUNT(*) FROM sessions WHERE name = ?`, "orphan-events-only",
+	).Scan(&count); err != nil {
 		t.Fatalf("query orphan-events-only row: %v", err)
 	}
-	if status != "destroyed" {
-		t.Errorf("status = %q, want destroyed", status)
-	}
-	// The fixture's one orphan-events-only event carries this exact time.
-	if want := "2026-01-03T00:00:00.000000000Z"; destroyedAt != want {
-		t.Errorf("destroyed_at = %q, want %q (its one event's time)", destroyedAt, want)
+	if count != 0 {
+		t.Errorf("sessions rows for orphan-events-only = %d, want 0 (skipped, not imported at all)", count)
 	}
 }
 

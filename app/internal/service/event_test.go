@@ -422,69 +422,6 @@ func TestEventListUnknownSessionIsEmpty(t *testing.T) {
 	}
 }
 
-// A session destroyed with no later recreate under the same name (its only
-// live-session lookup ever) must keep its event history reachable by name.
-func TestEventListAndPageStillReturnEventsAfterDestroyWithNoRecreate(t *testing.T) {
-	store := state.NewStore(t.TempDir())
-	const session = "owner/repo-7"
-	if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote, Summary: "hello"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Destroy(session); err != nil {
-		t.Fatalf("destroy: %v", err)
-	}
-
-	evs, _, _, err := EventList(nil, store, session, 0, event.Filter{})
-	if err != nil || len(evs) != 1 || evs[0].Summary != "hello" {
-		t.Fatalf("EventList after destroy: err=%v evs=%+v", err, evs)
-	}
-
-	ascPage, err := EventPage(nil, store, session, EventPageParams{})
-	if err != nil || len(ascPage.Events) != 1 || ascPage.Events[0].Summary != "hello" {
-		t.Fatalf("EventPage (asc) after destroy: err=%v page=%+v", err, ascPage)
-	}
-	if ascPage.NextCursor == "" {
-		t.Error("NextCursor = \"\", want a cursor over the destroyed incarnation (its history is still pageable)")
-	}
-
-	descPage, err := EventPage(nil, store, session, EventPageParams{Order: event.OrderDesc})
-	if err != nil || len(descPage.Events) != 1 || descPage.Events[0].Summary != "hello" {
-		t.Fatalf("EventPage (desc) after destroy: err=%v page=%+v", err, descPage)
-	}
-}
-
-// A destroyed session's history beyond one page limit must still be
-// reachable by resuming the cursor a prior page returned — pagination, not
-// just the first page, survives destroy the same way reads do.
-func TestEventPageAscPaginatesAfterDestroyWithNoRecreate(t *testing.T) {
-	store := state.NewStore(t.TempDir())
-	const session = "owner/repo-7"
-	for _, summary := range []string{"one", "two", "three"} {
-		if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote, Summary: summary}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := store.Destroy(session); err != nil {
-		t.Fatalf("destroy: %v", err)
-	}
-
-	first, err := EventPage(nil, store, session, EventPageParams{Filter: event.Filter{Limit: 2}})
-	if err != nil || len(first.Events) != 2 || first.Events[0].Summary != "one" || first.Events[1].Summary != "two" {
-		t.Fatalf("first page: err=%v page=%+v", err, first)
-	}
-	if first.NextCursor == "" {
-		t.Fatal("first page's NextCursor is empty, want one to resume from")
-	}
-
-	second, err := EventPage(nil, store, session, EventPageParams{Cursor: first.NextCursor})
-	if err != nil {
-		t.Fatalf("second page: %v", err)
-	}
-	if len(second.Events) != 1 || second.Events[0].Summary != "three" {
-		t.Fatalf("second page = %+v, want exactly [three]", second.Events)
-	}
-}
-
 func TestEventResolvesAlias(t *testing.T) {
 	store := state.NewStore(t.TempDir())
 	if err := store.Put(&domain.Session{Name: "owner/repo-7", Alias: "my-feature"}); err != nil {

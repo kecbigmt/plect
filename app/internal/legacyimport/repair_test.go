@@ -11,14 +11,15 @@ import (
 
 	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/persistence"
+	"github.com/kecbigmt/plecture/contracts/event"
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
 // buggyImportedFixture builds a legacy backup (see legacyFixture) plus a
 // destDir holding a storage.db exactly as the pre-fix importer left it:
 // every state.json session imported correctly, but orphan-events-only (an
-// events/-only session) imported live as status="down" -- the bug
-// RepairImportedSessions exists to fix on a host that already ran that
+// events/-only session) imported live as status="down" -- the ghost row
+// RepairImportedSessions exists to delete on a host that already ran that
 // importer.
 func buggyImportedFixture(t *testing.T) (sourceDir, destDir string) {
 	t.Helper()
@@ -42,6 +43,12 @@ func buggyImportedFixture(t *testing.T) (sourceDir, destDir string) {
 			t.Fatalf("PutSession(%s): %v", s.Name, err)
 		}
 	}
+	if _, err := db.AppendEvent(ctx, event.Event{
+		ID: "01GHOSTEVT0000000000000001", SessionName: "orphan-events-only", Time: now,
+		Type: "user.note", Direction: event.Internal,
+	}); err != nil {
+		t.Fatalf("AppendEvent(orphan-events-only): %v", err)
+	}
 	return sourceDir, destDir
 }
 
@@ -53,8 +60,8 @@ func TestRepairImportedSessions_DryRunReportsWithoutWriting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RepairImportedSessions (dry-run): %v", err)
 	}
-	if report.WouldMark != 1 || report.AlreadyDestroyed != 0 || report.Kept != 2 {
-		t.Errorf("report = %+v, want WouldMark=1 AlreadyDestroyed=0 Kept=2", report)
+	if report.WouldDelete != 1 || report.Kept != 2 {
+		t.Errorf("report = %+v, want WouldDelete=1 Kept=2", report)
 	}
 	if report.BackupPath != "" {
 		t.Errorf("BackupPath = %q, want empty for a dry run", report.BackupPath)
@@ -84,7 +91,7 @@ func TestRepairImportedSessions_DryRunReportsWithoutWriting(t *testing.T) {
 	}
 }
 
-func TestRepairImportedSessions_MarksGhostsDestroyedAndBacksUpFirst(t *testing.T) {
+func TestRepairImportedSessions_DeletesGhostsAndBacksUpFirst(t *testing.T) {
 	sourceDir, destDir := buggyImportedFixture(t)
 	ctx := context.Background()
 
@@ -92,8 +99,8 @@ func TestRepairImportedSessions_MarksGhostsDestroyedAndBacksUpFirst(t *testing.T
 	if err != nil {
 		t.Fatalf("RepairImportedSessions: %v", err)
 	}
-	if report.WouldMark != 1 || report.AlreadyDestroyed != 0 || report.Kept != 2 {
-		t.Fatalf("report = %+v, want WouldMark=1 AlreadyDestroyed=0 Kept=2", report)
+	if report.WouldDelete != 1 || report.Kept != 2 {
+		t.Fatalf("report = %+v, want WouldDelete=1 Kept=2", report)
 	}
 	if report.BackupPath == "" {
 		t.Fatal("BackupPath empty, want a dated backup path for a real run")
@@ -113,7 +120,7 @@ func TestRepairImportedSessions_MarksGhostsDestroyedAndBacksUpFirst(t *testing.T
 		t.Fatalf("GetSession: %v", err)
 	}
 	if ghost != nil {
-		t.Errorf("GetSession(orphan-events-only) = %+v, want nil (destroyed, hidden from live lookups)", ghost)
+		t.Errorf("GetSession(orphan-events-only) = %+v, want nil (deleted)", ghost)
 	}
 	all, err := db.AllSessions(ctx)
 	if err != nil {
@@ -128,28 +135,71 @@ func TestRepairImportedSessions_MarksGhostsDestroyedAndBacksUpFirst(t *testing.T
 		t.Fatalf("open storage.db directly: %v", err)
 	}
 	defer rawDB.Close()
-	var status, destroyedAt string
-	if err := rawDB.QueryRowContext(ctx,
-		`SELECT status, destroyed_at FROM sessions WHERE name = ?`, "orphan-events-only",
-	).Scan(&status, &destroyedAt); err != nil {
-		t.Fatalf("query orphan-events-only row: %v", err)
+	var sessionCount, eventCount int
+	if err := rawDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM sessions WHERE name = ?`, "orphan-events-only").Scan(&sessionCount); err != nil {
+		t.Fatalf("count sessions: %v", err)
 	}
-	if status != "destroyed" {
-		t.Errorf("status = %q, want destroyed", status)
+	if sessionCount != 0 {
+		t.Error("orphan-events-only's sessions row still present, want fully deleted")
 	}
-	if want := "2026-01-03T00:00:00.000000000Z"; destroyedAt != want {
-		t.Errorf("destroyed_at = %q, want %q (its one event's time)", destroyedAt, want)
+	if err := rawDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM events e JOIN sessions s ON e.session_id = s.id WHERE s.name = ?`, "orphan-events-only").Scan(&eventCount); err != nil {
+		t.Fatalf("count events: %v", err)
+	}
+	if eventCount != 0 {
+		t.Error("orphan-events-only's events still present, want fully deleted")
 	}
 
 	report2, err := RepairImportedSessions(ctx, RepairOptions{SourceDir: sourceDir, DestDir: destDir})
 	if err != nil {
 		t.Fatalf("second run: %v", err)
 	}
-	if report2.WouldMark != 0 || report2.AlreadyDestroyed != 1 || report2.Kept != 2 {
-		t.Errorf("second run report = %+v, want WouldMark=0 AlreadyDestroyed=1 Kept=2 (idempotent)", report2)
+	if report2.WouldDelete != 0 || report2.Kept != 2 {
+		t.Errorf("second run report = %+v, want WouldDelete=0 Kept=2 (idempotent)", report2)
 	}
 	if report2.BackupPath == report.BackupPath {
 		t.Error("second run's backup path collided with the first's")
+	}
+}
+
+// TestRepairImportedSessions_DeletesAnyNameAbsentFromTheBackupEvenIfLive is
+// the acceptance-driving corollary of the amendment's literal rule (every
+// session storage.db holds that the backup's state.json does not name is
+// deleted): a session created after cutover with real work and no relation
+// to the buggy import at all is deleted the same way a genuine ghost is,
+// because presence in the backup's state.json is the only criterion.
+func TestRepairImportedSessions_DeletesAnyNameAbsentFromTheBackupEvenIfLive(t *testing.T) {
+	sourceDir, destDir := buggyImportedFixture(t)
+	ctx := context.Background()
+
+	db, err := persistence.EnsureCurrent(ctx, persistence.PathIn(destDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if err := db.PutSession(ctx, &domain.Session{Name: "post-cutover-real", Status: contract.SessionStatusUp, Workflow: "wf-real", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	report, err := RepairImportedSessions(ctx, RepairOptions{SourceDir: sourceDir, DestDir: destDir})
+	if err != nil {
+		t.Fatalf("RepairImportedSessions: %v", err)
+	}
+	if report.WouldDelete != 2 || report.Kept != 2 {
+		t.Errorf("report = %+v, want WouldDelete=2 Kept=2", report)
+	}
+
+	db2, err := persistence.EnsureCurrent(ctx, persistence.PathIn(destDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db2.Close()
+	got, err := db2.GetSession(ctx, "post-cutover-real")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Errorf("GetSession(post-cutover-real) = %+v, want nil (deleted along with the ghost)", got)
 	}
 }
 
@@ -207,72 +257,5 @@ func TestRepairImportedSessions_BacksUpEvenWhenOpeningTheDatabaseFails(t *testin
 	}
 	if backupVersion != behindVersion {
 		t.Errorf("backup schema version = %d, want %d (its pre-open state)", backupVersion, behindVersion)
-	}
-}
-
-func TestRepairImportedSessions_ErrorsWhenTargetNeverImportedTheBackup(t *testing.T) {
-	sourceDir, _, _ := legacyFixture(t)
-	destDir := t.TempDir()
-	ctx := context.Background()
-
-	db, err := persistence.EnsureCurrent(ctx, persistence.PathIn(destDir))
-	if err != nil {
-		t.Fatal(err)
-	}
-	db.Close()
-
-	_, err = RepairImportedSessions(ctx, RepairOptions{SourceDir: sourceDir, DestDir: destDir})
-	if err == nil {
-		t.Fatal("RepairImportedSessions against a target that never imported --from's backup unexpectedly succeeded")
-	}
-	if !strings.Contains(err.Error(), "never imported") {
-		t.Errorf("error = %v, want it to mention the session was never imported (a --data-home mismatch, not an already-destroyed ghost)", err)
-	}
-}
-
-// TestRepairImportedSessions_LeavesARecreatedLiveSessionAlone is the
-// regression test for a real bug: a ghost name legitimately reused (e.g. an
-// operator running `plect up orphan-events-only` between the buggy import
-// and this repair) must not be destroyed just because it is absent from
-// --from's state.json -- that absence is also true of every real, never
-// pre-existing session name.
-func TestRepairImportedSessions_LeavesARecreatedLiveSessionAlone(t *testing.T) {
-	sourceDir, destDir := buggyImportedFixture(t)
-	ctx := context.Background()
-
-	db, err := persistence.EnsureCurrent(ctx, persistence.PathIn(destDir))
-	if err != nil {
-		t.Fatal(err)
-	}
-	later := time.Now().UTC().Add(time.Hour)
-	if err := db.UpdateSession(ctx, "orphan-events-only", func(s *domain.Session) error {
-		s.Status = contract.SessionStatusUp
-		s.Workflow = "wf-real"
-		s.UpdatedAt = later
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	db.Close()
-
-	report, err := RepairImportedSessions(ctx, RepairOptions{SourceDir: sourceDir, DestDir: destDir})
-	if err != nil {
-		t.Fatalf("RepairImportedSessions: %v", err)
-	}
-	if report.Recreated != 1 || report.WouldMark != 0 {
-		t.Errorf("report = %+v, want Recreated=1 WouldMark=0", report)
-	}
-
-	db2, err := persistence.EnsureCurrent(ctx, persistence.PathIn(destDir))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db2.Close()
-	got, err := db2.GetSession(ctx, "orphan-events-only")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got == nil || got.Status != contract.SessionStatusUp || got.Workflow != "wf-real" {
-		t.Errorf("orphan-events-only = %+v, want still live, up, and untouched", got)
 	}
 }

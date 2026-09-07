@@ -96,16 +96,15 @@ var (
 
 var storageRepairCmd = &cobra.Command{
 	Use:   "repair-imported-sessions",
-	Short: "One-time fix for a host already imported before events/-only sessions imported as destroyed",
-	Long: `A build older than the fix that made 'plect storage import' mark an
-events/-only legacy session destroyed (rather than a live "down" session)
-left every such session as a ghost row on a host that already ran that
-older import. This command finds them again from the same legacy backup
---from names, and marks each one destroyed in the already-promoted
-storage.db at --data-home, defaulting to $XDG_DATA_HOME/plect.
+	Short: "One-time fix for a host already imported before the importer stopped materializing events/-only sessions",
+	Long: `A build older than the fix that made 'plect storage import' skip an
+events/-only legacy session entirely left every such session as a ghost row
+on a host that already ran that older import. This command deletes every
+session (and its events) that the already-promoted storage.db at
+--data-home holds but --from's state.json does not name.
 
 It takes a dated backup of storage.db (plus its -wal/-shm siblings, if any)
-before writing anything, unless --dry-run. This command is a stopgap: it can
+before deleting anything, unless --dry-run. This command is a stopgap: it can
 be removed once every host has run it, or once v0.3.0 ships, whichever comes
 first.`,
 	Args: cobra.NoArgs,
@@ -146,7 +145,7 @@ func init() {
 
 	storageRepairCmd.Flags().StringVar(&storageRepairFrom, "from", "", "The same legacy backup directory --from used for the original import")
 	storageRepairCmd.Flags().StringVar(&storageRepairDataHome, "data-home", "", "The plect data directory holding the storage.db to repair (default: $XDG_DATA_HOME/plect)")
-	storageRepairCmd.Flags().BoolVar(&storageRepairDryRun, "dry-run", false, "Report what would be marked without writing anything")
+	storageRepairCmd.Flags().BoolVar(&storageRepairDryRun, "dry-run", false, "Report what would be deleted without writing anything")
 	_ = storageRepairCmd.MarkFlagRequired("from")
 	storageCmd.AddCommand(storageRepairCmd)
 

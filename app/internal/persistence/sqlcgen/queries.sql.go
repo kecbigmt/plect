@@ -21,6 +21,15 @@ func (q *Queries) CountLiveSessionsNamed(ctx context.Context, name string) (int6
 	return count, err
 }
 
+const deleteEventsForSession = `-- name: DeleteEventsForSession :exec
+DELETE FROM events WHERE session_id = ?
+`
+
+func (q *Queries) DeleteEventsForSession(ctx context.Context, sessionID string) error {
+	_, err := q.db.ExecContext(ctx, deleteEventsForSession, sessionID)
+	return err
+}
+
 const deleteNodeInstancesForSession = `-- name: DeleteNodeInstancesForSession :exec
 DELETE FROM node_instances WHERE session_id = ?
 `
@@ -41,6 +50,18 @@ type DeletePopulationMembersForPopulationParams struct {
 
 func (q *Queries) DeletePopulationMembersForPopulation(ctx context.Context, arg DeletePopulationMembersForPopulationParams) error {
 	_, err := q.db.ExecContext(ctx, deletePopulationMembersForPopulation, arg.Workflow, arg.Name)
+	return err
+}
+
+const deleteSessionByID = `-- name: DeleteSessionByID :exec
+DELETE FROM sessions WHERE id = ?
+`
+
+// node_instances/task_instances/session_channel_health/event_cursors all
+// cascade from this; events does not (see its own table comment), so a
+// caller must delete those first.
+func (q *Queries) DeleteSessionByID(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, deleteSessionByID, id)
 	return err
 }
 
