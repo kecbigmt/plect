@@ -347,7 +347,7 @@ func recreateSessionRuntime(cfg *config.Config, store *state.Store, sessionName 
 	if err := setSessionStatus(store, sessionName, contract.SessionStatusDown); err != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to record session status: %v", err)}
 	}
-	teardown, teardownErr := unifiedTeardownList(cfg, session, teardownPlan, false)
+	teardown, teardownErr := unifiedTeardownList(cfg, session, false)
 	if teardownErr != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: teardownErr.Error()}
 	}
