@@ -20,9 +20,8 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// sharedWorkspaceProviderBinariesDir/Err cache
-// buildSharedWorkspaceProviderBinaries's result for this test binary's run;
-// never removed since the run's temp dir is reclaimed along with it.
+// sharedWorkspaceProviderBinariesDir/Err cache buildSharedWorkspaceProviderBinaries's
+// result for this run; never removed since the run's own temp dir goes with it.
 var (
 	sharedWorkspaceProviderBinariesOnce sync.Once
 	sharedWorkspaceProviderBinariesDir  string
