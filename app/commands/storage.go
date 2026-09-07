@@ -101,7 +101,11 @@ var storageRepairCmd = &cobra.Command{
 events/-only legacy session entirely left every such session as a ghost row
 on a host that already ran that older import. This command deletes every
 session (and its events) that the already-promoted storage.db at
---data-home holds but --from's state.json does not name.
+--data-home holds, that --from's state.json does not name, and that
+--from's events/ tree still has a directory for -- the exact shape that
+older importer left behind. A session --from's backup names nowhere at all
+(for example, one created after the backup was taken) is reported as
+not-in-backup and left untouched.
 
 Stop every plect process against --data-home first (same prerequisite as
 'plect storage import'): this command's raw file-copy backup and its delete

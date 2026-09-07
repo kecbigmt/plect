@@ -238,13 +238,10 @@ func TestRepairImportedSessions_DeletesGhostsAndBacksUpFirst(t *testing.T) {
 	}
 }
 
-// TestRepairImportedSessions_DeletesAnyNameAbsentFromTheBackupEvenIfLive is
-// the acceptance-driving corollary of the amendment's literal rule (every
-// session storage.db holds that the backup's state.json does not name is
-// deleted): a session created after cutover with real work and no relation
-// to the buggy import at all is deleted the same way a genuine ghost is,
-// because presence in the backup's state.json is the only criterion.
-func TestRepairImportedSessions_DeletesAnyNameAbsentFromTheBackupEvenIfLive(t *testing.T) {
+// TestRepairImportedSessions_LeavesPostCutoverSessionsUntouched is the
+// regression test for a real bug: a session missing from state.json only
+// because it postdates the backup was being deleted as if it were a ghost.
+func TestRepairImportedSessions_LeavesPostCutoverSessionsUntouched(t *testing.T) {
 	sourceDir, destDir := buggyImportedFixture(t)
 	ctx := context.Background()
 
@@ -262,8 +259,8 @@ func TestRepairImportedSessions_DeletesAnyNameAbsentFromTheBackupEvenIfLive(t *t
 	if err != nil {
 		t.Fatalf("RepairImportedSessions: %v", err)
 	}
-	if report.WouldDelete != 2 || report.Kept != 2 {
-		t.Errorf("report = %+v, want WouldDelete=2 Kept=2", report)
+	if report.WouldDelete != 1 || report.Kept != 2 || report.NotInBackup != 1 {
+		t.Errorf("report = %+v, want WouldDelete=1 Kept=2 NotInBackup=1", report)
 	}
 
 	db2, err := persistence.EnsureCurrent(ctx, persistence.PathIn(destDir))
@@ -275,8 +272,16 @@ func TestRepairImportedSessions_DeletesAnyNameAbsentFromTheBackupEvenIfLive(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != nil {
-		t.Errorf("GetSession(post-cutover-real) = %+v, want nil (deleted along with the ghost)", got)
+	if got == nil {
+		t.Error("GetSession(post-cutover-real) = nil, want it left untouched: the backup names it nowhere at all, so it is not a ghost")
+	}
+
+	ghost, err := db2.GetSession(ctx, "orphan-events-only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ghost != nil {
+		t.Errorf("GetSession(orphan-events-only) = %+v, want nil: the backup's events/ tree still names it, so it is a genuine ghost", ghost)
 	}
 }
 

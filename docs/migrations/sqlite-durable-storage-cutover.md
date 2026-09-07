@@ -198,14 +198,14 @@ It takes the same `--from <legacy backup dir>` the original import used:
 plect storage repair-imported-sessions --from "$BACKUP_DIR" --dry-run
 ```
 
-Inspect the printed counts (`would-delete` / `kept`). `would-delete` is
-every session `storage.db` holds that `--from`'s `state.json` does not
-name; `kept` is every session it also names. **This is a blunt rule**: a
-session created after cutover with no relation to the buggy import at all
-(a real `plect up`, or one legitimately destroyed post-cutover) is deleted
-the same way a genuine ghost is, because presence in `--from`'s
-`state.json` is the only criterion — there is no narrower signal available
-to tell them apart from a legacy backup alone. Confirm the counts make
+Inspect the printed counts (`would-delete` / `kept` / `not-in-backup`).
+`kept` is every session `--from`'s `state.json` names; `would-delete` is a
+genuine ghost — absent from `state.json` but still present as a directory
+under `--from`'s `events/` tree, exactly the shape the importer above now
+skips instead of materializing. `not-in-backup` is everything else: a
+session `--from` names nowhere at all, typically one created after the
+backup was taken (a real `plect up`, or one legitimately destroyed
+post-cutover); it is reported but left untouched. Confirm the counts make
 sense for this host before proceeding; a dry run writes nothing. Once the
 report looks right, run it for real:
 

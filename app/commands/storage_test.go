@@ -261,8 +261,7 @@ func TestRootPersistentPreRun_DoesNotPreCreateStorageDBForStorageRepair(t *testi
 }
 
 // TestStorageRepairImportedSessions_DeletesGhosts exercises the CLI wiring
-// end to end against a storage.db holding a ghost row (a name absent from
-// the legacy backup's state.json) left behind by a pre-fix importer.
+// end to end, alongside a post-cutover session repair must leave untouched.
 func TestStorageRepairImportedSessions_DeletesGhosts(t *testing.T) {
 	t.Cleanup(func() { storageRepairDryRun = false })
 	fakeHome := t.TempDir()
@@ -273,6 +272,9 @@ func TestStorageRepairImportedSessions_DeletesGhosts(t *testing.T) {
 
 	backupDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(backupDir, "state.json"), []byte(`{"version":7,"sessions":{}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(backupDir, "events", "ghost-session"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -286,14 +288,18 @@ func TestStorageRepairImportedSessions_DeletesGhosts(t *testing.T) {
 		db.Close()
 		t.Fatalf("seed ghost-session: %v", err)
 	}
+	if err := db.PutSession(context.Background(), &domain.Session{Name: "post-cutover-real", Status: contract.SessionStatusUp, CreatedAt: now, UpdatedAt: now}); err != nil {
+		db.Close()
+		t.Fatalf("seed post-cutover-real: %v", err)
+	}
 	db.Close()
 
 	dryOut, err := execRoot(t, "storage", "repair-imported-sessions", "--from", backupDir, "--dry-run")
 	if err != nil {
 		t.Fatalf("dry-run: %v; output:\n%s", err, dryOut)
 	}
-	if !strings.Contains(dryOut, "would-delete=1") {
-		t.Errorf("dry-run output = %q, want it to report would-delete=1", dryOut)
+	if !strings.Contains(dryOut, "would-delete=1") || !strings.Contains(dryOut, "not-in-backup=1") {
+		t.Errorf("dry-run output = %q, want it to report would-delete=1 and not-in-backup=1", dryOut)
 	}
 	// cobra flag bindings outlive a single Execute() call (see execRoot's own
 	// doc comment on --config-home), so the real run below must explicitly
@@ -304,8 +310,8 @@ func TestStorageRepairImportedSessions_DeletesGhosts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute() error = %v; output:\n%s", err, out)
 	}
-	if !strings.Contains(out, "would-delete=1") {
-		t.Errorf("output = %q, want it to report would-delete=1", out)
+	if !strings.Contains(out, "would-delete=1") || !strings.Contains(out, "not-in-backup=1") {
+		t.Errorf("output = %q, want it to report would-delete=1 and not-in-backup=1", out)
 	}
 
 	db, err = persistence.EnsureCurrent(context.Background(), dbPath)
@@ -319,5 +325,12 @@ func TestStorageRepairImportedSessions_DeletesGhosts(t *testing.T) {
 	}
 	if ghost != nil {
 		t.Errorf("GetSession(ghost-session) = %+v, want nil (deleted)", ghost)
+	}
+	live, err := db.GetSession(context.Background(), "post-cutover-real")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if live == nil {
+		t.Error("GetSession(post-cutover-real) = nil, want it left untouched")
 	}
 }

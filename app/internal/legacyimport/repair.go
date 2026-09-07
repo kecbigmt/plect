@@ -4,16 +4,18 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
+	"github.com/kecbigmt/plecture/app/internal/legacystate"
 	"github.com/kecbigmt/plecture/app/internal/persistence"
 	"github.com/kecbigmt/plecture/contracts/atomicfile"
 )
 
 // RepairOptions configures one RepairImportedSessions call.
 type RepairOptions struct {
-	// SourceDir's state.json is the only source of truth for which names
-	// are legitimate: storage.db alone cannot tell a ghost row from a real one.
+	// SourceDir's state.json and events/ tree together decide which names
+	// are ghosts: storage.db alone cannot tell a ghost row from a real one.
 	SourceDir string
 	DestDir   string // the plect data directory holding the storage.db to repair
 	DryRun    bool   // previews via persistence.ReadSessionNames, skipping backup and delete entirely
@@ -21,8 +23,9 @@ type RepairOptions struct {
 
 // RepairReport counts what one RepairImportedSessions call found and did.
 type RepairReport struct {
-	WouldDelete int // deleted, or would be on DryRun
-	Kept        int // sessions the backup's state.json also names
+	WouldDelete int
+	Kept        int
+	NotInBackup int
 	BackupPath  string
 }
 
@@ -31,7 +34,7 @@ func (r *RepairReport) String() string {
 	if backup == "" {
 		backup = "(none: dry run)"
 	}
-	return fmt.Sprintf("would-delete=%d kept=%d backup=%s", r.WouldDelete, r.Kept, backup)
+	return fmt.Sprintf("would-delete=%d kept=%d not-in-backup=%d backup=%s", r.WouldDelete, r.Kept, r.NotInBackup, backup)
 }
 
 // RepairImportedSessions is the one-time fix for a host that ran an
@@ -45,6 +48,10 @@ func RepairImportedSessions(ctx context.Context, opts RepairOptions) (*RepairRep
 	}
 
 	sf, err := readLegacyState(opts.SourceDir)
+	if err != nil {
+		return report, err
+	}
+	classify, err := newSessionClassifier(opts.SourceDir, sf)
 	if err != nil {
 		return report, err
 	}
@@ -64,11 +71,7 @@ func RepairImportedSessions(ctx context.Context, opts RepairOptions) (*RepairRep
 			return report, fmt.Errorf("legacyimport: %w", err)
 		}
 		for _, name := range names {
-			if _, hasState := sf.Sessions[name]; hasState {
-				report.Kept++
-				continue
-			}
-			report.WouldDelete++
+			tallyClassification(report, classify(name))
 		}
 		return report, nil
 	}
@@ -93,17 +96,63 @@ func RepairImportedSessions(ctx context.Context, opts RepairOptions) (*RepairRep
 	}
 
 	for _, name := range names {
-		if _, hasState := sf.Sessions[name]; hasState {
-			report.Kept++
-			continue
-		}
-		report.WouldDelete++
-		if err := db.PurgeSessionByName(ctx, name); err != nil {
-			return report, fmt.Errorf("legacyimport: delete %q: %w", name, err)
+		if class := classify(name); class == classGhost {
+			report.WouldDelete++
+			if err := db.PurgeSessionByName(ctx, name); err != nil {
+				return report, fmt.Errorf("legacyimport: delete %q: %w", name, err)
+			}
+		} else {
+			tallyClassification(report, class)
 		}
 	}
 
 	return report, nil
+}
+
+type sessionClassification int
+
+const (
+	classKept sessionClassification = iota
+	classGhost
+	classNotInBackup
+)
+
+func tallyClassification(report *RepairReport, class sessionClassification) {
+	switch class {
+	case classKept:
+		report.Kept++
+	case classGhost:
+		report.WouldDelete++
+	case classNotInBackup:
+		report.NotInBackup++
+	}
+}
+
+// A name missing from state.json is ambiguous on its own: a genuine ghost
+// and a session created after the backup was taken are both missing from
+// it, for opposite reasons. The events/ tree resolves the ambiguity, since
+// only a ghost still has a directory there.
+func newSessionClassifier(sourceDir string, sf *legacystate.StateFile) (func(name string) sessionClassification, error) {
+	eventsRoot := filepath.Join(sourceDir, "events")
+	eventDirNames, err := ListLegacySessionDirs(eventsRoot)
+	if err != nil {
+		return nil, fmt.Errorf("legacyimport: %w", err)
+	}
+	ghostNames := make(map[string]bool, len(eventDirNames))
+	for _, name := range eventDirNames {
+		if _, hasState := sf.Sessions[name]; !hasState {
+			ghostNames[name] = true
+		}
+	}
+	return func(name string) sessionClassification {
+		if _, hasState := sf.Sessions[name]; hasState {
+			return classKept
+		}
+		if ghostNames[name] {
+			return classGhost
+		}
+		return classNotInBackup
+	}, nil
 }
 
 // backupDatabaseFiles copies dbPath and its WAL-mode siblings, if any, to a
