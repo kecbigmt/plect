@@ -84,7 +84,8 @@ func TestStorageMigrate_AllowDevBuildFlagStillCreatesAndReportsSchemaVersion(t *
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)
 	t.Setenv("XDG_DATA_HOME", "")
-	t.Cleanup(func() { storageMigrateAllowDevBuild = false }) // see execRoot's configHomeFlag comment
+	// storageMigrateAllowDevBuild is a package-level flag target that outlives this Execute() call, so it must be reset explicitly rather than relying on t.Setenv's automatic restore.
+	t.Cleanup(func() { storageMigrateAllowDevBuild = false })
 
 	out, err := execRoot(t, "storage", "migrate", "--allow-dev-build")
 	if err != nil {
