@@ -81,26 +81,38 @@ uses = "agent"
 }
 
 // Two sessions with different workspaceDirPath must not collide on one cache
-// entry.
+// entry. workspaceB carries its own `.plect/workflows/` overlay appending a
+// third run-scoped node to "default", so the two keys' correct answers
+// genuinely differ (2 nodes vs. 3) — a cache that conflated the two keys
+// would return the wrong count for at least one of them, which a same-length
+// assertion could not have caught.
 func TestCurrentPlanRunScopedNodeSet_CachesPerWorkspaceDirPathIndependently(t *testing.T) {
 	base := writeRunScopedWorkflow(t)
 	cfg := &Config{BaseDir: base}
 
+	workspaceB := t.TempDir()
+	writeFile(t, filepath.Join(workspaceB, ".plect", "workflows", "default.toml"), `
+[default]
+kind = "workflow"
+
+[[default.nodes]]
+id   = "extra"
+uses = "agent"
+`)
+
 	a, ok := cfg.CurrentPlanRunScopedNodeSet(&domain.Session{Workflow: "default", WorkspaceDirPath: ""})
-	if !ok {
-		t.Fatal("workspace a: ok = false")
+	if !ok || len(a) != 2 {
+		t.Fatalf("workspace a = %+v, ok=%v, want the global-layer-only two-node set", a, ok)
 	}
-	b, ok := cfg.CurrentPlanRunScopedNodeSet(&domain.Session{Workflow: "default", WorkspaceDirPath: t.TempDir()})
-	if !ok {
-		t.Fatal("workspace b: ok = false")
-	}
-	if len(a) != len(b) {
-		t.Errorf("a=%+v b=%+v, want both workspace dirs to resolve the same global-layer-only workflow the same way", a, b)
+	b, ok := cfg.CurrentPlanRunScopedNodeSet(&domain.Session{Workflow: "default", WorkspaceDirPath: workspaceB})
+	if !ok || len(b) != 3 || !b["extra"] {
+		t.Fatalf("workspace b = %+v, ok=%v, want the overlay's three-node set including \"extra\"", b, ok)
 	}
 
-	// Repeat a: must still be the cached, correct answer, not disturbed by b.
+	// Repeat a: must still be the cached, correct two-node answer, not
+	// disturbed by (or leaking into) workspace b's three-node one.
 	again, ok := cfg.CurrentPlanRunScopedNodeSet(&domain.Session{Workflow: "default", WorkspaceDirPath: ""})
-	if !ok || len(again) != len(a) {
-		t.Errorf("repeat workspace a = %+v, ok=%v, want %+v unchanged", again, ok, a)
+	if !ok || len(again) != 2 || again["extra"] {
+		t.Errorf("repeat workspace a = %+v, ok=%v, want the unchanged two-node set", again, ok)
 	}
 }
