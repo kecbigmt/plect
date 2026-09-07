@@ -214,13 +214,11 @@ func runtimeDispatcher(t *testing.T, session string, log *eventlog.Store, socket
 			"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Outputs: map[string]any{"socket_path": socketPath}},
 		},
 	}
-	// state.Store and log must share one directory (and so one database):
-	// dispatch itself reads log's own session row. Callers rebuild a
-	// dispatcher over the same log/session to simulate a restart
-	// (TestDispatcher_ReplaysFromCursorAcrossRestart), so only Put the
-	// first time — a second Put would still update the same live row (it
-	// does not mint a new incarnation), but skipping it when one already
-	// exists keeps this helper's intent explicit.
+	// Callers rebuild a dispatcher over the same log/session to simulate a
+	// restart (TestDispatcher_ReplaysFromCursorAcrossRestart), so only Put
+	// the first time — a second Put would still update the same live row
+	// (it does not mint a new incarnation), but skipping it when one
+	// already exists keeps this helper's intent explicit.
 	st := state.NewStore(log.Dir())
 	if existing, err := st.GetE(session); err != nil {
 		t.Fatal(err)

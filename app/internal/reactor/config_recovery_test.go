@@ -109,9 +109,6 @@ func TestSessionReactor_KeepsLastGoodTickConfigWhenWorkflowLoadFails(t *testing.
 	log := eventlog.NewStore(dir)
 	hub := sessionhub.NewRegistry(log, sessionhub.WithPollInterval(2*time.Millisecond))
 	t.Cleanup(hub.Close)
-	// state.Store and eventlog.Store share one directory (and so one
-	// database): a session Put below must be visible to log's own reads,
-	// since a session row now is one incarnation.
 	st := state.NewStore(dir)
 	session := &domain.Session{
 		Name:     "o/r-1",
@@ -177,9 +174,6 @@ func newRefreshFixture(t *testing.T, body string) (*sessionReactor, string) {
 	log := eventlog.NewStore(dir)
 	hub := sessionhub.NewRegistry(log, sessionhub.WithPollInterval(2*time.Millisecond))
 	t.Cleanup(hub.Close)
-	// state.Store and eventlog.Store share one directory (and so one
-	// database): a session Put below must be visible to log's own reads,
-	// since a session row now is one incarnation.
 	st := state.NewStore(dir)
 	session := &domain.Session{
 		Name:     "o/r-1",

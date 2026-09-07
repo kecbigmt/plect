@@ -16,19 +16,6 @@
 -- "2026-09-06T08:50:42.821423717Z"), or NULL when unset — never a
 -- variable-width fractional part, so lexical order equals time order. See
 -- timeconv.go.
---
--- _json column rule (Schema amendment 15, kecbigmt/plecture#434): a text
--- column holding JSON carries the _json suffix and is declaration-owned
--- (its shape comes from a configuration-language or provider schema, never
--- core structure); a nullable one carries
--- `CHECK (col IS NULL OR json_valid(col))`. See
--- docs/design/sqlite-persistence.md for the full rule, its two exceptions,
--- and the classification table naming every column's owning declaration.
---
--- See docs/design/sqlite-persistence.md's "Session identity and lifecycle"
--- section for why sessions carries a surrogate id/status separate from
--- name, and its "Durable records" section for population_workflow/
--- population_name vs. population_members.session_name.
 CREATE TABLE sessions (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -66,19 +53,12 @@ CREATE TABLE sessions (
     FOREIGN KEY (population_workflow, population_name) REFERENCES populations(workflow, name) ON DELETE SET NULL
 );
 
--- Unique only among live rows, so a destroyed session's name is free for a
--- later create to reuse under a new id.
+-- Unique only among live rows; a destroyed session's name is free to reuse.
 CREATE UNIQUE INDEX sessions_live_name ON sessions(name) WHERE status <> 'destroyed';
 CREATE INDEX sessions_alias_idx ON sessions(alias);
 CREATE INDEX sessions_parent_idx ON sessions(parent_session_id);
 
--- Session.Tasks splits by Dynamic into this table (static workflow-DAG
--- nodes, including @workflow) and task_instances (dynamic `plect task
--- setup` instances); Dynamic is derived from which table a row came from,
--- not stored. done_when_json is an explicit, narrow exception to the
--- _json ownership rule above (core-owned shape, kept opaque here rather
--- than split relationally like task_instances' own done_when); see
--- docs/design/sqlite-persistence.md.
+-- Static workflow-DAG nodes; task_instances holds the dynamic ones.
 CREATE TABLE node_instances (
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     node_id TEXT NOT NULL,
@@ -103,11 +83,7 @@ CREATE TABLE node_instances (
     PRIMARY KEY (session_id, node_id)
 );
 
--- One row per layer of a node instance's nested effect/task chain, ordered
--- by position (outermost-first, matching contract.LayerState's own
--- recorded order). No shared polymorphic layer table: node and task
--- instances have different parent keys, and a shared table would need a
--- nullable discriminated FK pair instead of one real foreign key.
+-- One row per layer of a node instance's nested effect chain, ordered by position.
 CREATE TABLE node_instance_layers (
     session_id TEXT NOT NULL,
     node_id TEXT NOT NULL,
@@ -128,11 +104,7 @@ CREATE TABLE node_instance_layers (
     FOREIGN KEY (session_id, node_id) REFERENCES node_instances(session_id, node_id) ON DELETE CASCADE
 );
 
--- id is a ULID minted once at first setup and preserved across an ordinary
--- update; only a cleanup followed by a new setup mints a fresh one (see
--- docs/design/sqlite-persistence.md). named replaces a would-be duplicated
--- identity string: a `--name` is always either empty or exactly
--- instance_name.
+-- id is preserved across an update; only a cleanup+setup mints a fresh one.
 CREATE TABLE task_instances (
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -158,9 +130,7 @@ CREATE TABLE task_instances (
 
 CREATE UNIQUE INDEX task_instances_session_id_instance_name ON task_instances(session_id, instance_name);
 
--- See node_instance_layers; task instances key their own layer rows by
--- task_instances.id rather than (session_id, node_id) since a dynamic
--- instance has no node_id of its own.
+-- See node_instance_layers; keyed by task_instances.id.
 CREATE TABLE task_instance_layers (
     task_instance_id TEXT NOT NULL REFERENCES task_instances(id) ON DELETE CASCADE,
     position INTEGER NOT NULL,
@@ -191,9 +161,7 @@ CREATE TABLE task_done_when_states (
     escalate_reason TEXT
 );
 
--- Ordered list, replacing task_done_when_states.last_unsatisfied_json: each
--- heartbeat evaluation replaces the whole list (delete + insert in the same
--- write transaction) rather than diffing it.
+-- Ordered list; each heartbeat evaluation replaces it wholesale rather than diffing.
 CREATE TABLE task_done_when_unsatisfied_items (
     task_instance_id TEXT NOT NULL REFERENCES task_instances(id) ON DELETE CASCADE,
     position INTEGER NOT NULL,
@@ -229,13 +197,8 @@ CREATE TABLE populations (
     PRIMARY KEY (workflow, name)
 );
 
--- session_name is a recorded fact, not an enforced foreign key to
--- sessions(id): a poll or appearance can accept a member and record the
--- session name it intends to create before that session's own row exists
--- (ApplyPoll/ApplyAppearance run independently of session creation, and
--- mint no id of their own) — unlike sessions.population_workflow/name
--- above, there is no point at which an id could be known here, so this
--- column deliberately keeps naming a session rather than one.
+-- session_name is a recorded fact, not a foreign key: a poll/appearance can
+-- accept a member and record its intended session name before that session's own row exists.
 CREATE TABLE population_members (
     workflow TEXT NOT NULL,
     name TEXT NOT NULL,
@@ -254,9 +217,7 @@ CREATE TABLE population_members (
     FOREIGN KEY (workflow, name) REFERENCES populations(workflow, name) ON DELETE CASCADE
 );
 
--- Ordered list, replacing population_members.last_blockers_json; see
--- task_done_when_unsatisfied_items for the same replace-the-list write
--- pattern.
+-- Ordered list; same replace-wholesale pattern as task_done_when_unsatisfied_items.
 CREATE TABLE population_member_blockers (
     workflow TEXT NOT NULL,
     name TEXT NOT NULL,
@@ -267,9 +228,7 @@ CREATE TABLE population_member_blockers (
     FOREIGN KEY (workflow, name, resource_id) REFERENCES population_members(workflow, name, resource_id) ON DELETE CASCADE
 );
 
--- Two independent failure streaks of one shape (validation and delivery
--- run on separate schedules); no row when a kind has no open streak. See
--- docs/design/sqlite-persistence.md.
+-- Two independent failure streaks (validation, delivery); no row when open.
 CREATE TABLE session_channel_health (
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     kind TEXT NOT NULL CHECK (kind IN ('validation', 'delivery')),
@@ -298,9 +257,7 @@ CREATE TABLE up_reservations (
     CHECK ((parent_session_name IS NOT NULL) != (virtual_root = 1))
 );
 
--- events/event_cursors key off sessions(id) directly: the retired
--- event_streams table (PR #463) folds into sessions, since a row now is
--- one incarnation. See docs/design/sqlite-persistence.md.
+-- events/event_cursors key off sessions(id) directly: a row now is one incarnation.
 CREATE TABLE events (
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL REFERENCES sessions(id),
@@ -316,15 +273,10 @@ CREATE TABLE events (
 
 CREATE UNIQUE INDEX events_session_id_sequence ON events(session_id, sequence);
 CREATE INDEX events_session_id_id_idx ON events(session_id, id);
--- Backs the status-message reader's "latest event of this type for this
--- session" lookup (ORDER BY sequence DESC LIMIT 1) without a per-session
--- table scan.
+-- Backs the status-message reader's latest-event-of-this-type lookup.
 CREATE INDEX events_session_id_type_sequence_idx ON events(session_id, type, sequence);
 
--- delivery/tick are at-least-once commitments; heartbeat is a resettable
--- mark (the reactor's own quiet-tick-backoff read position, replacing
--- TickBackoff.LastLogPosition — see sessions.tick_consecutive_unchanged);
--- next_sequence is exclusive and 0 is valid (unconsumed).
+-- heartbeat is the reactor's resettable quiet-backoff position; next_sequence is exclusive.
 CREATE TABLE event_cursors (
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     kind TEXT NOT NULL CHECK (kind IN ('delivery', 'tick', 'heartbeat')),

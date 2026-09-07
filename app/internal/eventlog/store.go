@@ -120,13 +120,9 @@ func (s *Store) lockPath(session string) string { return filepath.Join(s.session
 
 // Append writes ev to its session's log and returns the stored event (with
 // ID and Time filled in if absent), its sequence (the replay cursor), and
-// next. A session with no live row (never created, or a notice about a
-// resource whose admission never went through) gets a minimal placeholder
-// row started here, so a name that never went through `plect create` can
-// still be published to (e.g. a cross-session event.publish notice) —
-// mirroring the retired event_streams table's own independence from
-// sessions, now folded into a lazily-started session row instead of an
-// independent stream row.
+// next. A session with no live row gets a minimal placeholder row started
+// here, so a name that never went through `plect create` can still be
+// published to (e.g. a cross-session event.publish notice).
 func (s *Store) Append(ev event.Event) (stored event.Event, seq, next int64, err error) {
 	if ev.SessionName == "" {
 		return ev, 0, 0, fmt.Errorf("eventlog: session_name is required")

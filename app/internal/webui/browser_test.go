@@ -20,6 +20,7 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/service"
 	"github.com/kecbigmt/plecture/app/internal/state"
 	"github.com/kecbigmt/plecture/contracts/event"
+	contract "github.com/kecbigmt/plecture/contracts/state"
 	"github.com/mxschmitt/playwright-go"
 )
 
@@ -72,7 +73,13 @@ func TestBrowserAcceptance_LoginNavigatesHierarchyAndShowsHistory(t *testing.T) 
 		Name:          "browser-child",
 		ParentSession: "browser-root",
 		ResourceID:    "https://github.com/browser-accept/issues/2",
-		Branch:        "issue/2",
+		Tasks: map[string]*contract.TaskState{
+			contract.WorkflowPseudoNodeID: {
+				Scope:   contract.TaskScopeSession,
+				Status:  contract.TaskStatusProduced,
+				Outputs: map[string]any{"branch": "issue/2"},
+			},
+		},
 	})
 
 	origin, svc := browserOrigin(t, store, &Config{AuthToken: "s3cr3t-token"})

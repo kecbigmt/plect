@@ -19,14 +19,8 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// LatestStatusMessage returns a session's current self-reported status
-// line, or nil if it has none. Session.Message is not a stored field: the
-// fact lives in the session's plect.status_message event stream, so this
-// derives it from the most recent such event (none, or one that cleared
-// the message, both read as nil). A read error also reads as nil, matching
-// this package's other best-effort display projections (e.g.
-// sessionHealthState): a status line is not worth failing plect ls/status
-// over.
+// LatestStatusMessage derives a session's status line from its most recent
+// plect.status_message event, or nil if none (or a read error).
 func LatestStatusMessage(store *state.Store, sessionName string) *domain.Message {
 	ev, ok, err := eventlog.NewStore(store.Dir()).LatestByType(sessionName, event.TypeStatusMessage)
 	if err != nil || !ok {
@@ -341,7 +335,7 @@ func List(cfg *config.Config, store *state.Store) ([]ListEntry, error) {
 
 	entries := make([]ListEntry, 0, len(sessions))
 	for _, s := range sessions {
-		entries = append(entries, buildListEntry(cfg, displayWorkflows, displayTasks, s, sessions))
+		entries = append(entries, buildListEntry(cfg, store, displayWorkflows, displayTasks, s, sessions))
 	}
 
 	// store.All ranges a map, so sort by name to make List deterministic —
@@ -353,7 +347,7 @@ func List(cfg *config.Config, store *state.Store) ([]ListEntry, error) {
 	return entries, nil
 }
 
-func buildListEntry(cfg *config.Config, displayWorkflows map[string]config.WorkflowFile, displayTasks taskDeclarations, s *domain.Session, sessions map[string]*domain.Session) ListEntry {
+func buildListEntry(cfg *config.Config, store *state.Store, displayWorkflows map[string]config.WorkflowFile, displayTasks taskDeclarations, s *domain.Session, sessions map[string]*domain.Session) ListEntry {
 	var cached cachedInfo
 	applyDisplay(displayWorkflows, s, &cached)
 
@@ -504,13 +498,8 @@ func workflowDisplayOutputs(s *domain.Session) map[string]any {
 	return out
 }
 
-// SetMessage updates the session's self-reported status line. An empty text
-// clears it (a later reader sees none) rather than persisting a blank,
-// since a blank line would look identical to "never set" in display. The
-// fact is not a stored Session field: it lives entirely in the session's
-// plect.status_message event stream, so change detection reads that
-// stream's latest event rather than an in-memory value, and a no-op update
-// appends nothing.
+// SetMessage updates the session's status line, appending nothing when
+// text is unchanged from the latest plect.status_message event.
 func SetMessage(cfg *config.Config, store *state.Store, identifier string, text string) error {
 	sessionName, _, err := resolveSession(cfg, store, identifier)
 	if err != nil {

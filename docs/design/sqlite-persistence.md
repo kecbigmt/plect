@@ -248,6 +248,20 @@ rows by default). History reads (an event read, or a listing that opts into
 rows and their events is a separate, later concern this design does not
 address.
 
+`parent_session_id`/`root_session_id` are resolved against the referenced
+session's live row once — normally at the child's own creation, but a
+session created with no parent yet may still adopt one on a later write,
+since nothing has been resolved to fix in place — and never re-resolved
+after that. A write to a session whose parent columns are already set
+passes them through unchanged regardless of what its in-memory
+`ParentSession` (a name) says, so a parent later destroyed and recreated
+under the same name (a distinct `id`) never retargets an existing child
+onto the new incarnation just because the child itself is written again.
+`contracts/state.Session` carries the resolved `ParentSessionID`/
+`RootSessionID` alongside `ParentSession`, which is a read-side projection
+of them onto the referenced row's current name (with a `root:` prefix for
+`RootSessionID`) — not itself the identity a write resolves against.
+
 ## Status message
 
 `Session.Message` is not a stored field: the fact lives entirely in the

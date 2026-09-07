@@ -46,9 +46,6 @@ scope = "run"
 // wait on the production 500ms poll interval.
 func newTestReactor(t *testing.T, tc config.TickConfig) (*sessionReactor, *state.Store, *eventlog.Store) {
 	t.Helper()
-	// state.Store and eventlog.Store share one directory (and so one
-	// database): a session Put below must be visible to log's own reads,
-	// since a session row now is one incarnation.
 	dir := t.TempDir()
 	log := eventlog.NewStore(dir)
 	hub := sessionhub.NewRegistry(log, sessionhub.WithPollInterval(2*time.Millisecond))

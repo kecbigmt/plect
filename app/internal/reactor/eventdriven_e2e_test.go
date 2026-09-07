@@ -640,14 +640,18 @@ all = [
 	if err := st.Put(&domain.Session{
 		Name:          session,
 		ParentSession: parent,
-		// The session's own workspace branch: what a workspace provider's
-		// setup hook would have produced for a session created on this issue
-		// URL. Seeded directly (as the pre-existing sibling test seeds
-		// Tasks) since what this test pins is delivery once the branch
-		// exists, not how a workspace provider derives one — that path has
-		// its own coverage in app/internal/service.
-		Branch: branch,
 		Tasks: map[string]*contract.TaskState{
+			// The session's own workspace branch: what a workspace
+			// provider's setup hook would have produced for a session
+			// created on this issue URL. Seeded directly since what this
+			// test pins is delivery once the branch exists, not how a
+			// provider derives one — that path has its own coverage in
+			// app/internal/service.
+			contract.WorkflowPseudoNodeID: {
+				Scope:   contract.TaskScopeSession,
+				Status:  contract.TaskStatusProduced,
+				Outputs: map[string]any{"branch": branch},
+			},
 			"runtime": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced},
 		},
 	}); err != nil {

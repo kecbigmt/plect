@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/domain"
@@ -264,8 +265,13 @@ func TestEventPageRejectsCursorAcrossSessionDeleteAndRecreateUnderSameName(t *te
 	if err := store.Destroy(session); err != nil {
 		t.Fatalf("destroy: %v", err)
 	}
-	// EventPublish's own Append lazily mints the recreated incarnation (see
-	// eventlog.Store.Append); no separate stream-start call is needed.
+	// EnsureLiveSession's lazy-create is reserved for a name that has never
+	// gone through `plect create` at all; a destroyed name is recreated the
+	// same way a real one is (store.Put), not by publishing to it.
+	now := time.Now()
+	if err := store.Put(&domain.Session{Name: session, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("recreate: %v", err)
+	}
 	if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote}); err != nil {
 		t.Fatalf("publish after recreate: %v", err)
 	}

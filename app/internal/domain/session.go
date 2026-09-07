@@ -62,10 +62,10 @@ const (
 )
 
 // branchOutputKey is the workspace-provider output key a git-backed
-// workspace provider (e.g. the GitHub worktree provider) is conventioned to
-// publish its checked-out branch under. Core does not define or require
-// this key; SessionBranch is a convenience projection for the several call
-// sites that want it, not a core concept of its own.
+// workspace provider is conventioned to publish its checked-out branch
+// under. Core does not define or require this key; SessionBranch is a
+// convenience projection for the several call sites that want it, not a
+// core concept of its own.
 const branchOutputKey = "branch"
 
 // SessionBranch reads the @workflow pseudo-node's own "branch" output, or

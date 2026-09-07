@@ -161,6 +161,66 @@ func TestPutSession_ClearsAParentReferenceThatWouldCreateACycle(t *testing.T) {
 	}
 }
 
+// TestPutSession_ChildKeepsFirstParentIncarnationAcrossParentDestroyAndRecreate
+// is the regression the chain reviewer asked for: a child's parent link is
+// resolved once, against the referenced session's live row at that time,
+// and never re-resolved on a later write to the child — so destroying the
+// parent and recreating it under the same name (a distinct id) does not
+// retarget an existing child onto the new incarnation the next time the
+// child itself is written.
+func TestPutSession_ChildKeepsFirstParentIncarnationAcrossParentDestroyAndRecreate(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+	putBareSession(t, db, "p1", "")
+	putBareSession(t, db, "child", "p1")
+
+	before, err := db.GetSession(ctx, "child")
+	if err != nil {
+		t.Fatalf("GetSession (before): %v", err)
+	}
+	firstParentID := before.ParentSessionID
+	if firstParentID == "" {
+		t.Fatal("child.ParentSessionID is empty, want p1's first incarnation id")
+	}
+
+	if err := db.UpdateSession(ctx, "p1", func(s *domain.Session) error {
+		s.Status = contract.SessionStatusDestroyed
+		s.DestroyedAt = time.Now().UTC()
+		return nil
+	}); err != nil {
+		t.Fatalf("destroy p1: %v", err)
+	}
+	putBareSession(t, db, "p1", "") // recreate under the same name: a new id.
+	recreatedParent, err := db.GetSession(ctx, "p1")
+	if err != nil {
+		t.Fatalf("GetSession (recreated p1): %v", err)
+	}
+	if recreatedParent.ID == firstParentID {
+		t.Fatalf("recreated p1's id = %q, want distinct from the destroyed row's %q", recreatedParent.ID, firstParentID)
+	}
+
+	// Write the child again -- this is exactly the write the reviewed
+	// defect mis-resolved: it must leave the existing parent link alone
+	// rather than re-resolving "p1" against the new live row.
+	if err := db.UpdateSession(ctx, "child", func(s *domain.Session) error {
+		s.UpdatedAt = time.Now().UTC()
+		return nil
+	}); err != nil {
+		t.Fatalf("update child: %v", err)
+	}
+
+	after, err := db.GetSession(ctx, "child")
+	if err != nil {
+		t.Fatalf("GetSession (after): %v", err)
+	}
+	if after.ParentSessionID != firstParentID {
+		t.Fatalf("child.ParentSessionID = %q after a later write, want unchanged %q (p1's first incarnation)", after.ParentSessionID, firstParentID)
+	}
+	if after.ParentSession != "p1" {
+		t.Fatalf("child.ParentSession = %q, want %q (the destroyed first incarnation's own retained name)", after.ParentSession, "p1")
+	}
+}
+
 func TestUpdateSession_DestroyRetainsRowAndMintsFreshIDOnRecreate(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
@@ -614,7 +674,7 @@ func TestPutSessionAndGetSession_EveryFieldRoundTrips(t *testing.T) {
 			ConsecutiveFailures: 3,
 			FirstFailureAt:      earlier,
 			LastFailureAt:       now,
-			LastChannel:         "slack:#eng",
+			LastChannel:         "chat:#eng",
 			LastError:           "timeout",
 			EscalatedAt:         now,
 		},
@@ -688,7 +748,7 @@ func TestPutSessionAndGetSession_EveryFieldRoundTrips(t *testing.T) {
 	if got.ChannelValidationHealth == nil || got.ChannelValidationHealth.ConsecutiveFailures != 1 || got.ChannelValidationHealth.LastError != "no valid channel definition" {
 		t.Errorf("ChannelValidationHealth = %+v", got.ChannelValidationHealth)
 	}
-	if got.ChannelDeliveryHealth == nil || got.ChannelDeliveryHealth.ConsecutiveFailures != 3 || got.ChannelDeliveryHealth.LastChannel != "slack:#eng" ||
+	if got.ChannelDeliveryHealth == nil || got.ChannelDeliveryHealth.ConsecutiveFailures != 3 || got.ChannelDeliveryHealth.LastChannel != "chat:#eng" ||
 		got.ChannelDeliveryHealth.LastError != "timeout" || !got.ChannelDeliveryHealth.EscalatedAt.Equal(now) {
 		t.Errorf("ChannelDeliveryHealth = %+v", got.ChannelDeliveryHealth)
 	}
@@ -795,5 +855,82 @@ func TestPutSession_FreshSessionAndTaskLeaveEveryJSONColumnNull(t *testing.T) {
 	}
 	if taskInputsJSON.Valid || taskOutputsJSON.Valid || taskStateJSON.Valid {
 		t.Errorf("task_instances json columns = inputs:%v outputs:%v state:%v, want all NULL", taskInputsJSON, taskOutputsJSON, taskStateJSON)
+	}
+}
+
+func TestEnsureLiveSession_LazilyCreatesAGenuinelyNewName(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+
+	id, err := db.EnsureLiveSession(ctx, "never-created")
+	if err != nil {
+		t.Fatalf("EnsureLiveSession: %v", err)
+	}
+	if id == "" {
+		t.Fatal("EnsureLiveSession returned an empty id for a name with no prior row")
+	}
+	got, err := db.GetSession(ctx, "never-created")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if got == nil || got.ID != id {
+		t.Fatalf("GetSession = %+v, want the row EnsureLiveSession just minted (id %q)", got, id)
+	}
+}
+
+func TestEnsureLiveSession_ReturnsTheExistingIDForALiveName(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+	putBareSession(t, db, "s1", "")
+	before, err := db.GetSession(ctx, "s1")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+
+	id, err := db.EnsureLiveSession(ctx, "s1")
+	if err != nil {
+		t.Fatalf("EnsureLiveSession: %v", err)
+	}
+	if id != before.ID {
+		t.Fatalf("EnsureLiveSession id = %q, want the already-live row's own id %q", id, before.ID)
+	}
+}
+
+// TestEnsureLiveSession_RefusesToResurrectADestroyedName is the regression
+// for a real bug: an event appended to a session racing its own destroy
+// (e.g. a lifecycle observer's node-result recording, which runs during
+// TaskCleanup's own cleanup script) must not silently mint a fresh live row
+// under the destroyed name just because none is currently live. Only a
+// name with no row at all, ever, gets the lazy-create fallback.
+func TestEnsureLiveSession_RefusesToResurrectADestroyedName(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+	putBareSession(t, db, "s1", "")
+	before, err := db.GetSession(ctx, "s1")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if err := db.DestroySession(ctx, "s1", time.Now().UTC()); err != nil {
+		t.Fatalf("DestroySession: %v", err)
+	}
+
+	if _, err := db.EnsureLiveSession(ctx, "s1"); err == nil {
+		t.Fatal("EnsureLiveSession succeeded against a destroyed name, want an error")
+	}
+
+	got, err := db.GetSession(ctx, "s1")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("GetSession after EnsureLiveSession = %+v, want nil (still destroyed, not resurrected)", got)
+	}
+	// The original destroyed row itself is untouched.
+	var status string
+	if err := db.write.QueryRowContext(ctx, `SELECT status FROM sessions WHERE id = ?`, before.ID).Scan(&status); err != nil {
+		t.Fatalf("read original row: %v", err)
+	}
+	if status != contract.SessionStatusDestroyed {
+		t.Fatalf("original row status = %q, want %q", status, contract.SessionStatusDestroyed)
 	}
 }

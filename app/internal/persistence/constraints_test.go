@@ -10,9 +10,7 @@ import (
 )
 
 // seedBareSessionForTest inserts a minimal, live sessions row and returns
-// its id, so a node_instances/task_instances insert in the same test
-// satisfies its session_id foreign key and fails (or succeeds) only for
-// the reason the test is actually checking.
+// its id, satisfying a later insert's session_id foreign key.
 func seedBareSessionForTest(t *testing.T, db *DB, name string) string {
 	t.Helper()
 	q := sqlcgen.New(db.write)
@@ -146,9 +144,8 @@ func TestSchema_RejectsUpReservationsWithBothOrNeitherParentShape(t *testing.T) 
 }
 
 // TestSchema_RejectsTwoLiveSessionsWithSameName proves the partial unique
-// index (sessions_live_name) that replaces sessions.name's old plain
-// PRIMARY KEY uniqueness: two rows may share a name only if at most one of
-// them is live.
+// index sessions_live_name: two rows may share a name only if at most one
+// is live.
 func TestSchema_RejectsTwoLiveSessionsWithSameName(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()

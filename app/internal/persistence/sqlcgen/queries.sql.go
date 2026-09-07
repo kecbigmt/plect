@@ -100,11 +100,9 @@ func (q *Queries) DeleteTaskInstanceByName(ctx context.Context, arg DeleteTaskIn
 }
 
 const deleteTaskInstanceLayersByInstanceID = `-- name: DeleteTaskInstanceLayersByInstanceID :exec
-
 DELETE FROM task_instance_layers WHERE task_instance_id = ?
 `
 
-// Task instance layers
 func (q *Queries) DeleteTaskInstanceLayersByInstanceID(ctx context.Context, taskInstanceID string) error {
 	_, err := q.db.ExecContext(ctx, deleteTaskInstanceLayersByInstanceID, taskInstanceID)
 	return err
@@ -308,7 +306,6 @@ func (q *Queries) InsertNodeInstance(ctx context.Context, arg InsertNodeInstance
 }
 
 const insertNodeInstanceLayer = `-- name: InsertNodeInstanceLayer :exec
-
 INSERT INTO node_instance_layers (
     session_id, node_id, position, effect_id, status, inputs_json,
     locals_json, outputs_json, env_json, heartbeat_ticks,
@@ -334,7 +331,6 @@ type InsertNodeInstanceLayerParams struct {
 	Error                sql.NullString
 }
 
-// Node instance layers
 func (q *Queries) InsertNodeInstanceLayer(ctx context.Context, arg InsertNodeInstanceLayerParams) error {
 	_, err := q.db.ExecContext(ctx, insertNodeInstanceLayer,
 		arg.SessionID,
@@ -400,7 +396,6 @@ func (q *Queries) InsertPopulationMember(ctx context.Context, arg InsertPopulati
 }
 
 const insertPopulationMemberBlocker = `-- name: InsertPopulationMemberBlocker :exec
-
 INSERT INTO population_member_blockers (workflow, name, resource_id, position, reason)
 VALUES (?, ?, ?, ?, ?)
 `
@@ -413,7 +408,6 @@ type InsertPopulationMemberBlockerParams struct {
 	Reason     string
 }
 
-// Population member blockers
 func (q *Queries) InsertPopulationMemberBlocker(ctx context.Context, arg InsertPopulationMemberBlockerParams) error {
 	_, err := q.db.ExecContext(ctx, insertPopulationMemberBlocker,
 		arg.Workflow,
@@ -467,11 +461,6 @@ type InsertSessionParams struct {
 }
 
 // Sessions
-// InsertSession creates a genuinely new session row (no live row has this
-// name yet -- a fresh session, including a same-name create after a prior
-// destroy). The caller mints id itself; a name collision with another live
-// row fails the write (sessions_live_name), which cannot happen when the
-// caller has already confirmed no live row exists.
 func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) error {
 	_, err := q.db.ExecContext(ctx, insertSession,
 		arg.ID,
@@ -577,7 +566,6 @@ func (q *Queries) InsertTaskDoneWhenState(ctx context.Context, arg InsertTaskDon
 }
 
 const insertTaskDoneWhenUnsatisfiedItem = `-- name: InsertTaskDoneWhenUnsatisfiedItem :exec
-
 INSERT INTO task_done_when_unsatisfied_items (task_instance_id, position, item)
 VALUES (?, ?, ?)
 `
@@ -588,7 +576,6 @@ type InsertTaskDoneWhenUnsatisfiedItemParams struct {
 	Item           string
 }
 
-// Task done_when unsatisfied items
 func (q *Queries) InsertTaskDoneWhenUnsatisfiedItem(ctx context.Context, arg InsertTaskDoneWhenUnsatisfiedItemParams) error {
 	_, err := q.db.ExecContext(ctx, insertTaskDoneWhenUnsatisfiedItem, arg.TaskInstanceID, arg.Position, arg.Item)
 	return err
@@ -661,8 +648,7 @@ type LatestEventByTypeRow struct {
 	MetadataJson string
 }
 
-// LatestEventByType backs the status-message reader: the most recent event
-// of one type for one session incarnation, if any.
+// LatestEventByType backs the status-message reader.
 func (q *Queries) LatestEventByType(ctx context.Context, arg LatestEventByTypeParams) (LatestEventByTypeRow, error) {
 	row := q.db.QueryRowContext(ctx, latestEventByType, arg.SessionID, arg.Type)
 	var i LatestEventByTypeRow
@@ -739,7 +725,6 @@ const listEverSessionNames = `-- name: ListEverSessionNames :many
 SELECT DISTINCT name FROM sessions ORDER BY name
 `
 
-// Every name that has ever named a session, live or destroyed.
 func (q *Queries) ListEverSessionNames(ctx context.Context) ([]string, error) {
 	rows, err := q.db.QueryContext(ctx, listEverSessionNames)
 	if err != nil {
@@ -1140,8 +1125,6 @@ const listSessionIDsByName = `-- name: ListSessionIDsByName :many
 SELECT id FROM sessions WHERE name = ? ORDER BY created_at ASC
 `
 
-// Every incarnation (live or destroyed) that ever had this name, oldest
-// first, for walking forward through superseded incarnations.
 func (q *Queries) ListSessionIDsByName(ctx context.Context, name string) ([]string, error) {
 	rows, err := q.db.QueryContext(ctx, listSessionIDsByName, name)
 	if err != nil {
@@ -1428,23 +1411,6 @@ func (q *Queries) LiveSessionParentID(ctx context.Context, id string) (sql.NullS
 	return parent_session_id, err
 }
 
-const mostRecentSessionIDByName = `-- name: MostRecentSessionIDByName :one
-SELECT id FROM sessions WHERE name = ? ORDER BY created_at DESC LIMIT 1
-`
-
-// MostRecentSessionIDByName resolves a parent/root reference to id
-// regardless of live status: a name always names its live row while one
-// exists, but a parent/root reference set before that row was destroyed
-// must keep resolving to it (see docs/design/sqlite-persistence.md's
-// "Session identity and lifecycle") rather than reading as broken the
-// moment the referenced session is no longer live.
-func (q *Queries) MostRecentSessionIDByName(ctx context.Context, name string) (string, error) {
-	row := q.db.QueryRowContext(ctx, mostRecentSessionIDByName, name)
-	var id string
-	err := row.Scan(&id)
-	return id, err
-}
-
 const nextEventSequence = `-- name: NextEventSequence :one
 
 SELECT COALESCE(MAX(sequence), 0) + 1 FROM events WHERE session_id = ?
@@ -1458,14 +1424,21 @@ func (q *Queries) NextEventSequence(ctx context.Context, sessionID string) (int6
 	return column_1, err
 }
 
+const sessionEverExistedByName = `-- name: SessionEverExistedByName :one
+SELECT EXISTS(SELECT 1 FROM sessions WHERE name = ?)
+`
+
+func (q *Queries) SessionEverExistedByName(ctx context.Context, name string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, sessionEverExistedByName, name)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const sessionIDByLiveName = `-- name: SessionIDByLiveName :one
 SELECT id FROM sessions WHERE name = ? AND status <> 'destroyed'
 `
 
-// SessionIDByLiveName resolves a live row's id by name, the same
-// resolution UpsertSession's own conflict target applies, exposed as a
-// plain lookup for callers (parent/root linkage, event/cursor writes) that
-// need just the id.
 func (q *Queries) SessionIDByLiveName(ctx context.Context, name string) (string, error) {
 	row := q.db.QueryRowContext(ctx, sessionIDByLiveName, name)
 	var id string
@@ -1539,11 +1512,6 @@ type UpdateSessionByIDParams struct {
 	ID                       string
 }
 
-// UpdateSessionByID updates an existing row in place by its own id,
-// including the destroy transition itself (setting status = 'destroyed'
-// on that same row) -- never re-inserting id, which the sessions_live_name
-// partial index cannot arbitrate a conflict on (it indexes name, not id;
-// id already exists as this row's own primary key).
 func (q *Queries) UpdateSessionByID(ctx context.Context, arg UpdateSessionByIDParams) error {
 	_, err := q.db.ExecContext(ctx, updateSessionByID,
 		arg.Name,
@@ -1606,7 +1574,6 @@ func (q *Queries) UpsertPopulation(ctx context.Context, arg UpsertPopulationPara
 }
 
 const upsertSessionChannelHealth = `-- name: UpsertSessionChannelHealth :exec
-
 INSERT INTO session_channel_health (
     session_id, kind, consecutive_failures, first_failure_at,
     last_failure_at, last_channel, last_error, escalated_at
@@ -1631,7 +1598,6 @@ type UpsertSessionChannelHealthParams struct {
 	EscalatedAt         sql.NullString
 }
 
-// Session channel health
 func (q *Queries) UpsertSessionChannelHealth(ctx context.Context, arg UpsertSessionChannelHealthParams) error {
 	_, err := q.db.ExecContext(ctx, upsertSessionChannelHealth,
 		arg.SessionID,
@@ -1697,10 +1663,6 @@ type UpsertTaskInstanceParams struct {
 	FinalizedAt             sql.NullString
 }
 
-// UpsertTaskInstance preserves the existing id when (session_id,
-// instance_name) already has a row (an ordinary Put/Update of a live
-// instance) and keeps the freshly minted candidate id only when inserting
-// a genuinely new row; RETURNING id reports whichever one now applies.
 func (q *Queries) UpsertTaskInstance(ctx context.Context, arg UpsertTaskInstanceParams) (string, error) {
 	row := q.db.QueryRowContext(ctx, upsertTaskInstance,
 		arg.ID,

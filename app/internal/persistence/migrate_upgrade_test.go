@@ -113,12 +113,9 @@ func TestMigrate_DropsDeliveryModeColumnWithoutLosingExistingRows(t *testing.T) 
 // regression: Atlas's own generated Down for this drop referenced the
 // table's pre-rename temporary name, which no longer exists once Up
 // finishes, so stepping back would error rather than restore the column.
-// It stops one migration short of current (UpByOne past eventTablesVersion,
-// not all the way to current) because the record_json-dissolution
-// migration on top re-keys events by session_id, which this test's own
-// raw-SQL assertions predate; see
-// TestMigrate_DownRestoresPreDissolutionSchemaWithoutError for that newer
-// migration's own dedicated Down regression.
+// It stops one migration short of current: the record_json-dissolution
+// migration on top re-keys events by session_id, which this test's raw SQL
+// predates (see TestMigrate_DownRestoresPreDissolutionSchemaWithoutError).
 func TestMigrate_DownRestoresDeliveryModeColumnWithoutError(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
@@ -150,9 +147,7 @@ func TestMigrate_DownRestoresDeliveryModeColumnWithoutError(t *testing.T) {
 	if deliveryMode != "" {
 		t.Errorf("delivery_mode = %q, want the added column's default empty value for a row that predates Down", deliveryMode)
 	}
-	// Raw SQL, not assertEventRowIntact/ListEventsFrom: this database is one
-	// migration short of current, so the generated queries' session_id
-	// column does not exist here yet.
+	// Raw SQL: this database predates session_id, so the generated queries don't apply.
 	var gotType, gotSummary, gotBody string
 	if err := db.write.QueryRowContext(ctx, `SELECT type, summary, body FROM events WHERE id = ?`, "01EVENT0000000000000001").Scan(&gotType, &gotSummary, &gotBody); err != nil {
 		t.Fatalf("read restored event row: %v", err)
@@ -163,13 +158,10 @@ func TestMigrate_DownRestoresDeliveryModeColumnWithoutError(t *testing.T) {
 }
 
 // TestMigrate_DownRestoresPreDissolutionSchemaWithoutError proves the
-// record_json-dissolution/session-lifecycle migration's own hand-written
-// Down runs without error and leaves an identifiable event row reachable
-// under the restored pre-dissolution schema (event_streams/events.stream_id
-// TEXT, sessions.record_json). It does not assert the Down path is
-// lossless: see that migration's own header comment and
-// docs/migrations/record-json-dissolution-and-session-lifecycle-migration.md
-// for why full data reconstruction on the way back down is out of scope.
+// dissolution migration's Down runs without error and leaves an
+// identifiable event row reachable under the restored pre-dissolution
+// schema. It does not assert losslessness -- see that migration's own
+// header comment.
 func TestMigrate_DownRestoresPreDissolutionSchemaWithoutError(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()

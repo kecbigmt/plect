@@ -280,15 +280,11 @@ func indexPredicate(t *testing.T, ctx context.Context, handle *sql.DB, index str
 	return normalizeSQLFragment(createSQL.String[where+len("WHERE"):])
 }
 
-// maskStringLiterals masks string-literal content, and `--` line-comment
-// content, so callers can search for keywords and count parens without a
-// literal's own contents (which are free to contain "CHECK", "WHERE", or a
-// stray paren) or a comment's own prose (schema.sql's table bodies carry
-// why-not comments, and ordinary English apostrophes like "it's" would
-// otherwise be mistaken for a string literal's opening quote and desync
-// every string/comment boundary found afterward) being mistaken for
-// syntax; the result stays the same length, so an index found in it still
-// locates the same character in s.
+// maskStringLiterals masks string-literal content and `--` line-comment
+// content: an ordinary English apostrophe inside a why-not comment (e.g.
+// "it's") would otherwise be mistaken for a string literal's opening
+// quote, desyncing every boundary found afterward. The result stays the
+// same length, so an index found in it still locates the same character in s.
 func maskStringLiterals(s string) string {
 	b := []byte(s)
 	inString := false
@@ -777,11 +773,8 @@ func TestExtractChecks_DistinguishesLiteralCase(t *testing.T) {
 	}
 }
 
-// TestExtractChecks_IgnoresApostrophesInsideLineComments is the regression
-// for a table body carrying an ordinary English why-not comment: an
-// apostrophe there (e.g. "it's") must not be mistaken for a string
-// literal's opening quote, which would desync string/comment tracking for
-// every CHECK constraint declared after it.
+// TestExtractChecks_IgnoresApostrophesInsideLineComments guards against a
+// comment's apostrophe desyncing CHECK-constraint extraction after it.
 func TestExtractChecks_IgnoresApostrophesInsideLineComments(t *testing.T) {
 	const createTable = `CREATE TABLE t (
 		-- note is optional; it's never required. CHECK constraints follow.

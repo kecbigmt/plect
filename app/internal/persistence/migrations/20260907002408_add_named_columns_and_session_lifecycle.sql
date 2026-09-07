@@ -1,33 +1,20 @@
 -- +goose Up
--- Atlas's own generated diff for this rewrite naively copies old rows into
--- the new NOT NULL columns (id, status, session_id) with no value, which
--- fails outright against any database holding real rows -- this migration
--- is hand-written instead, following the same precedent as
--- drop_event_delivery_mode.sql. It reaches the identical structural end
--- state schema.sql declares (verified by TestSchemaSQL_MatchesMigrationHistory).
+-- Atlas's own generated diff naively copies old rows into the new NOT NULL
+-- columns (id, status, session_id) with no value, failing against any
+-- database holding real rows -- hand-written instead, following
+-- drop_event_delivery_mode.sql's precedent.
 --
--- Backfill strategy for a database with pre-existing rows: the retired
--- event_streams table already minted one id per session incarnation, so
--- every migrated sessions row reuses its corresponding event_streams.id as
--- its own id -- a pre-existing session's events stay linked with no re-key.
--- The row matching each session's current name becomes that live row
--- (status 'down'; existing relational columns carried over); every other,
--- superseded event_streams row for a name becomes a minimal 'destroyed'
--- row (workflow unknown, so it takes the empty string the domain already
--- reserves for "no frozen workflow"; destroyed_at approximated as that
--- incarnation's last event time, falling back to its stream's created_at).
--- A session that never logged an event gets a freshly minted placeholder
--- id instead. Every *_json/error/timestamp column this migration adds to
--- node_instances/task_instances/task_done_when_states/population_members
--- is left NULL for pre-existing rows rather than parsed out of the retired
--- record_json blob -- see docs/migrations/ for why an in-place backfill of
--- that data is out of scope here.
+-- Backfill: each migrated sessions row reuses its event_streams.id, so
+-- existing events stay linked with no re-key. Each name's current
+-- event_streams row becomes its live row (status 'down'); every
+-- superseded row becomes a minimal 'destroyed' one (workflow ''); a
+-- session that never logged an event gets a fresh id instead. Every new
+-- *_json/error/timestamp column is left NULL for pre-existing rows rather
+-- than parsed out of the retired record_json blob -- see docs/migrations/.
 PRAGMA foreign_keys = off;
 
 ALTER TABLE `sessions` RENAME TO `old_sessions`;
--- The rename carries the old table's own indexes along under their
--- original names; drop them before the new sessions table below recreates
--- both under the same names.
+-- The rename carries the old indexes along; drop before recreating them below.
 DROP INDEX `sessions_alias_idx`;
 DROP INDEX `sessions_parent_idx`;
 
@@ -84,11 +71,8 @@ SELECT
   o.population_workflow, o.population_name, o.created_at, o.updated_at
 FROM `old_sessions` o;
 
--- A name can carry event_streams rows with no old_sessions row at all
--- (event_streams deliberately had no foreign key to sessions): its latest
--- incarnation still becomes a live row here (minimal, workflow unknown so
--- it takes the empty string), so its events keep resolving by name exactly
--- as the old model's independent event_streams table let them.
+-- A name can carry event_streams rows with no old_sessions row at all;
+-- its latest incarnation still becomes a minimal live row here.
 INSERT INTO `sessions` (`id`, `name`, `status`, `workflow`, `created_at`, `updated_at`)
 SELECT
   (SELECT es.id FROM `event_streams` es WHERE es.session_name = names.session_name ORDER BY es.created_at DESC LIMIT 1),
@@ -115,10 +99,8 @@ SET `root_session_id` = (
 )
 WHERE EXISTS (SELECT 1 FROM `old_sessions` o WHERE o.name = `sessions`.name AND o.root_session_name IS NOT NULL);
 
--- Every event_streams row not already reused above is a superseded
--- (already-destroyed under the old model) incarnation with no surviving
--- rich session row; reconstruct a minimal destroyed placeholder so its
--- events keep a valid session_id to reference.
+-- Every remaining event_streams row is a superseded incarnation; reconstruct
+-- a minimal destroyed placeholder so its events keep a valid session_id.
 INSERT INTO `sessions` (`id`, `name`, `status`, `destroyed_at`, `workflow`, `created_at`, `updated_at`)
 SELECT
   es.id, es.session_name, 'destroyed',
@@ -201,12 +183,10 @@ DROP TABLE `event_streams`;
 PRAGMA foreign_keys = on;
 
 -- +goose Down
--- Best-effort structural rollback: a destroyed session row (impossible in
--- the old one-row-per-name schema) is dropped rather than preserved, and
--- record_json/last_unsatisfied_json/last_blockers_json are reconstructed
--- empty rather than repopulated from the columns this migration retires
--- them into -- restoring data losslessly across a forward-incompatible
--- schema flip is not the goal; not erroring on the way back down is.
+-- Best-effort structural rollback, not lossless: a destroyed session row
+-- (impossible in the old schema) is dropped, and record_json/
+-- last_unsatisfied_json/last_blockers_json are reconstructed empty rather
+-- than repopulated -- not erroring on the way back down is the goal.
 PRAGMA foreign_keys = off;
 
 CREATE TABLE `event_streams` (`id` text NULL, `session_name` text NOT NULL, `created_at` text NOT NULL, PRIMARY KEY (`id`));

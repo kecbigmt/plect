@@ -1,10 +1,5 @@
 -- Sessions
 
--- InsertSession creates a genuinely new session row (no live row has this
--- name yet -- a fresh session, including a same-name create after a prior
--- destroy). The caller mints id itself; a name collision with another live
--- row fails the write (sessions_live_name), which cannot happen when the
--- caller has already confirmed no live row exists.
 -- name: InsertSession :exec
 INSERT INTO sessions (
     id, name, status, destroyed_at, parent_session_id, root_session_id,
@@ -16,11 +11,6 @@ INSERT INTO sessions (
     created_at, updated_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
--- UpdateSessionByID updates an existing row in place by its own id,
--- including the destroy transition itself (setting status = 'destroyed'
--- on that same row) -- never re-inserting id, which the sessions_live_name
--- partial index cannot arbitrate a conflict on (it indexes name, not id;
--- id already exists as this row's own primary key).
 -- name: UpdateSessionByID :exec
 UPDATE sessions SET
     name = ?,
@@ -81,10 +71,6 @@ FROM sessions WHERE alias = ? AND status <> 'destroyed' ORDER BY name;
 -- name: ListLiveChildSessionNames :many
 SELECT name FROM sessions WHERE parent_session_id = ? AND status <> 'destroyed' ORDER BY name;
 
--- SessionIDByLiveName resolves a live row's id by name, the same
--- resolution UpsertSession's own conflict target applies, exposed as a
--- plain lookup for callers (parent/root linkage, event/cursor writes) that
--- need just the id.
 -- name: SessionIDByLiveName :one
 SELECT id FROM sessions WHERE name = ? AND status <> 'destroyed';
 
@@ -97,21 +83,12 @@ SELECT parent_session_id FROM sessions WHERE id = ?;
 -- name: CountLiveSessionsNamed :one
 SELECT COUNT(*) FROM sessions WHERE name = ? AND status <> 'destroyed';
 
--- Every incarnation (live or destroyed) that ever had this name, oldest
--- first, for walking forward through superseded incarnations.
 -- name: ListSessionIDsByName :many
 SELECT id FROM sessions WHERE name = ? ORDER BY created_at ASC;
 
--- MostRecentSessionIDByName resolves a parent/root reference to id
--- regardless of live status: a name always names its live row while one
--- exists, but a parent/root reference set before that row was destroyed
--- must keep resolving to it (see docs/design/sqlite-persistence.md's
--- "Session identity and lifecycle") rather than reading as broken the
--- moment the referenced session is no longer live.
--- name: MostRecentSessionIDByName :one
-SELECT id FROM sessions WHERE name = ? ORDER BY created_at DESC LIMIT 1;
+-- name: SessionEverExistedByName :one
+SELECT EXISTS(SELECT 1 FROM sessions WHERE name = ?);
 
--- Every name that has ever named a session, live or destroyed.
 -- name: ListEverSessionNames :many
 SELECT DISTINCT name FROM sessions ORDER BY name;
 
@@ -135,8 +112,6 @@ FROM node_instances WHERE session_id = ? ORDER BY node_id;
 -- name: DeleteNodeInstancesForSession :exec
 DELETE FROM node_instances WHERE session_id = ?;
 
--- Node instance layers
-
 -- name: InsertNodeInstanceLayer :exec
 INSERT INTO node_instance_layers (
     session_id, node_id, position, effect_id, status, inputs_json,
@@ -159,10 +134,6 @@ SELECT id, session_id, instance_name, task_id, scope, status, sequence,
        error, setup_at, failed_at, cleaned_at, finalized_at
 FROM task_instances WHERE session_id = ? ORDER BY instance_name;
 
--- UpsertTaskInstance preserves the existing id when (session_id,
--- instance_name) already has a row (an ordinary Put/Update of a live
--- instance) and keeps the freshly minted candidate id only when inserting
--- a genuinely new row; RETURNING id reports whichever one now applies.
 -- name: UpsertTaskInstance :one
 INSERT INTO task_instances (
     id, session_id, instance_name, task_id, scope, status, sequence,
@@ -192,8 +163,6 @@ RETURNING id;
 
 -- name: DeleteTaskInstanceByName :exec
 DELETE FROM task_instances WHERE session_id = ? AND instance_name = ?;
-
--- Task instance layers
 
 -- name: DeleteTaskInstanceLayersByInstanceID :exec
 DELETE FROM task_instance_layers WHERE task_instance_id = ?;
@@ -233,8 +202,6 @@ SELECT s.task_instance_id, s.heartbeat_ticks, s.heartbeat_escalations,
 FROM task_done_when_states s
 JOIN task_instances t ON t.id = s.task_instance_id
 WHERE t.session_id = ?;
-
--- Task done_when unsatisfied items
 
 -- name: InsertTaskDoneWhenUnsatisfiedItem :exec
 INSERT INTO task_done_when_unsatisfied_items (task_instance_id, position, item)
@@ -293,8 +260,6 @@ INSERT INTO population_members (
     decision_kind, decision_reason, item_json
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
--- Population member blockers
-
 -- name: InsertPopulationMemberBlocker :exec
 INSERT INTO population_member_blockers (workflow, name, resource_id, position, reason)
 VALUES (?, ?, ?, ?, ?);
@@ -304,8 +269,6 @@ SELECT b.workflow, b.name, b.resource_id, b.position, b.reason
 FROM population_member_blockers b
 WHERE b.workflow = ? AND b.name = ?
 ORDER BY b.resource_id, b.position;
-
--- Session channel health
 
 -- name: UpsertSessionChannelHealth :exec
 INSERT INTO session_channel_health (
@@ -359,8 +322,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 SELECT id, sequence, time, type, source, direction, summary, body, metadata_json
 FROM events WHERE session_id = ? AND sequence >= ? ORDER BY sequence;
 
--- LatestEventByType backs the status-message reader: the most recent event
--- of one type for one session incarnation, if any.
+-- LatestEventByType backs the status-message reader.
 -- name: LatestEventByType :one
 SELECT id, sequence, time, type, source, direction, summary, body, metadata_json
 FROM events WHERE session_id = ? AND type = ? ORDER BY sequence DESC LIMIT 1;

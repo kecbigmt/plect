@@ -55,16 +55,8 @@ func seedSession(t *testing.T, store interface {
 	if tasks == nil {
 		tasks = map[string]*contract.TaskState{}
 	}
-	// domain.SessionBranch reads "branch" off the @workflow pseudo-node's
-	// own outputs (Session.Branch was retired: a checked-out branch is git
-	// vocabulary, and core stays version-control-agnostic by identity). A
-	// caller whose tasks already include that node, with no branch output
-	// of its own, gets it stamped with "issue/1" as a default; seedSession
-	// never synthesizes the node itself, since Destroy treats its mere
-	// presence as "workflow setup ran, its own cleanup must run too" --
-	// callers not exercising that path (most of them) must not be given a
-	// fake one just to carry a branch value, and a caller that already set
-	// its own branch output keeps it.
+	// Never synthesize @workflow itself: Destroy treats its presence as
+	// "workflow setup ran, run its cleanup too."
 	if wf := tasks[contract.WorkflowPseudoNodeID]; wf != nil {
 		if wf.Outputs == nil {
 			wf.Outputs = map[string]any{}
@@ -1717,11 +1709,8 @@ func TestDestroy_FailsClosedWhenStoreUnreadable(t *testing.T) {
 	}
 }
 
-// TestDestroy_ForceKeepsChildrensParentLinkWithWarning covers the --force
-// path: the parent is destroyed as before, and the now-parentless-in-effect
-// child is called out in CleanupWarnings instead of vanishing silently, but
-// its ParentSession keeps naming the destroyed parent (destroy retains the
-// row rather than deleting it, so the lineage stays inspectable).
+// TestDestroy_ForceKeepsChildrensParentLinkWithWarning: --force warns about
+// the child but keeps its ParentSession naming the retained parent.
 func TestDestroy_ForceKeepsChildrensParentLinkWithWarning(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")

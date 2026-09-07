@@ -11,14 +11,7 @@ import (
 	"github.com/kecbigmt/plecture/contracts/event"
 )
 
-// AppendEvent inserts one fully-formed event (id, time, and every other
-// field already assigned by the caller) into its session's live row in one
-// write transaction. It returns the assigned sequence, a positive,
-// per-session append position; ev.ID remains the event's own global dedup
-// identity, unrelated to this number. A name with no live session (never
-// created, a typo, or a session already destroyed) is a caller error, not
-// silently started here — a session row is minted only by session
-// creation itself (see writeSessionTx), since a row now is one incarnation.
+// AppendEvent errors on a name with no live session rather than starting one.
 func (db *DB) AppendEvent(ctx context.Context, ev event.Event) (sequence int64, err error) {
 	err = db.WithImmediateTx(ctx, func(tx *sql.Tx) error {
 		q := sqlcgen.New(tx)
@@ -57,11 +50,7 @@ func (db *DB) AppendEvent(ctx context.Context, ev event.Event) (sequence int64, 
 	return sequence, err
 }
 
-// EventStreamID returns session's live row's id, or "" if it has none (never
-// created, or already destroyed). event.Cursor's v2 stream_id is this
-// value: a session create mints a new id, so a cursor issued for a
-// since-destroyed and recreated incarnation fails validation against the
-// current one.
+// EventStreamID is session's live row id, event.Cursor's v2 stream_id.
 func (db *DB) EventStreamID(ctx context.Context, session string) (string, error) {
 	var id string
 	err := db.WithReadTx(ctx, func(tx *sql.Tx) error {
@@ -78,8 +67,6 @@ func (db *DB) EventStreamID(ctx context.Context, session string) (string, error)
 	return id, err
 }
 
-// EventStreamSessions returns the names of every session that has ever
-// existed, live or destroyed, sorted for deterministic iteration.
 func (db *DB) EventStreamSessions(ctx context.Context) ([]string, error) {
 	var names []string
 	err := db.WithReadTx(ctx, func(tx *sql.Tx) error {
@@ -93,10 +80,6 @@ func (db *DB) EventStreamSessions(ctx context.Context) ([]string, error) {
 	return names, err
 }
 
-// EventStreamIDsBySession returns every incarnation's id for a name, oldest
-// first (live or destroyed), so a caller draining a superseded incarnation
-// can find the very next one even when more than one rotation happened
-// since it last read.
 func (db *DB) EventStreamIDsBySession(ctx context.Context, session string) ([]string, error) {
 	var ids []string
 	err := db.WithReadTx(ctx, func(tx *sql.Tx) error {
@@ -110,19 +93,14 @@ func (db *DB) EventStreamIDsBySession(ctx context.Context, session string) ([]st
 	return ids, err
 }
 
-// ListEventsFrom returns every event of session's live incarnation at or
-// after sequence `since` (inclusive), in ascending sequence order, alongside
-// each event's own sequence (parallel slices, index-aligned). A session
-// with no live row returns empty, not an error: a read has nothing to
-// reject a missing session against, unlike an append or a cursor commit.
+// ListEventsFrom returns session's events at or after `since`, ascending,
+// with their sequences (parallel slices). No live row returns empty.
 func (db *DB) ListEventsFrom(ctx context.Context, session string, since int64) ([]event.Event, []int64, error) {
 	evs, seqs, _, err := db.listCurrentEventsFrom(ctx, session, since)
 	return evs, seqs, err
 }
 
-// ListCurrentEventsFrom is ListEventsFrom's counterpart that also returns the
-// current incarnation's id, resolved atomically with the rows in the same
-// read transaction rather than a separate, racing id-then-List.
+// ListCurrentEventsFrom is ListEventsFrom plus the resolved incarnation id.
 func (db *DB) ListCurrentEventsFrom(ctx context.Context, session string, since int64) (evs []event.Event, seqs []int64, sessionID string, err error) {
 	return db.listCurrentEventsFrom(ctx, session, since)
 }
@@ -158,10 +136,7 @@ func (db *DB) listCurrentEventsFrom(ctx context.Context, session string, since i
 	return evs, seqs, sessionID, err
 }
 
-// ListEventsFromStreamID returns every event of the given session id at or
-// after sequence `since`, bypassing name resolution — the only way to reach
-// a superseded incarnation's rows once a recreate has a newer one live.
-// session names the returned events, since events itself does not.
+// ListEventsFromStreamID bypasses name resolution to reach a superseded incarnation.
 func (db *DB) ListEventsFromStreamID(ctx context.Context, sessionID, session string, since int64) ([]event.Event, []int64, error) {
 	var evs []event.Event
 	var seqs []int64
@@ -199,9 +174,6 @@ func (db *DB) ListEventsFromStreamID(ctx context.Context, sessionID, session str
 	return evs, seqs, nil
 }
 
-// EventStreamSessionName returns the session name that owns sessionID, or ""
-// if no session has that id — for validating a resume token before ever
-// trusting it, independent of reading that incarnation's rows.
 func (db *DB) EventStreamSessionName(ctx context.Context, sessionID string) (string, error) {
 	var owner string
 	err := db.WithReadTx(ctx, func(tx *sql.Tx) error {
@@ -212,8 +184,6 @@ func (db *DB) EventStreamSessionName(ctx context.Context, sessionID string) (str
 	return owner, err
 }
 
-// eventStreamSessionName is EventStreamSessionName's transaction-scoped
-// primitive, shared with ListEventsFromStreamID's own ownership check.
 func eventStreamSessionName(ctx context.Context, q *sqlcgen.Queries, sessionID string) (string, error) {
 	owner, err := q.SessionNameByID(ctx, sessionID)
 	if err != nil {
@@ -225,10 +195,7 @@ func eventStreamSessionName(ctx context.Context, q *sqlcgen.Queries, sessionID s
 	return owner, nil
 }
 
-// HasEventCursor reports whether a consumer has ever committed an offset
-// for session's live incarnation, distinguishing "never started" from a
-// committed position of 0. A session with no live row reports false, not
-// an error, matching the "never started" case it cannot distinguish from.
+// HasEventCursor distinguishes "never committed" from a committed 0.
 func (db *DB) HasEventCursor(ctx context.Context, session, cursorName string) (bool, error) {
 	var has bool
 	err := db.WithReadTx(ctx, func(tx *sql.Tx) error {
@@ -253,9 +220,6 @@ func (db *DB) HasEventCursor(ctx context.Context, session, cursorName string) (b
 	return has, err
 }
 
-// EventCursor returns cursorName's committed next-sequence position for
-// session's live incarnation (0 if never committed, including when the
-// session has no live row).
 func (db *DB) EventCursor(ctx context.Context, session, cursorName string) (int64, error) {
 	var pos int64
 	err := db.WithReadTx(ctx, func(tx *sql.Tx) error {
@@ -283,10 +247,7 @@ func (db *DB) EventCursor(ctx context.Context, session, cursorName string) (int6
 	return pos, err
 }
 
-// SetEventCursor durably records cursorName's next-sequence position for
-// session's live incarnation (a cursor may be seeded before that
-// incarnation's first event, but the session row itself must already
-// exist — created at session creation, same as for AppendEvent).
+// SetEventCursor requires session's row to already exist, same as AppendEvent.
 func (db *DB) SetEventCursor(ctx context.Context, session, cursorName string, next int64) error {
 	return db.WithImmediateTx(ctx, func(tx *sql.Tx) error {
 		q := sqlcgen.New(tx)
@@ -305,9 +266,6 @@ func (db *DB) SetEventCursor(ctx context.Context, session, cursorName string, ne
 	})
 }
 
-// LatestSessionEventByType returns the most recent event of eventType for
-// session's live incarnation, and whether one exists — the status-message
-// reader's primitive (see events_session_id_type_sequence_idx).
 func (db *DB) LatestSessionEventByType(ctx context.Context, session, eventType string) (ev event.Event, ok bool, err error) {
 	err = db.WithReadTx(ctx, func(tx *sql.Tx) error {
 		q := sqlcgen.New(tx)
@@ -336,11 +294,7 @@ func (db *DB) LatestSessionEventByType(ctx context.Context, session, eventType s
 	return ev, ok, err
 }
 
-// currentSessionID resolves session's live row's id for a write that
-// requires one to exist already (an append, or a cursor commit): unlike a
-// read, it has nothing else to fall back to, so a missing session is an
-// error naming it, not a silent mint — session creation is the only place
-// that starts a new incarnation.
+// currentSessionID errors on a missing session rather than silently minting one.
 func currentSessionID(ctx context.Context, q *sqlcgen.Queries, session string) (string, error) {
 	id, err := q.SessionIDByLiveName(ctx, session)
 	if err != nil {
@@ -377,9 +331,7 @@ func unmarshalEventMetadata(s string) (map[string]string, error) {
 	return m, nil
 }
 
-// eventFromRow decodes an events row into a domain event.Event. session is
-// supplied by the caller (already resolved to find the row's incarnation)
-// rather than read from a column, since events no longer carries it.
+// eventFromRow's session is caller-supplied: events no longer carries it.
 func eventFromRow(row sqlcgen.ListEventsFromBySessionRow, session string) (event.Event, error) {
 	t, err := parseTime(row.Time)
 	if err != nil {

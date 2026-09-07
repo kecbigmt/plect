@@ -10,11 +10,7 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// createSessionForTest mints a fresh, live session row (a genuinely new
-// incarnation, since no live row exists yet for name) and returns it — the
-// event-log tests' replacement for the retired CreateEventStream: a
-// session row now is one incarnation, so starting one means creating a
-// session.
+// createSessionForTest mints a fresh, live session row.
 func createSessionForTest(t *testing.T, db *DB, name string) {
 	t.Helper()
 	now := time.Now().UTC()
@@ -23,10 +19,7 @@ func createSessionForTest(t *testing.T, db *DB, name string) {
 	}
 }
 
-// destroyAndRecreateSessionForTest transitions name's live row to destroyed
-// and then creates a fresh one under the same name, mirroring `plect
-// destroy` followed by `plect up`/`plect create` — the only way a session
-// name gets a second, distinct incarnation.
+// destroyAndRecreateSessionForTest mints name's second, distinct incarnation.
 func destroyAndRecreateSessionForTest(t *testing.T, db *DB, name string) {
 	t.Helper()
 	ctx := context.Background()
@@ -255,15 +248,10 @@ func TestEventStreamID_DestroyAndRecreateMintsANewCurrentIncarnation(t *testing.
 }
 
 // TestEventCursor_DestroyAndRecreateResetsNameBasedReaderWithoutLoss proves
-// the clause a per-incarnation session_id makes possible: a reader that
-// only ever addresses a session by name (ReadCursor/ListEventsFrom, exactly
-// how the reactor and dispatch consumers work) picks up the new
-// incarnation's events from its own beginning rather than skipping past
-// them. event_cursors and events both key off session_id, and a new
-// incarnation mints a new id with no cursor row of its own yet, so a
-// cursor left at the old incarnation's last-read sequence can never be
-// misread as "already past" the new incarnation's low sequence numbers —
-// there is no shared sequence space for it to be stale against.
+// a name-based reader (ReadCursor/ListEventsFrom) picks up a recreated
+// incarnation's events from its own beginning: event_cursors keys off
+// session_id, so the new incarnation's fresh id has no cursor row to be
+// misread as "already past" its own low sequence numbers.
 func TestEventCursor_DestroyAndRecreateResetsNameBasedReaderWithoutLoss(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()

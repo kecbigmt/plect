@@ -18,10 +18,8 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// newSessionForTest mints a fresh, live session row for session (a
-// genuinely new incarnation, since no live row exists yet) and returns its
-// id -- the eventlog tests' replacement for the retired NewStream: a
-// session row now is one incarnation.
+// newSessionForTest mints a fresh, live session row for session and
+// returns its id.
 func newSessionForTest(t *testing.T, s *Store, session string) string {
 	t.Helper()
 	db, err := s.dbHandle()
@@ -41,9 +39,7 @@ func newSessionForTest(t *testing.T, s *Store, session string) string {
 }
 
 // destroyAndRecreateForTest transitions session's live row to destroyed and
-// creates a fresh one under the same name, mirroring `plect destroy`
-// followed by `plect up`/`plect create` -- the only way a session name gets
-// a second, distinct incarnation.
+// creates a fresh one under the same name, a second distinct incarnation.
 func destroyAndRecreateForTest(t *testing.T, s *Store, session string) string {
 	t.Helper()
 	db, err := s.dbHandle()

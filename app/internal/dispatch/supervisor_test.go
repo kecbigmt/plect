@@ -537,9 +537,6 @@ include     = ["plect.instruction"]
 	// a freshly-resolved Config on its next periodic refresh.
 	currentCfg := &config.Config{}
 
-	// state.Store and eventlog.Store share one directory (and so one
-	// database): a session Put below must be visible to log's own reads,
-	// since a session row now is one incarnation.
 	dir := t.TempDir()
 	stateStore := state.NewStore(dir)
 	sock, recv := startFakeSocket(t)
