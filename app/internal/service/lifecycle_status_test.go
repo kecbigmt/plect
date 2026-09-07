@@ -118,8 +118,6 @@ func TestDown_SetsStatusDown(t *testing.T) {
 	if _, err := Up(cfg, store, UpParams{Identifier: sessionName}); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
-	// Precondition, independent of this test's own subject: Down must
-	// transition a genuinely up session, not one that never left down.
 	if s := store.Get(sessionName); s.Status != contract.SessionStatusUp {
 		t.Fatalf("precondition: Status after Up = %q, want %q", s.Status, contract.SessionStatusUp)
 	}
@@ -132,8 +130,6 @@ func TestDown_SetsStatusDown(t *testing.T) {
 	}
 }
 
-// The fixture workflow declares no workspace provider, so force-recreate's
-// own rebuild fails at provider setup every time.
 func TestUp_FailedForceRecreateFromUpSessionSetsStatusDown(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -160,7 +156,6 @@ func TestUp_FailedForceRecreateFromUpSessionSetsStatusDown(t *testing.T) {
 	}
 }
 
-// The broken sibling task declaration fails plan construction specifically.
 func TestDown_PlanConstructionFailureSetsStatusDown(t *testing.T) {
 	store := testStore(t)
 	sessionName := "work-24"
@@ -182,7 +177,7 @@ func TestDown_PlanConstructionFailureSetsStatusDown(t *testing.T) {
 	}
 
 	if _, err := Down(cfg, store, DownParams{Identifier: sessionName}); err == nil {
-		t.Fatal("Down: want an error when teardown-list construction fails")
+		t.Fatal("Down: want an error when plan construction fails")
 	}
 	if s := store.Get(sessionName); s.Status != contract.SessionStatusDown {
 		t.Fatalf("Status after failed Down = %q, want %q", s.Status, contract.SessionStatusDown)
