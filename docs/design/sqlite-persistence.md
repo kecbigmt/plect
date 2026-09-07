@@ -3,9 +3,11 @@
 This design implements [the SQLite durable-storage decision](../adr/2026-09-06-sqlite-durable-storage.md).
 
 Core runtime persistence is one SQLite database at
-`$XDG_DATA_HOME/plect/storage.db`. The `app/internal/persistence` package owns
-opening it, schema checks, the access gate, migrations, and translation between
-database records and domain values. It opens every connection with WAL mode, a
+`<data home>/storage.db`, where `<data home>` is the directory
+`app/internal/datahome.Resolve` returns (see "Data-home resolution" below).
+The `app/internal/persistence` package owns opening the database, schema
+checks, the access gate, migrations, and translation between database
+records and domain values. It opens every connection with WAL mode, a
 non-zero bounded busy timeout, and foreign-key enforcement. Production opens
 the file database; tests use a distinct temporary database file per test so
 WAL, locking, and multiple connections exercise the production configuration.
@@ -15,6 +17,51 @@ is the historical transition authority, and the goose ledger in the same
 database is the sole authority for applied versions. sqlc query results stay
 inside the persistence package; service, Web, MCP, and command packages use
 domain values rather than generated database types.
+
+## Data-home resolution
+
+`app/internal/datahome.Resolve` returns the data directory the database and
+the durable event log both live under: `$PLECT_DATA_HOME` if set, else
+`$XDG_DATA_HOME/plect` if set, else `~/.local/share/plect`. A `--data-home`
+flag on every `plect` command sets `$PLECT_DATA_HOME` for that invocation the
+same way `--config-home` sets `$PLECT_CONFIG_HOME` (see
+`app/commands/root.go`). `PLECT_DATA_HOME` names the data directory itself —
+unlike `XDG_DATA_HOME`, which is a shared root and so still needs the
+`/plect` namespace segment — because the variable already names plect's own
+directory and has no sibling to be namespaced against.
+
+`app/internal/state.NewStore`, `app/internal/eventlog.NewStore`,
+`app/internal/persistence.DefaultPath`, `plect storage import --data-home`'s
+default, and `plect-web` all resolve through this same function, so they
+never disagree about where the store lives.
+
+`datahome.InheritableEnv` returns the current process's environment with
+`PLECT_DATA_HOME` removed (`XDG_DATA_HOME` is deliberately left alone; see
+below). Every child process a declaration starts — a task's setup/cleanup
+action (`app/internal/effect`), a resource observer's poll/subscribe query
+(`app/internal/population`), a channel delivery (`app/internal/channel`),
+and a plugin service (`app/internal/pluginservice`) — builds its
+environment from this base rather than from the raw process environment,
+appending any binding the declaration itself supplies afterward (which
+wins, since a later occurrence of a duplicate key overrides an earlier
+one). This is what keeps a `PLECT_DATA_HOME` relocation from leaking into a
+long-lived child a task's setup starts (a tmux pane's shell, in
+particular): a development build invoked inside that pane resolves the
+default data directory rather than silently reusing whatever data home the
+parent `plect` process was pointed at. Process fan-out that intentionally
+shares the parent's own store (`plect serve` spawning a `plect mcp serve`
+per connection) does not go through this base — sharing the store is the
+point there.
+
+`XDG_DATA_HOME` is not stripped from this base: it is a general-purpose XDG
+variable, and existing declarations already depend on a child inheriting it
+for their own on-disk state unrelated to plect's own store — the shipped
+`github-watcher` service and its observer queries locate their subscription
+registry this way. Stripping it too would need those declarations to gain
+an explicit rebinding mechanism first (today only `PLECT_DATA_HOME` is
+plect-specific enough to strip unconditionally); until then, a wrapper that
+still relocates via `XDG_DATA_HOME` rather than `PLECT_DATA_HOME` keeps
+leaking into these children the same way it always has.
 
 ## Version authority and consumers
 
@@ -472,7 +519,7 @@ true for, because the release pipeline never stamped it — additionally
 refuses to advance a database it did not create: a ledger already holding an
 applied migration (schema version greater than zero) behind the embedded
 migration set. The refusal names both schema versions and points at
-`XDG_DATA_HOME` (isolate onto a scratch database) and
+`PLECT_DATA_HOME` (isolate onto a scratch database) and
 `plect storage migrate --allow-dev-build` (migrate this one deliberately) as
 the two ways to proceed, and makes no change, the same as the newer-than-
 supported refusal above. A database at schema zero carries none of that risk

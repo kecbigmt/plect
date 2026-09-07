@@ -19,6 +19,7 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
+	"github.com/kecbigmt/plecture/app/internal/datahome"
 	"github.com/kecbigmt/plecture/app/internal/persistence"
 	"github.com/kecbigmt/plecture/contracts/atomicfile"
 	"github.com/kecbigmt/plecture/contracts/event"
@@ -46,16 +47,11 @@ func (s *Store) Root() string { return s.root }
 // NewIncarnation) derives it from here rather than tracking it separately.
 func (s *Store) Dir() string { return s.dir }
 
-// NewStore creates a Store. If dir is empty it defaults to ~/.local/share/plect
-// (honoring XDG_DATA_HOME), matching state.NewStore so both live side by side.
+// NewStore creates a Store. If dir is empty it defaults to datahome.Resolve(),
+// matching state.NewStore so both live side by side.
 func NewStore(dir string) *Store {
 	if dir == "" {
-		dataHome := os.Getenv("XDG_DATA_HOME")
-		if dataHome == "" {
-			home, _ := os.UserHomeDir()
-			dataHome = filepath.Join(home, ".local", "share")
-		}
-		dir = filepath.Join(dataHome, "plect")
+		dir = datahome.Resolve()
 	}
 	return &Store{dir: dir, root: filepath.Join(dir, "events"), logger: slog.Default()}
 }

@@ -5,12 +5,14 @@ import (
 	"os"
 
 	"github.com/kecbigmt/plecture/app/internal/confighome"
+	"github.com/kecbigmt/plecture/app/internal/datahome"
 	"github.com/kecbigmt/plecture/app/internal/persistence"
 	"github.com/kecbigmt/plecture/app/internal/state"
 	"github.com/spf13/cobra"
 )
 
 var configHomeFlag string
+var dataHomeFlag string
 
 var rootCmd = &cobra.Command{
 	Use:   "plect",
@@ -39,6 +41,11 @@ identifier no resolver matches selects a workflow explicitly (see
 		if configHomeFlag != "" {
 			if err := os.Setenv(confighome.EnvVar, configHomeFlag); err != nil {
 				return fmt.Errorf("set %s from --config-home: %w", confighome.EnvVar, err)
+			}
+		}
+		if dataHomeFlag != "" {
+			if err := os.Setenv(datahome.EnvVar, dataHomeFlag); err != nil {
+				return fmt.Errorf("set %s from --data-home: %w", datahome.EnvVar, err)
 			}
 		}
 		if cmd == storageMigrateCmd {
@@ -75,6 +82,12 @@ func init() {
 			"plect.lock, tasks/, workflows/, ...); else $"+confighome.EnvVar+
 			", else $"+confighome.XDGEnvVar+"/plect, else ~/.config/plect. "+
 			"Runtime state and the plugin cache always resolve from the XDG data/cache dirs, unaffected by this.")
+	rootCmd.PersistentFlags().StringVar(&dataHomeFlag, "data-home", "",
+		"Override the runtime data directory (storage.db, the durable event log); else $"+datahome.EnvVar+
+			", else $"+datahome.XDGEnvVar+"/plect, else ~/.local/share/plect. "+
+			"Unlike $"+datahome.XDGEnvVar+", this process never passes $"+datahome.EnvVar+
+			" on to a child it starts (a tmux pane, a task's setup script, a plugin service, "+
+			"a channel command), so a build one of those starts resolves the default data directory.")
 }
 
 func Execute() error {

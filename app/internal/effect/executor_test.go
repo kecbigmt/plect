@@ -3,6 +3,7 @@ package effect
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/kecbigmt/plecture/app/internal/lang"
@@ -73,6 +74,47 @@ func TestExecutor_RequestForKeepsEachFormsInvocationShape(t *testing.T) {
 				t.Errorf("requestFor = %+v, want %+v", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestExecutor_HostExecutorStripsPlectDataHomeUnlessEnvRebindsIt is this
+// change's regression test: before it, hostExecutor.Run left cmd.Env nil
+// whenever ExecRequest.Env was empty, so the child inherited this process's
+// PLECT_DATA_HOME verbatim — the exact inheritance hole issue #503 closes
+// for a task's setup script (a tmux pane's `tmux new-session`, in
+// particular). XDG_DATA_HOME is deliberately left alone: existing
+// declarations (a resource observer, a plugin service) already rely on a
+// child inheriting it for their own unrelated on-disk state — see
+// datahome.InheritableEnv's doc comment.
+func TestExecutor_HostExecutorStripsPlectDataHomeUnlessEnvRebindsIt(t *testing.T) {
+	t.Setenv("PLECT_DATA_HOME", "/poisoned")
+	t.Setenv("XDG_DATA_HOME", "/still-inherited")
+	t.Setenv("UNRELATED_VAR", "kept")
+
+	var exec Executor = hostExecutor{}
+	stdout, _, err := exec.Run(context.Background(), ExecRequest{Argv: []string{"env"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	got := string(stdout)
+	if strings.Contains(got, "PLECT_DATA_HOME=") {
+		t.Fatalf("child env leaked PLECT_DATA_HOME:\n%s", got)
+	}
+	if !strings.Contains(got, "XDG_DATA_HOME=/still-inherited") {
+		t.Fatalf("child env dropped XDG_DATA_HOME, want it still inherited:\n%s", got)
+	}
+	if !strings.Contains(got, "UNRELATED_VAR=kept") {
+		t.Fatalf("child env dropped an unrelated variable:\n%s", got)
+	}
+
+	// A layer's own explicit binding (effect nesting's [id.inner.env]) must
+	// still win over the strip.
+	stdout, _, err = exec.Run(context.Background(), ExecRequest{Argv: []string{"env"}, Env: []string{"PLECT_DATA_HOME=/explicit"}})
+	if err != nil {
+		t.Fatalf("Run with explicit Env: %v", err)
+	}
+	if !strings.Contains(string(stdout), "PLECT_DATA_HOME=/explicit") {
+		t.Fatalf("an explicit Env binding did not survive the strip:\n%s", stdout)
 	}
 }
 

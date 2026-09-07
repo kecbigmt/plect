@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kecbigmt/plecture/app/internal/datahome"
 	"github.com/kecbigmt/plecture/app/internal/lang"
 )
 
@@ -33,8 +34,9 @@ const CancelWaitDelay = 2 * time.Second
 
 // ExecRequest is a single host-process invocation: Argv[0] is the command,
 // Dir is the working directory (applied only if it exists, see hostExecutor),
-// and Stdin/Env are optional: nil means "none" and "inherit the process
-// env".
+// Stdin is optional (nil means "none"), and Env is additions on top of the
+// process's own environment stripped of datahome.EnvVar (see
+// hostExecutor.Run) — nil means no additions.
 type ExecRequest struct {
 	Argv  []string
 	Dir   string
@@ -67,9 +69,14 @@ func (hostExecutor) Run(ctx context.Context, req ExecRequest) (stdout, stderr []
 	if len(req.Stdin) > 0 {
 		cmd.Stdin = bytes.NewReader(req.Stdin)
 	}
-	if len(req.Env) > 0 {
-		cmd.Env = append(os.Environ(), req.Env...)
-	}
+	// A PLECT_DATA_HOME relocation active in this process (see the datahome
+	// package) must never leak into a task's setup/cleanup process or the
+	// long-lived thing it starts (a tmux pane's shell, in particular): that
+	// child may itself invoke a development build of plect, which must
+	// resolve the default data directory, not the one this process was
+	// pointed at. req.Env is appended after, so a layer's own explicit
+	// binding for that name still wins.
+	cmd.Env = append(datahome.InheritableEnv(), req.Env...)
 	// Put the child in its own process group and, on cancellation, kill the
 	// whole group rather than just the direct child. A shell script's own
 	// children (e.g. "sleep 5" spawned by "bash -c") don't die with their

@@ -64,7 +64,7 @@ var storageImportCmd = &cobra.Command{
 --from, builds and validates a temporary SQLite database, and — unless
 --dry-run — atomically promotes it to storage.db and writes the legacy
 rejection marker over state.json in the target data directory, defaulting to
-$XDG_DATA_HOME/plect.
+$PLECT_DATA_HOME, else $XDG_DATA_HOME/plect.
 
 Every writer against --from must already be stopped, and --from should be a
 backup copy, not the live data directory: this command validates that no
@@ -89,8 +89,8 @@ docs/migrations/ for the full cutover procedure.`,
 }
 
 // defaultDataHome is the directory persistence.DefaultPath's storage.db
-// lives in ($XDG_DATA_HOME/plect), derived rather than duplicated so the two
-// never disagree about XDG resolution.
+// lives in, derived rather than duplicated so the two never disagree about
+// data-home resolution.
 func defaultDataHome() string {
 	return filepath.Dir(persistence.DefaultPath())
 }
@@ -101,7 +101,7 @@ func init() {
 	storageCmd.AddCommand(storageMigrateCmd)
 
 	storageImportCmd.Flags().StringVar(&storageImportFrom, "from", "", "Legacy data directory to import (a stopped-writer backup, not the live directory)")
-	storageImportCmd.Flags().StringVar(&storageImportDataHome, "data-home", "", "Target plect data directory (default: $XDG_DATA_HOME/plect)")
+	storageImportCmd.Flags().StringVar(&storageImportDataHome, "data-home", "", "Target plect data directory (default: $PLECT_DATA_HOME, else $XDG_DATA_HOME/plect)")
 	storageImportCmd.Flags().BoolVar(&storageImportDryRun, "dry-run", false, "Validate and report without promoting a database or writing the rejection marker")
 	_ = storageImportCmd.MarkFlagRequired("from")
 	storageCmd.AddCommand(storageImportCmd)

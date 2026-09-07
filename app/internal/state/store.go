@@ -10,10 +10,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"time"
 
+	"github.com/kecbigmt/plecture/app/internal/datahome"
 	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/persistence"
 )
@@ -40,16 +39,11 @@ type Store struct {
 }
 
 // NewStore creates a Store using the given directory to hold the database.
-// If dir is empty, defaults to ~/.local/share/plect. The database is not
+// If dir is empty, defaults to datahome.Resolve(). The database is not
 // opened until the first call that needs it.
 func NewStore(dir string) *Store {
 	if dir == "" {
-		dataHome := os.Getenv("XDG_DATA_HOME")
-		if dataHome == "" {
-			home, _ := os.UserHomeDir()
-			dataHome = filepath.Join(home, ".local", "share")
-		}
-		dir = filepath.Join(dataHome, "plect")
+		dir = datahome.Resolve()
 	}
 	return &Store{dir: dir}
 }
