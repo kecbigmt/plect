@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/kecbigmt/plecture/app/internal/plugins"
+	"github.com/kecbigmt/plecture/app/internal/testpath"
 )
 
 func catalogTestPaths(t *testing.T) PluginPaths {
@@ -23,7 +24,7 @@ func catalogTestPaths(t *testing.T) PluginPaths {
 
 func writeCatalogSource(t *testing.T, plugins map[string]string) string {
 	t.Helper()
-	dir := t.TempDir()
+	dir := testpath.Real(t, t.TempDir())
 	var names []string
 	for name := range plugins {
 		names = append(names, name)

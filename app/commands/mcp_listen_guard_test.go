@@ -16,6 +16,7 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/confighome"
 	"github.com/kecbigmt/plecture/app/internal/mcpserver"
 	"github.com/kecbigmt/plecture/app/internal/service"
+	"github.com/kecbigmt/plecture/app/internal/sockettest"
 )
 
 // helperProcessEnv is the sentinel that makes this test binary double as the
@@ -132,7 +133,7 @@ func TestMCPListen_ScopesSessionGuardToOwnSession(t *testing.T) {
 		t.Fatalf("os.Executable: %v", err)
 	}
 
-	socketPath := filepath.Join(t.TempDir(), "listen.sock")
+	socketPath := filepath.Join(sockettest.Dir(t), "listen.sock")
 	guard, err := service.SessionGuardForOwnSession("ownerA/session-a")
 	if err != nil {
 		t.Fatalf("SessionGuardForOwnSession: %v", err)

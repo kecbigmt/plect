@@ -18,6 +18,7 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/eventlog"
 	"github.com/kecbigmt/plecture/app/internal/sessionhub"
+	"github.com/kecbigmt/plecture/app/internal/sockettest"
 	"github.com/kecbigmt/plecture/app/internal/state"
 	protocol "github.com/kecbigmt/plecture/contracts/channel-protocol"
 	"github.com/kecbigmt/plecture/contracts/event"
@@ -26,7 +27,7 @@ import (
 
 func startFakeChannelSocket(t *testing.T) (string, <-chan protocol.MessagePayload) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "c.sock")
+	path := filepath.Join(sockettest.Dir(t), "c.sock")
 	ln, err := net.Listen("unix", path)
 	if err != nil {
 		t.Fatal(err)

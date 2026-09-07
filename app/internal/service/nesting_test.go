@@ -166,7 +166,7 @@ func TestCapture_NestedTerminalRendersAgainstTheDeclaringLayer(t *testing.T) {
 	cfg := nestedConfig(t,
 		taskFixture{
 			attach:   "true",
-			capture:  `echo -n "endpoint {{.Self.interactive_endpoint}} pid {{.Self.pid}}"`,
+			capture:  `printf '%s' "endpoint {{.Self.interactive_endpoint}} pid {{.Self.pid}}"`,
 			sendText: "true",
 			sendKeys: "true",
 		},

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/kecbigmt/plecture/app/internal/confighome"
+	"github.com/kecbigmt/plecture/app/internal/testpath"
 )
 
 func TestDefaultConfig(t *testing.T) {
@@ -195,7 +196,7 @@ func TestLoad_LegacyWorkdirsRootWarns(t *testing.T) {
 }
 
 func TestLoad_PopulatesBaseDir(t *testing.T) {
-	tmpHome := t.TempDir()
+	tmpHome := testpath.Real(t, t.TempDir())
 	t.Setenv("HOME", tmpHome)
 	configDir := filepath.Join(tmpHome, ".config", "plect")
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
@@ -229,7 +230,7 @@ func TestLoad_ReadsFromConfigHomeEnvVarInsteadOfRealHome(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	overrideDir := t.TempDir()
+	overrideDir := testpath.Real(t, t.TempDir())
 	if err := os.WriteFile(filepath.Join(overrideDir, "config.toml"), []byte("schema_version = 2\nworkspace_dirs_root = \"/override-workspace-dirs\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}

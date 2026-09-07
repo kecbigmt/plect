@@ -51,7 +51,11 @@ var mcpListenCmd = &cobra.Command{
 			}
 			guard = g
 			if socketPath == "" {
-				socketPath = defaultSessionMcpListenSocket(mcpListenSession)
+				path, err := resolveSessionSocket(mcpListenSession, fallbackRuntimeSocketRoot())
+				if err != nil {
+					return err
+				}
+				socketPath = path
 			}
 		}
 		if socketPath == "" {
@@ -84,16 +88,67 @@ var mcpListenCmd = &cobra.Command{
 	},
 }
 
-// defaultSessionMcpListenSocket derives a per-session socket path under
-// $XDG_RUNTIME_DIR. sessionName often contains "/" (e.g. "team/project"),
-// which filepath.Join turns into nested directories rather than a flat
-// filename.
-func defaultSessionMcpListenSocket(sessionName string) string {
-	rt := os.Getenv("XDG_RUNTIME_DIR")
-	if rt == "" {
-		rt = os.TempDir()
+// resolveSessionSocket bundles the fallback decision with hardening its root.
+func resolveSessionSocket(sessionName, fallbackRoot string) (string, error) {
+	path, needsPrivateRoot := defaultSessionMcpListenSocket(sessionName, fallbackRoot)
+	if needsPrivateRoot {
+		if err := ensurePrivateFallbackRoot(fallbackRoot); err != nil {
+			return "", err
+		}
 	}
-	return filepath.Join(rt, "plect-mcp", sessionName+".sock")
+	return path, nil
+}
+
+// defaultSessionMcpListenSocket derives a per-session socket path under
+// $XDG_RUNTIME_DIR, falling back to fallbackRoot instead of the too-long
+// os.TempDir(); needsPrivateRoot reports that case.
+func defaultSessionMcpListenSocket(sessionName, fallbackRoot string) (path string, needsPrivateRoot bool) {
+	if rt := os.Getenv("XDG_RUNTIME_DIR"); rt != "" {
+		return filepath.Join(rt, "plect-mcp", sessionName+".sock"), false
+	}
+	return filepath.Join(fallbackRoot, sessionName+".sock"), true
+}
+
+// fallbackRuntimeSocketRoot embeds the current uid; a bare shared path has no OS-enforced privacy guarantee.
+func fallbackRuntimeSocketRoot() string {
+	return fmt.Sprintf("/tmp/plect-mcp-%d", os.Getuid())
+}
+
+// ensurePrivateFallbackRoot creates root 0700, or verifies a pre-existing
+// one is owned by the caller with no group/other permission bits.
+func ensurePrivateFallbackRoot(root string) error {
+	if err := os.Mkdir(root, 0o700); err == nil || !os.IsExist(err) {
+		if err != nil {
+			return fmt.Errorf("create private socket directory %s: %w", root, err)
+		}
+		return nil
+	}
+	info, err := os.Lstat(root)
+	if err != nil {
+		return fmt.Errorf("stat private socket directory %s: %w", root, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("private socket directory %s is a symlink, refusing to use it", root)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s exists and is not a directory", root)
+	}
+	if info.Mode().Perm() != 0o700 {
+		return fmt.Errorf("private socket directory %s has permissions %o, want 0700", root, info.Mode().Perm())
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("private socket directory %s: cannot verify its owner on this platform", root)
+	}
+	return checkPrivateDirOwner(root, stat.Uid)
+}
+
+// checkPrivateDirOwner is split out for testability: chown needs privileges a test lacks.
+func checkPrivateDirOwner(root string, ownerUID uint32) error {
+	if ownerUID != uint32(os.Getuid()) {
+		return fmt.Errorf("private socket directory %s is owned by uid %d, not the current user", root, ownerUID)
+	}
+	return nil
 }
 
 func init() {
