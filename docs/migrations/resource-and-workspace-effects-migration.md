@@ -90,13 +90,14 @@ external allocation is gone.
 
 1. Inspect the retained execution record, its cleanup information, and failure
    reason.
-2. Release the residual allocation through its external owner.
+2. Release the residual allocation through its external owner, following the
+   retained plan's release order.
 3. Use the implementation's explicit operator-confirmation operation to record
    that assertion for that execution, including who confirmed it, what was
    released, when, and its audit event. This is not a successful cleanup and
    does not release any other allocation.
 4. Retry ordinary `up` after every applicable retained obligation is resolved;
-   it reconstructs under the retained release order.
+   it reconstructs in the latest desired workflow's setup dependency order.
 
 `--force-recreate` never substitutes for confirmation, and recovery never
 runs cleanup in another directory.

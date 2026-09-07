@@ -91,10 +91,11 @@ an explicit operator-confirmation operation may record that release as the
 operator's assertion, distinct from successful cleanup. It records the
 execution identity, who made the assertion, what was released, when, and an
 audit event. Confirmation resolves only that allocation's obligation; it never
-releases another execution. Once every applicable retained obligation is
-explicitly resolved, ordinary `up` reconstructs using the latest desired
-workflow while respecting retained release order. `--force-recreate` does not
-acknowledge an obligation implicitly. A missing directory does not prove that a
+releases another execution. Old allocations are released in the retained plan's
+release order. Once every applicable retained obligation is explicitly resolved,
+ordinary `up` reconstructs in the latest desired workflow's setup dependency
+order. `--force-recreate` does not acknowledge an obligation implicitly.
+A missing directory does not prove that a
 process or external allocation is gone. No recovery action runs cleanup in a
 substitute directory.
 

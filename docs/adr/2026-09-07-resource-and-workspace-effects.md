@@ -76,10 +76,11 @@ recovery required while the record, cleanup information, and failure reason
 remain inspectable. After external release, an explicit operator-confirmation
 operation records the operator's assertion rather than a successful cleanup,
 with the execution identity, who, what, when, and an audit event. It resolves
-only that allocation's obligation. After all applicable obligations are
-explicitly resolved, ordinary `up` reconstructs under the latest desired
-workflow in retained release order. `--force-recreate` does not acknowledge an
-obligation implicitly. A missing directory does not prove that a process or
+only that allocation's obligation. Old allocations are released in the retained
+plan's release order. After all applicable obligations are explicitly resolved,
+ordinary `up` reconstructs in the latest desired workflow's setup dependency
+order. `--force-recreate` does not acknowledge an obligation implicitly.
+A missing directory does not prove that a process or
 external allocation is gone. Recovery never falls back to the invocation
 directory or another node's directory. There are no per-node or per-action cwd
 overrides.
