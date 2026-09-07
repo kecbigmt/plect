@@ -1,6 +1,8 @@
 package commands
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -15,18 +17,17 @@ func TestDefaultSessionMcpListenSocket(t *testing.T) {
 		}
 	})
 
-	// /tmp, not os.TempDir(): on the darwin release runner, $TMPDIR is a long
-	// per-process path (/var/folders/<hash>/<hash>/T), and a session name of
-	// realistic length ("<org>/<repo>-<issue>+<workflow>") pushes the joined
-	// socket path past the 104-byte sun_path limit, failing net.Listen with
-	// "bind: invalid argument". /tmp keeps the fallback short regardless of
-	// session name length, matching the convention the shipped claude
-	// runtime effect's own socket path already uses
-	// (${XDG_RUNTIME_DIR:-/tmp}/claude-channel).
-	t.Run("falls back to /tmp without XDG_RUNTIME_DIR", func(t *testing.T) {
+	// A short, uid-scoped /tmp root, not os.TempDir(): on the darwin release
+	// runner, $TMPDIR is a long per-process path (/var/folders/<hash>/<hash>/T),
+	// and a session name of realistic length ("<org>/<repo>-<issue>+<workflow>")
+	// pushes the joined socket path past the 104-byte sun_path limit, failing
+	// net.Listen with "bind: invalid argument". uid-scoping (rather than a
+	// single shared "/tmp/plect-mcp") also keeps the path from being a
+	// predictable location another local user could pre-create.
+	t.Run("falls back to a private per-uid /tmp root without XDG_RUNTIME_DIR", func(t *testing.T) {
 		t.Setenv("XDG_RUNTIME_DIR", "")
 		got := defaultSessionMcpListenSocket("owner/session")
-		want := filepath.Join("/tmp", "plect-mcp", "owner/session.sock")
+		want := filepath.Join(fmt.Sprintf("/tmp/plect-mcp-%d", os.Getuid()), "owner/session.sock")
 		if got != want {
 			t.Errorf("got %q, want %q", got, want)
 		}
