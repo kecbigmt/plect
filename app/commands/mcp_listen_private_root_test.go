@@ -71,11 +71,6 @@ func TestCheckPrivateDirOwner_RejectsMismatchedOwner(t *testing.T) {
 	}
 }
 
-// resolveSessionSocket bundles the fallback decision with hardening its
-// root; these two tests are written so that deleting the hardening call
-// (rather than just its condition) fails them, closing the "the decision
-// and its enforcement can drift apart" gap a caller re-deriving
-// $XDG_RUNTIME_DIR on its own would reopen.
 func TestResolveSessionSocket_FallbackHardensRootBeforeReturning(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", "")
 	root := filepath.Join(t.TempDir(), "plect-mcp-test")
@@ -111,7 +106,9 @@ func TestResolveSessionSocket_FallbackPropagatesHardeningFailure(t *testing.T) {
 
 func TestResolveSessionSocket_UnderXDGRuntimeDirSkipsHardening(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", "/run/user/1000")
-	got, err := resolveSessionSocket("owner/session", "/should/not/be/touched")
+	unusedRoot := filepath.Join(t.TempDir(), "plect-mcp-test")
+
+	got, err := resolveSessionSocket("owner/session", unusedRoot)
 	if err != nil {
 		t.Fatalf("resolveSessionSocket: %v", err)
 	}
@@ -119,7 +116,7 @@ func TestResolveSessionSocket_UnderXDGRuntimeDirSkipsHardening(t *testing.T) {
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
-	if _, statErr := os.Stat("/should/not/be/touched"); statErr == nil {
+	if _, statErr := os.Stat(unusedRoot); statErr == nil {
 		t.Error("the unused fallback root should not have been created")
 	}
 }
