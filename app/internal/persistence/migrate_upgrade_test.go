@@ -158,14 +158,9 @@ func TestMigrate_DownRestoresDeliveryModeColumnWithoutError(t *testing.T) {
 	}
 }
 
-// TestMigrate_DownRestoresPreDissolutionSchemaWithoutError proves the
-// dissolution migration's Down runs without error and leaves an
-// identifiable event row reachable under the restored pre-dissolution
-// schema. It does not assert losslessness -- see that migration's own
-// header comment. It steps down three times: once for the
-// resource-forward-cursor-kind migration now on top, once for the
-// node-execution-identity migration under it, then once for the dissolution
-// migration itself.
+// TestMigrate_DownRestoresPreDissolutionSchemaWithoutError proves Down
+// leaves an identifiable event row reachable (not lossless -- see the
+// migration's own header).
 func TestMigrate_DownRestoresPreDissolutionSchemaWithoutError(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
@@ -288,11 +283,7 @@ func TestMigrate_AddNodeExecutionIdentityPreservesExistingNodeRows(t *testing.T)
 	}
 }
 
-// Best-effort, not lossless -- see the migration's own Down comment. Steps
-// down twice: once for the resource-forward-cursor-kind migration now on
-// top (it touches only event_cursors, so this step leaves node_instances
-// untouched), then once for the node-execution-identity migration whose
-// Down this test actually exercises.
+// Best-effort, not lossless -- see the migration's own Down comment.
 func TestMigrate_DownRestoresNodeInstancesColumnsWithoutError(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
@@ -324,5 +315,55 @@ func TestMigrate_DownRestoresNodeInstancesColumnsWithoutError(t *testing.T) {
 	}
 	if taskID != "work" || scope != contract.TaskScopeSession || status != contract.TaskStatusProduced || outputsJSON != `{"b":2}` {
 		t.Fatalf("restored node = (%q,%q,%q,%q), want the seeded values intact", taskID, scope, status, outputsJSON)
+	}
+}
+
+// TestMigrate_DownDropsResourceForwardCursorRowsWithoutError: Down's
+// restored CHECK rejects kind='resourceforward', so copying every row
+// verbatim would error instead of restoring.
+func TestMigrate_DownDropsResourceForwardCursorRowsWithoutError(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	if err := db.PutSession(ctx, &domain.Session{Name: "s6", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+	var sessionID string
+	if err := db.write.QueryRowContext(ctx, `SELECT id FROM sessions WHERE name = ?`, "s6").Scan(&sessionID); err != nil {
+		t.Fatalf("resolve session id: %v", err)
+	}
+	if _, err := db.write.ExecContext(ctx,
+		`INSERT INTO event_cursors (session_id, kind, next_sequence) VALUES (?, 'resourceforward', 1), (?, 'tick', 2)`,
+		sessionID, sessionID,
+	); err != nil {
+		t.Fatalf("seed event_cursors rows: %v", err)
+	}
+
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db.write, db.migrations)
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+	if _, err := provider.Down(ctx); err != nil {
+		t.Fatalf("Down (resource-forward-cursor-kind): %v", err)
+	}
+
+	var kindCount int
+	if err := db.write.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM event_cursors WHERE session_id = ? AND kind = 'resourceforward'`, sessionID,
+	).Scan(&kindCount); err != nil {
+		t.Fatalf("check resourceforward rows: %v", err)
+	}
+	if kindCount != 0 {
+		t.Fatalf("resourceforward cursor rows survived Down = %d, want 0 (dropped, not erroring)", kindCount)
+	}
+	var tickSeq int
+	if err := db.write.QueryRowContext(ctx,
+		`SELECT next_sequence FROM event_cursors WHERE session_id = ? AND kind = 'tick'`, sessionID,
+	).Scan(&tickSeq); err != nil {
+		t.Fatalf("read restored tick cursor: %v", err)
+	}
+	if tickSeq != 2 {
+		t.Fatalf("tick cursor next_sequence = %d, want 2 (unrelated rows preserved)", tickSeq)
 	}
 }

@@ -37,7 +37,7 @@ func newTestForwarder(t *testing.T) (*sessionForwarder, *state.Store, *eventlog.
 	return f, st, log
 }
 
-// startForwarder starts f.run and blocks until its cursor is seeded, so
+// startForwarder starts f.run and blocks until its first drain has run, so
 // callers need no fixed sleep despite SQLite's variable first-touch cost —
 // mirroring startReactor.
 func startForwarder(t *testing.T, f *sessionForwarder) func() {
@@ -45,19 +45,22 @@ func startForwarder(t *testing.T, f *sessionForwarder) func() {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { f.run(ctx); close(done) }()
-	waitForForwardCursorSeed(t, f.log, f.session)
+	waitForFirstDrain(t, f.log, f.session)
 	return func() {
 		cancel()
 		<-done
 	}
 }
 
-func waitForForwardCursorSeed(t *testing.T, log *eventlog.Store, session string) {
+// waitForFirstDrain polls for forwardConsumer's cursor to exist: drain
+// commits it every pass (even unchanged), so its presence means the
+// forwarder's first drain has completed.
+func waitForFirstDrain(t *testing.T, log *eventlog.Store, session string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for !log.HasCursor(session, forwardConsumer) {
 		if time.Now().After(deadline) {
-			t.Fatal("forwarder never seeded its cursor")
+			t.Fatal("forwarder never completed its first drain")
 		}
 		time.Sleep(time.Millisecond)
 	}
@@ -140,14 +143,20 @@ func TestSessionForwarder_IgnoresNonInboundEvents(t *testing.T) {
 	assertNeverForwarded(t, &mu, &calls)
 }
 
-// TestSessionForwarder_SeedsCursorAtTailSkippingPriorHistory proves the
-// forwarder never replays a session's pre-existing history as newly-arrived
-// forwards on its first start (the same birth-event rationale reactor.go's
-// own seedCursor documents): only an Inbound event appended after this
-// forwarder's first start is relayed.
-func TestSessionForwarder_SeedsCursorAtTailSkippingPriorHistory(t *testing.T) {
+// TestSessionForwarder_SkipsHistoryTheReactorAlreadyHandled proves the
+// forwarder never replays events the session's own reactor already drained
+// while up: it starts no earlier than reactorConsumer's own persisted
+// cursor, only an event past that position is relayed.
+func TestSessionForwarder_SkipsHistoryTheReactorAlreadyHandled(t *testing.T) {
 	f, _, log := newTestForwarder(t)
-	log.Append(event.Event{SessionName: "down-session", ID: "pre-existing", Type: "resource.updated", Direction: event.Inbound})
+	log.Append(event.Event{SessionName: "down-session", ID: "already-handled", Type: "resource.updated", Direction: event.Inbound})
+	_, seqs, next, err := log.List("down-session", 0, event.Filter{})
+	if err != nil || len(seqs) != 1 {
+		t.Fatalf("seed history: %v (seqs=%v)", err, seqs)
+	}
+	if err := log.CommitCursor("down-session", reactorConsumer, next); err != nil {
+		t.Fatalf("seed reactor cursor: %v", err)
+	}
 
 	var mu sync.Mutex
 	var calls []event.Event
@@ -160,11 +169,87 @@ func TestSessionForwarder_SeedsCursorAtTailSkippingPriorHistory(t *testing.T) {
 	stop := startForwarder(t, f)
 	defer stop()
 
-	log.Append(event.Event{SessionName: "down-session", ID: "after-start", Type: "resource.updated", Direction: event.Inbound})
+	log.Append(event.Event{SessionName: "down-session", ID: "after-reactor-cursor", Type: "resource.updated", Direction: event.Inbound})
 
 	got := waitForwardCalls(t, &mu, &calls, 1)
-	if len(got) != 1 || got[0].ID != "after-start" {
-		t.Fatalf("relayed events = %+v, want exactly one (after-start), no pre-existing history replayed", got)
+	if len(got) != 1 || got[0].ID != "after-reactor-cursor" {
+		t.Fatalf("relayed events = %+v, want exactly one (after-reactor-cursor)", got)
+	}
+}
+
+// TestSessionForwarder_DoesNotDropAnEventArrivingBeforeItsFirstDrain: an
+// event arriving in the gap between the down transition and this goroutine's
+// own scheduling must still be relayed once it does start.
+func TestSessionForwarder_DoesNotDropAnEventArrivingBeforeItsFirstDrain(t *testing.T) {
+	f, _, log := newTestForwarder(t)
+	log.Append(event.Event{SessionName: "down-session", ID: "already-handled", Type: "resource.updated", Direction: event.Inbound})
+	_, _, afterHandled, err := log.List("down-session", 0, event.Filter{})
+	if err != nil {
+		t.Fatalf("seed history: %v", err)
+	}
+	if err := log.CommitCursor("down-session", reactorConsumer, afterHandled); err != nil {
+		t.Fatalf("seed reactor cursor: %v", err)
+	}
+	// Arrives after the down transition (reactorConsumer is already frozen)
+	// but before the forwarder goroutine below ever runs.
+	log.Append(event.Event{SessionName: "down-session", ID: "gap-arrival", Type: "resource.updated", Direction: event.Inbound})
+
+	var mu sync.Mutex
+	var calls []event.Event
+	f.forwardFn = func(_ *config.Config, _ *state.Store, _ string, ev event.Event) (bool, error) {
+		mu.Lock()
+		calls = append(calls, ev)
+		mu.Unlock()
+		return true, nil
+	}
+	stop := startForwarder(t, f)
+	defer stop()
+
+	got := waitForwardCalls(t, &mu, &calls, 1)
+	if len(got) != 1 || got[0].ID != "gap-arrival" {
+		t.Fatalf("relayed events = %+v, want exactly one (gap-arrival), not dropped", got)
+	}
+}
+
+// TestSessionForwarder_DownUpDownCycleDoesNotReplayTheUpPeriod: a
+// forwardConsumer cursor left stale from an earlier down period must not
+// replay a later up period's already-handled events as newly arrived.
+func TestSessionForwarder_DownUpDownCycleDoesNotReplayTheUpPeriod(t *testing.T) {
+	f, st, log := newTestForwarder(t)
+	var mu sync.Mutex
+	var calls []event.Event
+	f.forwardFn = func(_ *config.Config, _ *state.Store, _ string, ev event.Event) (bool, error) {
+		mu.Lock()
+		calls = append(calls, ev)
+		mu.Unlock()
+		return true, nil
+	}
+	stop := startForwarder(t, f)
+	log.Append(event.Event{SessionName: "down-session", ID: "first-down-period", Type: "resource.updated", Direction: event.Inbound})
+	waitForwardCalls(t, &mu, &calls, 1)
+	stop() // simulates the session being brought up: the supervisor would cancel this goroutine
+
+	// The session is up: its own reactor drains this event normally (not
+	// through the forwarder), advancing reactorConsumer past it.
+	log.Append(event.Event{SessionName: "down-session", ID: "handled-while-up", Type: "resource.updated", Direction: event.Inbound})
+	_, _, afterUpPeriod, err := log.List("down-session", 0, event.Filter{})
+	if err != nil {
+		t.Fatalf("read log tail: %v", err)
+	}
+	if err := log.CommitCursor("down-session", reactorConsumer, afterUpPeriod); err != nil {
+		t.Fatalf("advance reactor cursor past the up period: %v", err)
+	}
+
+	// Down again: a fresh forwarder (as the supervisor would start).
+	f2 := &sessionForwarder{session: f.session, cfg: f.cfg, state: st, log: log, hub: f.hub}
+	f2.forwardFn = f.forwardFn
+	stop2 := startForwarder(t, f2)
+	defer stop2()
+	log.Append(event.Event{SessionName: "down-session", ID: "second-down-period", Type: "resource.updated", Direction: event.Inbound})
+
+	got := waitForwardCalls(t, &mu, &calls, 2)
+	if len(got) != 2 || got[1].ID != "second-down-period" {
+		t.Fatalf("relayed events = %+v, want [first-down-period second-down-period], up-period event not replayed", got)
 	}
 }
 

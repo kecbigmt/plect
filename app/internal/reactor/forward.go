@@ -13,9 +13,8 @@ import (
 	"github.com/kecbigmt/plecture/contracts/event"
 )
 
-// forwardConsumer is the down-forwarder's own durable cursor kind, distinct
-// from reactorConsumer and dispatch's "delivery": it drains only Inbound
-// events, to relay them rather than tick or deliver.
+// forwardConsumer is the down-forwarder's own cursor kind: it drains only
+// Inbound events, to relay rather than tick or deliver them.
 const forwardConsumer = "resourceforward"
 
 // sessionForwarder relays a down-but-not-destroyed session's new Inbound
@@ -40,7 +39,6 @@ func (f *sessionForwarder) effectiveLogger() *slog.Logger {
 }
 
 func (f *sessionForwarder) run(ctx context.Context) {
-	seedForwardCursor(f.log, f.session)
 	startGen, _ := f.log.StreamID(f.session)
 	wake := f.hub.Watch(f.session)
 	defer wake.Close()
@@ -69,26 +67,14 @@ func (f *sessionForwarder) run(ctx context.Context) {
 	}
 }
 
-// seedForwardCursor seeds the cursor at the log's tail if none exists yet
-// (mirrors reactor.go's seedCursor), so pre-existing history is never
-// replayed as forwards on first use.
-func seedForwardCursor(log *eventlog.Store, session string) {
-	if log.HasCursor(session, forwardConsumer) {
-		return
-	}
-	_, _, end, err := log.List(session, 0, event.Filter{})
-	if err != nil {
-		slog.Default().Warn("forward: seed cursor: list failed; cursor left unseeded, next start will retry", "session", session, "error", err)
-		return
-	}
-	if err := log.CommitCursor(session, forwardConsumer, end); err != nil {
-		slog.Default().Warn("forward: seed cursor: commit failed; cursor left unseeded, next start will retry", "session", session, "error", err)
-	}
-}
-
-// drain relays every Inbound event past the committed cursor, advancing the
-// cursor one event at a time (mirroring dispatch) so a crash mid-batch
-// replays at most one event, not the whole batch.
+// drain relays every Inbound event past the committed cursor, one event at a
+// time (mirroring dispatch) so a crash mid-batch replays at most one event.
+// The start position never falls behind reactorConsumer's own cursor: a
+// forwardConsumer seeded at "whatever the tail is when scheduled" would drop
+// an event arriving in that gap, and one stale from an earlier down period
+// would replay a later up period's events as new — reactorConsumer, seeded
+// and advanced by reactor.go independently of this goroutine, is immune to
+// both.
 func (f *sessionForwarder) drain(ctx context.Context, startGen *string) {
 	if g, _ := f.log.StreamID(f.session); *startGen != "" && g != *startGen {
 		if err := f.log.CommitCursor(f.session, forwardConsumer, 0); err != nil {
@@ -100,6 +86,18 @@ func (f *sessionForwarder) drain(ctx context.Context, startGen *string) {
 	if err != nil {
 		f.effectiveLogger().Warn("forward: read cursor failed; skipping this drain, will retry on next wake", "session", f.session, "error", err)
 		return
+	}
+	reactorCur, err := f.log.ReadCursor(f.session, reactorConsumer)
+	if err != nil {
+		f.effectiveLogger().Warn("forward: read reactor cursor failed; using the forward cursor as-is", "session", f.session, "error", err)
+	} else {
+		if reactorCur > cur {
+			cur = reactorCur
+		}
+		// Committed even when unchanged, so tests can detect a first drain.
+		if err := f.log.CommitCursor(f.session, forwardConsumer, cur); err != nil {
+			f.effectiveLogger().Warn("forward: commit cursor failed", "session", f.session, "error", err)
+		}
 	}
 	evs, offs, next, err := f.log.List(f.session, cur, event.Filter{Direction: event.Inbound})
 	if err != nil {
@@ -122,8 +120,7 @@ func (f *sessionForwarder) drain(ctx context.Context, startGen *string) {
 		if i+1 < len(offs) {
 			commit = offs[i+1]
 		}
-		// A commit failure leaves ev relayed but not advanced past; safe to
-		// re-relay next drain since the push dedups on ev's own id.
+		// Safe to re-relay next drain: the push dedups on ev's own id.
 		if err := f.log.CommitCursor(f.session, forwardConsumer, commit); err != nil {
 			f.effectiveLogger().Warn("forward: commit cursor failed; event may re-relay on next drain", "session", f.session, "offset", commit, "error", err)
 		}

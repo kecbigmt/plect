@@ -10,9 +10,8 @@ import (
 	"github.com/kecbigmt/plecture/contracts/event"
 )
 
-// ForwardDownSessionEvent relays ev, an inbound event that landed on
-// origin's own log while origin is down, to origin's nearest live ancestor
-// (resolveLiveAncestor) as a plect.resource.forwarded push. Reports false,
+// ForwardDownSessionEvent pushes ev to origin's nearest live ancestor
+// (resolveLiveAncestor) as a plect.resource.forwarded event. Reports false,
 // nil when origin has no live ancestor (a root session, or one whose whole
 // remaining chain is down/unhealthy): a structural fact, not a transient
 // condition worth retrying.

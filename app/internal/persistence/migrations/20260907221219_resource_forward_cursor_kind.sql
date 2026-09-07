@@ -19,7 +19,10 @@ PRAGMA foreign_keys = on;
 -- 20260907085032_add_node_execution_identity.sql's own `old_`-named rebuild.
 PRAGMA foreign_keys = off;
 CREATE TABLE `old_event_cursors` (`session_id` text NOT NULL, `kind` text NOT NULL, `next_sequence` integer NOT NULL, PRIMARY KEY (`session_id`, `kind`), CONSTRAINT `0` FOREIGN KEY (`session_id`) REFERENCES `sessions` (`id`) ON UPDATE NO ACTION ON DELETE CASCADE, CHECK (kind IN ('delivery', 'tick', 'heartbeat')), CHECK (next_sequence >= 0));
-INSERT INTO `old_event_cursors` (`session_id`, `kind`, `next_sequence`) SELECT `session_id`, `kind`, `next_sequence` FROM `event_cursors`;
+-- A row this Up ever created with kind='resourceforward' would violate the
+-- narrower CHECK above; Down is not lossless (see 20260906231449's own
+-- precedent), so it drops that consumer's cursor rather than erroring.
+INSERT INTO `old_event_cursors` (`session_id`, `kind`, `next_sequence`) SELECT `session_id`, `kind`, `next_sequence` FROM `event_cursors` WHERE `kind` != 'resourceforward';
 DROP TABLE `event_cursors`;
 ALTER TABLE `old_event_cursors` RENAME TO `event_cursors`;
 PRAGMA foreign_keys = on;

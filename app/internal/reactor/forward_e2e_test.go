@@ -50,9 +50,8 @@ func assertEventCountStays(t *testing.T, log *eventlog.Store, session, typ strin
 }
 
 // TestSupervisor_ForwardsDownChildResourceEventsToLiveAncestorUntilUpOrDestroyed
-// runs the real Supervisor (reactor + forwarder) and service.ForwardDownSessionEvent,
-// no injected fakes, through AC1 (forward + ancestor tick), AC2 (destroy stops
-// it), and AC3 (brought back up, only the child's own reactor ticks).
+// runs the real Supervisor (reactor + forwarder) and
+// service.ForwardDownSessionEvent, no injected fakes.
 func TestSupervisor_ForwardsDownChildResourceEventsToLiveAncestorUntilUpOrDestroyed(t *testing.T) {
 	pluginDir := t.TempDir()
 	// A neutrally-named run-scoped effect, not reactor_test.go's
@@ -98,13 +97,12 @@ on = ["resource.*"]
 	done := make(chan struct{})
 	go func() { sup.Run(ctx); close(done) }()
 	defer func() { cancel(); <-done }()
-	// Cursors must seed before AC1 appends anything, or the append reads as
-	// pre-existing history and never surfaces.
+	// Cursors must seed before appending anything below, or the append reads
+	// as pre-existing history and never surfaces.
 	waitReactorStarted(t, sup, "parent")
 	waitForwarderStarted(t, sup, "child")
 
-	// AC1: an inbound resource event lands on the down child while the
-	// parent is up.
+	// An inbound resource event lands on the down child while the parent is up.
 	parentFloor := time.Now()
 	log.Append(event.Event{
 		SessionName: "child", ID: "ev-1", Type: "resource.updated", Direction: event.Inbound,
@@ -128,7 +126,7 @@ on = ["resource.*"]
 		t.Fatalf("original events on the down child = %+v, want exactly one preserved", original)
 	}
 
-	// AC2: destroy the child; a further event on it must not forward.
+	// Destroy the child; a further event on it must not forward.
 	if err := st.Destroy("child"); err != nil {
 		t.Fatal(err)
 	}
@@ -136,9 +134,9 @@ on = ["resource.*"]
 	log.Append(event.Event{SessionName: "child", ID: "ev-2", Type: "resource.updated", Direction: event.Inbound})
 	assertEventCountStays(t, log, "parent", event.TypeResourceForwarded, 1)
 
-	// AC3: a second down-but-not-destroyed child is brought back up instead
-	// of destroyed. It starts with no run-scoped node at all, not a cleaned
-	// one flipped back to produced: persistence refuses reviving a cleaned
+	// A second down-but-not-destroyed child is brought back up instead of
+	// destroyed. It starts with no run-scoped node at all, not a cleaned one
+	// flipped back to produced: persistence refuses reviving a cleaned
 	// execution, so a real down->up cycle mints a fresh one instead.
 	if err := st.Put(&domain.Session{
 		Name: "child2", Workflow: "reactive", ParentSession: "parent",
