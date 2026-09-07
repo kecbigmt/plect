@@ -31,8 +31,7 @@ func (c *Config) ResolveSessionWorkflow(s *domain.Session) (*WorkflowFile, error
 
 // runScopeCache memoizes CurrentPlanRunScopedNodeSet by (workflow,
 // workspaceDirPath), reached via a pointer field (not embedded) since Config
-// is copied by value in test fixture tables and an embedded sync.Mutex would
-// make each copy a lock copy.
+// is copied by value in tests and an embedded sync.Mutex would lock-copy.
 type runScopeCache struct {
 	mu    sync.Mutex
 	byKey map[runScopeCacheKey]runScopeCacheEntry
@@ -80,15 +79,11 @@ func (c *Config) runScopeCacheInstance() *runScopeCache {
 // run-scoped node ids as a set. ok is false when the workflow or its task
 // definitions do not resolve at all, which a caller must tell apart from a
 // legitimately empty node set (ok=true).
-//
-// Memoized per (workflow, workspaceDirPath) for this *Config's lifetime:
-// dispatch.Supervisor and reactor.Supervisor each re-evaluate RunScopeUp for
-// every up session on every ~1s poll tick, and each evaluation used to
-// re-parse every definition file on disk from scratch just to answer this.
-// A new *Config (config.Live's own refresh) is what invalidates the cache —
-// this must not be used where a caller needs to see an on-disk edit sooner
-// than that (workflow/task-definition loading elsewhere in this package is
-// unaffected and stays uncached).
+// Memoized per (workflow, workspaceDirPath) for this *Config's lifetime —
+// dispatch/reactor Supervisor.reconcile calls RunScopeUp every ~1s poll
+// tick per up session, and this used to re-parse the whole definition tree
+// from scratch just to answer it. A new *Config (config.Live's own refresh)
+// invalidates the cache; nothing else here does.
 func (c *Config) CurrentPlanRunScopedNodeSet(s *domain.Session) (set map[string]bool, ok bool) {
 	key := runScopeCacheKey{workflow: s.Workflow, workspaceDirPath: s.WorkspaceDirPath}
 	cache := c.runScopeCacheInstance()
