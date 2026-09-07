@@ -71,6 +71,14 @@ FROM sessions WHERE alias = ? AND status <> 'destroyed' ORDER BY name;
 -- name: ListLiveChildSessionNames :many
 SELECT name FROM sessions WHERE parent_session_id = ? AND status <> 'destroyed' ORDER BY name;
 
+-- name: ListLiveChildSessionNamesForSessions :many
+SELECT parent_session_id, name FROM sessions
+WHERE parent_session_id IN (sqlc.slice(parent_ids)) AND status <> 'destroyed'
+ORDER BY parent_session_id, name;
+
+-- name: SessionNamesByIDs :many
+SELECT id, name FROM sessions WHERE id IN (sqlc.slice(ids));
+
 -- name: SessionIDByLiveName :one
 SELECT id FROM sessions WHERE name = ? AND status <> 'destroyed';
 
@@ -109,6 +117,13 @@ SELECT session_id, node_id, task_id, name, scope, status, sequence, resource,
        setup_at, failed_at, cleaned_at, finalized_at
 FROM node_instances WHERE session_id = ? ORDER BY node_id;
 
+-- name: ListNodeInstancesForSessions :many
+SELECT session_id, node_id, task_id, name, scope, status, sequence, resource,
+       inputs_json, outputs_json, state_json, resource_observation_json,
+       resource_observed_at, done_when_json, extra_done_when_json, error,
+       setup_at, failed_at, cleaned_at, finalized_at
+FROM node_instances WHERE session_id IN (sqlc.slice(session_ids)) ORDER BY session_id, node_id;
+
 -- name: DeleteNodeInstancesForSession :exec
 DELETE FROM node_instances WHERE session_id = ?;
 
@@ -125,6 +140,13 @@ SELECT session_id, node_id, position, effect_id, status, inputs_json,
        heartbeat_escalations, setup_at, failed_at, cleaned_at, error
 FROM node_instance_layers WHERE session_id = ? ORDER BY node_id, position;
 
+-- name: ListNodeInstanceLayersForSessions :many
+SELECT session_id, node_id, position, effect_id, status, inputs_json,
+       locals_json, outputs_json, env_json, heartbeat_ticks,
+       heartbeat_escalations, setup_at, failed_at, cleaned_at, error
+FROM node_instance_layers WHERE session_id IN (sqlc.slice(session_ids))
+ORDER BY session_id, node_id, position;
+
 -- Task instances (dynamic; Session.Tasks entries)
 
 -- name: ListTaskInstances :many
@@ -133,6 +155,13 @@ SELECT id, session_id, instance_name, task_id, scope, status, sequence,
        resource_observation_json, resource_observed_at, extra_done_when_json,
        error, setup_at, failed_at, cleaned_at, finalized_at
 FROM task_instances WHERE session_id = ? ORDER BY instance_name;
+
+-- name: ListTaskInstancesForSessions :many
+SELECT id, session_id, instance_name, task_id, scope, status, sequence,
+       resource, named, inputs_json, outputs_json, state_json,
+       resource_observation_json, resource_observed_at, extra_done_when_json,
+       error, setup_at, failed_at, cleaned_at, finalized_at
+FROM task_instances WHERE session_id IN (sqlc.slice(session_ids)) ORDER BY session_id, instance_name;
 
 -- name: UpsertTaskInstance :one
 INSERT INTO task_instances (
@@ -183,6 +212,15 @@ JOIN task_instances t ON t.id = l.task_instance_id
 WHERE t.session_id = ?
 ORDER BY l.task_instance_id, l.position;
 
+-- name: ListTaskInstanceLayersForSessions :many
+SELECT l.task_instance_id, l.position, l.effect_id, l.status, l.inputs_json,
+       l.locals_json, l.outputs_json, l.env_json, l.heartbeat_ticks,
+       l.heartbeat_escalations, l.setup_at, l.failed_at, l.cleaned_at, l.error
+FROM task_instance_layers l
+JOIN task_instances t ON t.id = l.task_instance_id
+WHERE t.session_id IN (sqlc.slice(session_ids))
+ORDER BY l.task_instance_id, l.position;
+
 -- Task done_when states
 
 -- name: InsertTaskDoneWhenState :exec
@@ -203,6 +241,14 @@ FROM task_done_when_states s
 JOIN task_instances t ON t.id = s.task_instance_id
 WHERE t.session_id = ?;
 
+-- name: ListTaskDoneWhenStatesForSessions :many
+SELECT s.task_instance_id, s.heartbeat_ticks, s.heartbeat_escalations,
+       s.last_action, s.last_fingerprint, s.last_reason,
+       s.last_body, s.escalated_at, s.escalate_reason
+FROM task_done_when_states s
+JOIN task_instances t ON t.id = s.task_instance_id
+WHERE t.session_id IN (sqlc.slice(session_ids));
+
 -- name: InsertTaskDoneWhenUnsatisfiedItem :exec
 INSERT INTO task_done_when_unsatisfied_items (task_instance_id, position, item)
 VALUES (?, ?, ?);
@@ -215,6 +261,13 @@ SELECT i.task_instance_id, i.position, i.item
 FROM task_done_when_unsatisfied_items i
 JOIN task_instances t ON t.id = i.task_instance_id
 WHERE t.session_id = ?
+ORDER BY i.task_instance_id, i.position;
+
+-- name: ListTaskDoneWhenUnsatisfiedItemsForSessions :many
+SELECT i.task_instance_id, i.position, i.item
+FROM task_done_when_unsatisfied_items i
+JOIN task_instances t ON t.id = i.task_instance_id
+WHERE t.session_id IN (sqlc.slice(session_ids))
 ORDER BY i.task_instance_id, i.position;
 
 -- Task done_when judges
@@ -234,6 +287,13 @@ SELECT j.task_instance_id, j.leaf_id, j.action, j.reason, j.revision,
 FROM task_done_when_judges j
 JOIN task_instances t ON t.id = j.task_instance_id
 WHERE t.session_id = ?;
+
+-- name: ListTaskDoneWhenJudgesForSessions :many
+SELECT j.task_instance_id, j.leaf_id, j.action, j.reason, j.revision,
+       j.judge_session, j.judge_workflow, j.relation, j.created_at
+FROM task_done_when_judges j
+JOIN task_instances t ON t.id = j.task_instance_id
+WHERE t.session_id IN (sqlc.slice(session_ids));
 
 -- Populations
 
@@ -290,6 +350,11 @@ DELETE FROM session_channel_health WHERE session_id = ? AND kind = ?;
 SELECT session_id, kind, consecutive_failures, first_failure_at,
        last_failure_at, last_channel, last_error, escalated_at
 FROM session_channel_health WHERE session_id = ?;
+
+-- name: ListSessionChannelHealthForSessions :many
+SELECT session_id, kind, consecutive_failures, first_failure_at,
+       last_failure_at, last_channel, last_error, escalated_at
+FROM session_channel_health WHERE session_id IN (sqlc.slice(session_ids));
 
 -- Up-slot reservations
 

@@ -51,25 +51,9 @@ func loadChannelHealth(ctx context.Context, q *sqlcgen.Queries, sessionID string
 		return nil, nil, fmt.Errorf("list channel health for %q: %w", sessionID, err)
 	}
 	for _, row := range rows {
-		firstFailureAt, err := parseTime(row.FirstFailureAt)
+		ch, err := channelHealthFromRow(row)
 		if err != nil {
-			return nil, nil, fmt.Errorf("parse channel health %q/%q first_failure_at: %w", sessionID, row.Kind, err)
-		}
-		lastFailureAt, err := parseTime(row.LastFailureAt)
-		if err != nil {
-			return nil, nil, fmt.Errorf("parse channel health %q/%q last_failure_at: %w", sessionID, row.Kind, err)
-		}
-		escalatedAt, err := parseTimeNull(row.EscalatedAt)
-		if err != nil {
-			return nil, nil, fmt.Errorf("parse channel health %q/%q escalated_at: %w", sessionID, row.Kind, err)
-		}
-		ch := &contract.ChannelHealth{
-			ConsecutiveFailures: int(row.ConsecutiveFailures),
-			FirstFailureAt:      firstFailureAt,
-			LastFailureAt:       lastFailureAt,
-			LastChannel:         row.LastChannel.String,
-			LastError:           row.LastError.String,
-			EscalatedAt:         escalatedAt,
+			return nil, nil, err
 		}
 		switch row.Kind {
 		case contract.ChannelFailureKindValidation:
@@ -79,4 +63,57 @@ func loadChannelHealth(ctx context.Context, q *sqlcgen.Queries, sessionID string
 		}
 	}
 	return validation, delivery, nil
+}
+
+// loadChannelHealthBatch is loadChannelHealth generalized over many sessions
+// at once, batched by session_id via an IN clause instead of one query per
+// session; see loadTasksBatch's own doc comment for the shared rationale.
+func loadChannelHealthBatch(ctx context.Context, q *sqlcgen.Queries, sessionIDs []string) (validationBySession, deliveryBySession map[string]*contract.ChannelHealth, err error) {
+	if len(sessionIDs) == 0 {
+		return nil, nil, nil
+	}
+	rows, err := q.ListSessionChannelHealthForSessions(ctx, sessionIDs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list channel health: %w", err)
+	}
+	validationBySession = make(map[string]*contract.ChannelHealth)
+	deliveryBySession = make(map[string]*contract.ChannelHealth)
+	for _, row := range rows {
+		ch, err := channelHealthFromRow(row)
+		if err != nil {
+			return nil, nil, err
+		}
+		switch row.Kind {
+		case contract.ChannelFailureKindValidation:
+			validationBySession[row.SessionID] = ch
+		case contract.ChannelFailureKindDelivery:
+			deliveryBySession[row.SessionID] = ch
+		}
+	}
+	return validationBySession, deliveryBySession, nil
+}
+
+// channelHealthFromRow decodes one session_channel_health row; shared by
+// loadChannelHealth and loadChannelHealthBatch.
+func channelHealthFromRow(row sqlcgen.SessionChannelHealth) (*contract.ChannelHealth, error) {
+	firstFailureAt, err := parseTime(row.FirstFailureAt)
+	if err != nil {
+		return nil, fmt.Errorf("parse channel health %q/%q first_failure_at: %w", row.SessionID, row.Kind, err)
+	}
+	lastFailureAt, err := parseTime(row.LastFailureAt)
+	if err != nil {
+		return nil, fmt.Errorf("parse channel health %q/%q last_failure_at: %w", row.SessionID, row.Kind, err)
+	}
+	escalatedAt, err := parseTimeNull(row.EscalatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("parse channel health %q/%q escalated_at: %w", row.SessionID, row.Kind, err)
+	}
+	return &contract.ChannelHealth{
+		ConsecutiveFailures: int(row.ConsecutiveFailures),
+		FirstFailureAt:      firstFailureAt,
+		LastFailureAt:       lastFailureAt,
+		LastChannel:         row.LastChannel.String,
+		LastError:           row.LastError.String,
+		EscalatedAt:         escalatedAt,
+	}, nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -371,6 +372,99 @@ func TestAllSessions_ReturnsEveryLivePutSessionAndExcludesDestroyed(t *testing.T
 	}
 	if _, ok := all["sess-beta"]; ok {
 		t.Error("destroyed session sess-beta present in AllSessions, want excluded")
+	}
+}
+
+// TestAllSessions_MatchesGetSessionAcrossParentsChildrenTasksAndChannelHealth
+// is a two-authorities check on AllSessions' batched extras-loading against
+// GetSession's per-row loadSessionExtras for the same rows: every relation
+// loadSessionExtras resolves (parent by parent_session_id, parent by the
+// root: pseudo-parent form, children, channel health, nodes, tasks with
+// layers/done_when/judges) is exercised on a session AllSessions must
+// answer identically to GetSession, since a batching bug would show up as
+// exactly this kind of disagreement between the two paths.
+func TestAllSessions_MatchesGetSessionAcrossParentsChildrenTasksAndChannelHealth(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	if err := db.PutSession(ctx, &domain.Session{Name: "root", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("PutSession(root): %v", err)
+	}
+	childA := &domain.Session{
+		Name: "childA", ParentSession: "root", CreatedAt: now, UpdatedAt: now,
+		ChannelValidationHealth: &contract.ChannelHealth{
+			ConsecutiveFailures: 1, FirstFailureAt: now, LastFailureAt: now, LastError: "bad channel",
+		},
+		ChannelDeliveryHealth: &contract.ChannelHealth{
+			ConsecutiveFailures: 2, FirstFailureAt: now, LastFailureAt: now, LastChannel: "chat:#eng", LastError: "timeout",
+		},
+		Nodes: map[string]*contract.TaskState{
+			"setup": {
+				Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, TaskID: "setup-def",
+				Layers: []contract.LayerState{{EffectID: "outer", Status: contract.TaskStatusProduced, SetupAt: now}},
+			},
+		},
+		Tasks: map[string]*contract.TaskState{
+			"impl": {
+				Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "impl-def",
+				Layers: []contract.LayerState{{EffectID: "layer1", Status: contract.TaskStatusProduced}},
+				DoneWhen: &contract.DoneWhenState{
+					HeartbeatTicks:  3,
+					LastFingerprint: "abc123",
+					LastUnsatisfied: []string{"leaf-a"},
+					Judges: map[string]*contract.DoneWhenJudge{
+						"leaf-a": {
+							LeafID: "leaf-a", Action: "approve", Reason: "looks good",
+							Revision: "sha1", JudgeSession: "reviewer1", JudgeWorkflow: "coding-agent",
+							Relation: "sibling", CreatedAt: now,
+						},
+					},
+				},
+			},
+		},
+	}
+	if err := db.PutSession(ctx, childA); err != nil {
+		t.Fatalf("PutSession(childA): %v", err)
+	}
+	childB := &domain.Session{
+		Name: "childB", ParentSession: "root", CreatedAt: now, UpdatedAt: now,
+		// Same node_id as childA's "setup" node, deliberately: node_id is a
+		// workflow-declared identifier, not globally unique, so this proves
+		// AllSessions' batched layer lookup keys on (session, node_id) and
+		// never leaks childA's "outer" layer onto childB's node of the same
+		// name.
+		Nodes: map[string]*contract.TaskState{
+			"setup": {
+				Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, TaskID: "setup-def-b",
+				Layers: []contract.LayerState{{EffectID: "childB-only", Status: contract.TaskStatusProduced}},
+			},
+		},
+	}
+	if err := db.PutSession(ctx, childB); err != nil {
+		t.Fatalf("PutSession(childB): %v", err)
+	}
+	if err := db.PutSession(ctx, &domain.Session{Name: "grandchild", ParentSession: "root:childA", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("PutSession(grandchild): %v", err)
+	}
+
+	all, err := db.AllSessions(ctx)
+	if err != nil {
+		t.Fatalf("AllSessions: %v", err)
+	}
+
+	for _, name := range []string{"root", "childA", "childB", "grandchild"} {
+		want, err := db.GetSession(ctx, name)
+		if err != nil {
+			t.Fatalf("GetSession(%q): %v", name, err)
+		}
+		got, ok := all[name]
+		if !ok {
+			t.Fatalf("AllSessions missing %q", name)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("AllSessions[%q] = %+v, want (matching GetSession) %+v", name, got, want)
+		}
 	}
 }
 

@@ -8,6 +8,7 @@ package sqlcgen
 import (
 	"context"
 	"database/sql"
+	"strings"
 )
 
 const countLiveSessionsNamed = `-- name: CountLiveSessionsNamed :one
@@ -775,6 +776,50 @@ func (q *Queries) ListLiveChildSessionNames(ctx context.Context, parentSessionID
 	return items, nil
 }
 
+const listLiveChildSessionNamesForSessions = `-- name: ListLiveChildSessionNamesForSessions :many
+SELECT parent_session_id, name FROM sessions
+WHERE parent_session_id IN (/*SLICE:parent_ids*/?) AND status <> 'destroyed'
+ORDER BY parent_session_id, name
+`
+
+type ListLiveChildSessionNamesForSessionsRow struct {
+	ParentSessionID sql.NullString
+	Name            string
+}
+
+func (q *Queries) ListLiveChildSessionNamesForSessions(ctx context.Context, parentIds []sql.NullString) ([]ListLiveChildSessionNamesForSessionsRow, error) {
+	query := listLiveChildSessionNamesForSessions
+	var queryParams []interface{}
+	if len(parentIds) > 0 {
+		for _, v := range parentIds {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:parent_ids*/?", strings.Repeat(",?", len(parentIds))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:parent_ids*/?", "NULL", 1)
+	}
+	rows, err := q.db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListLiveChildSessionNamesForSessionsRow
+	for rows.Next() {
+		var i ListLiveChildSessionNamesForSessionsRow
+		if err := rows.Scan(&i.ParentSessionID, &i.Name); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listLiveSessions = `-- name: ListLiveSessions :many
 SELECT id, name, status, destroyed_at, parent_session_id, root_session_id,
        resource_id, alias, workflow, workspace_dir,
@@ -941,6 +986,63 @@ func (q *Queries) ListNodeInstanceLayers(ctx context.Context, sessionID string) 
 	return items, nil
 }
 
+const listNodeInstanceLayersForSessions = `-- name: ListNodeInstanceLayersForSessions :many
+SELECT session_id, node_id, position, effect_id, status, inputs_json,
+       locals_json, outputs_json, env_json, heartbeat_ticks,
+       heartbeat_escalations, setup_at, failed_at, cleaned_at, error
+FROM node_instance_layers WHERE session_id IN (/*SLICE:session_ids*/?)
+ORDER BY session_id, node_id, position
+`
+
+func (q *Queries) ListNodeInstanceLayersForSessions(ctx context.Context, sessionIds []string) ([]NodeInstanceLayer, error) {
+	query := listNodeInstanceLayersForSessions
+	var queryParams []interface{}
+	if len(sessionIds) > 0 {
+		for _, v := range sessionIds {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:session_ids*/?", strings.Repeat(",?", len(sessionIds))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:session_ids*/?", "NULL", 1)
+	}
+	rows, err := q.db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []NodeInstanceLayer
+	for rows.Next() {
+		var i NodeInstanceLayer
+		if err := rows.Scan(
+			&i.SessionID,
+			&i.NodeID,
+			&i.Position,
+			&i.EffectID,
+			&i.Status,
+			&i.InputsJson,
+			&i.LocalsJson,
+			&i.OutputsJson,
+			&i.EnvJson,
+			&i.HeartbeatTicks,
+			&i.HeartbeatEscalations,
+			&i.SetupAt,
+			&i.FailedAt,
+			&i.CleanedAt,
+			&i.Error,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listNodeInstances = `-- name: ListNodeInstances :many
 SELECT session_id, node_id, task_id, name, scope, status, sequence, resource,
        inputs_json, outputs_json, state_json, resource_observation_json,
@@ -951,6 +1053,68 @@ FROM node_instances WHERE session_id = ? ORDER BY node_id
 
 func (q *Queries) ListNodeInstances(ctx context.Context, sessionID string) ([]NodeInstance, error) {
 	rows, err := q.db.QueryContext(ctx, listNodeInstances, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []NodeInstance
+	for rows.Next() {
+		var i NodeInstance
+		if err := rows.Scan(
+			&i.SessionID,
+			&i.NodeID,
+			&i.TaskID,
+			&i.Name,
+			&i.Scope,
+			&i.Status,
+			&i.Sequence,
+			&i.Resource,
+			&i.InputsJson,
+			&i.OutputsJson,
+			&i.StateJson,
+			&i.ResourceObservationJson,
+			&i.ResourceObservedAt,
+			&i.DoneWhenJson,
+			&i.ExtraDoneWhenJson,
+			&i.Error,
+			&i.SetupAt,
+			&i.FailedAt,
+			&i.CleanedAt,
+			&i.FinalizedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNodeInstancesForSessions = `-- name: ListNodeInstancesForSessions :many
+SELECT session_id, node_id, task_id, name, scope, status, sequence, resource,
+       inputs_json, outputs_json, state_json, resource_observation_json,
+       resource_observed_at, done_when_json, extra_done_when_json, error,
+       setup_at, failed_at, cleaned_at, finalized_at
+FROM node_instances WHERE session_id IN (/*SLICE:session_ids*/?) ORDER BY session_id, node_id
+`
+
+func (q *Queries) ListNodeInstancesForSessions(ctx context.Context, sessionIds []string) ([]NodeInstance, error) {
+	query := listNodeInstancesForSessions
+	var queryParams []interface{}
+	if len(sessionIds) > 0 {
+		for _, v := range sessionIds {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:session_ids*/?", strings.Repeat(",?", len(sessionIds))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:session_ids*/?", "NULL", 1)
+	}
+	rows, err := q.db.QueryContext(ctx, query, queryParams...)
 	if err != nil {
 		return nil, err
 	}
@@ -1121,6 +1285,54 @@ func (q *Queries) ListSessionChannelHealth(ctx context.Context, sessionID string
 	return items, nil
 }
 
+const listSessionChannelHealthForSessions = `-- name: ListSessionChannelHealthForSessions :many
+SELECT session_id, kind, consecutive_failures, first_failure_at,
+       last_failure_at, last_channel, last_error, escalated_at
+FROM session_channel_health WHERE session_id IN (/*SLICE:session_ids*/?)
+`
+
+func (q *Queries) ListSessionChannelHealthForSessions(ctx context.Context, sessionIds []string) ([]SessionChannelHealth, error) {
+	query := listSessionChannelHealthForSessions
+	var queryParams []interface{}
+	if len(sessionIds) > 0 {
+		for _, v := range sessionIds {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:session_ids*/?", strings.Repeat(",?", len(sessionIds))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:session_ids*/?", "NULL", 1)
+	}
+	rows, err := q.db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SessionChannelHealth
+	for rows.Next() {
+		var i SessionChannelHealth
+		if err := rows.Scan(
+			&i.SessionID,
+			&i.Kind,
+			&i.ConsecutiveFailures,
+			&i.FirstFailureAt,
+			&i.LastFailureAt,
+			&i.LastChannel,
+			&i.LastError,
+			&i.EscalatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSessionIDsByName = `-- name: ListSessionIDsByName :many
 SELECT id FROM sessions WHERE name = ? ORDER BY created_at ASC
 `
@@ -1158,6 +1370,57 @@ WHERE t.session_id = ?
 
 func (q *Queries) ListTaskDoneWhenJudgesForSession(ctx context.Context, sessionID string) ([]TaskDoneWhenJudge, error) {
 	rows, err := q.db.QueryContext(ctx, listTaskDoneWhenJudgesForSession, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TaskDoneWhenJudge
+	for rows.Next() {
+		var i TaskDoneWhenJudge
+		if err := rows.Scan(
+			&i.TaskInstanceID,
+			&i.LeafID,
+			&i.Action,
+			&i.Reason,
+			&i.Revision,
+			&i.JudgeSession,
+			&i.JudgeWorkflow,
+			&i.Relation,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTaskDoneWhenJudgesForSessions = `-- name: ListTaskDoneWhenJudgesForSessions :many
+SELECT j.task_instance_id, j.leaf_id, j.action, j.reason, j.revision,
+       j.judge_session, j.judge_workflow, j.relation, j.created_at
+FROM task_done_when_judges j
+JOIN task_instances t ON t.id = j.task_instance_id
+WHERE t.session_id IN (/*SLICE:session_ids*/?)
+`
+
+func (q *Queries) ListTaskDoneWhenJudgesForSessions(ctx context.Context, sessionIds []string) ([]TaskDoneWhenJudge, error) {
+	query := listTaskDoneWhenJudgesForSessions
+	var queryParams []interface{}
+	if len(sessionIds) > 0 {
+		for _, v := range sessionIds {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:session_ids*/?", strings.Repeat(",?", len(sessionIds))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:session_ids*/?", "NULL", 1)
+	}
+	rows, err := q.db.QueryContext(ctx, query, queryParams...)
 	if err != nil {
 		return nil, err
 	}
@@ -1231,6 +1494,58 @@ func (q *Queries) ListTaskDoneWhenStatesForSession(ctx context.Context, sessionI
 	return items, nil
 }
 
+const listTaskDoneWhenStatesForSessions = `-- name: ListTaskDoneWhenStatesForSessions :many
+SELECT s.task_instance_id, s.heartbeat_ticks, s.heartbeat_escalations,
+       s.last_action, s.last_fingerprint, s.last_reason,
+       s.last_body, s.escalated_at, s.escalate_reason
+FROM task_done_when_states s
+JOIN task_instances t ON t.id = s.task_instance_id
+WHERE t.session_id IN (/*SLICE:session_ids*/?)
+`
+
+func (q *Queries) ListTaskDoneWhenStatesForSessions(ctx context.Context, sessionIds []string) ([]TaskDoneWhenState, error) {
+	query := listTaskDoneWhenStatesForSessions
+	var queryParams []interface{}
+	if len(sessionIds) > 0 {
+		for _, v := range sessionIds {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:session_ids*/?", strings.Repeat(",?", len(sessionIds))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:session_ids*/?", "NULL", 1)
+	}
+	rows, err := q.db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TaskDoneWhenState
+	for rows.Next() {
+		var i TaskDoneWhenState
+		if err := rows.Scan(
+			&i.TaskInstanceID,
+			&i.HeartbeatTicks,
+			&i.HeartbeatEscalations,
+			&i.LastAction,
+			&i.LastFingerprint,
+			&i.LastReason,
+			&i.LastBody,
+			&i.EscalatedAt,
+			&i.EscalateReason,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTaskDoneWhenUnsatisfiedItemsForSession = `-- name: ListTaskDoneWhenUnsatisfiedItemsForSession :many
 SELECT i.task_instance_id, i.position, i.item
 FROM task_done_when_unsatisfied_items i
@@ -1241,6 +1556,47 @@ ORDER BY i.task_instance_id, i.position
 
 func (q *Queries) ListTaskDoneWhenUnsatisfiedItemsForSession(ctx context.Context, sessionID string) ([]TaskDoneWhenUnsatisfiedItem, error) {
 	rows, err := q.db.QueryContext(ctx, listTaskDoneWhenUnsatisfiedItemsForSession, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TaskDoneWhenUnsatisfiedItem
+	for rows.Next() {
+		var i TaskDoneWhenUnsatisfiedItem
+		if err := rows.Scan(&i.TaskInstanceID, &i.Position, &i.Item); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTaskDoneWhenUnsatisfiedItemsForSessions = `-- name: ListTaskDoneWhenUnsatisfiedItemsForSessions :many
+SELECT i.task_instance_id, i.position, i.item
+FROM task_done_when_unsatisfied_items i
+JOIN task_instances t ON t.id = i.task_instance_id
+WHERE t.session_id IN (/*SLICE:session_ids*/?)
+ORDER BY i.task_instance_id, i.position
+`
+
+func (q *Queries) ListTaskDoneWhenUnsatisfiedItemsForSessions(ctx context.Context, sessionIds []string) ([]TaskDoneWhenUnsatisfiedItem, error) {
+	query := listTaskDoneWhenUnsatisfiedItemsForSessions
+	var queryParams []interface{}
+	if len(sessionIds) > 0 {
+		for _, v := range sessionIds {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:session_ids*/?", strings.Repeat(",?", len(sessionIds))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:session_ids*/?", "NULL", 1)
+	}
+	rows, err := q.db.QueryContext(ctx, query, queryParams...)
 	if err != nil {
 		return nil, err
 	}
@@ -1310,6 +1666,64 @@ func (q *Queries) ListTaskInstanceLayersForSession(ctx context.Context, sessionI
 	return items, nil
 }
 
+const listTaskInstanceLayersForSessions = `-- name: ListTaskInstanceLayersForSessions :many
+SELECT l.task_instance_id, l.position, l.effect_id, l.status, l.inputs_json,
+       l.locals_json, l.outputs_json, l.env_json, l.heartbeat_ticks,
+       l.heartbeat_escalations, l.setup_at, l.failed_at, l.cleaned_at, l.error
+FROM task_instance_layers l
+JOIN task_instances t ON t.id = l.task_instance_id
+WHERE t.session_id IN (/*SLICE:session_ids*/?)
+ORDER BY l.task_instance_id, l.position
+`
+
+func (q *Queries) ListTaskInstanceLayersForSessions(ctx context.Context, sessionIds []string) ([]TaskInstanceLayer, error) {
+	query := listTaskInstanceLayersForSessions
+	var queryParams []interface{}
+	if len(sessionIds) > 0 {
+		for _, v := range sessionIds {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:session_ids*/?", strings.Repeat(",?", len(sessionIds))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:session_ids*/?", "NULL", 1)
+	}
+	rows, err := q.db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TaskInstanceLayer
+	for rows.Next() {
+		var i TaskInstanceLayer
+		if err := rows.Scan(
+			&i.TaskInstanceID,
+			&i.Position,
+			&i.EffectID,
+			&i.Status,
+			&i.InputsJson,
+			&i.LocalsJson,
+			&i.OutputsJson,
+			&i.EnvJson,
+			&i.HeartbeatTicks,
+			&i.HeartbeatEscalations,
+			&i.SetupAt,
+			&i.FailedAt,
+			&i.CleanedAt,
+			&i.Error,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTaskInstances = `-- name: ListTaskInstances :many
 
 SELECT id, session_id, instance_name, task_id, scope, status, sequence,
@@ -1322,6 +1736,68 @@ FROM task_instances WHERE session_id = ? ORDER BY instance_name
 // Task instances (dynamic; Session.Tasks entries)
 func (q *Queries) ListTaskInstances(ctx context.Context, sessionID string) ([]TaskInstance, error) {
 	rows, err := q.db.QueryContext(ctx, listTaskInstances, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TaskInstance
+	for rows.Next() {
+		var i TaskInstance
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.InstanceName,
+			&i.TaskID,
+			&i.Scope,
+			&i.Status,
+			&i.Sequence,
+			&i.Resource,
+			&i.Named,
+			&i.InputsJson,
+			&i.OutputsJson,
+			&i.StateJson,
+			&i.ResourceObservationJson,
+			&i.ResourceObservedAt,
+			&i.ExtraDoneWhenJson,
+			&i.Error,
+			&i.SetupAt,
+			&i.FailedAt,
+			&i.CleanedAt,
+			&i.FinalizedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTaskInstancesForSessions = `-- name: ListTaskInstancesForSessions :many
+SELECT id, session_id, instance_name, task_id, scope, status, sequence,
+       resource, named, inputs_json, outputs_json, state_json,
+       resource_observation_json, resource_observed_at, extra_done_when_json,
+       error, setup_at, failed_at, cleaned_at, finalized_at
+FROM task_instances WHERE session_id IN (/*SLICE:session_ids*/?) ORDER BY session_id, instance_name
+`
+
+func (q *Queries) ListTaskInstancesForSessions(ctx context.Context, sessionIds []string) ([]TaskInstance, error) {
+	query := listTaskInstancesForSessions
+	var queryParams []interface{}
+	if len(sessionIds) > 0 {
+		for _, v := range sessionIds {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:session_ids*/?", strings.Repeat(",?", len(sessionIds))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:session_ids*/?", "NULL", 1)
+	}
+	rows, err := q.db.QueryContext(ctx, query, queryParams...)
 	if err != nil {
 		return nil, err
 	}
@@ -1455,6 +1931,48 @@ func (q *Queries) SessionNameByID(ctx context.Context, id string) (string, error
 	var name string
 	err := row.Scan(&name)
 	return name, err
+}
+
+const sessionNamesByIDs = `-- name: SessionNamesByIDs :many
+SELECT id, name FROM sessions WHERE id IN (/*SLICE:ids*/?)
+`
+
+type SessionNamesByIDsRow struct {
+	ID   string
+	Name string
+}
+
+func (q *Queries) SessionNamesByIDs(ctx context.Context, ids []string) ([]SessionNamesByIDsRow, error) {
+	query := sessionNamesByIDs
+	var queryParams []interface{}
+	if len(ids) > 0 {
+		for _, v := range ids {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:ids*/?", strings.Repeat(",?", len(ids))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:ids*/?", "NULL", 1)
+	}
+	rows, err := q.db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SessionNamesByIDsRow
+	for rows.Next() {
+		var i SessionNamesByIDsRow
+		if err := rows.Scan(&i.ID, &i.Name); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const updateSessionByID = `-- name: UpdateSessionByID :exec

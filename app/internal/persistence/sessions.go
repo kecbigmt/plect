@@ -51,7 +51,13 @@ func (db *DB) GetSession(ctx context.Context, name string) (*domain.Session, err
 	return s, nil
 }
 
-// AllSessions returns every live session, keyed by name (see GetSession).
+// AllSessions returns every live session, keyed by name (see GetSession). It
+// loads every session's extras (parent, children, channel health, tasks) in
+// one batch of queries covering the whole result set, rather than one round
+// of loadSessionExtras' own queries per row: at this call's actual scale
+// (every non-destroyed session, not just the handful currently up) a
+// per-row loop turns into several thousand SQL round trips per call, which
+// is the N+1 this method exists to not have.
 func (db *DB) AllSessions(ctx context.Context) (map[string]*domain.Session, error) {
 	result := make(map[string]*domain.Session)
 	err := db.WithReadTx(ctx, func(tx *sql.Tx) error {
@@ -59,15 +65,17 @@ func (db *DB) AllSessions(ctx context.Context) (map[string]*domain.Session, erro
 		if err != nil {
 			return fmt.Errorf("list sessions: %w", err)
 		}
+		sessions := make([]*domain.Session, 0, len(rows))
 		for _, row := range rows {
 			s, err := sessionFromRow(row)
 			if err != nil {
 				return err
 			}
-			if err := db.loadSessionExtras(ctx, tx, s); err != nil {
-				return err
-			}
+			sessions = append(sessions, s)
 			result[s.Name] = s
+		}
+		if err := db.loadSessionExtrasBatch(ctx, tx, sessions); err != nil {
+			return err
 		}
 		return nil
 	})
@@ -631,4 +639,112 @@ func (db *DB) loadSessionExtras(ctx context.Context, q sqlcgen.DBTX, s *domain.S
 	s.Nodes = nodes
 	s.Tasks = tasks
 	return nil
+}
+
+// loadSessionExtrasBatch is loadSessionExtras generalized over many sessions
+// at once: each of its four sub-loads (parent, children, channel health,
+// tasks) runs once for the whole slice, batched by session id, instead of
+// once per session. See AllSessions' doc comment for why this matters.
+func (db *DB) loadSessionExtrasBatch(ctx context.Context, q sqlcgen.DBTX, sessions []*domain.Session) error {
+	if len(sessions) == 0 {
+		return nil
+	}
+	queries := sqlcgen.New(q)
+
+	ids := make([]string, len(sessions))
+	for i, s := range sessions {
+		ids[i] = s.ID
+	}
+
+	parentRootNames, err := resolveParentRootNames(ctx, queries, sessions)
+	if err != nil {
+		return err
+	}
+	childrenByParentID, err := listLiveChildSessionNamesBatch(ctx, queries, ids)
+	if err != nil {
+		return err
+	}
+	validationBySession, deliveryBySession, err := loadChannelHealthBatch(ctx, queries, ids)
+	if err != nil {
+		return err
+	}
+	nodesBySession, tasksBySession, err := loadTasksBatch(ctx, q, ids)
+	if err != nil {
+		return err
+	}
+
+	for _, s := range sessions {
+		switch {
+		case s.ParentSessionID != "":
+			s.ParentSession = parentRootNames[s.ParentSessionID]
+		case s.RootSessionID != "":
+			if name, ok := parentRootNames[s.RootSessionID]; ok {
+				s.ParentSession = "root:" + name
+			} else {
+				s.ParentSession = ""
+			}
+		default:
+			s.ParentSession = ""
+		}
+		s.Children = childrenByParentID[s.ID]
+		s.ChannelValidationHealth = validationBySession[s.ID]
+		s.ChannelDeliveryHealth = deliveryBySession[s.ID]
+		s.Nodes = nodesBySession[s.ID]
+		s.Tasks = tasksBySession[s.ID]
+	}
+	return nil
+}
+
+// resolveParentRootNames batch-resolves every session's ParentSessionID/
+// RootSessionID to a name in one query, keyed by that id (not by the owning
+// session), mirroring deriveParentSession's own two-column lookup.
+func resolveParentRootNames(ctx context.Context, q *sqlcgen.Queries, sessions []*domain.Session) (map[string]string, error) {
+	seen := map[string]bool{}
+	ids := make([]string, 0)
+	for _, s := range sessions {
+		for _, id := range [2]string{s.ParentSessionID, s.RootSessionID} {
+			if id != "" && !seen[id] {
+				seen[id] = true
+				ids = append(ids, id)
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := q.SessionNamesByIDs(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("resolve parent/root session names: %w", err)
+	}
+	names := make(map[string]string, len(rows))
+	for _, r := range rows {
+		names[r.ID] = r.Name
+	}
+	return names, nil
+}
+
+// listLiveChildSessionNamesBatch batch-resolves every session's live
+// children in one query, grouped by parent_session_id; a parent with no
+// live children is simply absent from the returned map, matching
+// loadSessionExtras' own nil-Children convention.
+func listLiveChildSessionNamesBatch(ctx context.Context, q *sqlcgen.Queries, ids []string) (map[string][]string, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	parentIDs := make([]sql.NullString, len(ids))
+	for i, id := range ids {
+		parentIDs[i] = sql.NullString{String: id, Valid: true}
+	}
+	rows, err := q.ListLiveChildSessionNamesForSessions(ctx, parentIDs)
+	if err != nil {
+		return nil, fmt.Errorf("list children: %w", err)
+	}
+	out := make(map[string][]string)
+	for _, r := range rows {
+		if !r.ParentSessionID.Valid {
+			continue
+		}
+		out[r.ParentSessionID.String] = append(out[r.ParentSessionID.String], r.Name)
+	}
+	return out, nil
 }
