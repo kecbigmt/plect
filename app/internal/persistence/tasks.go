@@ -337,6 +337,7 @@ func upsertNodeExecutionTx(ctx context.Context, q *sqlcgen.Queries, sessionID, n
 	if err != nil {
 		return fmt.Errorf("marshal node %q/%q done_when: %w", sessionID, nodeID, err)
 	}
+	cleanupJSON := nullRawJSON(ts.Cleanup)
 
 	if err := q.EnsureNodeInstance(ctx, sqlcgen.EnsureNodeInstanceParams{SessionID: sessionID, NodeID: nodeID}); err != nil {
 		return fmt.Errorf("ensure node instance %q/%q: %w", sessionID, nodeID, err)
@@ -356,6 +357,7 @@ func upsertNodeExecutionTx(ctx context.Context, q *sqlcgen.Queries, sessionID, n
 			Scope:                   ts.Scope,
 			Status:                  ts.Status,
 			Resource:                nullString(ts.Resource),
+			ExecutionDir:            nullString(ts.ExecutionDir),
 			InputsJson:              inputsJSON,
 			OutputsJson:             outputsJSON,
 			StateJson:               stateJSON,
@@ -363,6 +365,8 @@ func upsertNodeExecutionTx(ctx context.Context, q *sqlcgen.Queries, sessionID, n
 			ResourceObservedAt:      observedAt,
 			DoneWhenJson:            doneWhenJSON,
 			ExtraDoneWhenJson:       nullRawJSON(ts.ExtraDoneWhen),
+			CleanupJson:             cleanupJSON,
+			PluginRef:               nullString(ts.PluginRef),
 			Error:                   nullString(ts.Error),
 			SetupAt:                 formatTimeNull(ts.SetupAt),
 			FailedAt:                formatTimeNull(ts.FailedAt),
@@ -384,6 +388,7 @@ func upsertNodeExecutionTx(ctx context.Context, q *sqlcgen.Queries, sessionID, n
 			Scope:                   ts.Scope,
 			Status:                  ts.Status,
 			Resource:                nullString(ts.Resource),
+			ExecutionDir:            nullString(ts.ExecutionDir),
 			InputsJson:              inputsJSON,
 			OutputsJson:             outputsJSON,
 			StateJson:               stateJSON,
@@ -391,6 +396,8 @@ func upsertNodeExecutionTx(ctx context.Context, q *sqlcgen.Queries, sessionID, n
 			ResourceObservedAt:      observedAt,
 			DoneWhenJson:            doneWhenJSON,
 			ExtraDoneWhenJson:       nullRawJSON(ts.ExtraDoneWhen),
+			CleanupJson:             cleanupJSON,
+			PluginRef:               nullString(ts.PluginRef),
 			Error:                   nullString(ts.Error),
 			SetupAt:                 formatTimeNull(ts.SetupAt),
 			FailedAt:                formatTimeNull(ts.FailedAt),
@@ -483,12 +490,15 @@ func nodeExecutionFromRow(row sqlcgen.NodeExecution) (*contract.TaskState, error
 		Status:        row.Status,
 		Seq:           int(row.Sequence),
 		Resource:      row.Resource.String,
+		ExecutionDir:  row.ExecutionDir.String,
 		Inputs:        inputs,
 		Outputs:       outputs,
 		State:         state,
 		Observed:      observed,
 		DoneWhen:      doneWhen,
 		ExtraDoneWhen: rawJSONFromColumn(row.ExtraDoneWhenJson),
+		Cleanup:       rawJSONFromColumn(row.CleanupJson),
+		PluginRef:     row.PluginRef.String,
 		Error:         row.Error.String,
 		SetupAt:       setupAt,
 		FailedAt:      failedAt,

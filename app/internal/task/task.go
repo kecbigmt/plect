@@ -17,6 +17,7 @@ package task
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -701,15 +702,28 @@ func reportCleanupFailure(obs Observer, r Resolved, elapsed time.Duration, err e
 // RunSetup is idempotent: a task whose persisted state is already
 // "produced" is verified before it is reused, not blindly skipped — see
 // verifyLiveness and invalidateProducedNode. Tasks in any other state
-// (absent, "failed", "cleaned") are re-run with a fresh setup attempt. Task
-// authors must make their setup scripts cope with this by verifying the
-// desired state rather than blindly recreating; see README "Task model"
+// (absent, "failed", "cleaned") are re-run with a fresh setup attempt, under
+// the SAME declaration (task id and scope unchanged) as the existing record.
+// Task authors must make their setup scripts cope with retry by verifying
+// the desired state rather than blindly recreating; see README "Task model"
 // section.
+//
+// A node whose existing, unreleased (not yet "cleaned") record names a
+// DIFFERENT declaration — a workflow revision remapped this node id onto a
+// different task/effect — is refused rather than silently overwritten: an
+// unreleased allocation's own release recipe must not be discarded just
+// because the node id it lived under now means something else. Release it
+// first (`plect down`/`plect destroy`) and retry. This is deliberately not
+// gated by a force flag yet — no caller needs one — see issue #496.
 func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, tasks map[string]*contract.TaskState, observer Observer) error {
 	obs := observerOr(observer)
 	terminalOwner := terminalOwnerIn(ordered)
 	for _, r := range ordered {
 		session = withFreshTerminalOutputs(session, terminalOwner, tasks)
+		if existing, ok := tasks[r.NodeID]; ok && existing != nil && existing.Status != contract.TaskStatusCleaned && declarationChanged(r, existing) {
+			return fmt.Errorf("node %q: an unreleased setup attempt for a different declaration (task %q) still exists; release it with `plect down` or `plect destroy` before setting up %q",
+				r.NodeID, describeTaskID(existing.TaskID, r.NodeID), describeTaskID(taskIDFor(r), r.NodeID))
+		}
 		if existing, ok := tasks[r.NodeID]; ok && existing != nil && existing.Status == contract.TaskStatusProduced {
 			aliveStart := time.Now()
 			aliveErr := verifyLiveness(goCtx, r, session, existing)
@@ -740,13 +754,13 @@ func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, ta
 		deps := dependencyOutputs(r.DependsOn, tasks)
 		resolvedInputs, inputErr := ResolveNodeInputs(r.Inputs, deps, workflowOutputs(tasks), session)
 		if inputErr != nil {
-			tasks[r.NodeID] = failedState(r, now, inputErr.Error(), prev, nil)
+			tasks[r.NodeID] = failedState(r, session, now, inputErr.Error(), prev, nil)
 			wrapped := fmt.Errorf("node %q input: %w", r.NodeID, inputErr)
 			return reportSetupFailure(obs, r, time.Since(now), wrapped, nil)
 		}
 		if r.InputsSchema != nil {
 			if vErr := r.InputsSchema.Validate(toJSONShape(resolvedInputs)); vErr != nil {
-				tasks[r.NodeID] = failedState(r, now, vErr.Error(), prev, resolvedInputs)
+				tasks[r.NodeID] = failedState(r, session, now, vErr.Error(), prev, resolvedInputs)
 				wrapped := fmt.Errorf("node %q input schema: %w", r.NodeID, vErr)
 				return reportSetupFailure(obs, r, time.Since(now), wrapped, nil)
 			}
@@ -765,7 +779,7 @@ func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, ta
 			if nestErr != nil {
 				// The layers that did produce are persisted with the
 				// failure: the next cleanup has to unwind exactly those.
-				failed := failedState(r, now, nestErr.Error(), prev, resolvedInputs)
+				failed := failedState(r, session, now, nestErr.Error(), prev, resolvedInputs)
 				failed.Layers = layers
 				tasks[r.NodeID] = failed
 				wrapped := fmt.Errorf("task %q: %w", r.NodeID, nestErr)
@@ -773,21 +787,25 @@ func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, ta
 			}
 			outputs, projErr := projectNestedOutputs(r, layers, session)
 			if projErr != nil {
-				failed := failedState(r, now, projErr.Error(), prev, resolvedInputs)
+				failed := failedState(r, session, now, projErr.Error(), prev, resolvedInputs)
 				failed.Layers = layers
 				tasks[r.NodeID] = failed
 				wrapped := fmt.Errorf("task %q: %w", r.NodeID, projErr)
 				return reportSetupFailure(obs, r, time.Since(now), wrapped, stderr)
 			}
 			tasks[r.NodeID] = &contract.TaskState{
-				Scope:   r.Scope,
-				TaskID:  taskIDFor(r),
-				Status:  contract.TaskStatusProduced,
-				Inputs:  resolvedInputs,
-				Outputs: outputs,
-				Layers:  layers,
-				Seq:     nextSeq(tasks),
-				SetupAt: now,
+				Scope:        r.Scope,
+				TaskID:       taskIDFor(r),
+				Status:       contract.TaskStatusProduced,
+				Inputs:       resolvedInputs,
+				Outputs:      outputs,
+				Layers:       layers,
+				DependsOn:    append([]string(nil), r.DependsOn...),
+				ExecutionDir: session.WorkspaceDirPath,
+				Cleanup:      retainCleanup(r),
+				PluginRef:    pluginRef(r),
+				Seq:          nextSeq(tasks),
+				SetupAt:      now,
 			}
 			reportSetupSuccess(obs, r, time.Since(now), stderr)
 			continue
@@ -797,7 +815,7 @@ func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, ta
 		if r.Setup != nil {
 			resolved, resolveErr := resolveEffect(r.Setup, setupRoots(ctx), ctx, r.From, nil)
 			if resolveErr != nil {
-				tasks[r.NodeID] = failedState(r, now, resolveErr.Error(), prev, resolvedInputs)
+				tasks[r.NodeID] = failedState(r, session, now, resolveErr.Error(), prev, resolvedInputs)
 				wrapped := fmt.Errorf("effect %q setup: %w", r.NodeID, resolveErr)
 				return reportSetupFailure(obs, r, time.Since(now), wrapped, nil)
 			}
@@ -805,33 +823,37 @@ func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, ta
 			resolved.Close()
 			stderrCaptured = stderr
 			if runErr != nil {
-				tasks[r.NodeID] = failedState(r, now, runErr.Error(), prev, resolvedInputs)
+				tasks[r.NodeID] = failedState(r, session, now, runErr.Error(), prev, resolvedInputs)
 				wrapped := fmt.Errorf("task %q setup: %w", r.NodeID, runErr)
 				return reportSetupFailure(obs, r, time.Since(now), wrapped, stderr)
 			}
 			var parseErr error
 			outputs, parseErr = lang.ParseOutputs(stdout)
 			if parseErr != nil {
-				tasks[r.NodeID] = failedState(r, now, parseErr.Error(), prev, resolvedInputs)
+				tasks[r.NodeID] = failedState(r, session, now, parseErr.Error(), prev, resolvedInputs)
 				wrapped := fmt.Errorf("task %q setup: %w", r.NodeID, parseErr)
 				return reportSetupFailure(obs, r, time.Since(now), wrapped, stderr)
 			}
 		}
 		if r.OutputsSchema != nil {
 			if vErr := r.OutputsSchema.Validate(outputs); vErr != nil {
-				tasks[r.NodeID] = failedState(r, now, vErr.Error(), prev, resolvedInputs)
+				tasks[r.NodeID] = failedState(r, session, now, vErr.Error(), prev, resolvedInputs)
 				wrapped := fmt.Errorf("task %q setup: outputs schema: %w", r.NodeID, vErr)
 				return reportSetupFailure(obs, r, time.Since(now), wrapped, stderrCaptured)
 			}
 		}
 		tasks[r.NodeID] = &contract.TaskState{
-			Scope:   r.Scope,
-			TaskID:  taskIDFor(r),
-			Status:  contract.TaskStatusProduced,
-			Inputs:  resolvedInputs,
-			Outputs: outputs,
-			Seq:     nextSeq(tasks),
-			SetupAt: now,
+			Scope:        r.Scope,
+			TaskID:       taskIDFor(r),
+			Status:       contract.TaskStatusProduced,
+			Inputs:       resolvedInputs,
+			Outputs:      outputs,
+			DependsOn:    append([]string(nil), r.DependsOn...),
+			ExecutionDir: session.WorkspaceDirPath,
+			Cleanup:      retainCleanup(r),
+			PluginRef:    pluginRef(r),
+			Seq:          nextSeq(tasks),
+			SetupAt:      now,
 		}
 		reportSetupSuccess(obs, r, time.Since(now), stderrCaptured)
 	}
@@ -906,16 +928,84 @@ func taskIDFor(r Resolved) string {
 	return r.TaskID
 }
 
-func failedState(r Resolved, now time.Time, errMsg string, prev, inputs map[string]any) *contract.TaskState {
-	return &contract.TaskState{
-		Scope:    r.Scope,
-		TaskID:   taskIDFor(r),
-		Status:   contract.TaskStatusFailed,
-		Inputs:   inputs,
-		Outputs:  prev,
-		FailedAt: now,
-		Error:    errMsg,
+// declarationChanged reports whether the node about to be (re-)set up names
+// a different declaration than existing's own recorded one -- the case
+// RunSetup refuses to silently overwrite while existing is unreleased.
+func declarationChanged(r Resolved, existing *contract.TaskState) bool {
+	return existing.Scope != r.Scope || existing.TaskID != taskIDFor(r)
+}
+
+// describeTaskID renders a task_id column's stored value (empty means "same
+// as the node id", per taskIDFor's convention) back into a readable address
+// for an error message.
+func describeTaskID(taskID, nodeID string) string {
+	if taskID == "" {
+		return nodeID
 	}
+	return taskID
+}
+
+func failedState(r Resolved, session SessionVars, now time.Time, errMsg string, prev, inputs map[string]any) *contract.TaskState {
+	return &contract.TaskState{
+		Scope:        r.Scope,
+		TaskID:       taskIDFor(r),
+		Status:       contract.TaskStatusFailed,
+		Inputs:       inputs,
+		Outputs:      prev,
+		DependsOn:    append([]string(nil), r.DependsOn...),
+		ExecutionDir: session.WorkspaceDirPath,
+		Cleanup:      retainCleanup(r),
+		PluginRef:    pluginRef(r),
+		FailedAt:     now,
+		Error:        errMsg,
+	}
+}
+
+// retainedCleanup is the JSON shape persisted as TaskState.Cleanup: a plain
+// (non-nested) node's cleanup action, resolved at setup time, plus the
+// ownership/source facts needed to run it again later without re-reading
+// whatever the *current* task/effect definition says. lang.Action and
+// lang.Value are plain data (no compiled/unexported internals), so this
+// round-trips through encoding/json with no custom (un)marshaling.
+//
+// Deferred: a nested node's own cleanup chain (r.Layers) is not retained
+// here -- effect.Layer carries compiled *jsonschema.Schema fields that are
+// not JSON-serializable as-is, and teardown for a nested chain still
+// re-resolves it from the current definition, exactly as before this
+// change. This is a scoped, documented gap (see issue #496's PR body), not
+// an oversight.
+type retainedCleanup struct {
+	Action     *lang.Action   `json:"action"`
+	SourcePath string         `json:"source_path,omitempty"`
+	From       lang.Ownership `json:"from"`
+}
+
+// retainCleanup returns r's retained cleanup contract, or nil when r has no
+// plain cleanup action to retain (nested nodes; a node declaring none).
+func retainCleanup(r Resolved) json.RawMessage {
+	if r.Cleanup == nil || len(r.Layers) > 0 {
+		return nil
+	}
+	encoded, err := json.Marshal(retainedCleanup{Action: r.Cleanup, SourcePath: r.SourcePath, From: r.From})
+	if err != nil {
+		// r.Cleanup/From are plain data assembled by this package's own
+		// config-loading code; a marshal failure here would mean that
+		// invariant broke, not a runtime condition a caller can act on.
+		return nil
+	}
+	return encoded
+}
+
+// pluginRef names the catalog alias r's setup resolved bin references
+// against, or empty for a global/user-owned effect. This is the alias
+// only, not a pinned revision/digest: resolving a stable revision would
+// require threading the plugin lockfile into RunSetup, which no caller
+// needs yet.
+func pluginRef(r Resolved) string {
+	if !r.From.IsPlugin {
+		return ""
+	}
+	return r.From.Alias
 }
 
 // toJSONShape normalizes a map[string]any (with string-typed leaves from

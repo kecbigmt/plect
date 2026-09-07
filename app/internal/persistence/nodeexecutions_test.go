@@ -2,6 +2,7 @@ package persistence
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -52,6 +53,45 @@ func countNodeExecutionsForTest(t *testing.T, db *DB, sessionName, nodeID string
 		t.Fatalf("count node_executions(%q/%q): %v", sessionName, nodeID, err)
 	}
 	return count
+}
+
+// TestPutSession_NodeExecutionRetainedFactsRoundTrip proves ExecutionDir,
+// Cleanup (the retained cleanup contract), and PluginRef survive a
+// PutSession/GetSession round trip -- persistence stores Cleanup opaquely
+// (json.RawMessage) and must not alter its bytes.
+func TestPutSession_NodeExecutionRetainedFactsRoundTrip(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	cleanup := json.RawMessage(`{"action":{"Type":"shell","Script":"true"},"from":{"IsPlugin":true,"Alias":"gh"}}`)
+	session := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Nodes: map[string]*contract.TaskState{
+		"a": {
+			Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "work",
+			ExecutionDir: "/tmp/workdir", Cleanup: cleanup, PluginRef: "gh",
+		},
+	}}
+	if err := db.PutSession(ctx, session); err != nil {
+		t.Fatalf("PutSession: %v", err)
+	}
+
+	got, err := db.GetSession(ctx, "s1")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	node := got.Nodes["a"]
+	if node == nil {
+		t.Fatal("node missing")
+	}
+	if node.ExecutionDir != "/tmp/workdir" {
+		t.Errorf("ExecutionDir = %q, want %q", node.ExecutionDir, "/tmp/workdir")
+	}
+	if node.PluginRef != "gh" {
+		t.Errorf("PluginRef = %q, want %q", node.PluginRef, "gh")
+	}
+	if string(node.Cleanup) != string(cleanup) {
+		t.Errorf("Cleanup = %s, want %s", node.Cleanup, cleanup)
+	}
 }
 
 // TestPutSession_NodeExecutionIDStableAcrossOrdinaryUpdate mirrors

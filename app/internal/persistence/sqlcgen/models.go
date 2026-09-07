@@ -37,6 +37,7 @@ type NodeExecution struct {
 	Scope                   string
 	Status                  string
 	Resource                sql.NullString
+	ExecutionDir            sql.NullString
 	InputsJson              sql.NullString
 	OutputsJson             sql.NullString
 	StateJson               sql.NullString
@@ -44,6 +45,8 @@ type NodeExecution struct {
 	ResourceObservedAt      sql.NullString
 	DoneWhenJson            sql.NullString
 	ExtraDoneWhenJson       sql.NullString
+	CleanupJson             sql.NullString
+	PluginRef               sql.NullString
 	Error                   sql.NullString
 	SetupAt                 sql.NullString
 	FailedAt                sql.NullString

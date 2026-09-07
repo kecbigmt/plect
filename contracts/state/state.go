@@ -151,6 +151,26 @@ type TaskState struct {
 	// edge. See docs/design/sqlite-persistence.md's "Node execution identity"
 	// section and node_execution_dependencies.
 	DependsOn []string `json:"depends_on,omitempty"`
+	// ExecutionDir is the absolute working directory this node's setup ran
+	// in (the session's workspace directory at setup time), retained per
+	// execution so a later release does not depend on the session's
+	// *current* workspace_dir. Meaningful only for a workflow-DAG node.
+	// Excluded from ordinary JSON output: it is a persistence-internal
+	// retention detail, not a fact external consumers (Web UI, MCP) need to
+	// see, per issue #496's security obligations.
+	ExecutionDir string `json:"-"`
+	// PluginRef is the resolved plugin catalog address and revision this
+	// execution's cleanup action's `bin` references resolve against, empty
+	// for a global/user-owned effect with no plugin involved. Same
+	// json:"-" rationale as ExecutionDir.
+	PluginRef string `json:"-"`
+	// Cleanup is the retained cleanup contract as resolved at setup time
+	// (already-encoded JSON; shape documented in
+	// docs/design/sqlite-persistence.md), so a later release does not need
+	// to re-read whatever the *current* task/effect definition says. Nil
+	// for an execution with no cleanup. Same json:"-" rationale as
+	// ExecutionDir.
+	Cleanup json.RawMessage `json:"-"`
 	// State is what a task instance holds about itself: the keys a reviewer
 	// or another session records into it, read by a completion predicate as
 	// `self.state.*`. Distinct from Outputs, which is what an effect's setup

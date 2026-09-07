@@ -136,27 +136,29 @@ AND NOT EXISTS (
 
 -- name: CurrentNodeExecution :one
 SELECT id, session_id, node_id, sequence, task_id, name, scope, status, resource,
-       inputs_json, outputs_json, state_json, resource_observation_json,
-       resource_observed_at, done_when_json, extra_done_when_json, error,
-       setup_at, failed_at, cleaned_at, finalized_at
+       execution_dir, inputs_json, outputs_json, state_json,
+       resource_observation_json, resource_observed_at, done_when_json,
+       extra_done_when_json, cleanup_json, plugin_ref, error, setup_at,
+       failed_at, cleaned_at, finalized_at
 FROM node_executions WHERE session_id = ? AND node_id = ? AND status <> 'cleaned';
 
 -- name: InsertNodeExecution :one
 INSERT INTO node_executions (
     id, session_id, node_id, sequence, task_id, name, scope, status, resource,
-    inputs_json, outputs_json, state_json, resource_observation_json,
-    resource_observed_at, done_when_json, extra_done_when_json, error,
-    setup_at, failed_at, cleaned_at, finalized_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    execution_dir, inputs_json, outputs_json, state_json,
+    resource_observation_json, resource_observed_at, done_when_json,
+    extra_done_when_json, cleanup_json, plugin_ref, error, setup_at,
+    failed_at, cleaned_at, finalized_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING id;
 
 -- name: UpdateNodeExecution :exec
 UPDATE node_executions SET
     sequence = ?, task_id = ?, name = ?, scope = ?, status = ?, resource = ?,
-    inputs_json = ?, outputs_json = ?, state_json = ?,
+    execution_dir = ?, inputs_json = ?, outputs_json = ?, state_json = ?,
     resource_observation_json = ?, resource_observed_at = ?, done_when_json = ?,
-    extra_done_when_json = ?, error = ?, setup_at = ?, failed_at = ?,
-    cleaned_at = ?, finalized_at = ?
+    extra_done_when_json = ?, cleanup_json = ?, plugin_ref = ?, error = ?,
+    setup_at = ?, failed_at = ?, cleaned_at = ?, finalized_at = ?
 WHERE id = ?;
 
 -- name: ListCurrentNodeExecutions :many
@@ -168,10 +170,11 @@ WHERE id = ?;
 -- strictly increasing one per attempt); it keeps the pick deterministic
 -- rather than leaving it to join-order chance.
 SELECT ne.id, ne.session_id, ne.node_id, ne.sequence, ne.task_id, ne.name,
-       ne.scope, ne.status, ne.resource, ne.inputs_json, ne.outputs_json,
-       ne.state_json, ne.resource_observation_json, ne.resource_observed_at,
-       ne.done_when_json, ne.extra_done_when_json, ne.error, ne.setup_at,
-       ne.failed_at, ne.cleaned_at, ne.finalized_at
+       ne.scope, ne.status, ne.resource, ne.execution_dir, ne.inputs_json,
+       ne.outputs_json, ne.state_json, ne.resource_observation_json,
+       ne.resource_observed_at, ne.done_when_json, ne.extra_done_when_json,
+       ne.cleanup_json, ne.plugin_ref, ne.error, ne.setup_at, ne.failed_at,
+       ne.cleaned_at, ne.finalized_at
 FROM node_executions ne
 WHERE ne.session_id = ?
 AND NOT EXISTS (

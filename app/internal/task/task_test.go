@@ -2,6 +2,7 @@ package task
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -273,6 +274,64 @@ func TestRunCleanup_RequiredSelfOutputAbsenceFailsTheRelease(t *testing.T) {
 	}
 }
 
+// TestRunSetup_RetainsCleanupContractAndExecutionDir proves a plain node's
+// setup snapshots its own cleanup action, execution directory, and plugin
+// reference onto TaskState -- see issue #496's node_executions.cleanup_json/
+// execution_dir/plugin_ref. persistence.writeTasksTx persists Cleanup
+// opaquely; this test only proves the task package's own producer side.
+func TestRunSetup_RetainsCleanupContractAndExecutionDir(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	plan := buildPlan(t,
+		[]taskStub{{id: "a", scope: "run", setup: `echo '{}'`, cleanup: `true`}},
+		[]nodeStub{{id: "a"}},
+	)
+	tasks := map[string]*contract.TaskState{}
+	if err := RunSetup(context.Background(), plan.Run, SessionVars{WorkspaceDirPath: "/tmp/x"}, tasks, nil); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	got := tasks["a"]
+	if got.ExecutionDir != "/tmp/x" {
+		t.Fatalf("ExecutionDir = %q, want %q", got.ExecutionDir, "/tmp/x")
+	}
+	if len(got.Cleanup) == 0 {
+		t.Fatal("Cleanup not retained")
+	}
+	var decoded struct {
+		Action struct {
+			Type   string `json:"Type"`
+			Script string `json:"Script"`
+		} `json:"action"`
+	}
+	if err := json.Unmarshal(got.Cleanup, &decoded); err != nil {
+		t.Fatalf("Cleanup did not decode as JSON: %v (%s)", err, got.Cleanup)
+	}
+	if decoded.Action.Type != lang.ActionShell || decoded.Action.Script != "true" {
+		t.Fatalf("decoded retained cleanup action = %+v, want the declared shell action", decoded.Action)
+	}
+}
+
+// TestRunSetup_RetainsNoCleanupContractForNestedNode proves a nested
+// (layered) node's Cleanup is left nil even though it declares one -- the
+// retained-contract shape does not cover effect.Layer's own cleanup chain
+// (its InputsSchema etc. are not JSON-serializable as-is), a scoped,
+// documented gap (see task.go's retainedCleanup doc comment). Its cleanup
+// still runs via the existing, unretained resolution path -- only the new
+// cleanup_json retention is skipped.
+func TestRunSetup_RetainsNoCleanupContractForNestedNode(t *testing.T) {
+	withScriptedExecutor(t, &scriptedExecutor{stdout: map[string]string{"inner-setup": `{"pid":42}`}})
+	outer := config.TaskDefinition{ID: "outer", Scope: "run", Cleanup: shellStub("outer-cleanup")}
+	inner := config.TaskDefinition{ID: "inner", Scope: "run", Setup: shellStub("inner-setup"), Cleanup: shellStub("inner-cleanup")}
+	tasks := map[string]*contract.TaskState{}
+	if err := RunSetup(context.Background(), nestedPlan(t, outer, inner), SessionVars{Name: "s"}, tasks, nil); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if got := tasks["outer"].Cleanup; got != nil {
+		t.Fatalf("Cleanup = %s, want nil for a nested node", got)
+	}
+}
+
 func TestRunSetup_CapturesOutputsAndRespectsDeps(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -303,6 +362,38 @@ func TestRunSetup_CapturesOutputsAndRespectsDeps(t *testing.T) {
 	}
 	if tasks["a"].Status != contract.TaskStatusProduced {
 		t.Fatalf("a.Status = %q", tasks["a"].Status)
+	}
+}
+
+// TestRunSetup_StampsDependsOnFromResolvedNode proves each node's setup
+// records its own resolved dependency edges onto TaskState.DependsOn --
+// persistence.writeTasksTx snapshots these into node_execution_dependencies
+// so release ordering survives even once the workflow declaration that
+// derived them changes or the dependency node disappears from it. See
+// issue #496.
+func TestRunSetup_StampsDependsOnFromResolvedNode(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	plan := buildPlan(t,
+		[]taskStub{
+			{id: "a", scope: "run", setup: `echo '{"k":"first"}'`},
+			{id: "b", scope: "run", setup: `echo '{}'`},
+		},
+		[]nodeStub{
+			{id: "a"},
+			{id: "b", inputs: depInput("a")},
+		},
+	)
+	tasks := map[string]*contract.TaskState{}
+	if err := RunSetup(context.Background(), plan.Run, SessionVars{Name: "x"}, tasks, nil); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if got := tasks["b"].DependsOn; len(got) != 1 || got[0] != "a" {
+		t.Fatalf("b.DependsOn = %v, want [a]", got)
+	}
+	if got := tasks["a"].DependsOn; len(got) != 0 {
+		t.Fatalf("a.DependsOn = %v, want none", got)
 	}
 }
 
@@ -392,6 +483,60 @@ func TestRunSetup_RetriesFailed(t *testing.T) {
 	}
 	if tasks["a"].Outputs["value"] != "second" {
 		t.Fatalf("outputs not refreshed: %v", tasks["a"].Outputs)
+	}
+}
+
+// TestRunSetup_RefusesUnreleasedNodeUnderADifferentDeclaration is the
+// issue #496 acceptance case: a node whose recorded, unreleased (here
+// "failed") attempt names a different task than the one about to be set up
+// must be refused rather than silently overwritten -- the old attempt's own
+// release recipe (task "old", not "new") would otherwise be discarded with
+// no way to release it later.
+func TestRunSetup_RefusesUnreleasedNodeUnderADifferentDeclaration(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	plan := buildPlan(t,
+		[]taskStub{{id: "new", scope: "run", setup: `echo '{}'`}},
+		[]nodeStub{{id: "a", uses: "new"}},
+	)
+	tasks := map[string]*contract.TaskState{
+		"a": {Scope: "run", Status: contract.TaskStatusFailed, TaskID: "old", Error: "boom"},
+	}
+	err := RunSetup(context.Background(), plan.Run, SessionVars{}, tasks, nil)
+	if err == nil {
+		t.Fatal("RunSetup: want refusal, got nil error")
+	}
+	if !strings.Contains(err.Error(), "old") || !strings.Contains(err.Error(), "new") {
+		t.Fatalf("error = %q, want it to name both the retained (%q) and requested (%q) declarations", err, "old", "new")
+	}
+	if got := tasks["a"]; got.Status != contract.TaskStatusFailed || got.TaskID != "old" || got.Error != "boom" {
+		t.Fatalf("retained state = %+v, want the unreleased attempt left untouched", got)
+	}
+}
+
+// TestRunSetup_RefusesUnreleasedProducedNodeUnderADifferentDeclaration
+// covers the same refusal for a currently "produced" node whose new
+// declaration no longer declares an alive probe at all -- without the
+// refusal, an absent probe would vacuously "pass" liveness and this node
+// would be treated as already matching a declaration it never actually ran.
+func TestRunSetup_RefusesUnreleasedProducedNodeUnderADifferentDeclaration(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	plan := buildPlan(t,
+		[]taskStub{{id: "new", scope: "run", setup: `echo '{}'`}},
+		[]nodeStub{{id: "a", uses: "new"}},
+	)
+	tasks := map[string]*contract.TaskState{
+		"a": {Scope: "run", Status: contract.TaskStatusProduced, TaskID: "old", Outputs: map[string]any{"x": "y"}},
+	}
+	err := RunSetup(context.Background(), plan.Run, SessionVars{}, tasks, nil)
+	if err == nil {
+		t.Fatal("RunSetup: want refusal, got nil error")
+	}
+	if got := tasks["a"]; got.Status != contract.TaskStatusProduced || got.TaskID != "old" || got.Outputs["x"] != "y" {
+		t.Fatalf("retained state = %+v, want the unreleased attempt left untouched", got)
 	}
 }
 
