@@ -1,2 +1,3 @@
 node_modules/
-webapp/dist/
+webapp/dist/*
+!webapp/dist/.gitkeep

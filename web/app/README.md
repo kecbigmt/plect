@@ -55,14 +55,13 @@ mutating request echoes it back as `X-CSRF-Token`. `src/lib/bootstrap.ts` and
 pnpm build   # tsc --noEmit && vite build -> ../../app/internal/webui/webapp/dist/
 ```
 
-The output is gitignored, not committed: `go install`'s installability
-invariant compiles from committed module source alone, so
-`app/internal/webui/webapp` embeds a committed placeholder shell by default
-and only picks up a real `dist/` when built with `-tags webembed` (see that
-package's `embed.go`). The release workflow builds this package before
-compiling `plect-web` with that tag; CI's `web-app-build` job
-(`.github/workflows/ci.yml`) builds and tests it from source on every
-production-path change, without comparing its output to Git.
+The output is gitignored (only a `dist/.gitkeep` placeholder is committed,
+so `go install`'s installability invariant still compiles from committed
+module source alone — see `app/internal/webui/webapp/embed.go`). Without
+this build, `plect-web` serves a plain "Web UI not built" notice on every
+`/app/` route instead of the shell. CI's `web-app-build` job
+(`.github/workflows/ci.yml`) builds and tests this package from source on
+every production-path change, without comparing its output to Git.
 
 ## Testing
 

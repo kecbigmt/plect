@@ -118,6 +118,10 @@ type Server struct {
 	// busClientFn, when set, overrides how the live-timeline handler reaches the
 	// bus (tests point it at an httptest bus instead of a Unix socket).
 	busClientFn func() *event.Client
+	// webAppFS, when set, overrides the embedded Web UI build handleWebApp
+	// serves — tests substitute a synthetic fs.FS for both the built and
+	// not-built states instead of depending on what happens to be on disk.
+	webAppFS fs.FS
 }
 
 // New builds a Server with default config (no auth token — tailnet trust).
@@ -338,11 +342,22 @@ func buttonClass(variant any) string {
 // an error page — the same reason any single-page app's server needs a
 // catch-all.
 func (s *Server) handleWebApp() http.Handler {
-	fileServer := http.StripPrefix("/app/", http.FileServerFS(webapp.FS))
+	root := s.webAppFS
+	if root == nil {
+		root = webapp.FS
+	}
+	dist, err := fs.Sub(root, "dist")
+	if err != nil {
+		panic(err) // dist/ (even just its placeholder) is always embedded; a missing one is a build bug, not a runtime condition.
+	}
+	if _, err := fs.Stat(dist, "index.html"); err != nil {
+		return webAppNotBuiltHandler()
+	}
+	fileServer := http.StripPrefix("/app/", http.FileServerFS(dist))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimPrefix(r.URL.Path, "/app/")
 		if name != "" {
-			if _, err := fs.Stat(webapp.FS, name); err != nil {
+			if _, err := fs.Stat(dist, name); err != nil {
 				name = "" // unknown path: fall through to the directory below
 			}
 		}
@@ -358,5 +373,20 @@ func (s *Server) handleWebApp() http.Handler {
 			req.URL = &url.URL{Path: "/app/" + name, RawQuery: r.URL.RawQuery}
 		}
 		fileServer.ServeHTTP(w, req)
+	})
+}
+
+// webAppNotBuiltHandler serves every /app/ route the same 503 when dist/
+// has no index.html — a plain source build rather than a release archive
+// or a local pnpm build (see app/internal/webui/webapp/embed.go). The rest
+// of the server (API, login) is unaffected.
+func webAppNotBuiltHandler() http.Handler {
+	const body = `<!doctype html>
+<html><body><p>Web UI not built; run pnpm build in web/ (the release archive includes it).</p></body></html>
+`
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		fmt.Fprint(w, body)
 	})
 }

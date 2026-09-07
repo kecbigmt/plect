@@ -1,19 +1,11 @@
-// Package webapp exposes FS, the filesystem served under /app/ by
-// app/internal/webui's server. dist/ (web/app's Vite output) is
-// gitignored, and go:embed of a directory with zero matching files is a
-// compile error, not a runtime one — so FS has two build-tagged sources:
-// embed_dist.go (-tags webembed) embeds a real, pre-built dist/; the
-// default, embed_placeholder.go, embeds a tiny committed stand-in so
-// every other build/test of this module stays Node-free. Both root FS at
-// the shell's own contents, so callers need not know which one is active.
+// Package webapp embeds the Web UI shell served under /app/. dist/ (Vite's
+// output) is gitignored except for a placeholder dist/.gitkeep: go:embed
+// fails to compile on a directory with zero matching files, so something
+// must always be there. app/internal/webui/server.go checks at runtime
+// whether dist/index.html — a real build — is actually present.
 package webapp
 
-import "io/fs"
+import "embed"
 
-func mustSub(fsys fs.FS, dir string) fs.FS {
-	sub, err := fs.Sub(fsys, dir)
-	if err != nil {
-		panic(err) // the embedded build always contains this directory; a missing one is a build bug, not a runtime condition.
-	}
-	return sub
-}
+//go:embed all:dist
+var FS embed.FS

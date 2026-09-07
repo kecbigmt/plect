@@ -94,7 +94,7 @@ jobs:
           mkdir -p "$out"
           flags="-X github.com/kecbigmt/plecture/app/internal/version.Current=$version"
           go build -C app -ldflags "$flags" -o "$out/plect" ./cmd/plect
-          go build -C app -tags webembed -ldflags "$flags" -o "$out/plect-web" ./cmd/plect-web
+          go build -C app -ldflags "$flags" -o "$out/plect-web" ./cmd/plect-web
           "$out/plect" --help
           "$out/plect-web" --help
           tar -C dist -czf "dist/${root}.tar.gz" "$root"
