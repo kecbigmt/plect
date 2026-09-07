@@ -285,12 +285,28 @@ row a loaded state actually came from, and `task.RunSetup` carries it
 forward only when a fresh attempt continues that exact row (a
 same-declaration retry) — a genuinely new attempt (first setup, or one
 reviving a node this same call already released via a liveness-triggered
-cleanup) leaves it empty. `upsertNodeExecutionTx` refuses a write whose
-`ExecutionID` names a row that is no longer the current unreleased one (or
-no longer unreleased at all), rather than silently updating whatever
-generation happens to be current. A write whose `ExecutionID` is empty is
-never checked this way, since it makes no claim about continuing a
-specific row.
+cleanup) leaves it empty. When `ExecutionID` is set, `upsertNodeExecutionTx`
+resolves and updates exactly that row by id, regardless of its current
+status, refusing the write instead if the row is gone or if it has since
+been released (`status = 'cleaned'`) while the incoming write's own status
+has not — the one status combination this does not refuse is both sides
+already `'cleaned'`, which is a caller re-persisting a checkpoint it already
+wrote, not a conflict. Resolving by id rather than "current unreleased"
+is also what lets that re-persist target the same row instead of minting a
+duplicate cleaned one, since the "current unreleased" query would no longer
+see it. A write whose `ExecutionID` is empty makes no claim about
+continuing a specific row, so it instead falls back to "the current
+unreleased row for this node_id, if any" — update in place, or insert a
+fresh row when none exists. This fallback cannot always distinguish a
+genuinely new first attempt from a same-pass liveness-invalidate-then-
+rebuild (whose intermediate release was never itself persisted, since
+`task.RunSetup` operates on one in-memory state per node id and cannot
+represent "old row now cleaned" and "new row just produced" at once): both
+land on the same unreleased row it finds, collapsing what should be two
+generations into an update of the first. This is a known limitation, not
+something the fallback can safely resolve from the information available to
+it alone — see the ADR's Consequences section.
+
 Release is the only thing that clears a node: `service.unifiedTeardownList`
 enumerates every unreleased execution directly from `session.Nodes` — not
 from the *current* plan, which has nothing to say about a node it no

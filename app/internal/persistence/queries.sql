@@ -120,6 +120,14 @@ SELECT id, session_id, node_id, sequence, task_id, name, scope, status, resource
        failed_at, cleaned_at, finalized_at
 FROM node_executions WHERE session_id = ? AND node_id = ? AND status <> 'cleaned';
 
+-- name: NodeExecutionByID :one
+SELECT id, session_id, node_id, sequence, task_id, name, scope, status, resource,
+       execution_dir, inputs_json, outputs_json, state_json,
+       resource_observation_json, resource_observed_at, done_when_json,
+       extra_done_when_json, cleanup_json, plugin_ref, error, setup_at,
+       failed_at, cleaned_at, finalized_at
+FROM node_executions WHERE id = ?;
+
 -- name: InsertNodeExecution :one
 INSERT INTO node_executions (
     id, session_id, node_id, sequence, task_id, name, scope, status, resource,

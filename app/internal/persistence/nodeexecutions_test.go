@@ -396,3 +396,40 @@ func TestPutSession_RefusesUpdateAgainstAnExecutionAlreadyReleasedByAnotherWrite
 		t.Fatal("PutSession (stale update): want a conflict error, got nil")
 	}
 }
+
+// TestPutSession_RewritingAnAlreadyCleanedStateDoesNotDuplicateTheRow proves
+// re-persisting a state whose ExecutionID names an already-cleaned row
+// updates that same row rather than minting a second cleaned row for it --
+// CurrentNodeExecution excludes cleaned rows, so a lookup keyed only on
+// node_id would otherwise treat the row as absent and insert a duplicate.
+func TestPutSession_RewritingAnAlreadyCleanedStateDoesNotDuplicateTheRow(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	seed := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Nodes: map[string]*contract.TaskState{
+		"a": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "work"},
+	}}
+	if err := db.PutSession(ctx, seed); err != nil {
+		t.Fatalf("PutSession (seed): %v", err)
+	}
+	id := nodeExecutionIDForTest(t, db, "s1", "a")
+
+	cleaned := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Nodes: map[string]*contract.TaskState{
+		"a": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusCleaned, TaskID: "work", ExecutionID: id},
+	}}
+	if err := db.PutSession(ctx, cleaned); err != nil {
+		t.Fatalf("PutSession (cleaned): %v", err)
+	}
+
+	// A later checkpoint re-persists the same already-cleaned state, still
+	// naming the same row (mirroring service.Destroy's multiple checkpoint
+	// writes of one unchanged session.Nodes map).
+	if err := db.PutSession(ctx, cleaned); err != nil {
+		t.Fatalf("PutSession (re-persist cleaned): %v", err)
+	}
+
+	if got := countNodeExecutionsForTest(t, db, "s1", "a"); got != 1 {
+		t.Fatalf("node_executions rows for %q/%q = %d, want 1 (no duplicate cleaned row)", "s1", "a", got)
+	}
+}

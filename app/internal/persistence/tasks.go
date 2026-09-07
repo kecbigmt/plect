@@ -304,14 +304,14 @@ func orderNodesByDependency(nodes map[string]*contract.TaskState) []string {
 	return order
 }
 
-// upsertNodeExecutionTx reconciles nodeID's execution row: it updates the
-// current unreleased execution (see CurrentNodeExecution) in place when one
-// exists, preserving its id, or mints a fresh one otherwise. When ts carries
-// a non-empty ExecutionID (a same-declaration retry continuing a row this
-// write's caller already read), the write is refused instead of silently
-// retargeting a since-released or since-superseded generation. Layers and
-// dependency edges are always replaced wholesale for whichever execution id
-// this resolves to.
+// upsertNodeExecutionTx reconciles nodeID's execution row. When ts carries a
+// non-empty ExecutionID (a same-declaration retry continuing a row this
+// write's caller already read), it updates exactly that row, refusing the
+// write if it no longer exists rather than silently retargeting whatever
+// generation happens to be current. Otherwise it falls back to the current
+// unreleased execution (see CurrentNodeExecution), updating it in place or
+// inserting a fresh one when none exists. Layers and dependency edges are
+// always replaced wholesale for whichever execution id this resolves to.
 func upsertNodeExecutionTx(ctx context.Context, q *sqlcgen.Queries, sessionID, nodeID string, ts *contract.TaskState) error {
 	inputsJSON, err := marshalJSONMap(ts.Inputs)
 	if err != nil {
@@ -340,51 +340,30 @@ func upsertNodeExecutionTx(ctx context.Context, q *sqlcgen.Queries, sessionID, n
 	}
 
 	var executionID string
-	current, err := q.CurrentNodeExecution(ctx, sqlcgen.CurrentNodeExecutionParams{SessionID: sessionID, NodeID: nodeID})
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		if ts.ExecutionID != "" && ts.Status != contract.TaskStatusCleaned {
-			// A re-write of a state this same operation already persisted as
-			// cleaned (a later checkpoint in a multi-step Destroy, say) is not
-			// a conflict: nothing unreleased is being silently overwritten.
+	if ts.ExecutionID != "" {
+		// A write naming a specific row updates exactly that row, regardless
+		// of its current status -- looking it up by id rather than by "the
+		// current unreleased row for this node_id" is what lets a caller
+		// re-persist an already-cleaned state (a later checkpoint in a
+		// multi-step Destroy, say) without minting a duplicate cleaned row.
+		row, err := q.NodeExecutionByID(ctx, ts.ExecutionID)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return fmt.Errorf("node %q/%q: execution %q was released by another writer since this write's setup ran", sessionID, nodeID, ts.ExecutionID)
+		case err != nil:
+			return fmt.Errorf("find node execution %q/%q: %w", sessionID, nodeID, err)
+		case row.SessionID != sessionID || row.NodeID != nodeID:
+			return fmt.Errorf("node %q/%q: execution %q now belongs to %q/%q", sessionID, nodeID, ts.ExecutionID, row.SessionID, row.NodeID)
+		case row.Status == contract.TaskStatusCleaned && ts.Status != contract.TaskStatusCleaned:
+			// The writer's own view (ts.Status) predates the release: it
+			// still thinks this row is active, so proceeding would silently
+			// un-release an execution another writer already finished with.
+			// Re-persisting an already-cleaned state (ts.Status == cleaned
+			// too) is the one case this does not reject -- see
+			// TestPutSession_RewritingAnAlreadyCleanedStateDoesNotDuplicateTheRow.
 			return fmt.Errorf("node %q/%q: execution %q was released by another writer since this write's setup ran", sessionID, nodeID, ts.ExecutionID)
 		}
-		executionID, err = q.InsertNodeExecution(ctx, sqlcgen.InsertNodeExecutionParams{
-			ID:                      newULID(),
-			SessionID:               sessionID,
-			NodeID:                  nodeID,
-			Sequence:                int64(ts.Seq),
-			TaskID:                  nullString(ts.TaskID),
-			Name:                    nullString(ts.Name),
-			Scope:                   ts.Scope,
-			Status:                  ts.Status,
-			Resource:                nullString(ts.Resource),
-			ExecutionDir:            nullString(ts.ExecutionDir),
-			InputsJson:              inputsJSON,
-			OutputsJson:             outputsJSON,
-			StateJson:               stateJSON,
-			ResourceObservationJson: observationJSON,
-			ResourceObservedAt:      observedAt,
-			DoneWhenJson:            doneWhenJSON,
-			ExtraDoneWhenJson:       nullRawJSON(ts.ExtraDoneWhen),
-			CleanupJson:             cleanupJSON,
-			PluginRef:               nullString(ts.PluginRef),
-			Error:                   nullString(ts.Error),
-			SetupAt:                 formatTimeNull(ts.SetupAt),
-			FailedAt:                formatTimeNull(ts.FailedAt),
-			CleanedAt:               formatTimeNull(ts.CleanedAt),
-			FinalizedAt:             formatTimeNull(ts.FinalizedAt),
-		})
-		if err != nil {
-			return fmt.Errorf("insert node execution %q/%q: %w", sessionID, nodeID, err)
-		}
-	case err != nil:
-		return fmt.Errorf("find current node execution %q/%q: %w", sessionID, nodeID, err)
-	default:
-		if ts.ExecutionID != "" && ts.ExecutionID != current.ID {
-			return fmt.Errorf("node %q/%q: execution %q was superseded by %q since this write's setup ran", sessionID, nodeID, ts.ExecutionID, current.ID)
-		}
-		executionID = current.ID
+		executionID = row.ID
 		if err := q.UpdateNodeExecution(ctx, sqlcgen.UpdateNodeExecutionParams{
 			ID:                      executionID,
 			Sequence:                int64(ts.Seq),
@@ -410,6 +389,78 @@ func upsertNodeExecutionTx(ctx context.Context, q *sqlcgen.Queries, sessionID, n
 			FinalizedAt:             formatTimeNull(ts.FinalizedAt),
 		}); err != nil {
 			return fmt.Errorf("update node execution %q/%q: %w", sessionID, nodeID, err)
+		}
+	} else {
+		// No claimed identity: either genuinely the node's first attempt, or
+		// (see docs/design/sqlite-persistence.md's "Node execution identity"
+		// section) a same-pass liveness-invalidate-then-rebuild, whose
+		// intermediate "released" transition was never itself persisted. Both
+		// land here as "insert if nothing unreleased exists, else update the
+		// one that does" -- the second case's collapsing into one row rather
+		// than two generations is a known, documented limitation, not
+		// something this branch can safely resolve on the information it has.
+		current, err := q.CurrentNodeExecution(ctx, sqlcgen.CurrentNodeExecutionParams{SessionID: sessionID, NodeID: nodeID})
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			executionID, err = q.InsertNodeExecution(ctx, sqlcgen.InsertNodeExecutionParams{
+				ID:                      newULID(),
+				SessionID:               sessionID,
+				NodeID:                  nodeID,
+				Sequence:                int64(ts.Seq),
+				TaskID:                  nullString(ts.TaskID),
+				Name:                    nullString(ts.Name),
+				Scope:                   ts.Scope,
+				Status:                  ts.Status,
+				Resource:                nullString(ts.Resource),
+				ExecutionDir:            nullString(ts.ExecutionDir),
+				InputsJson:              inputsJSON,
+				OutputsJson:             outputsJSON,
+				StateJson:               stateJSON,
+				ResourceObservationJson: observationJSON,
+				ResourceObservedAt:      observedAt,
+				DoneWhenJson:            doneWhenJSON,
+				ExtraDoneWhenJson:       nullRawJSON(ts.ExtraDoneWhen),
+				CleanupJson:             cleanupJSON,
+				PluginRef:               nullString(ts.PluginRef),
+				Error:                   nullString(ts.Error),
+				SetupAt:                 formatTimeNull(ts.SetupAt),
+				FailedAt:                formatTimeNull(ts.FailedAt),
+				CleanedAt:               formatTimeNull(ts.CleanedAt),
+				FinalizedAt:             formatTimeNull(ts.FinalizedAt),
+			})
+			if err != nil {
+				return fmt.Errorf("insert node execution %q/%q: %w", sessionID, nodeID, err)
+			}
+		case err != nil:
+			return fmt.Errorf("find current node execution %q/%q: %w", sessionID, nodeID, err)
+		default:
+			executionID = current.ID
+			if err := q.UpdateNodeExecution(ctx, sqlcgen.UpdateNodeExecutionParams{
+				ID:                      executionID,
+				Sequence:                int64(ts.Seq),
+				TaskID:                  nullString(ts.TaskID),
+				Name:                    nullString(ts.Name),
+				Scope:                   ts.Scope,
+				Status:                  ts.Status,
+				Resource:                nullString(ts.Resource),
+				ExecutionDir:            nullString(ts.ExecutionDir),
+				InputsJson:              inputsJSON,
+				OutputsJson:             outputsJSON,
+				StateJson:               stateJSON,
+				ResourceObservationJson: observationJSON,
+				ResourceObservedAt:      observedAt,
+				DoneWhenJson:            doneWhenJSON,
+				ExtraDoneWhenJson:       nullRawJSON(ts.ExtraDoneWhen),
+				CleanupJson:             cleanupJSON,
+				PluginRef:               nullString(ts.PluginRef),
+				Error:                   nullString(ts.Error),
+				SetupAt:                 formatTimeNull(ts.SetupAt),
+				FailedAt:                formatTimeNull(ts.FailedAt),
+				CleanedAt:               formatTimeNull(ts.CleanedAt),
+				FinalizedAt:             formatTimeNull(ts.FinalizedAt),
+			}); err != nil {
+				return fmt.Errorf("update node execution %q/%q: %w", sessionID, nodeID, err)
+			}
 		}
 	}
 

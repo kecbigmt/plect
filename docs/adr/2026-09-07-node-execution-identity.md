@@ -103,14 +103,18 @@ row a loaded state was read from. `task.RunSetup` carries it forward only
 when a fresh attempt continues that same unreleased row (a same-declaration
 retry); a genuinely new attempt — first setup, or one that revives a node
 already released by a liveness-triggered cleanup within the same call —
-leaves it empty. `persistence.upsertNodeExecutionTx` refuses a write whose
-`ExecutionID` no longer matches the row currently unreleased for that node
-(or no longer matches any unreleased row at all), rather than silently
-retargeting whatever generation happens to be current: without this, two
-writers racing a release-then-recreate of the same node could have the
-stale one overwrite the new generation's own release recipe with data read
-before the race, defeating the very isolation per-execution identity exists
-to provide.
+leaves it empty. When set, `persistence.upsertNodeExecutionTx` resolves and
+updates exactly that row by id (regardless of its current status, so a
+caller re-persisting an already-cleaned checkpoint updates the same row
+instead of mining a duplicate), refusing the write if the row is gone or
+has since been released while the write's own status has not: without
+this, two writers racing a release-then-recreate of the same node could
+have the stale one overwrite the new generation's own release recipe with
+data read before the race, defeating the very isolation per-execution
+identity exists to provide. A write with no `ExecutionID` falls back to
+"the current unreleased row for this node, if any" — see Consequences for
+the one case (a same-pass liveness-invalidate-then-rebuild) this fallback
+does not fully resolve.
 
 `service.unifiedTeardownList` (used by `plect down`/`plect destroy`, and
 internally by `--force-recreate`) now enumerates every unreleased execution
@@ -183,7 +187,22 @@ an unexpected cycle) instead of ascending `Seq` alone.
 - Full nested-node cleanup retention exists (per layer); a nested node's
   own *setup*-time schemas are never retained, since cleanup never needed
   them. Plugin revision pinning is content-hash-based (`plect.lock`'s own
-  per-plugin entry), not a general artifact store.
+  per-plugin entry), not a general artifact store; the same revision check
+  cleanup now performs is not yet extended to a nested node's per-layer
+  cleanup, since layers don't retain a per-layer `plugin_ref` at all.
+- A same-pass liveness-invalidate-then-rebuild (an already-`produced` node
+  whose liveness probe fails, is cleaned up, and is immediately re-set-up
+  within the same `RunSetup` call) still collapses onto the released row's
+  own id instead of minting a fresh one: `task.RunSetup` holds one
+  in-memory `TaskState` per node id and cannot represent "old row now
+  cleaned" and "new row just produced" at the same time, so the
+  intermediate release is never itself persisted before the rebuild's own
+  write. Closing this fully needs either a persistence dependency inside
+  `RunSetup` to checkpoint the release before rebuilding, or a data-model
+  change letting one write carry more than one execution per node id —
+  both larger than this change's scope; the `ExecutionID` guard above
+  still protects the case that guard exists for (a genuinely different
+  writer racing the same node), just not this same-writer, same-pass one.
 
 ## Alternatives considered
 

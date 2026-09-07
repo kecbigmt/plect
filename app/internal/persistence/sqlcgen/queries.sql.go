@@ -1610,6 +1610,47 @@ func (q *Queries) NextEventSequence(ctx context.Context, sessionID string) (int6
 	return column_1, err
 }
 
+const nodeExecutionByID = `-- name: NodeExecutionByID :one
+SELECT id, session_id, node_id, sequence, task_id, name, scope, status, resource,
+       execution_dir, inputs_json, outputs_json, state_json,
+       resource_observation_json, resource_observed_at, done_when_json,
+       extra_done_when_json, cleanup_json, plugin_ref, error, setup_at,
+       failed_at, cleaned_at, finalized_at
+FROM node_executions WHERE id = ?
+`
+
+func (q *Queries) NodeExecutionByID(ctx context.Context, id string) (NodeExecution, error) {
+	row := q.db.QueryRowContext(ctx, nodeExecutionByID, id)
+	var i NodeExecution
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.NodeID,
+		&i.Sequence,
+		&i.TaskID,
+		&i.Name,
+		&i.Scope,
+		&i.Status,
+		&i.Resource,
+		&i.ExecutionDir,
+		&i.InputsJson,
+		&i.OutputsJson,
+		&i.StateJson,
+		&i.ResourceObservationJson,
+		&i.ResourceObservedAt,
+		&i.DoneWhenJson,
+		&i.ExtraDoneWhenJson,
+		&i.CleanupJson,
+		&i.PluginRef,
+		&i.Error,
+		&i.SetupAt,
+		&i.FailedAt,
+		&i.CleanedAt,
+		&i.FinalizedAt,
+	)
+	return i, err
+}
+
 const sessionEverExistedByName = `-- name: SessionEverExistedByName :one
 SELECT EXISTS(SELECT 1 FROM sessions WHERE name = ?)
 `
