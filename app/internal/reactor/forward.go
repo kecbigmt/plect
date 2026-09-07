@@ -39,7 +39,8 @@ func (f *sessionForwarder) effectiveLogger() *slog.Logger {
 }
 
 func (f *sessionForwarder) run(ctx context.Context) {
-	if !awaitPredecessor(ctx, f.predecessorDone) {
+	awaitPredecessor(f.predecessorDone)
+	if ctx.Err() != nil {
 		return
 	}
 	startGen, _ := f.log.StreamID(f.session)

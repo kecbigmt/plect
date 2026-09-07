@@ -69,22 +69,17 @@ func NewSupervisor(cfg func() *config.Config, st *state.Store, log *eventlog.Sto
 	return &Supervisor{cfg: cfg, state: st, log: log, hub: hub, logger: slog.Default(), poll: time.Second}
 }
 
-// followerHandle's done signal is what an incoming follower for the same
-// session waits on (predecessorDone) so the two never run concurrently.
+// followerHandle's done signal is what a session's next follower awaits.
 type followerHandle struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 }
 
-func awaitPredecessor(ctx context.Context, predecessorDone <-chan struct{}) bool {
-	if predecessorDone == nil {
-		return true
-	}
-	select {
-	case <-predecessorDone:
-		return true
-	case <-ctx.Done():
-		return false
+// awaitPredecessor ignores ctx: a canceled follower must still confirm its
+// own predecessor is gone, or a rapid reversal could run two at once.
+func awaitPredecessor(predecessorDone <-chan struct{}) {
+	if predecessorDone != nil {
+		<-predecessorDone
 	}
 }
 
@@ -191,8 +186,7 @@ func resolveTickConfig(cfg *config.Config, s *domain.Session) (config.TickConfig
 
 // reconcile starts a sessionReactor per up session, a sessionForwarder per
 // down-but-not-destroyed one (exact complements over RunScopeUp), stopping
-// whichever no longer applies. Either direction's handoff wires
-// predecessorDone rather than blocking here (see awaitPredecessor).
+// whichever no longer applies.
 func (sup *Supervisor) reconcile(ctx context.Context, active, forwarding map[string]followerHandle, wg *sync.WaitGroup) {
 	cfg := sup.cfg()
 	sessions, err := sup.state.AllE()

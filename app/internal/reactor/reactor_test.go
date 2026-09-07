@@ -240,6 +240,48 @@ func TestSessionReactor_WaitsForPredecessorBeforeTouchingTheLog(t *testing.T) {
 	waitLastTickAt(t, st, "o/r-1", floor)
 }
 
+// TestSessionReactor_PreservesThePredecessorChainThroughACanceledIntermediate
+// is the three-state regression: A is still running, B (waiting on A) is
+// canceled before A ever finishes, and C (waiting on B) must still not
+// proceed until A actually does -- B's own cancellation must not close its
+// done channel early and silently drop the chain one hop down.
+func TestSessionReactor_PreservesThePredecessorChainThroughACanceledIntermediate(t *testing.T) {
+	base, st, log := newTestReactor(t, config.TickConfig{On: []string{"resource.*"}})
+
+	aDone := make(chan struct{})
+	b := &sessionForwarder{session: "o/r-1", cfg: base.cfg, state: st, log: log, hub: base.hub, predecessorDone: aDone}
+	bctx, bcancel := context.WithCancel(context.Background())
+	bdone := make(chan struct{})
+	go func() { b.run(bctx); close(bdone) }()
+	bcancel()
+
+	select {
+	case <-bdone:
+		t.Fatal("B closed its done channel before confirming its own predecessor (A) was done")
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	c := &sessionReactor{
+		session: "o/r-1", cfg: base.cfg, state: st, log: log, hub: base.hub,
+		tick: config.TickConfig{On: []string{"resource.*"}}, predecessorDone: bdone,
+	}
+	cctx, ccancel := context.WithCancel(context.Background())
+	cdone := make(chan struct{})
+	go func() { c.run(cctx); close(cdone) }()
+	defer func() { ccancel(); <-cdone }()
+	// C's own seedCursor runs before it ever waits on B (reactor.go), so wait
+	// for it here too -- otherwise the append below could race it and be
+	// swallowed into the seed, same as startReactor's own helper avoids.
+	waitForCursorSeed(t, log, "o/r-1")
+
+	floor := time.Now()
+	log.Append(event.Event{SessionName: "o/r-1", Type: "resource.updated", Direction: event.Inbound})
+	assertNeverTicked(t, st, "o/r-1", floor)
+
+	close(aDone)
+	waitLastTickAt(t, st, "o/r-1", floor)
+}
+
 // TestSessionReactor_HeartbeatSweepTicksAfterElapsed proves a session with no
 // `on` declared still ticks once `heartbeat` has elapsed since its last
 // tick, using a shortened heartbeatInterval so the test doesn't wait a full
