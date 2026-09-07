@@ -64,43 +64,60 @@ project layer's dialect. Add the root's canonical path to
 `trusted_project_roots` in the machine configuration. Do not preserve ancestor
 fragments or copy configuration from a generated checkout.
 
+Before upgrading, release every unreleased allocation with the pre-upgrade
+binary where that is possible. This is required for a legacy allocation that
+cannot prove both its setup directory and its cleanup-contract evidence. Do not
+copy cleanup code or plugin files into durable state to make the later release
+run.
+
 Migrate existing sessions to their recorded project root, initial layer
 revisions and digest, and node execution records before running lifecycle
-operations. An execution record retains cleanup definitions, setup inputs and
-outputs, the execution directory, and resolved plugin version and reference,
-including partial or failed setup. Preserve every executable and instruction
-sidecar referenced by an unreleased record. An old session whose context cannot
-be reconstructed is stopped and requires an operator-selected context after
-backup; it must not fall back to a caller cwd.
+operations. For an unreleased execution with historical per-layer cleanup
+digests, locked plugin content revisions, setup directory, and required
+setup-time facts, preserve those facts exactly. Never calculate a digest from
+today's configuration or lock file and label it as setup-time evidence.
+
+An unreleased execution missing any required historical evidence migrates as an
+outstanding obligation with cleanup unavailable and the reason `historical
+cleanup evidence is unavailable`. It remains inspectable but the new release
+does not clean it up or reconstruct the node. An old session whose context
+cannot be reconstructed has the same outcome; it must not fall back to a
+caller cwd.
 
 ## Verify and recover
 
 Run the release's configuration validation and inspect every workflow that has
 agent actions, every population, each resource action input contract, and both
-normal and forced cleanup paths. Test a vanished work directory: cleanup must
-fail without changing directory. Keep the timestamped copies until sessions
-have been recreated and the migrated state has been observed in normal use.
+normal cleanup and explicit force-discard paths. Test a vanished work directory:
+cleanup must become unavailable without changing directory. Keep the timestamped
+copies until sessions have been recreated and the migrated state has been
+observed in normal use.
 
 ## Recover a residual allocation
 
-When recorded cleanup cannot run because its directory is gone, automatic
+When cleanup is unavailable because evidence, its directory, plugin content,
+credentials, environment, or reliable target identity is unavailable, automatic
 reconstruction stops and reports operator recovery required. Do not create an
-empty directory as evidence of release: it does not prove that a process or
-external allocation is gone.
+empty directory or use current configuration as evidence of release: neither
+proves that a process or external allocation is gone.
 
-1. Inspect the retained execution record, its cleanup information, and failure
-   reason.
+1. Inspect the retained execution record, its unavailable reason, and the
+   dependency-blocked executions.
 2. Release the residual allocation through its external owner, following the
    retained plan's release order.
-3. Use the implementation's explicit operator-confirmation operation to record
-   that assertion for that execution, including who confirmed it, what was
-   released, when, and its audit event. This is not a successful cleanup and
-   does not release any other allocation.
+3. After the owner-approved acknowledgement operation is available, use
+   `plect execution acknowledge-release --session <name> --execution <ulid>
+   --reason <text>` for that exact execution. It records an auditable operator
+   assertion, not successful cleanup, and does not release any other
+   allocation. Until then, preserve the unresolved record or use the explicit
+   discard in the next step.
 4. Retry ordinary `up` after every applicable retained obligation is resolved;
    it reconstructs in the latest desired workflow's setup dependency order.
 
-`--force-recreate` never substitutes for confirmation, and recovery never
-runs cleanup in another directory.
+`--force-recreate` never substitutes for confirmation or discard, and recovery
+never runs cleanup in another directory. `plect destroy --force` is the only
+explicit discard: it records that release was not verified and removes the
+session's remaining execution records.
 
 To recover, stop the new release, restore the configuration and state copies,
 and restart the previous release. Do not mix old configuration with migrated

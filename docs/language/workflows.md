@@ -75,29 +75,11 @@ liveness actions run in the declared directory and depend on its producer. If
 per-node or per-action cwd overrides.
 
 Cleanup uses the directory chosen for its node setup. If that directory has
-vanished, cleanup records a failure and does not run in any fallback directory.
+vanished, cleanup is unavailable and does not run in any fallback directory.
 This preserves cleanup actions' directory boundary. Down, repeated up, and
 destroy use the same rule. A liveness probe whose launch needs that vanished
-directory fails to launch, invalidates the node, and attempts cleanup in the
-stored setup directory. If that cleanup also fails, its record, allocation, and
-cleanup obligation remain durable. A later explicit `up` may retry that stored
-cleanup, but cannot set up the invalidated node or its prerequisites until the
-old allocation's release is explicitly confirmed. Successful recorded cleanup
-is the normal confirmation.
-If cleanup cannot run, automatic reconstruction stops and reports operator
-recovery required. The retained allocation record, cleanup information, and
-failure reason remain inspectable. After externally releasing the allocation,
-an explicit operator-confirmation operation may record that release as the
-operator's assertion, distinct from successful cleanup. It records the
-execution identity, who made the assertion, what was released, when, and an
-audit event. Confirmation resolves only that allocation's obligation; it never
-releases another execution. Old allocations are released in the retained plan's
-release order. Once every applicable retained obligation is explicitly resolved,
-ordinary `up` reconstructs in the latest desired workflow's setup dependency
-order. `--force-recreate` does not acknowledge an obligation implicitly.
-A missing directory does not prove that a
-process or external allocation is gone. No recovery action runs cleanup in a
-substitute directory.
+directory invalidates the node and attempts cleanup in the stored setup
+directory; it never treats the missing directory as release evidence.
 
 `[<id>.outputs]` is the workflow's explicit public projection record;
 `outputs_schema` declares it. Each binding is evaluable from node outputs as
@@ -159,13 +141,12 @@ reload; a changed digest is reported, not rejected. It never tears down or
 rebuilds a node on its own.
 
 Each setup attempt has a session-owned execution record, including partial and
-failed attempts. It records the cleanup declaration, setup inputs and outputs,
-setup directory, resolved plugin version and reference, and the dependency
-edges and allocation-lifetime information needed to release the existing plan.
-The local session-state store is the trust boundary for those records: it alone
-protects their writes, and records are not signed. Plugin executables and
-instruction sidecars named by an unreleased record remain available until
-release.
+failed attempts. It records the acquired resource identity, setup facts,
+directory, per-layer cleanup-contract digests, locked plugin content revisions,
+and the dependency edges and allocation-lifetime information needed to release
+the existing plan. It does not retain executable cleanup code, plugin binaries,
+or a replayable cleanup declaration. The local session-state store protects
+writes to this evidence but is not a trust boundary for executable code.
 
 Retained execution records are a retained execution plan. Release follows its
 recorded dependency order rather than an order derived from the latest desired
@@ -173,9 +154,9 @@ workflow: an old agent depending on an old checkout is cleaned up before that
 checkout is released. This preserves the lifetime boundaries of allocations
 whose declarations were removed or changed.
 
-The current operation supplies `force` and plugin-owned cleanup inputs; it does
-not replace the record's cleanup declaration. A record that still matches a
-desired node remains in use. New nodes are set up from the latest desired
+The current operation supplies `force` and plugin-owned cleanup inputs; they
+do not replace setup-time facts or digest evidence. A record that still matches
+a desired node remains in use. New nodes are set up from the latest desired
 workflow. A changed node effect, resolved setup inputs, scope, or execution
 directory requires reconstruction; the diagnostic directs the caller to
 `--force-recreate`. A node removed from the desired workflow is not set up
@@ -185,6 +166,32 @@ policy, while an existing node's execution contract changes only by
 reconstruction. Population reload follows the same rule: its current policy
 controls future evaluation, while members and their provenance remain retained
 as specified below.
+
+## Cleanup and reconstruction
+
+Before teardown, plect resolves the matching cleanup layer from the current
+trusted configuration tree and compares its digest and locked plugin content
+revision with the execution record. A missing definition, changed contract,
+unavailable plugin content, setup fact, directory, credential, environment, or
+reliable target identity makes cleanup unavailable. The record stays
+inspectable with its outstanding obligation and a non-secret reason; current
+configuration is never replayed merely because it is newer.
+
+Release follows execution-owned dependency edges, dependents before
+prerequisites. A failed or unavailable dependent blocks release of its
+prerequisites but not independent allocations. Successful cleanup marks only
+that execution released. An externally released allocation requires the
+explicit, audited acknowledgement operation proposed in [the cleanup
+ADR](../adr/2026-09-08-minimum-cleanup-contract.md); its assertion is not a
+successful cleanup and cannot release another generation.
+
+Ordinary `up` can retry cleanup but cannot reconstruct an allocation or a
+required prerequisite while its release obligation remains outstanding.
+`--force-recreate` follows the same release-then-new-generation path and never
+acknowledges or discards an obligation. `destroy --force` is the separate,
+explicit record-discard operation: it warns and records that release was not
+verified, then removes the session's remaining execution records. It is not
+evidence that an external resource was released.
 
 ## Display
 

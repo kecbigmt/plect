@@ -128,8 +128,8 @@ classifies every `_json` column by its owning declaration:
 | --- | --- | --- | --- |
 | `sessions` | `id` (ULID) primary key; `name` (unique only among live rows — see "Session identity and lifecycle"); `status`, nullable `destroyed_at`; nullable `parent_session_id` and `root_session_id`, each referencing `sessions(id)`; nullable `resource_id`, `alias`, `workspace_dir`, `population_workflow`, `population_name` (the pair also references `populations(workflow, name)`); `workflow`, `created_at`, `updated_at` | inputs, health, tick backoff | `state.json` `sessions` entries |
 | `node_instances` | `(session_id, node_id)` primary key; session foreign key; no other columns | none — purely the logical node's identity | `state.json` `sessions.*.tasks` entries with `dynamic` unset (keys only) |
-| `node_executions` | `id` (ULID, minted per setup attempt) primary key; `(session_id, node_id)` foreign key to `node_instances`; `sequence`; nullable `task_id`, `name`, `resource`; `scope`, `status`, nullable `finalized_at`; at most one unreleased (`status <> 'cleaned'`) row per `(session_id, node_id)` — see "Node execution identity" | inputs, outputs, state, observed value, `done_when` (rare, not relationally queried), extra completion data, error, lifecycle timestamps | `state.json` `sessions.*.tasks` entries with `dynamic` unset (per-attempt facts) |
-| `node_execution_layers` | `(execution_id, position)` primary key; execution foreign key (`ON DELETE CASCADE`) | inputs, locals, outputs, env, heartbeat counters, lifecycle timestamps, error | `TaskState.Layers` (static node instances) |
+| `node_executions` | `id` (ULID, minted per setup attempt) primary key; `(session_id, node_id)` foreign key to `node_instances`; `sequence`; nullable `task_id`, `name`, `resource`; `scope`, `status`, nullable `finalized_at`; release outcome and unavailable reason; at most one unreleased row per `(session_id, node_id)` — see "Node execution identity" | inputs, outputs, state, observed value, `done_when` (rare, not relationally queried), setup-time cleanup facts, error, lifecycle timestamps | `state.json` `sessions.*.tasks` entries with `dynamic` unset (per-attempt facts) |
+| `node_execution_layers` | `(execution_id, position)` primary key; execution foreign key (`ON DELETE CASCADE`); cleanup-contract digest and locked plugin content revision | inputs, locals, outputs, env, heartbeat counters, lifecycle timestamps, error | `TaskState.Layers` (static node instances) |
 | `node_execution_dependencies` | `(execution_id, depends_on_execution_id)` primary key; both reference `node_executions(id)` (`ON DELETE CASCADE`) | none — the edge itself is the payload | snapshotted from `task.Resolved.DependsOn` at the dependent's own setup time — see "Node execution identity" |
 | `task_instances` | `id` (ULID, stable across every write that still names the same `(session_id, instance_name)`; re-minted only when a cleanup removes the row before a later setup recreates it) primary key; `(session_id, instance_name)` unique; session foreign key; `task_id`, `scope`, `status`, `sequence`, nullable `resource`, `named`, nullable `finalized_at` | inputs, outputs, state, observed value, extra completion data, error, lifecycle timestamps | `state.json` `sessions.*.tasks` entries with `dynamic: true` |
 | `task_instance_layers` | `(task_instance_id, position)` primary key; task-instance foreign key | inputs, locals, outputs, env, heartbeat counters, lifecycle timestamps, error | `TaskState.Layers` (dynamic instances) |
@@ -336,21 +336,32 @@ fallback and cannot tell the two cases apart either. Both are accepted,
 documented limitations rather than something this fallback can resolve
 from the information available to it alone.
 
-Release is the only thing that clears a node: `service.unifiedTeardownList`
-enumerates every unreleased execution directly from `session.Nodes` — not
-from the *current* plan, which has nothing to say about a node it no
-longer declares — and resolves each one's cleanup by looking up its current
-task definition by the execution's own retained `task_id`. Cleanup code is
-always resolved fresh from the current, project-trusted configuration tree;
-it is never read back from the database and replayed. A node whose
-definition can no longer be found this way is marked unresolved:
-`task.RunCleanup` reports it as an error and leaves its record unreleased
-rather than treating "no cleanup to run" as trivial success.
-`persistence.PruneReleasedNode`/`ResetNodes` are the two explicit ways a row
-is actually removed (a caller, such as `persistStaleWorkflowCleanup`, that
-already knows a specific node's cleanup just succeeded; or
-`--force-recreate`'s own deliberate whole-runtime wipe, which discards every
-node's history on purpose instead of retaining it).
+Each execution retains its setup directory, the setup-time values needed by
+cleanup bindings, a release outcome, a non-secret unavailable reason when one
+exists, and per-layer cleanup-contract digest and locked plugin content
+revision. It retains no cleanup script, command, executable, or serialized
+cleanup declaration. The exact digest object and canonicalization are defined
+in [the minimum cleanup ADR](../adr/2026-09-08-minimum-cleanup-contract.md).
+
+`service.unifiedTeardownList` enumerates every execution with an outstanding
+release obligation directly from `session.Nodes` — not from the *current* plan,
+which has nothing to say about a node it no longer declares. It resolves each
+cleanup layer from the current trusted configuration tree by the execution's
+retained declaration and layer position, then compares the digest and locked
+plugin content revision before it runs. A missing definition, changed evidence,
+or missing required cleanup input marks the execution unavailable and leaves it
+outstanding; it never applies a newer declaration to the older allocation.
+
+Release is recorded as either successful cleanup or external-release
+acknowledgement. The latter is one exact execution's atomic, auditable operator
+assertion, not a cleanup result. Dependency ordering keeps an unavailable or
+failed dependent's prerequisites outstanding while it continues independent
+release branches. `persistence.PruneReleasedNode` removes a record only after
+successful cleanup or recorded acknowledgement. `plect destroy --force` is the
+separate record-discard path: it writes a tombstone/audit event warning that
+release was not verified before removing remaining records. `--force-recreate`
+never discards an outstanding record; it waits for release before creating the
+next execution generation.
 
 ### Alternatives considered
 
@@ -358,10 +369,9 @@ A `generation` counter bumped in place on the existing `node_instances` row
 was considered instead of a separate `node_executions` row per attempt; it
 would preserve the current status but not the outputs of a superseded,
 still-unreleased attempt — exactly the data an interrupted release needs. A
-force-flag-gated reconstruction (releasing an old unreleased execution and
-immediately proceeding with a new declaration in one step) was also
-considered; no caller needs it, since `plect down`/`plect destroy` already
-exist as the explicit two-step release path.
+force-flag-gated reconstruction that discards an old unreleased execution was
+also considered. It loses because reconstruction requires a confirmed release
+boundary; force-discard is intentionally limited to `destroy --force`.
 
 ### Release ordering
 

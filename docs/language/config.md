@@ -62,11 +62,13 @@ and effective digest at creation. Later operations use that root rather than
 their caller's cwd, but load the latest valid definitions at the recorded root.
 They compare and report a changed digest; a digest mismatch neither fails an
 operation nor destroys or rebuilds nodes. The current workflow is the desired
-state used for reconciliation. Nodes already set up retain execution records
-used for their cleanup. If a desired revision requires a node to be rebuilt,
+state used for reconciliation. Nodes already set up retain cleanup evidence and
+setup-time facts, while executable cleanup code always comes from the current
+trusted tree. If a desired revision requires a node to be rebuilt,
 the diagnostic directs the caller to `--force-recreate`. If the recorded root
 cannot be read, desired operations fail with an actionable error and do not
-select another root; record-based cleanup and release remain available. Chains
+select another root; cleanup is unavailable unless the current trusted tree can
+prove the retained cleanup contract. Chains
 inherit their triggering session's root. A resident population inherits the
 root captured when the resident started, not its process cwd.
 

@@ -118,18 +118,10 @@ All other nodes execute setup and liveness in the declared directory. Effects
 cannot override either directory per node or action. Cleanup uses the directory
 its setup used; a vanished directory is a cleanup failure, not an invitation to
 run elsewhere. A probe launch failure caused by that directory invalidates the
-node, then cleanup attempts the stored directory and records its failure if it
-cannot launch there either. The failed record, allocation, and cleanup
-obligation remain durable. A later `up` may retry that recorded cleanup, but
-cannot set up the invalidated node or its prerequisites until successful
-recorded cleanup or explicit operator confirmation of external release resolves
-the old allocation's obligation. If cleanup cannot run, automatic
-reconstruction stops with an operator-recovery error; the retained record,
-cleanup information, and failure reason remain inspectable. The confirmation is
-an audited operator assertion for one execution, not a successful cleanup and
-not a release of other allocations. `--force-recreate` does not acknowledge an
-obligation implicitly. A missing directory does not prove that a process or
-external allocation is gone.
+node, then cleanup attempts the stored directory. The failed record and its
+release obligation remain durable. The execution-release and reconstruction
+rules, including unavailable cleanup and external-release acknowledgement, are
+defined in [workflows](workflows.md#cleanup-and-reconstruction).
 
 ## Outputs are production records
 
