@@ -88,11 +88,9 @@ var mcpListenCmd = &cobra.Command{
 	},
 }
 
-// resolveSessionSocket derives sessionName's listen socket path, hardening
-// fallbackRoot first when the derived path falls back to it. Deciding the
-// path and hardening its root in one function, rather than a caller
-// re-deriving "did we fall back" on its own from $XDG_RUNTIME_DIR, is what
-// keeps the two from silently drifting out of sync.
+// resolveSessionSocket bundles the fallback decision with hardening its
+// root, so a caller can't re-derive one from $XDG_RUNTIME_DIR independently
+// and let the two drift apart.
 func resolveSessionSocket(sessionName, fallbackRoot string) (string, error) {
 	path, needsPrivateRoot := defaultSessionMcpListenSocket(sessionName, fallbackRoot)
 	if needsPrivateRoot {
@@ -104,11 +102,8 @@ func resolveSessionSocket(sessionName, fallbackRoot string) (string, error) {
 }
 
 // defaultSessionMcpListenSocket derives a per-session socket path under
-// $XDG_RUNTIME_DIR. sessionName often contains "/" (e.g. "team/project"),
-// which filepath.Join turns into nested directories rather than a flat
-// filename. Without $XDG_RUNTIME_DIR (e.g. macOS), it falls back to
-// fallbackRoot instead of the too-long os.TempDir(); needsPrivateRoot
-// reports that case, so resolveSessionSocket knows to harden fallbackRoot.
+// $XDG_RUNTIME_DIR, falling back to fallbackRoot instead of the too-long
+// os.TempDir(); needsPrivateRoot reports that case.
 func defaultSessionMcpListenSocket(sessionName, fallbackRoot string) (path string, needsPrivateRoot bool) {
 	if rt := os.Getenv("XDG_RUNTIME_DIR"); rt != "" {
 		return filepath.Join(rt, "plect-mcp", sessionName+".sock"), false
@@ -151,9 +146,8 @@ func ensurePrivateFallbackRoot(root string) error {
 	return checkPrivateDirOwner(root, stat.Uid)
 }
 
-// checkPrivateDirOwner is split out of ensurePrivateFallbackRoot so the
-// owner-mismatch rejection is unit-testable: chown-ing a directory to
-// another uid needs privileges a test does not have.
+// checkPrivateDirOwner is split out for testability: chown-ing a directory
+// to another uid needs privileges a test does not have.
 func checkPrivateDirOwner(root string, ownerUID uint32) error {
 	if ownerUID != uint32(os.Getuid()) {
 		return fmt.Errorf("private socket directory %s is owned by uid %d, not the current user", root, ownerUID)
