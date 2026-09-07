@@ -139,13 +139,43 @@ plect processes only once this step confirms `0` for every file.
 
 ## Rollback
 
-Restore the backed-up tree (plect processes are still stopped, per the
-ordering requirement — this migration never restarts them itself):
+Restoring the backup wholesale is safe only if plect processes are still
+stopped from the ordering requirement above and have never been restarted
+since the backup was taken — nothing has written to `$DATA_DIR/events` in
+that window, so nothing the restore overwrites is lost:
 
 ```bash
 rm -rf "$DATA_DIR/events"
 cp -a "$BACKUP_DIR/events" "$DATA_DIR/events"
 ```
+
+If plect was already restarted (against this doc's own guidance) before a
+problem was noticed, do **not** run the wholesale restore above: a live
+writer may since have destroyed a session and written its tombstone under
+a directory the backup has no copy of, and `rm -rf` would discard it. This
+case has no safe one-shot script — a session name can in principle be
+recreated and destroyed again after the restart, overwriting the same
+`tombstone.json` path with a legitimately new snapshot that a
+content-diff-only restore cannot tell apart from the migration's own
+change — so it needs a per-session judgment call instead. Stop plect
+processes again, note the wall-clock time of the restart (or read it from
+whatever process-manager log recorded it), and for each
+`events/<session>/tombstone.json` newer than that time, leave it alone;
+only restore the ones untouched since the restart, from
+`$BACKUP_DIR/events/<session>/tombstone.json`:
+
+```bash
+cp -a "$BACKUP_DIR/events/<session>/tombstone.json" "$DATA_DIR/events/<session>/tombstone.json"
+```
+
+Either way, the restored files are back in the pre-migration shape this
+migrated binary no longer produces. Running that binary against them is
+not corrupting — a plain `json.Unmarshal` of the old shape leaves `Nodes`
+empty and every entry under `Tasks`, the same as before this migration
+existed — but it does resurface the `dynamic` misreporting bug this
+migration exists to fix. Pair a rollback with downgrading the plect
+binary too, to whatever version was last running before this migration's
+code, if that bug's resurfacing is not acceptable.
 
 ## Rollout note
 
