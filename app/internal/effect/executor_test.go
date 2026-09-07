@@ -77,9 +77,8 @@ func TestExecutor_RequestForKeepsEachFormsInvocationShape(t *testing.T) {
 	}
 }
 
-// Regression test for issue #503: hostExecutor.Run used to leave cmd.Env
-// nil whenever ExecRequest.Env was empty, inheriting PLECT_DATA_HOME
-// verbatim. XDG_DATA_HOME stays inherited on purpose (datahome.InheritableEnv).
+// hostExecutor.Run used to leave cmd.Env nil with an empty ExecRequest.Env,
+// inheriting PLECT_DATA_HOME verbatim (issue #503).
 func TestExecutor_HostExecutorStripsPlectDataHomeUnlessEnvRebindsIt(t *testing.T) {
 	t.Setenv("PLECT_DATA_HOME", "/poisoned")
 	t.Setenv("XDG_DATA_HOME", "/still-inherited")
@@ -101,8 +100,7 @@ func TestExecutor_HostExecutorStripsPlectDataHomeUnlessEnvRebindsIt(t *testing.T
 		t.Fatalf("child env dropped an unrelated variable:\n%s", got)
 	}
 
-	// A layer's own explicit binding (effect nesting's [id.inner.env]) must
-	// still win over the strip.
+	// A layer's own explicit binding must still win over the strip.
 	stdout, _, err = exec.Run(context.Background(), ExecRequest{Argv: []string{"env"}, Env: []string{"PLECT_DATA_HOME=/explicit"}})
 	if err != nil {
 		t.Fatalf("Run with explicit Env: %v", err)
