@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sync/atomic"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -93,6 +94,7 @@ type Config struct {
 	catalogRegistrations *plugins.CatalogRegistrations
 	catalogLock          *plugins.Lockfile
 	catalogCacheRoot     string
+	runScopeCache        atomic.Pointer[runScopeCache]
 	Detached             bool           `toml:"detached"`
 	Channels             []string       `toml:"channels"`
 	InputsSchema         map[string]any `toml:"inputs_schema"`

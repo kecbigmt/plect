@@ -284,13 +284,13 @@ template = { type = "string" }
 func TestResolvedInputsSchemaPath(t *testing.T) {
 	cases := []struct {
 		name string
-		cfg  Config
+		cfg  *Config
 		want string
 	}{
-		{"empty", Config{}, ""},
-		{"absolute path", Config{InputsSchemaFile: "/abs/in.json"}, "/abs/in.json"},
-		{"relative with base", Config{InputsSchemaFile: "in.json", BaseDir: "/cfg"}, "/cfg/in.json"},
-		{"relative without base returns as-is", Config{InputsSchemaFile: "in.json"}, "in.json"},
+		{"empty", &Config{}, ""},
+		{"absolute path", &Config{InputsSchemaFile: "/abs/in.json"}, "/abs/in.json"},
+		{"relative with base", &Config{InputsSchemaFile: "in.json", BaseDir: "/cfg"}, "/cfg/in.json"},
+		{"relative without base returns as-is", &Config{InputsSchemaFile: "in.json"}, "in.json"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -304,33 +304,33 @@ func TestResolvedInputsSchemaPath(t *testing.T) {
 func TestIsResourceAllowed(t *testing.T) {
 	tests := []struct {
 		name     string
-		cfg      Config
+		cfg      *Config
 		resource string
 		want     bool
 		wantErr  bool
 	}{
-		{name: "both lists empty allows all", cfg: Config{}, resource: "anything", want: true},
+		{name: "both lists empty allows all", cfg: &Config{}, resource: "anything", want: true},
 		{
 			name:     "resource pattern matches",
-			cfg:      Config{ResourceAllowlist: []string{`^https://github\.com/org/`}},
+			cfg:      &Config{ResourceAllowlist: []string{`^https://github\.com/org/`}},
 			resource: "https://github.com/org/repo/issues/1",
 			want:     true,
 		},
 		{
 			name:     "resource pattern rejects",
-			cfg:      Config{ResourceAllowlist: []string{`^https://github\.com/org/`}},
+			cfg:      &Config{ResourceAllowlist: []string{`^https://github\.com/org/`}},
 			resource: "https://github.com/evil/repo/issues/1",
 			want:     false,
 		},
 		{
 			name:     "non-github resource allowed via resource pattern",
-			cfg:      Config{ResourceAllowlist: []string{`^https://jira\.example\.com/browse/`}},
+			cfg:      &Config{ResourceAllowlist: []string{`^https://jira\.example\.com/browse/`}},
 			resource: "https://jira.example.com/browse/PROJ-1",
 			want:     true,
 		},
 		{
 			name:    "invalid pattern surfaces error",
-			cfg:     Config{ResourceAllowlist: []string{`([`}},
+			cfg:     &Config{ResourceAllowlist: []string{`([`}},
 			wantErr: true,
 		},
 	}

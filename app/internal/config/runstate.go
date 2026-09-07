@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/kecbigmt/plecture/app/internal/domain"
 	contract "github.com/kecbigmt/plecture/contracts/state"
@@ -28,11 +29,72 @@ func (c *Config) ResolveSessionWorkflow(s *domain.Session) (*WorkflowFile, error
 	return &wf, nil
 }
 
+// runScopeCache memoizes CurrentPlanRunScopedNodeSet by (workflow,
+// workspaceDirPath); a pointer field since an embedded sync.Mutex would
+// lock-copy Config, which tests copy by value.
+type runScopeCache struct {
+	mu    sync.Mutex
+	byKey map[runScopeCacheKey]runScopeCacheEntry
+}
+
+type runScopeCacheKey struct {
+	workflow         string
+	workspaceDirPath string
+}
+
+type runScopeCacheEntry struct {
+	set map[string]bool
+	ok  bool
+}
+
+func (rc *runScopeCache) get(key runScopeCacheKey) (runScopeCacheEntry, bool) {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	e, ok := rc.byKey[key]
+	return e, ok
+}
+
+func (rc *runScopeCache) put(key runScopeCacheKey, entry runScopeCacheEntry) {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	if rc.byKey == nil {
+		rc.byKey = make(map[runScopeCacheKey]runScopeCacheEntry)
+	}
+	rc.byKey[key] = entry
+}
+
+// CompareAndSwap races safely: dispatch and reactor each reach a fresh Config's cache from their own goroutine.
+func (c *Config) runScopeCacheInstance() *runScopeCache {
+	if rc := c.runScopeCache.Load(); rc != nil {
+		return rc
+	}
+	rc := &runScopeCache{}
+	if !c.runScopeCache.CompareAndSwap(nil, rc) {
+		rc = c.runScopeCache.Load()
+	}
+	return rc
+}
+
 // CurrentPlanRunScopedNodeSet resolves s's frozen workflow's declared
 // run-scoped node ids as a set. ok is false when the workflow or its task
 // definitions do not resolve at all, which a caller must tell apart from a
 // legitimately empty node set (ok=true).
+// Memoized per (workflow, workspaceDirPath) for this *Config's lifetime:
+// dispatch/reactor Supervisor.reconcile calls RunScopeUp every ~1s poll per
+// up session, re-resolving the workflow and task definitions from scratch to
+// answer it; a new *Config (config.Live's own refresh) invalidates the cache.
 func (c *Config) CurrentPlanRunScopedNodeSet(s *domain.Session) (set map[string]bool, ok bool) {
+	key := runScopeCacheKey{workflow: s.Workflow, workspaceDirPath: s.WorkspaceDirPath}
+	cache := c.runScopeCacheInstance()
+	if entry, hit := cache.get(key); hit {
+		return entry.set, entry.ok
+	}
+	set, ok = c.resolveCurrentPlanRunScopedNodeSet(s)
+	cache.put(key, runScopeCacheEntry{set: set, ok: ok})
+	return set, ok
+}
+
+func (c *Config) resolveCurrentPlanRunScopedNodeSet(s *domain.Session) (set map[string]bool, ok bool) {
 	wf, err := c.ResolveSessionWorkflow(s)
 	if err != nil || wf == nil {
 		return nil, false
