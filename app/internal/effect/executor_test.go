@@ -77,15 +77,9 @@ func TestExecutor_RequestForKeepsEachFormsInvocationShape(t *testing.T) {
 	}
 }
 
-// TestExecutor_HostExecutorStripsPlectDataHomeUnlessEnvRebindsIt is this
-// change's regression test: before it, hostExecutor.Run left cmd.Env nil
-// whenever ExecRequest.Env was empty, so the child inherited this process's
-// PLECT_DATA_HOME verbatim — the exact inheritance hole issue #503 closes
-// for a task's setup script (a tmux pane's `tmux new-session`, in
-// particular). XDG_DATA_HOME is deliberately left alone: existing
-// declarations (a resource observer, a plugin service) already rely on a
-// child inheriting it for their own unrelated on-disk state — see
-// datahome.InheritableEnv's doc comment.
+// Regression test for issue #503: hostExecutor.Run used to leave cmd.Env
+// nil whenever ExecRequest.Env was empty, inheriting PLECT_DATA_HOME
+// verbatim. XDG_DATA_HOME stays inherited on purpose (datahome.InheritableEnv).
 func TestExecutor_HostExecutorStripsPlectDataHomeUnlessEnvRebindsIt(t *testing.T) {
 	t.Setenv("PLECT_DATA_HOME", "/poisoned")
 	t.Setenv("XDG_DATA_HOME", "/still-inherited")
