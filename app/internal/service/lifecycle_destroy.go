@@ -60,6 +60,9 @@ func Destroy(cfg *config.Config, store *state.Store, params DestroyParams) (*Des
 	if guardErr := checkLifecycleRelationGuard(store, sessionName, "destroy"); guardErr != nil {
 		return nil, guardErr
 	}
+	if session.Nodes == nil {
+		session.Nodes = make(map[string]*contract.TaskState)
+	}
 	if session.Tasks == nil {
 		session.Tasks = make(map[string]*contract.TaskState)
 	}
@@ -105,7 +108,7 @@ func Destroy(cfg *config.Config, store *state.Store, params DestroyParams) (*Des
 	if teardownErr != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: teardownErr.Error()}
 	}
-	if cleanupErr := task.RunCleanup(context.Background(), teardown, sessionVars(cfg, session, plan), session.Tasks, params.Observer); cleanupErr != nil {
+	if cleanupErr := runTaskCleanup(context.Background(), teardown, sessionVars(cfg, session, plan), session, params.Observer); cleanupErr != nil {
 		session.UpdatedAt = time.Now()
 		putBestEffort(store, session, "run cleanup failure")
 		if !params.Force {
@@ -120,7 +123,7 @@ func Destroy(cfg *config.Config, store *state.Store, params DestroyParams) (*Des
 	session.UpdatedAt = time.Now()
 	putBestEffort(store, session, "post-run-cleanup checkpoint")
 
-	if wfState, ok := session.Tasks[contract.WorkflowPseudoNodeID]; ok && wfState != nil {
+	if wfState, ok := session.Nodes[contract.WorkflowPseudoNodeID]; ok && wfState != nil {
 		// Workflow setup acquired the workspace, so workflow cleanup owns
 		// its release — the core performs no workspace directory removal
 		// here. (Whether the workspace directory is actually deleted is the

@@ -48,17 +48,17 @@ func resolveTerminalOwner(logger *slog.Logger, cfg *config.Config, s *domain.Ses
 
 // terminalResolver builds the terminal-capability closure for one event
 // delivery: it resolves the declaring effect's verbs against that effect's
-// own CURRENT outputs, re-read from s.Tasks fresh (not cached at
+// own CURRENT outputs, re-read from s.Nodes fresh (not cached at
 // dispatcher-build time) since a down/up recreates them — the same reason
-// channelInputs re-reads s.Tasks per drain instead of once. Returns nil when
-// the workflow declares no such effect, so a channel that consumes no
-// terminal verb is unaffected.
+// channelInputs re-reads the session's outputs per drain instead of once.
+// Returns nil when the workflow declares no such effect, so a channel that
+// consumes no terminal verb is unaffected.
 func terminalResolver(s *domain.Session, owner *terminalOwner, session task.SessionVars) channel.TerminalResolver {
 	if owner == nil {
 		return nil
 	}
 	outputs := map[string]any{}
-	if st, ok := s.Tasks[owner.NodeID]; ok && st != nil {
+	if st, ok := s.Nodes[owner.NodeID]; ok && st != nil {
 		if self := effect.TerminalSelf(owner.Layers, st); self != nil {
 			outputs = self
 		}

@@ -34,7 +34,7 @@ import (
 // instantiated under a node id, with its input bindings, depends_on edges
 // derived from those bindings, and the compiled outputs schema.
 //
-// NodeID is the state key (the field used to index session.Tasks). TaskID
+// NodeID is the state key (the field used to index session.Nodes). TaskID
 // is the `uses` target — preserved for traceability and to render `.TaskID`
 // in templates when a node id has been customized.
 type Resolved struct {
@@ -693,7 +693,12 @@ func reportCleanupFailure(obs Observer, r Resolved, elapsed time.Duration, err e
 }
 
 // RunSetup executes the setup commands for the provided ordered task list
-// against the given session. Outputs are persisted into session.Tasks.
+// (always workflow DAG nodes) against the given session. Outputs are
+// persisted into tasks, keyed by node id; the caller then copies the touched
+// node ids from tasks into session.Nodes, the collection they actually
+// belong to. tasks must combine every collection Seq is shared across (a
+// session's Nodes and Tasks) — see domain.MergedTasks — since each new node's
+// Seq is stamped from the highest Seq found in it.
 // Stops at the first failure; subsequent tasks in the slice are not run.
 //
 // RunSetup is idempotent: a task whose persisted state is already
@@ -872,25 +877,30 @@ func withFreshTerminalOutputs(session SessionVars, owner *Resolved, tasks map[st
 	return session
 }
 
-// NextSeq is the exported form of nextSeq: the next instantiation sequence
-// number for a tasks map. Callers persisting a dynamic instance re-stamp Seq
-// with this under the state lock, so the value reflects the freshly-read map
-// rather than the snapshot the setup ran against (atomic read-modify-write).
-func NextSeq(tasks map[string]*contract.TaskState) int {
-	return nextSeq(tasks)
+// NextSeq is the exported form of nextSeq, taking every collection Seq must
+// stay monotonic across (a session's Nodes and Tasks maps are two separate
+// collections but share one Seq space) instead of a single map. Callers
+// persisting a dynamic instance re-stamp Seq with this under the state lock,
+// so the value reflects the freshly-read collections rather than the
+// snapshot the setup ran against (atomic read-modify-write).
+func NextSeq(taskMaps ...map[string]*contract.TaskState) int {
+	return nextSeq(taskMaps...)
 }
 
-// nextSeq returns the next instantiation sequence number for the tasks map:
-// one past the highest Seq currently recorded. Seq is stamped when a task
-// reaches "produced" (workflow pseudo-node, static node, or dynamic instance),
-// so teardown can reclaim tasks in reverse-instantiation order regardless of
-// scope or origin. Legacy state with no Seq (all zero) leaves later assignments
-// starting at 1; the teardown path falls back to plan order in that case.
-func nextSeq(tasks map[string]*contract.TaskState) int {
+// nextSeq returns the next instantiation sequence number across every given
+// tasks map: one past the highest Seq currently recorded in any of them. Seq
+// is stamped when a task reaches "produced" (workflow pseudo-node, static
+// node, or dynamic instance), so teardown can reclaim tasks in
+// reverse-instantiation order regardless of scope or origin. Legacy state
+// with no Seq (all zero) leaves later assignments starting at 1; the
+// teardown path falls back to plan order in that case.
+func nextSeq(taskMaps ...map[string]*contract.TaskState) int {
 	max := 0
-	for _, st := range tasks {
-		if st != nil && st.Seq > max {
-			max = st.Seq
+	for _, tasks := range taskMaps {
+		for _, st := range tasks {
+			if st != nil && st.Seq > max {
+				max = st.Seq
+			}
 		}
 	}
 	return max + 1
@@ -935,6 +945,15 @@ func toJSONShape(m map[string]any) map[string]any {
 // .Input bound to the inputs persisted at setup time — so cleanup never
 // depends on the original CLI invocation.
 // Cleanup errors are collected but do not stop the loop — all cleanups attempt.
+//
+// ordered can freely mix workflow-node and dynamic-instance entries (a
+// unified teardown list interleaves both kinds by instantiation Seq), so
+// tasks must combine every collection a targeted key could live in — a
+// session's Nodes and Tasks — see domain.MergedTasks. Every mutation here is
+// through the *TaskState pointer already stored in tasks, never a map
+// assignment, so a caller that built tasks from the session's own
+// Nodes/Tasks maps needs no write-back: the mutation is visible through
+// those maps directly.
 func RunCleanup(goCtx context.Context, ordered []Resolved, session SessionVars, tasks map[string]*contract.TaskState, observer Observer) error {
 	obs := observerOr(observer)
 	var firstErr error

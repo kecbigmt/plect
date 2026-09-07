@@ -92,7 +92,7 @@ SELECT EXISTS(SELECT 1 FROM sessions WHERE name = ?);
 -- name: ListEverSessionNames :many
 SELECT DISTINCT name FROM sessions ORDER BY name;
 
--- Workflow nodes (static; Session.Tasks entries with Dynamic == false)
+-- Workflow nodes (static; Session.Nodes entries)
 
 -- name: InsertNodeInstance :exec
 INSERT INTO node_instances (
@@ -125,7 +125,7 @@ SELECT session_id, node_id, position, effect_id, status, inputs_json,
        heartbeat_escalations, setup_at, failed_at, cleaned_at, error
 FROM node_instance_layers WHERE session_id = ? ORDER BY node_id, position;
 
--- Task instances (dynamic; Session.Tasks entries with Dynamic == true)
+-- Task instances (dynamic; Session.Tasks entries)
 
 -- name: ListTaskInstances :many
 SELECT id, session_id, instance_name, task_id, scope, status, sequence,

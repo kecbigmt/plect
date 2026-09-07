@@ -86,15 +86,15 @@ instructions      = [{ text = "Handle {{ resource.id }}." }]
 	seedSession(t, store, "session-a", "workspace-a", 1, "wf", map[string]*contract.TaskState{
 		"review#1": {
 			Scope: contract.TaskScopeSession, TaskID: "review", Status: contract.TaskStatusProduced,
-			Dynamic: true, Resource: "https://example.test/pull/1", State: map[string]any{"verdict_revision": "sha1"}, SetupAt: time.Now(),
+			Resource: "https://example.test/pull/1", State: map[string]any{"verdict_revision": "sha1"}, SetupAt: time.Now(),
 		},
 		"unbounded#1": {
 			Scope: contract.TaskScopeSession, TaskID: "unbounded", Status: contract.TaskStatusProduced,
-			Dynamic: true, Resource: "https://example.test/pull/2", SetupAt: time.Now(),
+			Resource: "https://example.test/pull/2", SetupAt: time.Now(),
 		},
 		"failed#1": {
 			Scope: contract.TaskScopeSession, TaskID: "review", Status: contract.TaskStatusFailed,
-			Dynamic: true, Resource: "https://example.test/pull/3", SetupAt: time.Now(),
+			Resource: "https://example.test/pull/3", SetupAt: time.Now(),
 		},
 	})
 

@@ -17,6 +17,9 @@ import (
 // process, simulating a nested `plect task setup` (or any other session
 // process) racing the lifecycle command under test.
 type nestedWritePatch struct {
+	// Nodes patches session.Nodes (a workflow-DAG node), Tasks patches
+	// session.Tasks (a plect task setup/task document instance).
+	Nodes       map[string]*contract.TaskState `json:"nodes,omitempty"`
 	Tasks       map[string]*contract.TaskState `json:"tasks,omitempty"`
 	Health      *contract.HealthState          `json:"health,omitempty"`
 	TickBackoff *contract.TickBackoff          `json:"tick_backoff,omitempty"`
@@ -57,6 +60,14 @@ func TestServiceNestedWriteHelperProcess(t *testing.T) {
 
 	store := state.NewStore(dir)
 	err = store.Update(sessionName, func(s *domain.Session) error {
+		if len(patch.Nodes) > 0 {
+			if s.Nodes == nil {
+				s.Nodes = make(map[string]*contract.TaskState)
+			}
+			for k, v := range patch.Nodes {
+				s.Nodes[k] = v
+			}
+		}
 		if len(patch.Tasks) > 0 {
 			if s.Tasks == nil {
 				s.Tasks = make(map[string]*contract.TaskState)

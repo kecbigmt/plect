@@ -76,7 +76,7 @@ func TestSessionReactor_ReactiveTickReachesDoneWhenConsequence(t *testing.T) {
 	if err := st.Put(&domain.Session{
 		Name:          "o/r-1",
 		ParentSession: "o/parent",
-		Tasks: map[string]*contract.TaskState{
+		Nodes: map[string]*contract.TaskState{
 			// A run-scope task keeps the reactor's drain loop active (mirrors a
 			// real session's tmux/claude node); the session-scope "initial"
 			// instance is what carries done_when.
@@ -154,7 +154,7 @@ func TestSessionReactor_UnchangedUnmetStateAnnouncesOnce(t *testing.T) {
 
 	if err := st.Put(&domain.Session{
 		Name: "o/r-1",
-		Tasks: map[string]*contract.TaskState{
+		Nodes: map[string]*contract.TaskState{
 			"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced},
 			"initial": {
 				Scope:    contract.TaskScopeSession,

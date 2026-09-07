@@ -99,7 +99,7 @@ func TestList_ReadsPersistedHealthWithoutProbing(t *testing.T) {
 	store := testStore(t)
 	marker := filepath.Join(t.TempDir(), "probe-calls")
 	cfg := aliveFixtureConfig(t, fmt.Sprintf("echo hit >> %s", marker))
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"initial": {Scope: contract.TaskScopeRun, TaskID: "runner", Status: contract.TaskStatusProduced},
 	})
 
@@ -130,7 +130,7 @@ func TestList_ReadsPersistedHealthWithoutProbing(t *testing.T) {
 func TestList_NeverSweptSessionHasNoHealth(t *testing.T) {
 	store := testStore(t)
 	cfg := aliveFixtureConfig(t, "true")
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"initial": {Scope: contract.TaskScopeRun, TaskID: "runner", Status: contract.TaskStatusProduced},
 	})
 
@@ -155,7 +155,7 @@ func TestList_NeverSweptSessionHasNoHealth(t *testing.T) {
 func TestList_SurfacesSweptUnhealthyReason(t *testing.T) {
 	store := testStore(t)
 	cfg := aliveFixtureConfig(t, "false")
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"initial": {Scope: contract.TaskScopeRun, TaskID: "runner", Status: contract.TaskStatusProduced},
 	})
 	if _, err := EvaluateHealth(cfg, store, "owner/repo-1"); err != nil {
@@ -184,7 +184,7 @@ func TestList_SurfacesSweptUnhealthyReason(t *testing.T) {
 func TestList_DownSessionMasksStalePersistedHealth(t *testing.T) {
 	store := testStore(t)
 	cfg := aliveFixtureConfig(t, "true")
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"initial": {Scope: contract.TaskScopeRun, TaskID: "runner", Status: contract.TaskStatusProduced},
 	})
 	if _, err := EvaluateHealth(cfg, store, "owner/repo-1"); err != nil {
@@ -193,7 +193,7 @@ func TestList_DownSessionMasksStalePersistedHealth(t *testing.T) {
 	// Bring the session down without a further sweep, mirroring the reactor,
 	// which skips a down session's healthcheck entirely.
 	if err := store.Update("owner/repo-1", func(s *domain.Session) error {
-		s.Tasks["initial"].Status = contract.TaskStatusCleaned
+		s.Nodes["initial"].Status = contract.TaskStatusCleaned
 		return nil
 	}); err != nil {
 		t.Fatalf("bring down: %v", err)
@@ -219,10 +219,10 @@ func TestList_DownSessionMasksStalePersistedHealth(t *testing.T) {
 func TestList_GhostWorkflowSessionHasNoHealthButOthersListNormally(t *testing.T) {
 	store := testStore(t)
 	cfg := currentPlanConfig(t, "true", "true") // only declares workflow "default"
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "ghost-workflow", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "ghost-workflow", map[string]*contract.TaskState{
 		"pane": {Scope: contract.TaskScopeRun, TaskID: "pane", Status: contract.TaskStatusProduced},
 	})
-	seedSession(t, store, "owner/repo-2", "owner/repo", 2, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-2", "owner/repo", 2, "default", map[string]*contract.TaskState{
 		"pane":  {Scope: contract.TaskScopeRun, TaskID: "pane", Status: contract.TaskStatusProduced},
 		"agent": {Scope: contract.TaskScopeRun, TaskID: "agent", Status: contract.TaskStatusProduced},
 	})
@@ -392,7 +392,7 @@ func TestStatus_DestroyedSessionReturnsTombstone(t *testing.T) {
 		[]nodeFixture{{id: "envfile"}},
 	)
 	sessionName := "org/repo-1"
-	seedSession(t, store, sessionName, "org/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, sessionName, "org/repo", 1, "default", map[string]*contract.TaskState{
 		"envfile": {
 			Scope:   contract.TaskScopeSession,
 			Status:  contract.TaskStatusProduced,
@@ -837,7 +837,7 @@ func TestApplyDisplay_OverridesFromOutputs(t *testing.T) {
 	s := &domain.Session{
 		Name:     "org/repo-1",
 		Workflow: "wf",
-		Tasks: map[string]*contract.TaskState{
+		Nodes: map[string]*contract.TaskState{
 			contract.WorkflowPseudoNodeID: {
 				Status:  contract.TaskStatusProduced,
 				Outputs: map[string]any{"title": "Fix the bug", "pr_state": "open"},
@@ -884,20 +884,18 @@ func TestTaskViews_EvaluatesDoneWhenPerInstanceState(t *testing.T) {
 		Name: "org/repo-1",
 		Tasks: map[string]*contract.TaskState{
 			"review#1": {
-				Scope:   contract.TaskScopeSession,
-				Status:  contract.TaskStatusProduced,
-				TaskID:  "review",
-				Dynamic: true,
-				Seq:     1,
-				State:   map[string]any{"checks_status": "SUCCESS"},
+				Scope:  contract.TaskScopeSession,
+				Status: contract.TaskStatusProduced,
+				TaskID: "review",
+				Seq:    1,
+				State:  map[string]any{"checks_status": "SUCCESS"},
 			},
 			"review#2": {
-				Scope:   contract.TaskScopeSession,
-				Status:  contract.TaskStatusProduced,
-				TaskID:  "review",
-				Dynamic: true,
-				Seq:     2,
-				State:   map[string]any{"checks_status": "FAILURE"},
+				Scope:  contract.TaskScopeSession,
+				Status: contract.TaskStatusProduced,
+				TaskID: "review",
+				Seq:    2,
+				State:  map[string]any{"checks_status": "FAILURE"},
 			},
 		},
 	}
@@ -928,8 +926,8 @@ eq = "SUCCESS"
 		[]taskFixture{{id: "review", scope: "session", extra: extra}},
 		[]nodeFixture{{id: "review"}})
 	seedSession(t, store, "org/repo-1", "org/repo", 1, "wf", map[string]*contract.TaskState{
-		"review#1": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "review", Dynamic: true, Seq: 1, Observed: observedFacts(map[string]any{"checks_status": "SUCCESS"})},
-		"review#2": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "review", Dynamic: true, Seq: 2, Observed: observedFacts(map[string]any{"checks_status": "FAILURE"})},
+		"review#1": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "review", Seq: 1, Observed: observedFacts(map[string]any{"checks_status": "SUCCESS"})},
+		"review#2": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "review", Seq: 2, Observed: observedFacts(map[string]any{"checks_status": "FAILURE"})},
 	})
 
 	status, err := Status(cfg, store, "org/repo-1")

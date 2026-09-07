@@ -91,7 +91,7 @@ const (
 	SessionStatusDestroyed = "destroyed"
 )
 
-// WorkflowPseudoNodeID is the reserved Session.Tasks key for the
+// WorkflowPseudoNodeID is the reserved Session.Nodes key for the
 // workflow-level setup/cleanup pseudo-node. The "@" prefix is outside the
 // node-id grammar ([A-Za-z_][A-Za-z0-9_]*), so it can never collide with a
 // real workflow node.
@@ -111,18 +111,15 @@ const OutputKeyWorkspaceDir = "workspace_dir"
 // resolved input bindings persisted at setup time so cleanup can run without
 // the original CLI invocation. Empty for legacy tasks with no input mapping.
 //
-// Seq / Dynamic / Resource support dynamic instantiation:
+// Seq / Resource support dynamic instantiation:
 //
 //   - Seq is the monotonically increasing instantiation order across every
 //     task in the session (workflow pseudo-node, static DAG nodes, and
-//     dynamic `plect task setup` instances). Teardown reclaims tasks in
-//     descending Seq — the reverse of the single instantiation stack — so an
-//     task always outlives anything that depends on it. Zero on legacy state
-//     written before this field existed (such entries fall back to plan order).
-//   - Dynamic marks instances created at runtime via `plect task setup` (as
-//     opposed to static workflow DAG nodes). Dynamic instances are not in the
-//     compiled plan, so teardown reconstructs their cleanup from the task
-//     definition keyed by TaskID.
+//     dynamic `plect task setup` instances, i.e. across both Session.Nodes and
+//     Session.Tasks). Teardown reclaims tasks in descending Seq — the reverse
+//     of the single instantiation stack — so an task always outlives anything
+//     that depends on it. Zero on legacy state written before this field
+//     existed (such entries fall back to plan order).
 //   - Resource is the `--resource` value bound at instantiation (the external
 //     resource this instance works on); empty for instances with no resource.
 //   - Name is a `--name` instance identity for a dynamic instance: when set, the
@@ -141,7 +138,6 @@ type TaskState struct {
 	Inputs   map[string]any `json:"inputs,omitempty"`   // resolved node inputs (post-template), persisted for cleanup
 	Outputs  map[string]any `json:"outputs,omitempty"`  // parsed JSON from setup stdout
 	Seq      int            `json:"seq,omitempty"`      // instantiation order; 0 = legacy/unset
-	Dynamic  bool           `json:"dynamic,omitempty"`  // true for runtime `plect task setup` instances
 	Resource string         `json:"resource,omitempty"` // bound --resource at instantiation
 	Name     string         `json:"name,omitempty"`     // --name instance identity (key == name when set)
 	Layers   []LayerState   `json:"layers,omitempty"`   // per-layer record for a nested task; empty for a plain one
@@ -243,7 +239,17 @@ type Session struct {
 	Workflow         string                `json:"workflow,omitempty"`
 	Population       *PopulationProvenance `json:"population,omitempty"`
 	Inputs           map[string]any        `json:"inputs,omitempty"`
-	Tasks            map[string]*TaskState `json:"tasks,omitempty"`
+	// Nodes holds workflow DAG node production records, keyed by node id —
+	// including the @workflow pseudo-node (WorkflowPseudoNodeID). Tasks holds
+	// task-document/effect instances created at runtime via
+	// `plect task setup`, keyed by their instance handle (a `--name`, or the
+	// numbered `<task>#<n>` form). The two occupy disjoint key namespaces (a
+	// `--name` collision is checked against both), but which collection a key
+	// lives in is otherwise structural, not derived: a caller that means "the
+	// whole session's task/node state regardless of origin" combines both
+	// (see domain.MergedTasks), rather than assuming either one alone.
+	Nodes map[string]*TaskState `json:"nodes,omitempty"`
+	Tasks map[string]*TaskState `json:"tasks,omitempty"`
 	// Health is the last probe observation and activity fingerprint core
 	// recorded for this session. It is persisted so stall judgment and
 	// parent re-notification use one durable history instead of a caller's

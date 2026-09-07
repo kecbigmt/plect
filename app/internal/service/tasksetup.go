@@ -101,6 +101,9 @@ func TaskSetup(cfg *config.Config, store *state.Store, params TaskSetupParams) (
 		return nil, err
 	}
 	flushPendingDeliveryLogged(cfg, store, resolvedName)
+	if session.Nodes == nil {
+		session.Nodes = make(map[string]*contract.TaskState)
+	}
 	if session.Tasks == nil {
 		session.Tasks = make(map[string]*contract.TaskState)
 	}
@@ -164,7 +167,10 @@ func TaskSetup(cfg *config.Config, store *state.Store, params TaskSetupParams) (
 		}
 		if params.Name != "" {
 			key = params.Name
-			if _, exists := s.Tasks[key]; exists {
+			// A `--name` collides against either collection's existing state:
+			// an uninstantiated node leaves its id free for a dynamic instance
+			// to take, but a live node under this name must still be refused.
+			if domain.TaskState(s, key) != nil {
 				collision = true
 				return nil
 			}
@@ -181,11 +187,10 @@ func TaskSetup(cfg *config.Config, store *state.Store, params TaskSetupParams) (
 			// claiming work that never ran.
 			Status:        contract.TaskStatusProduced,
 			Inputs:        inputs,
-			Dynamic:       true,
 			Resource:      params.Resource,
 			Name:          params.Name,
 			ExtraDoneWhen: extraDoneWhen,
-			Seq:           task.NextSeq(s.Tasks),
+			Seq:           task.NextSeq(s.Nodes, s.Tasks),
 			SetupAt:       now,
 		}
 		s.UpdatedAt = now
@@ -206,7 +211,7 @@ func TaskSetup(cfg *config.Config, store *state.Store, params TaskSetupParams) (
 
 	// Phase 2 — run setup WITHOUT the lock (it may shell out for a while). The
 	// @workflow outputs come from the pre-reservation snapshot (stable).
-	setupResult, setupErr := task.ExecuteTaskSetup(context.Background(), resolved, inputs, vars, session.Tasks)
+	setupResult, setupErr := task.ExecuteTaskSetup(context.Background(), resolved, inputs, vars, session.Nodes)
 	stderr := setupResult.Stderr
 
 	// Phase 3 — merge the result back into the reserved key under the lock,
@@ -333,7 +338,7 @@ func bindDynamicInputs(def config.TaskDefinition, cliInputs map[string]string, s
 	}
 
 	var wfOutputs map[string]any
-	if st, ok := session.Tasks[contract.WorkflowPseudoNodeID]; ok && st != nil {
+	if st, ok := session.Nodes[contract.WorkflowPseudoNodeID]; ok && st != nil {
 		wfOutputs = st.Outputs
 	}
 

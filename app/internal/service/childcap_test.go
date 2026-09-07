@@ -44,10 +44,10 @@ func TestReserveChildCapSlot_NoCapDeclaredAllowsUnlimitedChildren(t *testing.T) 
 	store := testStore(t)
 	cfg := &config.Config{BaseDir: t.TempDir()}
 	writeCapWorkflow(t, cfg.BaseDir, "parent_wf", nil)
-	seedSession(t, store, "parent1", "acct", 1, "parent_wf", nil)
+	seedSessionWithNodes(t, store, "parent1", "acct", 1, "parent_wf", nil)
 	for i := 0; i < 5; i++ {
 		name := fmt.Sprintf("child%d", i)
-		seedSession(t, store, name, "acct", i, "", upTasks())
+		seedSessionWithNodes(t, store, name, "acct", i, "", upTasks())
 		setParent(t, store, name, "parent1")
 	}
 
@@ -64,8 +64,8 @@ func TestReserveChildCapSlot_UnderCapAllowsNewChild(t *testing.T) {
 	store := testStore(t)
 	cfg := &config.Config{BaseDir: t.TempDir()}
 	writeCapWorkflow(t, cfg.BaseDir, "parent_wf", intPtr(2))
-	seedSession(t, store, "parent1", "acct", 1, "parent_wf", nil)
-	seedSession(t, store, "child0", "acct", 0, "", upTasks())
+	seedSessionWithNodes(t, store, "parent1", "acct", 1, "parent_wf", nil)
+	seedSessionWithNodes(t, store, "child0", "acct", 0, "", upTasks())
 	setParent(t, store, "child0", "parent1")
 
 	reserved, err := reserveChildCapSlot(cfg, store, "newchild", "parent1", false)
@@ -81,10 +81,10 @@ func TestReserveChildCapSlot_AtCapRejectsNewChild(t *testing.T) {
 	store := testStore(t)
 	cfg := &config.Config{BaseDir: t.TempDir()}
 	writeCapWorkflow(t, cfg.BaseDir, "parent_wf", intPtr(2))
-	seedSession(t, store, "parent1", "acct", 1, "parent_wf", nil)
+	seedSessionWithNodes(t, store, "parent1", "acct", 1, "parent_wf", nil)
 	for i := 0; i < 2; i++ {
 		name := fmt.Sprintf("child%d", i)
-		seedSession(t, store, name, "acct", i, "", upTasks())
+		seedSessionWithNodes(t, store, name, "acct", i, "", upTasks())
 		setParent(t, store, name, "parent1")
 	}
 
@@ -109,10 +109,10 @@ func TestReserveChildCapSlot_DownChildDoesNotCountTowardCap(t *testing.T) {
 	store := testStore(t)
 	cfg := &config.Config{BaseDir: t.TempDir()}
 	writeCapWorkflow(t, cfg.BaseDir, "parent_wf", intPtr(2))
-	seedSession(t, store, "parent1", "acct", 1, "parent_wf", nil)
-	seedSession(t, store, "childUp", "acct", 0, "", upTasks())
+	seedSessionWithNodes(t, store, "parent1", "acct", 1, "parent_wf", nil)
+	seedSessionWithNodes(t, store, "childUp", "acct", 0, "", upTasks())
 	setParent(t, store, "childUp", "parent1")
-	seedSession(t, store, "childDown", "acct", 1, "", nil)
+	seedSessionWithNodes(t, store, "childDown", "acct", 1, "", nil)
 	setParent(t, store, "childDown", "parent1")
 
 	reserved, err := reserveChildCapSlot(cfg, store, "newchild", "parent1", false)
@@ -128,10 +128,10 @@ func TestReserveChildCapSlot_AlreadyUpTargetIsExemptEvenAtFullCap(t *testing.T) 
 	store := testStore(t)
 	cfg := &config.Config{BaseDir: t.TempDir()}
 	writeCapWorkflow(t, cfg.BaseDir, "parent_wf", intPtr(2))
-	seedSession(t, store, "parent1", "acct", 1, "parent_wf", nil)
+	seedSessionWithNodes(t, store, "parent1", "acct", 1, "parent_wf", nil)
 	for i := 0; i < 2; i++ {
 		name := fmt.Sprintf("child%d", i)
-		seedSession(t, store, name, "acct", i, "", upTasks())
+		seedSessionWithNodes(t, store, name, "acct", i, "", upTasks())
 		setParent(t, store, name, "parent1")
 	}
 
@@ -147,8 +147,8 @@ func TestReserveChildCapSlot_AlreadyUpTargetIsExemptEvenAtFullCap(t *testing.T) 
 func TestReserveChildCapSlot_VirtualRootCapCountsEveryParentlessSession(t *testing.T) {
 	store := testStore(t)
 	cfg := &config.Config{BaseDir: t.TempDir(), MaxUpChildren: intPtr(2)}
-	seedSession(t, store, "rootA", "acct", 0, "", upTasks())
-	seedSession(t, store, "rootB", "acct", 1, "", upTasks())
+	seedSessionWithNodes(t, store, "rootA", "acct", 0, "", upTasks())
+	seedSessionWithNodes(t, store, "rootB", "acct", 1, "", upTasks())
 
 	reserved, err := reserveChildCapSlot(cfg, store, "newchild", "", false)
 	if reserved {
@@ -165,8 +165,8 @@ func TestReserveChildCapSlot_VirtualRootCapCountsEveryParentlessSession(t *testi
 func TestReserveChildCapSlot_VirtualRootCapIncludesExplicitSiblingCohorts(t *testing.T) {
 	store := testStore(t)
 	cfg := &config.Config{BaseDir: t.TempDir(), MaxUpChildren: intPtr(1)}
-	seedSession(t, store, "cohort", "acct", 0, "", nil)
-	seedSession(t, store, "sibling", "acct", 1, "", upTasks())
+	seedSessionWithNodes(t, store, "cohort", "acct", 0, "", nil)
+	seedSessionWithNodes(t, store, "sibling", "acct", 1, "", upTasks())
 	setParent(t, store, "sibling", "root:cohort")
 
 	reserved, err := reserveChildCapSlot(cfg, store, "newchild", "", false)
@@ -181,7 +181,7 @@ func TestReserveChildCapSlot_VirtualRootCapIncludesExplicitSiblingCohorts(t *tes
 func TestReserveChildCapSlot_UnsetVirtualRootCapAllowsParentlessSession(t *testing.T) {
 	store := testStore(t)
 	cfg := &config.Config{BaseDir: t.TempDir()}
-	seedSession(t, store, "rootA", "acct", 0, "", upTasks())
+	seedSessionWithNodes(t, store, "rootA", "acct", 0, "", upTasks())
 
 	reserved, err := reserveChildCapSlot(cfg, store, "newchild", "", false)
 	if err != nil || reserved {
@@ -193,7 +193,7 @@ func TestReserveChildCapSlot_OutstandingReservationCountsTowardCap(t *testing.T)
 	store := testStore(t)
 	cfg := &config.Config{BaseDir: t.TempDir()}
 	writeCapWorkflow(t, cfg.BaseDir, "parent_wf", intPtr(1))
-	seedSession(t, store, "parent1", "acct", 1, "parent_wf", nil)
+	seedSessionWithNodes(t, store, "parent1", "acct", 1, "parent_wf", nil)
 
 	first, err := reserveChildCapSlot(cfg, store, "childA", "parent1", false)
 	if err != nil || !first {
@@ -223,7 +223,7 @@ func TestReserveChildCapSlot_ConcurrentReservationsRespectCap(t *testing.T) {
 	const limit = 3
 	const attempts = 20
 	writeCapWorkflow(t, cfg.BaseDir, "parent_wf", intPtr(limit))
-	seedSession(t, store, "parent1", "acct", 1, "parent_wf", nil)
+	seedSessionWithNodes(t, store, "parent1", "acct", 1, "parent_wf", nil)
 
 	var wg sync.WaitGroup
 	results := make([]bool, attempts)
@@ -265,7 +265,7 @@ func TestReserveChildCapSlot_ConcurrentAttemptForTheSameChildIsRejected(t *testi
 	store := testStore(t)
 	cfg := &config.Config{BaseDir: t.TempDir()}
 	writeCapWorkflow(t, cfg.BaseDir, "parent_wf", intPtr(5))
-	seedSession(t, store, "parent1", "acct", 1, "parent_wf", nil)
+	seedSessionWithNodes(t, store, "parent1", "acct", 1, "parent_wf", nil)
 
 	first, err := reserveChildCapSlot(cfg, store, "childA", "parent1", false)
 	if err != nil || !first {
@@ -285,7 +285,7 @@ func TestReserveChildCapSlot_DestroyingTheStuckChildFreesItsReservation(t *testi
 	store := testStore(t)
 	cfg := &config.Config{BaseDir: t.TempDir()}
 	writeCapWorkflow(t, cfg.BaseDir, "parent_wf", intPtr(1))
-	seedSession(t, store, "parent1", "acct", 1, "parent_wf", nil)
+	seedSessionWithNodes(t, store, "parent1", "acct", 1, "parent_wf", nil)
 
 	if _, err := store.ReserveUpSlot("childA", "parent1", approveAnyReservation); err != nil {
 		t.Fatalf("simulate a crashed prior reservation: %v", err)
@@ -312,8 +312,8 @@ func TestReserveChildCapSlot_ForceRecreateOfAnUpChildDoesNotBlockItself(t *testi
 	store := testStore(t)
 	cfg := &config.Config{BaseDir: t.TempDir()}
 	writeCapWorkflow(t, cfg.BaseDir, "parent_wf", intPtr(1))
-	seedSession(t, store, "parent1", "acct", 1, "parent_wf", nil)
-	seedSession(t, store, "childA", "acct", 0, "", upTasks())
+	seedSessionWithNodes(t, store, "parent1", "acct", 1, "parent_wf", nil)
+	seedSessionWithNodes(t, store, "childA", "acct", 0, "", upTasks())
 	setParent(t, store, "childA", "parent1")
 
 	reserved, err := reserveChildCapSlot(cfg, store, "childA", "parent1", false)
@@ -326,8 +326,8 @@ func TestReserveChildCapSlot_ForceRecreateReservationStillBlocksASibling(t *test
 	store := testStore(t)
 	cfg := &config.Config{BaseDir: t.TempDir()}
 	writeCapWorkflow(t, cfg.BaseDir, "parent_wf", intPtr(1))
-	seedSession(t, store, "parent1", "acct", 1, "parent_wf", nil)
-	seedSession(t, store, "childA", "acct", 0, "", upTasks())
+	seedSessionWithNodes(t, store, "parent1", "acct", 1, "parent_wf", nil)
+	seedSessionWithNodes(t, store, "childA", "acct", 0, "", upTasks())
 	setParent(t, store, "childA", "parent1")
 
 	if reserved, err := reserveChildCapSlot(cfg, store, "childA", "parent1", false); err != nil || !reserved {

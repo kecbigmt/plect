@@ -63,10 +63,10 @@ func TestIntegration_UpAutoCreatesFromURL(t *testing.T) {
 	if session == nil {
 		t.Fatal("expected state entry created by Up")
 	}
-	if e := session.Tasks["envfile"]; e == nil || e.Status != contract.TaskStatusProduced {
+	if e := session.Nodes["envfile"]; e == nil || e.Status != contract.TaskStatusProduced {
 		t.Fatalf("envfile status = %v, want produced", e)
 	}
-	if e := session.Tasks["tmux"]; e == nil || e.Status != contract.TaskStatusProduced {
+	if e := session.Nodes["tmux"]; e == nil || e.Status != contract.TaskStatusProduced {
 		t.Fatalf("tmux status = %v, want produced", e)
 	}
 }
@@ -107,7 +107,7 @@ func TestIntegration_UpRecoversIncompleteSessionTask(t *testing.T) {
 	if session == nil {
 		t.Fatal("expected state entry after partial create")
 	}
-	if e := session.Tasks["envfile"]; e == nil || e.Status != contract.TaskStatusFailed {
+	if e := session.Nodes["envfile"]; e == nil || e.Status != contract.TaskStatusFailed {
 		t.Fatalf("envfile status after partial create = %v, want failed", e)
 	}
 
@@ -115,10 +115,10 @@ func TestIntegration_UpRecoversIncompleteSessionTask(t *testing.T) {
 		t.Fatalf("Up recovery failed: %v", err)
 	}
 	session = store.Get(sessionName)
-	if e := session.Tasks["envfile"]; e == nil || e.Status != contract.TaskStatusProduced {
+	if e := session.Nodes["envfile"]; e == nil || e.Status != contract.TaskStatusProduced {
 		t.Fatalf("envfile status after Up = %v, want produced", e)
 	}
-	if e := session.Tasks["tmux"]; e == nil || e.Status != contract.TaskStatusProduced {
+	if e := session.Nodes["tmux"]; e == nil || e.Status != contract.TaskStatusProduced {
 		t.Fatalf("tmux status after Up = %v, want produced", e)
 	}
 }
@@ -241,10 +241,10 @@ func TestIntegration_CreateIdempotent(t *testing.T) {
 	if session == nil {
 		t.Fatal("state entry should exist after partial create")
 	}
-	if a := session.Tasks["a"]; a == nil || a.Status != contract.TaskStatusProduced {
+	if a := session.Nodes["a"]; a == nil || a.Status != contract.TaskStatusProduced {
 		t.Fatalf("a status = %v, want produced", a)
 	}
-	if b := session.Tasks["b"]; b == nil || b.Status != contract.TaskStatusFailed {
+	if b := session.Nodes["b"]; b == nil || b.Status != contract.TaskStatusFailed {
 		t.Fatalf("b status = %v, want failed", b)
 	}
 
@@ -256,10 +256,10 @@ func TestIntegration_CreateIdempotent(t *testing.T) {
 		t.Fatalf("SessionName = %q, want %q", result.SessionName, sessionName)
 	}
 	session = store.Get(sessionName)
-	if a := session.Tasks["a"]; a == nil || a.Status != contract.TaskStatusProduced {
+	if a := session.Nodes["a"]; a == nil || a.Status != contract.TaskStatusProduced {
 		t.Fatalf("a status after retry = %v, want produced", a)
 	}
-	if b := session.Tasks["b"]; b == nil || b.Status != contract.TaskStatusProduced {
+	if b := session.Nodes["b"]; b == nil || b.Status != contract.TaskStatusProduced {
 		t.Fatalf("b status after retry = %v, want produced", b)
 	}
 }
@@ -297,7 +297,7 @@ func TestIntegration_DownUpPreservesPrev(t *testing.T) {
 	if _, err := Up(cfg, store, UpParams{Identifier: url}); err != nil {
 		t.Fatalf("first up: %v", err)
 	}
-	firstSID, _ := store.Get(sessionName).Tasks["claude_like"].Outputs["session_id"].(string)
+	firstSID, _ := store.Get(sessionName).Nodes["claude_like"].Outputs["session_id"].(string)
 	if firstSID != "fresh-abc" {
 		t.Fatalf("first setup session_id = %q, want fresh-abc", firstSID)
 	}
@@ -305,14 +305,14 @@ func TestIntegration_DownUpPreservesPrev(t *testing.T) {
 	if _, err := Down(cfg, store, DownParams{Identifier: url}); err != nil {
 		t.Fatalf("down: %v", err)
 	}
-	if s := store.Get(sessionName).Tasks["claude_like"].Status; s != contract.TaskStatusCleaned {
+	if s := store.Get(sessionName).Nodes["claude_like"].Status; s != contract.TaskStatusCleaned {
 		t.Fatalf("claude_like.Status after down = %q, want cleaned", s)
 	}
 
 	if _, err := Up(cfg, store, UpParams{Identifier: url}); err != nil {
 		t.Fatalf("second up: %v", err)
 	}
-	secondSID, _ := store.Get(sessionName).Tasks["claude_like"].Outputs["session_id"].(string)
+	secondSID, _ := store.Get(sessionName).Nodes["claude_like"].Outputs["session_id"].(string)
 	if secondSID != firstSID {
 		t.Fatalf("session_id after down→up = %q, want %q (Prev should preserve)", secondSID, firstSID)
 	}
@@ -345,14 +345,14 @@ func TestIntegration_DownSurvivesPartialSetup(t *testing.T) {
 	if _, err := Up(cfg, store, UpParams{Identifier: url}); err == nil {
 		t.Fatal("expected Up to fail on broken task")
 	}
-	if s := store.Get(sessionName).Tasks["broken"].Status; s != contract.TaskStatusFailed {
+	if s := store.Get(sessionName).Nodes["broken"].Status; s != contract.TaskStatusFailed {
 		t.Fatalf("broken.Status = %q, want failed", s)
 	}
 
 	if _, err := Down(cfg, store, DownParams{Identifier: url}); err != nil {
 		t.Fatalf("down should survive partial setup, got: %v", err)
 	}
-	if s := store.Get(sessionName).Tasks["broken"].Status; s != contract.TaskStatusCleaned {
+	if s := store.Get(sessionName).Nodes["broken"].Status; s != contract.TaskStatusCleaned {
 		t.Fatalf("broken.Status after down = %q, want cleaned", s)
 	}
 }
@@ -384,7 +384,7 @@ func TestIntegration_CreatePropagatesInputToTemplates(t *testing.T) {
 	if got := session.Inputs["template"]; got != "review" {
 		t.Fatalf("session.Inputs[template] = %v, want review", got)
 	}
-	outputs := session.Tasks["envfile"].Outputs
+	outputs := session.Nodes["envfile"].Outputs
 	if outputs["template"] != "review" {
 		t.Fatalf("envfile.Outputs[template] = %v, want review (proves .Input reached setup)", outputs["template"])
 	}
@@ -449,8 +449,8 @@ func TestIntegration_UpAutoCreateWithInput(t *testing.T) {
 	if session.Inputs["template"] != "respond" {
 		t.Fatalf("session.Inputs[template] = %v, want respond", session.Inputs["template"])
 	}
-	if session.Tasks["envfile"].Outputs["template"] != "respond" {
-		t.Fatalf("envfile.Outputs[template] = %v, want respond", session.Tasks["envfile"].Outputs["template"])
+	if session.Nodes["envfile"].Outputs["template"] != "respond" {
+		t.Fatalf("envfile.Outputs[template] = %v, want respond", session.Nodes["envfile"].Outputs["template"])
 	}
 }
 
@@ -551,7 +551,7 @@ func TestIntegration_DestroyAutoDownsLiveRunTask(t *testing.T) {
 		t.Fatalf("up: %v", err)
 	}
 	session := store.Get(sessionName)
-	if e := session.Tasks["tmux"]; e == nil || e.Status != contract.TaskStatusProduced {
+	if e := session.Nodes["tmux"]; e == nil || e.Status != contract.TaskStatusProduced {
 		t.Fatalf("precondition: tmux status = %v, want produced (need a live run task)", e)
 	}
 
@@ -1035,14 +1035,14 @@ session_name = { from = "nodes.tmux.outputs.session_name" }
 	if session.Workflow != "coding" {
 		t.Errorf("Session.Workflow = %q, want coding", session.Workflow)
 	}
-	tmux := session.Tasks["tmux"]
+	tmux := session.Nodes["tmux"]
 	if tmux == nil || tmux.Status != contract.TaskStatusProduced {
 		t.Fatalf("tmux state = %+v, want produced", tmux)
 	}
 	if tmux.Outputs["session_name"] != "abc" {
 		t.Fatalf("tmux outputs = %+v, want session_name=abc", tmux.Outputs)
 	}
-	agent := session.Tasks["agent"]
+	agent := session.Nodes["agent"]
 	if agent == nil || agent.Status != contract.TaskStatusProduced {
 		t.Fatalf("agent state = %+v, want produced", agent)
 	}
@@ -1129,7 +1129,7 @@ uses = "noop"
 
 // TestIntegration_AttachUnderWorkflowPath guards against the regression where
 // Attach reached for Resolved.Config (empty under the workflow path) and
-// looked up session.Tasks[""]. Exercises a workflow file whose tmux node
+// looked up session.Nodes[""]. Exercises a workflow file whose tmux node
 // declares `attach`, runs `plect up`, then verifies Attach resolves the right
 // task id and renders the command using the node's own outputs.
 func TestIntegration_AttachUnderWorkflowPath(t *testing.T) {

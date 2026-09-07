@@ -20,8 +20,9 @@ import (
 // own [input_schema] defaults fill whatever this wiring left unset, so an
 // author-declared optional parameter needs no per-workflow line.
 func channelInputs(s *domain.Session, ch config.EventChannel, def config.ChannelDefinition) (map[string]any, error) {
-	deps := make(map[string]map[string]any, len(s.Tasks))
-	for id, st := range s.Tasks {
+	merged := domain.MergedTasks(s)
+	deps := make(map[string]map[string]any, len(merged))
+	for id, st := range merged {
 		if st == nil {
 			continue
 		}
@@ -32,7 +33,7 @@ func channelInputs(s *domain.Session, ch config.EventChannel, def config.Channel
 		deps[id] = out
 	}
 	var wfOutputs map[string]any
-	if st := s.Tasks[contract.WorkflowPseudoNodeID]; st != nil {
+	if st := s.Nodes[contract.WorkflowPseudoNodeID]; st != nil {
 		wfOutputs = st.Outputs
 	}
 	resolved, err := task.ResolveNodeInputs(ch.Inputs, deps, wfOutputs, task.SessionVars{

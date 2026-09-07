@@ -23,7 +23,7 @@ func TestUp_VanishedPaneIsRebuilt(t *testing.T) {
 		},
 		[]nodeFixture{{id: "pane"}},
 	)
-	seedSession(t, store, sessionName, "acct", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, sessionName, "acct", 1, "default", map[string]*contract.TaskState{
 		"pane": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Outputs: map[string]any{}},
 	})
 
@@ -60,7 +60,7 @@ func TestUp_VanishedGuardDirectoryIsRebuilt(t *testing.T) {
 			{id: "agent", inputs: map[string]*lang.Value{"path_prepend": fromValue("nodes.guard.outputs.dir")}},
 		},
 	)
-	seedSession(t, store, sessionName, "acct", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, sessionName, "acct", 1, "default", map[string]*contract.TaskState{
 		"guard": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, Outputs: map[string]any{"dir": filepath.Join(t.TempDir(), "gone")}},
 		"agent": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Outputs: map[string]any{"saw": "stale"}},
 	})
@@ -94,7 +94,7 @@ func TestUp_VanishedSubscriptionIsRebuilt(t *testing.T) {
 		},
 		[]nodeFixture{{id: "subscription"}},
 	)
-	seedSession(t, store, sessionName, "acct", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, sessionName, "acct", 1, "default", map[string]*contract.TaskState{
 		"subscription": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Outputs: map[string]any{}},
 	})
 

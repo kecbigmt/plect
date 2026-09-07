@@ -408,13 +408,13 @@ func TestUpdateSession_MissingSessionErrors(t *testing.T) {
 	}
 }
 
-func TestUpdateSession_AppliesFnAndPersistsTasks(t *testing.T) {
+func TestUpdateSession_AppliesFnAndPersistsNodes(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
 	putBareSession(t, db, "s1", "")
 
 	err := db.UpdateSession(ctx, "s1", func(s *domain.Session) error {
-		s.Tasks = map[string]*contract.TaskState{
+		s.Nodes = map[string]*contract.TaskState{
 			"@workflow": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, Outputs: map[string]any{"workspace_dir": "/tmp/x"}},
 		}
 		return nil
@@ -427,12 +427,12 @@ func TestUpdateSession_AppliesFnAndPersistsTasks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSession: %v", err)
 	}
-	task := got.Tasks["@workflow"]
-	if task == nil {
-		t.Fatal("task @workflow missing after UpdateSession")
+	node := got.Nodes["@workflow"]
+	if node == nil {
+		t.Fatal("node @workflow missing after UpdateSession")
 	}
-	if task.Outputs["workspace_dir"] != "/tmp/x" {
-		t.Errorf("task outputs = %v, want workspace_dir=/tmp/x", task.Outputs)
+	if node.Outputs["workspace_dir"] != "/tmp/x" {
+		t.Errorf("node outputs = %v, want workspace_dir=/tmp/x", node.Outputs)
 	}
 }
 
@@ -468,7 +468,7 @@ func TestPutSession_WithDoneWhenAndJudgesRoundTrips(t *testing.T) {
 		Name: "reviewed", CreatedAt: now, UpdatedAt: now,
 		Tasks: map[string]*contract.TaskState{
 			"impl": {
-				Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, Dynamic: true, TaskID: "impl-work",
+				Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "impl-work",
 				DoneWhen: &contract.DoneWhenState{
 					HeartbeatTicks:  3,
 					LastFingerprint: "abc123",
@@ -516,10 +516,10 @@ func TestPutSession_WithDoneWhenAndJudgesRoundTrips(t *testing.T) {
 }
 
 // TestPutSession_NodeInstanceDoneWhenRoundTripsAsEmbeddedJSON proves a
-// static node instance's (Dynamic == false) DoneWhen survives round-trip
-// even though it is never split into the relational done_when tables
-// (those attach only to dynamic task_instances rows): it stays embedded in
-// node_instances.done_when_json instead.
+// static node instance's DoneWhen survives round-trip even though it is
+// never split into the relational done_when tables (those attach only to
+// task_instances rows): it stays embedded in node_instances.done_when_json
+// instead.
 func TestPutSession_NodeInstanceDoneWhenRoundTripsAsEmbeddedJSON(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
@@ -527,7 +527,7 @@ func TestPutSession_NodeInstanceDoneWhenRoundTripsAsEmbeddedJSON(t *testing.T) {
 
 	session := &domain.Session{
 		Name: "s1", CreatedAt: now, UpdatedAt: now,
-		Tasks: map[string]*contract.TaskState{
+		Nodes: map[string]*contract.TaskState{
 			"@workflow": {
 				Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced,
 				DoneWhen: &contract.DoneWhenState{LastFingerprint: "wf-fingerprint"},
@@ -542,15 +542,49 @@ func TestPutSession_NodeInstanceDoneWhenRoundTripsAsEmbeddedJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSession: %v", err)
 	}
-	task := got.Tasks["@workflow"]
-	if task == nil || task.Dynamic {
-		t.Fatalf("task = %+v, want a static (non-dynamic) node instance", task)
+	node := got.Nodes["@workflow"]
+	if node == nil {
+		t.Fatalf("node = %+v, want a node instance", node)
 	}
-	if task.DoneWhen == nil || task.DoneWhen.LastFingerprint != "wf-fingerprint" {
-		t.Fatalf("DoneWhen = %+v, want it preserved via embedded JSON", task.DoneWhen)
+	if node.DoneWhen == nil || node.DoneWhen.LastFingerprint != "wf-fingerprint" {
+		t.Fatalf("DoneWhen = %+v, want it preserved via embedded JSON", node.DoneWhen)
 	}
 }
 
+func TestPutSession_ReplacesNodesRatherThanAccumulating(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	session := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Nodes: map[string]*contract.TaskState{
+		"a": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced},
+	}}
+	if err := db.PutSession(ctx, session); err != nil {
+		t.Fatalf("PutSession: %v", err)
+	}
+	session.Nodes = map[string]*contract.TaskState{
+		"b": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced},
+	}
+	if err := db.PutSession(ctx, session); err != nil {
+		t.Fatalf("PutSession (2nd): %v", err)
+	}
+
+	got, err := db.GetSession(ctx, "s1")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if _, ok := got.Nodes["a"]; ok {
+		t.Errorf("node %q survived a Put that no longer declared it", "a")
+	}
+	if _, ok := got.Nodes["b"]; !ok {
+		t.Errorf("node %q missing after Put", "b")
+	}
+}
+
+// TestPutSession_ReplacesTasksRatherThanAccumulating covers the task_instances
+// reconciliation path (upsert current, delete any instance_name no longer
+// present), which is a different write strategy from node_instances' full
+// delete-then-insert (see TestPutSession_ReplacesNodesRatherThanAccumulating).
 func TestPutSession_ReplacesTasksRatherThanAccumulating(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
@@ -588,7 +622,7 @@ func TestPutSession_DynamicInstanceCleanupThenSetupYieldsFreshDoneWhenHistory(t 
 
 	seed := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Tasks: map[string]*contract.TaskState{
 		"initial": {
-			Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, Dynamic: true, TaskID: "work", Name: "initial",
+			Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "work", Name: "initial",
 			DoneWhen: &contract.DoneWhenState{
 				LastFingerprint: "old",
 				Judges: map[string]*contract.DoneWhenJudge{
@@ -607,7 +641,7 @@ func TestPutSession_DynamicInstanceCleanupThenSetupYieldsFreshDoneWhenHistory(t 
 	}
 
 	recreated := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Tasks: map[string]*contract.TaskState{
-		"initial": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, Dynamic: true, TaskID: "work", Name: "initial"},
+		"initial": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "work", Name: "initial"},
 	}}
 	if err := db.PutSession(ctx, recreated); err != nil {
 		t.Fatalf("PutSession (recreate): %v", err)
@@ -632,7 +666,7 @@ func TestPutSession_DynamicInstanceIDStableAcrossOrdinaryUpdate(t *testing.T) {
 	now := time.Now().UTC()
 
 	seed := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Tasks: map[string]*contract.TaskState{
-		"initial": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, Dynamic: true, TaskID: "work", Name: "initial"},
+		"initial": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "work", Name: "initial"},
 	}}
 	if err := db.PutSession(ctx, seed); err != nil {
 		t.Fatalf("PutSession (seed): %v", err)
@@ -640,7 +674,7 @@ func TestPutSession_DynamicInstanceIDStableAcrossOrdinaryUpdate(t *testing.T) {
 	firstID := taskInstanceIDForTest(t, db, "s1", "initial")
 
 	updated := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Tasks: map[string]*contract.TaskState{
-		"initial": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, Dynamic: true, TaskID: "work", Name: "initial",
+		"initial": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "work", Name: "initial",
 			DoneWhen: &contract.DoneWhenState{LastFingerprint: "new"},
 		},
 	}}
@@ -750,7 +784,7 @@ func TestPutSessionAndGetSession_EveryFieldRoundTrips(t *testing.T) {
 		UpdatedAt:   now,
 		Tasks: map[string]*contract.TaskState{
 			"work": {
-				Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Dynamic: true,
+				Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced,
 				TaskID: "work-def", Resource: "resource-1", Name: "work",
 				Inputs:  map[string]any{"in": 1},
 				Outputs: map[string]any{"out": 2},
@@ -829,7 +863,7 @@ func TestPutSessionAndGetSession_EveryFieldRoundTrips(t *testing.T) {
 	if task == nil {
 		t.Fatal("task work missing")
 	}
-	if task.TaskID != "work-def" || task.Resource != "resource-1" || task.Name != "work" || !task.Dynamic {
+	if task.TaskID != "work-def" || task.Resource != "resource-1" || task.Name != "work" {
 		t.Errorf("task identity = %+v", task)
 	}
 	if fmt.Sprint(task.Inputs) != fmt.Sprint(map[string]any{"in": float64(1)}) {
@@ -877,7 +911,7 @@ func TestPutSession_FreshSessionAndTaskLeaveEveryJSONColumnNull(t *testing.T) {
 	session := &domain.Session{
 		Name: "bare", CreatedAt: now, UpdatedAt: now,
 		Tasks: map[string]*contract.TaskState{
-			"initial": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, Dynamic: true, TaskID: "work"},
+			"initial": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "work"},
 		},
 	}
 	if err := db.PutSession(ctx, session); err != nil {

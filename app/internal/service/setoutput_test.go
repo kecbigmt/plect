@@ -32,7 +32,7 @@ func TestSetOutput_MergesMutableKeys(t *testing.T) {
 		[]taskFixture{{id: "watch", scope: "session", setup: "echo '{}'", extra: watchTaskSchema}},
 		[]nodeFixture{{id: "watch"}})
 
-	seedSession(t, store, "org/repo-1", "org/repo", 1, "wf", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "org/repo-1", "org/repo", 1, "wf", map[string]*contract.TaskState{
 		"watch": {
 			Scope:   contract.TaskScopeSession,
 			Status:  contract.TaskStatusProduced,
@@ -53,7 +53,7 @@ func TestSetOutput_MergesMutableKeys(t *testing.T) {
 		t.Errorf("Target = %q, want %q", result.Target, "watch")
 	}
 
-	got := store.Get("org/repo-1").Tasks["watch"].Outputs
+	got := store.Get("org/repo-1").Nodes["watch"].Outputs
 	if got["pr_state"] != "merged" {
 		t.Errorf("pr_state = %v, want merged", got["pr_state"])
 	}
@@ -70,7 +70,7 @@ func TestSetOutput_SessionGuardBlocksCrossOwner(t *testing.T) {
 		[]taskFixture{{id: "watch", scope: "session", setup: "echo '{}'", extra: watchTaskSchema}},
 		[]nodeFixture{{id: "watch"}})
 
-	seedSession(t, store, "exampleorg/repo-26", "exampleorg/repo", 26, "wf", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "exampleorg/repo-26", "exampleorg/repo", 26, "wf", map[string]*contract.TaskState{
 		"watch": {
 			Scope:   contract.TaskScopeSession,
 			Status:  contract.TaskStatusProduced,
@@ -92,7 +92,7 @@ func TestSetOutput_SessionGuardBlocksCrossOwner(t *testing.T) {
 	if !ok || svcErr.Code != ErrRepoNotAllowed {
 		t.Errorf("want ErrRepoNotAllowed, got %v", err)
 	}
-	if got := store.Get("exampleorg/repo-26").Tasks["watch"].Outputs["pr_state"]; got != "open" {
+	if got := store.Get("exampleorg/repo-26").Nodes["watch"].Outputs["pr_state"]; got != "open" {
 		t.Errorf("blocked set-output must not mutate the session; pr_state = %v", got)
 	}
 }
@@ -102,7 +102,7 @@ func TestSetOutput_RejectsImmutableKey(t *testing.T) {
 	cfg := writeWorkflowFixture(t, t.TempDir(), "wf",
 		[]taskFixture{{id: "watch", scope: "session", setup: "echo '{}'", extra: watchTaskSchema}},
 		[]nodeFixture{{id: "watch"}})
-	seedSession(t, store, "org/repo-1", "org/repo", 1, "wf", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "org/repo-1", "org/repo", 1, "wf", map[string]*contract.TaskState{
 		"watch": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, Outputs: map[string]any{"title": "Old"}},
 	})
 
@@ -117,7 +117,7 @@ func TestSetOutput_RejectsImmutableKey(t *testing.T) {
 	if !strings.Contains(err.Error(), "immutable") {
 		t.Errorf("error should mention immutability, got %q", err.Error())
 	}
-	if got := store.Get("org/repo-1").Tasks["watch"].Outputs["title"]; got != "Old" {
+	if got := store.Get("org/repo-1").Nodes["watch"].Outputs["title"]; got != "Old" {
 		t.Errorf("rejected write must not persist; title = %v", got)
 	}
 }
@@ -127,7 +127,7 @@ func TestSetOutput_RejectsWhenNoMutableDeclared(t *testing.T) {
 	cfg := writeWorkflowFixture(t, t.TempDir(), "wf",
 		[]taskFixture{{id: "plain", scope: "session", setup: "echo '{}'"}},
 		[]nodeFixture{{id: "plain"}})
-	seedSession(t, store, "org/repo-1", "org/repo", 1, "wf", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "org/repo-1", "org/repo", 1, "wf", map[string]*contract.TaskState{
 		"plain": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, Outputs: map[string]any{}},
 	})
 
@@ -169,7 +169,7 @@ func TestSetOutput_RequiresProducedState(t *testing.T) {
 	cfg := writeWorkflowFixture(t, t.TempDir(), "wf",
 		[]taskFixture{{id: "watch", scope: "session", setup: "echo '{}'", extra: watchTaskSchema}},
 		[]nodeFixture{{id: "watch"}})
-	seedSession(t, store, "org/repo-1", "org/repo", 1, "wf", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "org/repo-1", "org/repo", 1, "wf", map[string]*contract.TaskState{
 		"watch": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusFailed},
 	})
 
@@ -201,7 +201,7 @@ mutable = true
 	cfg := writeWorkflowFixture(t, t.TempDir(), "wf",
 		[]taskFixture{{id: "watch", scope: "session", setup: "echo '{}'", extra: schema}},
 		[]nodeFixture{{id: "watch"}})
-	seedSession(t, store, "org/repo-1", "org/repo", 1, "wf", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "org/repo-1", "org/repo", 1, "wf", map[string]*contract.TaskState{
 		"watch": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, Outputs: map[string]any{"pr_state": "open"}},
 	})
 
@@ -253,7 +253,7 @@ type = "string"
 `)
 
 	// Simulate a Phase 3 session: workflow pseudo-node already produced.
-	seedSession(t, store, "org/repo-1", "org/repo", 1, "wf", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "org/repo-1", "org/repo", 1, "wf", map[string]*contract.TaskState{
 		contract.WorkflowPseudoNodeID: {
 			Scope:   contract.TaskScopeSession,
 			Status:  contract.TaskStatusProduced,
@@ -272,7 +272,7 @@ type = "string"
 	if result.Target != contract.WorkflowPseudoNodeID {
 		t.Errorf("Target = %q, want %q", result.Target, contract.WorkflowPseudoNodeID)
 	}
-	got := store.Get("org/repo-1").Tasks[contract.WorkflowPseudoNodeID].Outputs
+	got := store.Get("org/repo-1").Nodes[contract.WorkflowPseudoNodeID].Outputs
 	if got["pr_state"] != "merged" {
 		t.Errorf("pr_state = %v, want merged", got["pr_state"])
 	}
@@ -291,7 +291,6 @@ func TestSetOutput_Task_MergesMutableKeys(t *testing.T) {
 			Scope:    contract.TaskScopeSession,
 			Status:   contract.TaskStatusProduced,
 			TaskID:   "review",
-			Dynamic:  true,
 			Resource: "pr-1",
 			Outputs:  map[string]any{"pr_state": "open"},
 		},
@@ -299,7 +298,6 @@ func TestSetOutput_Task_MergesMutableKeys(t *testing.T) {
 			Scope:    contract.TaskScopeSession,
 			Status:   contract.TaskStatusProduced,
 			TaskID:   "review",
-			Dynamic:  true,
 			Resource: "pr-2",
 			Outputs:  map[string]any{"checks_status": "FAILURE", "pr_state": "open"},
 		},
@@ -335,7 +333,7 @@ func TestSetOutput_Task_RejectsImmutableKey(t *testing.T) {
 		[]taskFixture{{id: "review", scope: "session", setup: "echo '{}'", extra: watchTaskSchema}},
 		[]nodeFixture{{id: "review"}})
 	seedSession(t, store, "org/repo-1", "org/repo", 1, "wf", map[string]*contract.TaskState{
-		"review#1": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "review", Dynamic: true, Outputs: map[string]any{"title": "Old"}},
+		"review#1": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "review", Outputs: map[string]any{"title": "Old"}},
 	})
 	// title is immutable in watchTaskSchema.
 	_, err := SetOutput(cfg, store, SetOutputParams{Identifier: "org/repo-1", Task: "review#1", Outputs: map[string]any{"title": "New"}})
@@ -361,7 +359,7 @@ func TestSetOutput_Task_RejectsStaticNode(t *testing.T) {
 	cfg := writeWorkflowFixture(t, t.TempDir(), "wf",
 		[]taskFixture{{id: "watch", scope: "session", setup: "echo '{}'", extra: watchTaskSchema}},
 		[]nodeFixture{{id: "watch"}})
-	seedSession(t, store, "org/repo-1", "org/repo", 1, "wf", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "org/repo-1", "org/repo", 1, "wf", map[string]*contract.TaskState{
 		"watch": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, Outputs: map[string]any{}},
 	})
 	_, err := SetOutput(cfg, store, SetOutputParams{Identifier: "org/repo-1", Task: "watch", Outputs: map[string]any{"checks_status": "SUCCESS"}})
@@ -425,7 +423,7 @@ func TestSetOutput_NestedRoutesWriteToTheBoundInnerOutput(t *testing.T) {
 		},
 		[]nodeFixture{{id: "team_runtime"}})
 
-	seedSession(t, store, "org/repo-1", "org/repo", 1, "wf", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "org/repo-1", "org/repo", 1, "wf", map[string]*contract.TaskState{
 		"team_runtime": {
 			Scope:   contract.TaskScopeSession,
 			Status:  contract.TaskStatusProduced,
@@ -446,7 +444,7 @@ func TestSetOutput_NestedRoutesWriteToTheBoundInnerOutput(t *testing.T) {
 		t.Fatalf("SetOutput: %v", err)
 	}
 
-	st := store.Get("org/repo-1").Tasks["team_runtime"]
+	st := store.Get("org/repo-1").Nodes["team_runtime"]
 	if got := st.Layers[1].Outputs["pid"]; got != "9" {
 		t.Errorf("inner pid = %v, want the routed write", got)
 	}
@@ -472,7 +470,6 @@ func TestSetOutput_NestedDynamicInstanceRoutesThroughItsLayers(t *testing.T) {
 		"team_runtime#1": {
 			Scope:   contract.TaskScopeSession,
 			TaskID:  "team_runtime",
-			Dynamic: true,
 			Status:  contract.TaskStatusProduced,
 			Outputs: map[string]any{"agent_pid": "1"},
 			Layers: []contract.LayerState{

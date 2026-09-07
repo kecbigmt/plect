@@ -288,7 +288,7 @@ func (db *DB) writeSessionTx(ctx context.Context, tx *sql.Tx, s *domain.Session)
 		return fmt.Errorf("update session %q: %w", s.Name, err)
 	}
 
-	if err := db.writeTasksTx(ctx, tx, candidateID, s.Tasks); err != nil {
+	if err := db.writeTasksTx(ctx, tx, candidateID, s.Nodes, s.Tasks); err != nil {
 		return err
 	}
 	return writeChannelHealthTx(ctx, q, candidateID, s.ChannelValidationHealth, s.ChannelDeliveryHealth)
@@ -332,7 +332,7 @@ func insertSessionParams(id, status string, parentCol, rootCol, populationWorkfl
 // itself, and leaves parent_session_id/root_session_id NULL: resolving a
 // parent link needs that parent's own row, which an unordered import pass
 // cannot guarantee exists yet. A later PutSession(ctx, s) call, once every
-// row exists, resolves ParentSession and writes s.Tasks/channel health.
+// row exists, resolves ParentSession and writes s.Nodes/s.Tasks/channel health.
 func (db *DB) ImportSession(ctx context.Context, id string, s *domain.Session) error {
 	return db.WithImmediateTx(ctx, func(tx *sql.Tx) error {
 		q := sqlcgen.New(tx)
@@ -624,10 +624,11 @@ func (db *DB) loadSessionExtras(ctx context.Context, q sqlcgen.DBTX, s *domain.S
 	s.ChannelValidationHealth = validationHealth
 	s.ChannelDeliveryHealth = deliveryHealth
 
-	tasks, err := loadTasks(ctx, q, s.ID)
+	nodes, tasks, err := loadTasks(ctx, q, s.ID)
 	if err != nil {
 		return err
 	}
+	s.Nodes = nodes
 	s.Tasks = tasks
 	return nil
 }

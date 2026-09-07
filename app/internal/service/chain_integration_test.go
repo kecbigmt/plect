@@ -100,7 +100,7 @@ revision = { from = "resource.state.revision" }
 	}
 	// The reviewer session is a real session the workflow built, not a
 	// record: its nodes ran.
-	if e := spawned.Tasks["tmux"]; e == nil || e.Status != contract.TaskStatusProduced {
+	if e := spawned.Nodes["tmux"]; e == nil || e.Status != contract.TaskStatusProduced {
 		t.Fatalf("reviewer tmux node = %v, want produced", e)
 	}
 	// The wired `revision` binding is rendered from the work outputs and fed to

@@ -181,12 +181,11 @@ enforces that exactly one of the two holds. The sentinel itself
 the `state.Store`/`ReserveUpSlot` call-site boundary, translated to and
 from these two columns only inside the persistence package.
 
-`Session.Tasks` splits across `node_instances` and `task_instances` by
-whether the entry is a static workflow-DAG node (including the `@workflow`
-pseudo-node) or a dynamic instance created at runtime via
-`plect task setup`; the persistence layer reads both and composes the one
-`Tasks` map the domain type and every core call site still see, deriving
-`Dynamic` from which table a record came from rather than storing it.
+`Session.Nodes` (static workflow-DAG nodes, including the `@workflow`
+pseudo-node) and `Session.Tasks` (dynamic instances created at runtime via
+`plect task setup`) map directly onto `node_instances` and `task_instances`
+respectively — one table per domain collection, with no composition or
+`Dynamic`-discriminated derivation at the persistence boundary.
 `task_instances.id` is a ULID minted once when a dynamic instance's row is
 first created and preserved by every later write that still names the same
 `(session_id, instance_name)` — an ordinary `Put`/`Update` upserts the

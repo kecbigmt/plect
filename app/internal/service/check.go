@@ -34,7 +34,7 @@ func PopulationTaskBlockers(cfg *config.Config, store *state.Store, sessionName 
 	var blockers []string
 	for _, key := range sortedTaskKeys(session.Tasks) {
 		st := session.Tasks[key]
-		if st == nil || !st.Dynamic || st.Status == contract.TaskStatusCleaned {
+		if st == nil || st.Status == contract.TaskStatusCleaned {
 			continue
 		}
 		if st.Status != contract.TaskStatusProduced {
@@ -184,10 +184,11 @@ func evaluateSessionActions(cfg *config.Config, store *state.Store, sessionName 
 	if err != nil {
 		return "", nil, nil, nil, err
 	}
+	merged := domain.MergedTasks(session)
 	var computed []computedAction
 	var chainPlan []ChainSpawn
-	for _, key := range sortedTaskKeys(session.Tasks) {
-		st := session.Tasks[key]
+	for _, key := range sortedTaskKeys(merged) {
+		st := merged[key]
 		if st == nil || st.Status != contract.TaskStatusProduced || key == contract.WorkflowPseudoNodeID {
 			continue
 		}

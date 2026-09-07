@@ -240,7 +240,7 @@ func attachCommandFor(cfg *config.Config, session *domain.Session) string {
 	if target == nil {
 		return ""
 	}
-	st, ok := session.Tasks[target.NodeID]
+	st, ok := session.Nodes[target.NodeID]
 	if !ok || st == nil || st.Status != contract.TaskStatusProduced {
 		return ""
 	}
@@ -270,9 +270,10 @@ func sessionDisplayTitle(cfg *config.Config, session *domain.Session) string {
 // runtimeTaskViews projects the session's run-scoped task instances — the
 // "run-scoped task produced state" layer-2 fact.
 func runtimeTaskViews(session *domain.Session) []StatusRuntimeTask {
+	merged := domain.MergedTasks(session)
 	var out []StatusRuntimeTask
-	for _, key := range sortedTaskKeys(session.Tasks) {
-		st := session.Tasks[key]
+	for _, key := range sortedTaskKeys(merged) {
+		st := merged[key]
 		if st == nil || st.Scope != contract.TaskScopeRun || key == contract.WorkflowPseudoNodeID {
 			continue
 		}
@@ -334,25 +335,29 @@ func statusTaskViews(cfg *config.Config, declarations taskDeclarations, session 
 // each task instance's final outputs/done_when state as recorded at destroy.
 func tombstoneStatusResult(tomb *contract.Tombstone) *StatusResult {
 	var work []StatusTask
-	for key, st := range tomb.Tasks {
-		if st == nil {
-			continue
+	appendCollection := func(collection map[string]*contract.TaskState, dynamic bool) {
+		for key, st := range collection {
+			if st == nil {
+				continue
+			}
+			work = append(work, StatusTask{
+				Instance:          key,
+				TaskID:            st.TaskID,
+				Scope:             st.Scope,
+				Status:            st.Status,
+				Dynamic:           dynamic,
+				Name:              st.Name,
+				Resource:          st.Resource,
+				Outputs:           st.Outputs,
+				State:             st.State,
+				Observed:          st.Observed,
+				Finalized:         !st.FinalizedAt.IsZero(),
+				PersistedDoneWhen: st.DoneWhen,
+			})
 		}
-		work = append(work, StatusTask{
-			Instance:          key,
-			TaskID:            st.TaskID,
-			Scope:             st.Scope,
-			Status:            st.Status,
-			Dynamic:           st.Dynamic,
-			Name:              st.Name,
-			Resource:          st.Resource,
-			Outputs:           st.Outputs,
-			State:             st.State,
-			Observed:          st.Observed,
-			Finalized:         !st.FinalizedAt.IsZero(),
-			PersistedDoneWhen: st.DoneWhen,
-		})
 	}
+	appendCollection(tomb.Nodes, false)
+	appendCollection(tomb.Tasks, true)
 	slices.SortFunc(work, func(a, b StatusTask) int { return strings.Compare(a.Instance, b.Instance) })
 	return &StatusResult{
 		Identity: StatusIdentity{

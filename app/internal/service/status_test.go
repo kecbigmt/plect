@@ -74,7 +74,7 @@ func TestStatus_RuntimeCarriesHealthMovementTimestamps(t *testing.T) {
 	cfg := aliveFixtureConfig(t, "true")
 	lastCheckedAt := time.Now().Add(-time.Minute).UTC()
 	lastMovementAt := time.Now().Add(-2 * time.Minute).UTC()
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"initial": {Scope: contract.TaskScopeRun, TaskID: "runner", Status: contract.TaskStatusProduced},
 	})
 	if err := store.Update("owner/repo-1", func(s *domain.Session) error {
@@ -107,7 +107,7 @@ func TestStatus_RuntimeCarriesHealthMovementTimestamps(t *testing.T) {
 func TestStatus_SurfacesActivityProbeFaultsAsWarnings(t *testing.T) {
 	store := testStore(t)
 	cfg := activityFixtureConfig(t, "echo 'pane is gone' >&2; exit 3")
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"initial": {Scope: contract.TaskScopeRun, TaskID: "runner", Status: contract.TaskStatusProduced},
 	})
 
@@ -132,7 +132,7 @@ func TestStatus_SurfacesActivityProbeFaultsAsWarnings(t *testing.T) {
 func TestStatus_IdentityCarriesCreateTimeInputs(t *testing.T) {
 	store := testStore(t)
 	cfg := aliveFixtureConfig(t, "true")
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", nil)
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", nil)
 	if err := store.Update("owner/repo-1", func(session *domain.Session) error {
 		session.Inputs = map[string]any{"reviewer": "alice", "retries": float64(3)}
 		return nil
@@ -157,7 +157,7 @@ func TestStatus_SlackThreadNodeOutputsAreReadableUnderTheNode(t *testing.T) {
 	cfg := writeWorkflowFixture(t, t.TempDir(), "default",
 		[]taskFixture{{id: "slack_thread", scope: contract.TaskScopeSession, setup: "true"}},
 		[]nodeFixture{{id: "slack_thread"}})
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"slack_thread": {
 			Scope:  contract.TaskScopeSession,
 			TaskID: "slack_thread",

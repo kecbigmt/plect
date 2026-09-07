@@ -32,6 +32,10 @@ func nodeAddresses(cfg *config.Config, session *domain.Session) map[string]strin
 }
 
 // instanceDefinitionAddress answers which declaration an instance runs.
+// dynamic reports which of the session's two collections st came from
+// (session.Tasks when true, session.Nodes when false) — a caller already
+// knows this structurally from where it read st, so it states it directly
+// rather than this function trying to infer it from st alone.
 //
 // A dynamic instance recorded the address its own reference selected, and that
 // is authoritative however it compares to the instance key — a `--name` equal
@@ -39,8 +43,8 @@ func nodeAddresses(cfg *config.Config, session *domain.Session) map[string]strin
 // name. A workflow node is the other way round: what it stores is the
 // definition's bare id, which is not an address, so the workflow that named
 // the effect answers for it whether or not the instance stored anything.
-func instanceDefinitionAddress(key string, st *contract.TaskState, nodes map[string]string) string {
-	if st != nil && st.Dynamic && st.TaskID != "" {
+func instanceDefinitionAddress(key string, st *contract.TaskState, dynamic bool, nodes map[string]string) string {
+	if dynamic && st != nil && st.TaskID != "" {
 		return st.TaskID
 	}
 	if address, ok := nodes[key]; ok {

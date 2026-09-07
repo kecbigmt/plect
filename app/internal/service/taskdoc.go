@@ -210,7 +210,10 @@ func setupTaskDocument(cfg *config.Config, store *state.Store, resolvedName stri
 		}
 		if params.Name != "" {
 			key = params.Name
-			if _, exists := s.Tasks[key]; exists {
+			// A `--name` collides against either collection's existing state:
+			// an uninstantiated node leaves its id free for a dynamic instance
+			// to take, but a live node under this name must still be refused.
+			if domain.TaskState(s, key) != nil {
 				collision = true
 				return nil
 			}
@@ -226,11 +229,10 @@ func setupTaskDocument(cfg *config.Config, store *state.Store, resolvedName stri
 			TaskID:   params.TaskID,
 			Status:   contract.TaskStatusProduced,
 			Inputs:   inputs,
-			Dynamic:  true,
 			Resource: params.Resource,
 			Name:     params.Name,
 			Observed: observation,
-			Seq:      task.NextSeq(s.Tasks),
+			Seq:      task.NextSeq(s.Nodes, s.Tasks),
 			SetupAt:  now,
 		}
 		s.UpdatedAt = now
@@ -310,7 +312,7 @@ func bindDocumentInputs(doc config.TaskDocument, cliInputs map[string]string, se
 // roots the instruction surface observes.
 func renderInstruction(cfg *config.Config, session *domain.Session, doc config.TaskDocument, inputs map[string]any, resourceID string, observed map[string]any) (string, *Error) {
 	workflowOutputs := map[string]any{}
-	if w := session.Tasks[contract.WorkflowPseudoNodeID]; w != nil && w.Outputs != nil {
+	if w := session.Nodes[contract.WorkflowPseudoNodeID]; w != nil && w.Outputs != nil {
 		workflowOutputs = w.Outputs
 	}
 	env := lang.Roots{

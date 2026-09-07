@@ -56,7 +56,7 @@ echo '{"workspace_dir":"%s","branch":"issue/5","title":"T"}'
 	if s == nil {
 		t.Fatal("session not persisted")
 	}
-	wfState := s.Tasks[contract.WorkflowPseudoNodeID]
+	wfState := s.Nodes[contract.WorkflowPseudoNodeID]
 	if wfState == nil || wfState.Status != contract.TaskStatusProduced {
 		t.Fatalf("pseudo-node = %+v, want produced", wfState)
 	}
@@ -64,7 +64,7 @@ echo '{"workspace_dir":"%s","branch":"issue/5","title":"T"}'
 		t.Errorf("free-form outputs should persist: %v", wfState.Outputs)
 	}
 	// Session tasks ran with the new workdir as cwd.
-	probe := s.Tasks["probe"]
+	probe := s.Nodes["probe"]
 	if probe == nil || probe.Status != contract.TaskStatusProduced {
 		t.Fatalf("probe = %+v", probe)
 	}
@@ -102,7 +102,7 @@ echo '{"workspace_dir":"%s"}'
 	if child.ParentSession != "orchestrator" {
 		t.Fatalf("ParentSession = %q, want orchestrator", child.ParentSession)
 	}
-	if got := child.Tasks["probe"].Outputs["parent"]; got != "orchestrator" {
+	if got := child.Nodes["probe"].Outputs["parent"]; got != "orchestrator" {
 		t.Fatalf("rendered ParentSession = %v, want orchestrator", got)
 	}
 	parent := store.Get("orchestrator")
@@ -130,7 +130,7 @@ func TestCreate_SessionNodeNestedWriteSurvives(t *testing.T) {
 	// (mimicking the nested `plect task setup`), then produces normally.
 	dispatcher := nestedWriteCommand(t, store.Dir(), "org/repo-11+claude", nestedWritePatch{
 		Tasks: map[string]*contract.TaskState{
-			"initial": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, Dynamic: true, TaskID: "work", Name: "initial", Outputs: map[string]any{"instruction": "start work"}},
+			"initial": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "work", Name: "initial", Outputs: map[string]any{"instruction": "start work"}},
 		},
 	}) + `
 echo '{}'`
@@ -151,7 +151,7 @@ echo '{"workspace_dir":"%s"}'
 		t.Fatal("session not persisted")
 	}
 	// The dispatcher node itself produced…
-	if st := session.Tasks["dispatcher"]; st == nil || st.Status != contract.TaskStatusProduced {
+	if st := session.Nodes["dispatcher"]; st == nil || st.Status != contract.TaskStatusProduced {
 		t.Fatalf("dispatcher node = %+v, want produced", st)
 	}
 	// …and its nested write survived the session-tasks persist.
@@ -331,7 +331,7 @@ echo '{"workspace_dir":"%s"}'
 	if s == nil {
 		t.Fatal("failed setup must still leave an inspectable state entry")
 	}
-	if st := s.Tasks[contract.WorkflowPseudoNodeID]; st == nil || st.Status != contract.TaskStatusFailed {
+	if st := s.Nodes[contract.WorkflowPseudoNodeID]; st == nil || st.Status != contract.TaskStatusFailed {
 		t.Fatalf("pseudo-node = %+v, want failed", st)
 	}
 
@@ -342,7 +342,7 @@ echo '{"workspace_dir":"%s"}'
 		t.Fatalf("retry should succeed: %v", err)
 	}
 	s = store.Get("org/repo-6+wf")
-	if st := s.Tasks[contract.WorkflowPseudoNodeID]; st == nil || st.Status != contract.TaskStatusProduced {
+	if st := s.Nodes[contract.WorkflowPseudoNodeID]; st == nil || st.Status != contract.TaskStatusProduced {
 		t.Fatalf("pseudo-node after retry = %+v, want produced", st)
 	}
 
@@ -635,7 +635,7 @@ func TestUp_RecoversFailedWorkflowSetup(t *testing.T) {
 		t.Fatalf("Up should recover the partial create: %v", err)
 	}
 	s := store.Get("org/repo-9+wf")
-	if st := s.Tasks[contract.WorkflowPseudoNodeID]; st == nil || st.Status != contract.TaskStatusProduced {
+	if st := s.Nodes[contract.WorkflowPseudoNodeID]; st == nil || st.Status != contract.TaskStatusProduced {
 		t.Fatalf("pseudo-node = %+v, want produced after Up recovery", st)
 	}
 }

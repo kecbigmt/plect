@@ -46,18 +46,47 @@ func TestPutBestEffort_PutFailureLogsWarningWithoutPanicking(t *testing.T) {
 	}
 }
 
+// seedSession seeds a session whose task map is entirely dynamic instances
+// (session.Tasks) — the common case across the test suite. A fixture that
+// also needs workflow-DAG node production records (session.Nodes), such as
+// the @workflow pseudo-node, calls seedSessionSplit directly.
 func seedSession(t *testing.T, store interface {
 	Put(*domain.Session) error
 	Dir() string
 }, sessionName, ownerRepo string, number int, workflow string, tasks map[string]*contract.TaskState) {
 	t.Helper()
+	seedSessionSplit(t, store, sessionName, ownerRepo, number, workflow, nil, tasks)
+}
+
+// seedSessionWithNodes seeds a session whose task map is entirely workflow-DAG
+// node production records (session.Nodes) — the counterpart of seedSession
+// for a fixture that exercises node-keyed behavior (health, terminal binding,
+// teardown-as-node) rather than plect task setup instances.
+func seedSessionWithNodes(t *testing.T, store interface {
+	Put(*domain.Session) error
+	Dir() string
+}, sessionName, ownerRepo string, number int, workflow string, nodes map[string]*contract.TaskState) {
+	t.Helper()
+	seedSessionSplit(t, store, sessionName, ownerRepo, number, workflow, nodes, nil)
+}
+
+// seedSessionSplit is seedSession/seedSessionWithNodes's shared
+// implementation, for a fixture that needs both collections populated.
+func seedSessionSplit(t *testing.T, store interface {
+	Put(*domain.Session) error
+	Dir() string
+}, sessionName, ownerRepo string, number int, workflow string, nodes, tasks map[string]*contract.TaskState) {
+	t.Helper()
 	now := time.Now()
+	if nodes == nil {
+		nodes = map[string]*contract.TaskState{}
+	}
 	if tasks == nil {
 		tasks = map[string]*contract.TaskState{}
 	}
 	// Never synthesize @workflow itself: Destroy treats its presence as
 	// "workflow setup ran, run its cleanup too."
-	if wf := tasks[contract.WorkflowPseudoNodeID]; wf != nil {
+	if wf := nodes[contract.WorkflowPseudoNodeID]; wf != nil {
 		if wf.Outputs == nil {
 			wf.Outputs = map[string]any{}
 		}
@@ -70,6 +99,7 @@ func seedSession(t *testing.T, store interface {
 		Name:       sessionName,
 		ResourceID: fmt.Sprintf("https://github.com/%s/issues/%d", ownerRepo, number),
 		Workflow:   workflow,
+		Nodes:      nodes,
 		Tasks:      tasks,
 		CreatedAt:  now,
 		UpdatedAt:  now,
@@ -381,7 +411,7 @@ func TestDestroy_RelationGuardAllowsSelf(t *testing.T) {
 		[]nodeFixture{{id: "envfile"}},
 	)
 	sessionName := "org/repo-1"
-	seedSession(t, store, sessionName, "org/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, sessionName, "org/repo", 1, "default", map[string]*contract.TaskState{
 		"envfile": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, Outputs: map[string]any{}},
 	})
 	t.Setenv("PLECT_SESSION_NAME", sessionName)
@@ -441,7 +471,7 @@ func TestUp_RunScopeNestedWriteSurvives(t *testing.T) {
 	// key straight to the store, then produces normally.
 	dispatcher := nestedWriteCommand(t, store.Dir(), sessionName, nestedWritePatch{
 		Tasks: map[string]*contract.TaskState{
-			"goal_x": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, Dynamic: true, TaskID: "pursue_goal", Name: "goal_x", Outputs: map[string]any{}},
+			"goal_x": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "pursue_goal", Name: "goal_x", Outputs: map[string]any{}},
 		},
 	}) + `
 echo '{}'`
@@ -492,7 +522,7 @@ func TestUp_ProducesSessionScopedNodeAddedAfterSessionCreation(t *testing.T) {
 			{id: "claude", inputs: map[string]*lang.Value{"path_prepend": fromValue("nodes.gh_guard.outputs.dir")}},
 		},
 	)
-	seedSession(t, store, sessionName, "org/repo", 12, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, sessionName, "org/repo", 12, "default", map[string]*contract.TaskState{
 		"tmux": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Outputs: map[string]any{}},
 	})
 
@@ -533,7 +563,7 @@ func TestUp_CleansAndDropsProducedNodeRemovedFromWorkflow(t *testing.T) {
 		},
 		[]nodeFixture{{id: "kept"}},
 	)
-	seedSession(t, store, sessionName, "org/repo", 12, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, sessionName, "org/repo", 12, "default", map[string]*contract.TaskState{
 		"retired": {
 			Scope:   contract.TaskScopeRun,
 			Status:  contract.TaskStatusProduced,
@@ -588,7 +618,7 @@ func TestUp_StaleNodeCleanupDoesNotClobberConcurrentSessionWrites(t *testing.T) 
 	t.Setenv("PLECT_SERVICE_NESTED_WRITE_HELPER", "1")
 	cleanupLog := filepath.Join(t.TempDir(), "cleanup.log")
 	concurrentWrite := nestedWriteCommand(t, store.Dir(), sessionName, nestedWritePatch{
-		Tasks: map[string]*contract.TaskState{
+		Nodes: map[string]*contract.TaskState{
 			"kept": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Outputs: map[string]any{"self_healed": "yes"}, Seq: 2},
 		},
 		Health:      &contract.HealthState{LastState: "healthy", LastReason: "concurrent"},
@@ -609,7 +639,7 @@ func TestUp_StaleNodeCleanupDoesNotClobberConcurrentSessionWrites(t *testing.T) 
 		},
 		[]nodeFixture{{id: "kept"}},
 	)
-	seedSession(t, store, sessionName, "org/repo", 14, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, sessionName, "org/repo", 14, "default", map[string]*contract.TaskState{
 		"retired": {
 			Scope:   contract.TaskScopeRun,
 			Status:  contract.TaskStatusProduced,
@@ -668,7 +698,7 @@ func TestUp_StaleNodeCleanupFailurePreservesInspectableState(t *testing.T) {
 		},
 		[]nodeFixture{{id: "kept"}},
 	)
-	seedSession(t, store, sessionName, "org/repo", 13, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, sessionName, "org/repo", 13, "default", map[string]*contract.TaskState{
 		"retired": {
 			Scope:   contract.TaskScopeRun,
 			Status:  contract.TaskStatusProduced,
@@ -689,11 +719,11 @@ func TestUp_StaleNodeCleanupFailurePreservesInspectableState(t *testing.T) {
 	if persisted == nil {
 		t.Fatal("session must remain inspectable after cleanup failure")
 	}
-	st := persisted.Tasks["retired"]
+	st := persisted.Nodes["retired"]
 	if st == nil || st.Status != contract.TaskStatusFailed || st.Outputs["token"] != "old-token" {
 		t.Fatalf("retired task = %+v, want failed state with recorded outputs preserved", st)
 	}
-	if st := persisted.Tasks["kept"]; st != nil {
+	if st := persisted.Nodes["kept"]; st != nil {
 		t.Fatalf("kept task = %+v, want setup not attempted after stale cleanup failure", st)
 	}
 	data, err := os.ReadFile(cleanupLog)
@@ -776,7 +806,7 @@ func TestUp_ForceRecreateResetsRuntimeWithoutPrev(t *testing.T) {
 	addWorkflowFields(t, cfg, "default", "workspace_provider = \"default_provider\"\n")
 	sessionName := "org/repo-12"
 	seedSession(t, store, "org/repo-parent", "org/repo", 11, "default", nil)
-	seedSession(t, store, sessionName, "org/repo", 12, "default", map[string]*contract.TaskState{
+	seedSessionSplit(t, store, sessionName, "org/repo", 12, "default", map[string]*contract.TaskState{
 		contract.WorkflowPseudoNodeID: {
 			Scope:   contract.TaskScopeSession,
 			Status:  contract.TaskStatusProduced,
@@ -795,11 +825,11 @@ func TestUp_ForceRecreateResetsRuntimeWithoutPrev(t *testing.T) {
 			Outputs: map[string]any{"session_id": "old-runtime"},
 			Seq:     4,
 		},
+	}, map[string]*contract.TaskState{
 		"work#1": {
 			Scope:   contract.TaskScopeSession,
 			TaskID:  "work",
 			Status:  contract.TaskStatusProduced,
-			Dynamic: true,
 			Outputs: map[string]any{"result": "preserved"},
 			Seq:     5,
 		},
@@ -934,7 +964,7 @@ func TestUp_ForceRecreateCleanupFailurePreservesInspectableState(t *testing.T) {
 	addWorkflowFields(t, cfg, "default", "workspace_provider = \"default_provider\"\n")
 	sessionName := "org/repo-15"
 	seedSession(t, store, "org/repo-parent", "org/repo", 14, "default", nil)
-	seedSession(t, store, sessionName, "org/repo", 15, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, sessionName, "org/repo", 15, "default", map[string]*contract.TaskState{
 		contract.WorkflowPseudoNodeID: {
 			Scope:   contract.TaskScopeSession,
 			Status:  contract.TaskStatusProduced,
@@ -1003,15 +1033,15 @@ func TestUp_ForceRecreateCleanupFailurePreservesInspectableState(t *testing.T) {
 	if !fileExists(oldWorkdirPath) {
 		t.Fatalf("old workdir %q was removed before workflow cleanup", oldWorkdirPath)
 	}
-	workflow := persisted.Tasks[contract.WorkflowPseudoNodeID]
+	workflow := persisted.Nodes[contract.WorkflowPseudoNodeID]
 	if workflow == nil || workflow.Status != contract.TaskStatusProduced || workflow.Outputs[contract.OutputKeyWorkspaceDir] != oldWorkdirPath {
 		t.Fatalf("@workflow state = %+v, want preserved produced state", workflow)
 	}
-	runtime := persisted.Tasks["runtime"]
+	runtime := persisted.Nodes["runtime"]
 	if runtime == nil || runtime.Status != contract.TaskStatusFailed || runtime.Outputs["session_id"] != "old-runtime" {
 		t.Fatalf("runtime task = %+v, want failed cleanup state with prior outputs", runtime)
 	}
-	channel := persisted.Tasks["channel"]
+	channel := persisted.Nodes["channel"]
 	if channel == nil || channel.Status != contract.TaskStatusCleaned || channel.Outputs["thread"] != "old-thread" {
 		t.Fatalf("channel task = %+v, want later cleanup result persisted", channel)
 	}
@@ -1071,7 +1101,7 @@ func TestUp_ForceRecreateProviderSetupFailurePersistsInspectableState(t *testing
 	addWorkflowFields(t, cfg, "default", "workspace_provider = \"default_provider\"\n")
 	sessionName := "org/repo-13"
 	seedSession(t, store, "org/repo-parent", "org/repo", 12, "default", nil)
-	seedSession(t, store, sessionName, "org/repo", 13, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, sessionName, "org/repo", 13, "default", map[string]*contract.TaskState{
 		contract.WorkflowPseudoNodeID: {
 			Scope:   contract.TaskScopeSession,
 			Status:  contract.TaskStatusProduced,
@@ -1125,15 +1155,15 @@ func TestUp_ForceRecreateProviderSetupFailurePersistsInspectableState(t *testing
 	if persisted.WorkspaceDirPath != "" || domain.SessionBranch(persisted) != "" {
 		t.Fatalf("runtime session state = (%q, %q), want cleared after cleanup", persisted.WorkspaceDirPath, domain.SessionBranch(persisted))
 	}
-	workflow := persisted.Tasks[contract.WorkflowPseudoNodeID]
+	workflow := persisted.Nodes[contract.WorkflowPseudoNodeID]
 	if workflow == nil || workflow.Status != contract.TaskStatusFailed {
 		t.Fatalf("@workflow state = %+v, want failed state persisted", workflow)
 	}
 	if workflow.Outputs != nil {
 		t.Fatalf("@workflow outputs = %+v, want no Prev after reset", workflow.Outputs)
 	}
-	if persisted.Tasks["runtime"] != nil {
-		t.Fatalf("runtime task = %+v, want cleared after reset", persisted.Tasks["runtime"])
+	if persisted.Nodes["runtime"] != nil {
+		t.Fatalf("runtime task = %+v, want cleared after reset", persisted.Nodes["runtime"])
 	}
 	if fileExists(oldWorkdirPath) {
 		t.Fatalf("old workdir %q still exists", oldWorkdirPath)
@@ -1171,7 +1201,7 @@ func TestRecreateSessionRuntimeTeardownListFailurePreservesRuntimeFieldsButMarks
 		t.Fatal(err)
 	}
 	sessionName := "org/repo-20"
-	seedSession(t, store, sessionName, "org/repo", 20, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, sessionName, "org/repo", 20, "default", map[string]*contract.TaskState{
 		contract.WorkflowPseudoNodeID: {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced},
 		"runtime": {
 			Scope:   contract.TaskScopeRun,
@@ -1188,7 +1218,7 @@ func TestRecreateSessionRuntimeTeardownListFailurePreservesRuntimeFieldsButMarks
 	}
 	session := store.Get(sessionName)
 	session.WorkspaceDirPath = oldWorkdirPath
-	session.Tasks[contract.WorkflowPseudoNodeID].Outputs["branch"] = "old-branch"
+	session.Nodes[contract.WorkflowPseudoNodeID].Outputs["branch"] = "old-branch"
 
 	_, err := recreateSessionRuntime(cfg, store, sessionName, session, config.WorkflowFile{ID: "default"}, &taskpkg.Plan{
 		Run: []taskpkg.Resolved{{
@@ -1213,7 +1243,7 @@ func TestRecreateSessionRuntimeTeardownListFailurePreservesRuntimeFieldsButMarks
 	if persisted.WorkspaceDirPath != "" || domain.SessionBranch(persisted) != "issue/1" {
 		t.Fatalf("persisted session state = (%q, %q), want original stored values", persisted.WorkspaceDirPath, domain.SessionBranch(persisted))
 	}
-	runtime := persisted.Tasks["runtime"]
+	runtime := persisted.Nodes["runtime"]
 	if runtime == nil || runtime.Status != contract.TaskStatusProduced || runtime.Outputs["session_id"] != "old-runtime" {
 		t.Fatalf("runtime task = %+v, want untouched produced state", runtime)
 	}
@@ -1376,7 +1406,7 @@ func TestUp_ForceRecreateFailureStagesPersistInspectableState(t *testing.T) {
 
 			sessionName := fmt.Sprintf("org/repo-%d", tc.sessionNum)
 			seedSession(t, store, "org/repo-parent", "org/repo", tc.sessionNum-1, "default", nil)
-			seedSession(t, store, sessionName, "org/repo", tc.sessionNum, "default", map[string]*contract.TaskState{
+			seedSessionWithNodes(t, store, sessionName, "org/repo", tc.sessionNum, "default", map[string]*contract.TaskState{
 				contract.WorkflowPseudoNodeID: {
 					Scope:   contract.TaskScopeSession,
 					Status:  contract.TaskStatusProduced,
@@ -1444,13 +1474,13 @@ func TestUp_ForceRecreateFailureStagesPersistInspectableState(t *testing.T) {
 				t.Fatalf("new workdir exists = %v, want %v", fileExists(newWorkdirPath), want.newExists)
 			}
 			for taskName, status := range want.tasks {
-				st := persisted.Tasks[taskName]
+				st := persisted.Nodes[taskName]
 				if st == nil || st.Status != status {
 					t.Fatalf("task %q = %+v, want status %q", taskName, st, status)
 				}
 			}
 			for _, taskName := range want.absentTasks {
-				if st := persisted.Tasks[taskName]; st != nil {
+				if st := persisted.Nodes[taskName]; st != nil {
 					t.Fatalf("task %q = %+v, want absent", taskName, st)
 				}
 			}
@@ -1563,7 +1593,7 @@ func TestDestroy_WritesTombstone(t *testing.T) {
 		[]nodeFixture{{id: "envfile"}},
 	)
 	sessionName := "org/repo-1"
-	seedSession(t, store, sessionName, "org/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, sessionName, "org/repo", 1, "default", map[string]*contract.TaskState{
 		"envfile": {
 			Scope:   contract.TaskScopeSession,
 			Status:  contract.TaskStatusProduced,
@@ -1595,9 +1625,9 @@ func TestDestroy_WritesTombstone(t *testing.T) {
 	if tomb.DestroyedAt.IsZero() {
 		t.Error("expected DestroyedAt to be set")
 	}
-	st := tomb.Tasks["envfile"]
+	st := tomb.Nodes["envfile"]
 	if st == nil || st.Outputs["path"] != "/tmp/env" {
-		t.Errorf("expected envfile outputs preserved in tombstone, got %+v", tomb.Tasks)
+		t.Errorf("expected envfile outputs preserved in tombstone, got %+v", tomb.Nodes)
 	}
 }
 
@@ -1614,7 +1644,7 @@ func TestDestroy_DefaultFailsFastOnRunCleanupError(t *testing.T) {
 		[]nodeFixture{{id: "tmux"}, {id: "envfile"}},
 	)
 	sessionName := "org/repo-1"
-	seedSession(t, store, sessionName, "org/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, sessionName, "org/repo", 1, "default", map[string]*contract.TaskState{
 		"tmux":    {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Outputs: map[string]any{}},
 		"envfile": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, Outputs: map[string]any{}},
 	})
@@ -1646,7 +1676,7 @@ func TestDestroy_ForceContinuesOnCleanupError(t *testing.T) {
 		[]nodeFixture{{id: "tmux"}, {id: "envfile"}},
 	)
 	sessionName := "org/repo-2"
-	seedSession(t, store, sessionName, "org/repo", 2, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, sessionName, "org/repo", 2, "default", map[string]*contract.TaskState{
 		"tmux":    {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Outputs: map[string]any{}},
 		"envfile": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, Outputs: map[string]any{}},
 	})
@@ -1731,7 +1761,7 @@ func TestDestroy_ForceKeepsChildrensParentLinkWithWarning(t *testing.T) {
 	)
 	parentName := "org/repo-1"
 	childName := "org/repo-2"
-	seedSession(t, store, parentName, "org/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, parentName, "org/repo", 1, "default", map[string]*contract.TaskState{
 		"envfile": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, Outputs: map[string]any{}},
 	})
 	seedSession(t, store, childName, "org/repo", 2, "default", nil)
@@ -1801,7 +1831,7 @@ func TestUp_ForceRecreateRendersTerminalHelperAgainstThisPassOutputs(t *testing.
 	}
 	addWorkflowFields(t, cfg, "default", "workspace_provider = \"default_provider\"\n")
 	sessionName := "org/repo-14"
-	seedSession(t, store, sessionName, "org/repo", 14, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, sessionName, "org/repo", 14, "default", map[string]*contract.TaskState{
 		contract.WorkflowPseudoNodeID: {
 			Scope:   contract.TaskScopeSession,
 			Status:  contract.TaskStatusProduced,

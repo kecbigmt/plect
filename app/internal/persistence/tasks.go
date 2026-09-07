@@ -10,30 +10,30 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// loadTasks assembles a session's Tasks map from two tables: node_instances
-// (static workflow-DAG nodes, including the @workflow pseudo-node) and
-// task_instances (dynamic instances created via `plect task setup`), joined
-// in Go with their layer/done_when/judge child tables. Dynamic is derived
-// from which table a record came from, never stored. sessionID is the
-// session's surrogate id (sessions.id), not its name.
-func loadTasks(ctx context.Context, q sqlcgen.DBTX, sessionID string) (map[string]*contract.TaskState, error) {
+// loadTasks assembles a session's Nodes and Tasks maps from two tables:
+// node_instances (static workflow-DAG nodes, including the @workflow
+// pseudo-node) and task_instances (dynamic instances created via
+// `plect task setup`), joined in Go with their layer/done_when/judge child
+// tables. sessionID is the session's surrogate id (sessions.id), not its
+// name.
+func loadTasks(ctx context.Context, q sqlcgen.DBTX, sessionID string) (nodes, tasks map[string]*contract.TaskState, err error) {
 	queries := sqlcgen.New(q)
 
 	nodeRows, err := queries.ListNodeInstances(ctx, sessionID)
 	if err != nil {
-		return nil, fmt.Errorf("list node instances for %q: %w", sessionID, err)
+		return nil, nil, fmt.Errorf("list node instances for %q: %w", sessionID, err)
 	}
 	instanceRows, err := queries.ListTaskInstances(ctx, sessionID)
 	if err != nil {
-		return nil, fmt.Errorf("list task instances for %q: %w", sessionID, err)
+		return nil, nil, fmt.Errorf("list task instances for %q: %w", sessionID, err)
 	}
 	if len(nodeRows) == 0 && len(instanceRows) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	nodeLayerRows, err := queries.ListNodeInstanceLayers(ctx, sessionID)
 	if err != nil {
-		return nil, fmt.Errorf("list node instance layers for %q: %w", sessionID, err)
+		return nil, nil, fmt.Errorf("list node instance layers for %q: %w", sessionID, err)
 	}
 	nodeLayersByNodeID := map[string][]sqlcgen.NodeInstanceLayer{}
 	for _, r := range nodeLayerRows {
@@ -42,7 +42,7 @@ func loadTasks(ctx context.Context, q sqlcgen.DBTX, sessionID string) (map[strin
 
 	taskLayerRows, err := queries.ListTaskInstanceLayersForSession(ctx, sessionID)
 	if err != nil {
-		return nil, fmt.Errorf("list task instance layers for %q: %w", sessionID, err)
+		return nil, nil, fmt.Errorf("list task instance layers for %q: %w", sessionID, err)
 	}
 	taskLayersByInstanceID := map[string][]sqlcgen.TaskInstanceLayer{}
 	for _, r := range taskLayerRows {
@@ -51,7 +51,7 @@ func loadTasks(ctx context.Context, q sqlcgen.DBTX, sessionID string) (map[strin
 
 	doneWhenRows, err := queries.ListTaskDoneWhenStatesForSession(ctx, sessionID)
 	if err != nil {
-		return nil, fmt.Errorf("list done_when states for %q: %w", sessionID, err)
+		return nil, nil, fmt.Errorf("list done_when states for %q: %w", sessionID, err)
 	}
 	doneWhenByInstanceID := make(map[string]sqlcgen.TaskDoneWhenState, len(doneWhenRows))
 	for _, r := range doneWhenRows {
@@ -60,7 +60,7 @@ func loadTasks(ctx context.Context, q sqlcgen.DBTX, sessionID string) (map[strin
 
 	unsatisfiedRows, err := queries.ListTaskDoneWhenUnsatisfiedItemsForSession(ctx, sessionID)
 	if err != nil {
-		return nil, fmt.Errorf("list done_when unsatisfied items for %q: %w", sessionID, err)
+		return nil, nil, fmt.Errorf("list done_when unsatisfied items for %q: %w", sessionID, err)
 	}
 	unsatisfiedByInstanceID := map[string][]string{}
 	for _, r := range unsatisfiedRows {
@@ -69,13 +69,13 @@ func loadTasks(ctx context.Context, q sqlcgen.DBTX, sessionID string) (map[strin
 
 	judgeRows, err := queries.ListTaskDoneWhenJudgesForSession(ctx, sessionID)
 	if err != nil {
-		return nil, fmt.Errorf("list done_when judges for %q: %w", sessionID, err)
+		return nil, nil, fmt.Errorf("list done_when judges for %q: %w", sessionID, err)
 	}
 	judgesByInstanceID := make(map[string]map[string]*contract.DoneWhenJudge)
 	for _, r := range judgeRows {
 		judge, err := judgeFromRow(r)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		m := judgesByInstanceID[r.TaskInstanceID]
 		if m == nil {
@@ -85,53 +85,62 @@ func loadTasks(ctx context.Context, q sqlcgen.DBTX, sessionID string) (map[strin
 		m[r.LeafID] = judge
 	}
 
-	tasks := make(map[string]*contract.TaskState, len(nodeRows)+len(instanceRows))
+	nodes = make(map[string]*contract.TaskState, len(nodeRows))
 	for _, row := range nodeRows {
 		ts, err := nodeInstanceFromRow(row)
 		if err != nil {
-			return nil, fmt.Errorf("parse node instance %q/%q: %w", sessionID, row.NodeID, err)
+			return nil, nil, fmt.Errorf("parse node instance %q/%q: %w", sessionID, row.NodeID, err)
 		}
 		layers, err := layersFromNodeRows(nodeLayersByNodeID[row.NodeID])
 		if err != nil {
-			return nil, fmt.Errorf("parse node instance %q/%q layers: %w", sessionID, row.NodeID, err)
+			return nil, nil, fmt.Errorf("parse node instance %q/%q layers: %w", sessionID, row.NodeID, err)
 		}
 		ts.Layers = layers
-		tasks[row.NodeID] = ts
+		nodes[row.NodeID] = ts
 	}
+	tasks = make(map[string]*contract.TaskState, len(instanceRows))
 	for _, row := range instanceRows {
 		ts, err := taskInstanceFromRow(row)
 		if err != nil {
-			return nil, fmt.Errorf("parse task instance %q/%q: %w", sessionID, row.InstanceName, err)
+			return nil, nil, fmt.Errorf("parse task instance %q/%q: %w", sessionID, row.InstanceName, err)
 		}
 		layers, err := layersFromTaskRows(taskLayersByInstanceID[row.ID])
 		if err != nil {
-			return nil, fmt.Errorf("parse task instance %q/%q layers: %w", sessionID, row.InstanceName, err)
+			return nil, nil, fmt.Errorf("parse task instance %q/%q layers: %w", sessionID, row.InstanceName, err)
 		}
 		ts.Layers = layers
 
 		if dw, ok := doneWhenByInstanceID[row.ID]; ok {
 			doneWhen, err := doneWhenFromRow(dw, unsatisfiedByInstanceID[row.ID], judgesByInstanceID[row.ID])
 			if err != nil {
-				return nil, fmt.Errorf("parse done_when %q/%q: %w", sessionID, row.InstanceName, err)
+				return nil, nil, fmt.Errorf("parse done_when %q/%q: %w", sessionID, row.InstanceName, err)
 			}
 			ts.DoneWhen = doneWhen
 		}
 		tasks[row.InstanceName] = ts
 	}
-	return tasks, nil
+	return nodes, tasks, nil
 }
 
 // writeTasksTx replaces every node-instance row for sessionID (that table
-// has no identity worth preserving across a write) and reconciles
-// task_instances against the current Tasks map instead: each current dynamic
+// has no identity worth preserving across a write) from nodes, and
+// reconciles task_instances against tasks instead: each current dynamic
 // instance is upserted (preserving its id across an ordinary update; see
 // UpsertTaskInstance), and any instance_name no longer present is then
 // explicitly deleted, which is what mints a fresh id on a later cleanup +
 // setup under the same name. It never touches another session's rows.
-func (db *DB) writeTasksTx(ctx context.Context, tx *sql.Tx, sessionID string, tasks map[string]*contract.TaskState) error {
+func (db *DB) writeTasksTx(ctx context.Context, tx *sql.Tx, sessionID string, nodes, tasks map[string]*contract.TaskState) error {
 	q := sqlcgen.New(tx)
 	if err := q.DeleteNodeInstancesForSession(ctx, sessionID); err != nil {
 		return fmt.Errorf("clear node instances for %q: %w", sessionID, err)
+	}
+	for key, ts := range nodes {
+		if ts == nil {
+			continue
+		}
+		if err := insertNodeInstanceTx(ctx, q, sessionID, key, ts); err != nil {
+			return err
+		}
 	}
 
 	existing, err := q.ListTaskInstances(ctx, sessionID)
@@ -147,14 +156,8 @@ func (db *DB) writeTasksTx(ctx context.Context, tx *sql.Tx, sessionID string, ta
 		if ts == nil {
 			continue
 		}
-		if ts.Dynamic {
-			delete(remaining, key)
-			if err := upsertTaskInstanceTx(ctx, q, sessionID, key, ts); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := insertNodeInstanceTx(ctx, q, sessionID, key, ts); err != nil {
+		delete(remaining, key)
+		if err := upsertTaskInstanceTx(ctx, q, sessionID, key, ts); err != nil {
 			return err
 		}
 	}
@@ -308,7 +311,6 @@ func nodeInstanceFromRow(row sqlcgen.NodeInstance) (*contract.TaskState, error) 
 		Scope:         row.Scope,
 		Status:        row.Status,
 		Seq:           int(row.Sequence),
-		Dynamic:       false,
 		Resource:      row.Resource.String,
 		Inputs:        inputs,
 		Outputs:       outputs,
@@ -449,7 +451,6 @@ func taskInstanceFromRow(row sqlcgen.TaskInstance) (*contract.TaskState, error) 
 		Scope:         row.Scope,
 		Status:        row.Status,
 		Seq:           int(row.Sequence),
-		Dynamic:       true,
 		Resource:      row.Resource.String,
 		Inputs:        inputs,
 		Outputs:       outputs,

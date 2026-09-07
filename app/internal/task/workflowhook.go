@@ -16,9 +16,15 @@ const workflowHookScope = "workflow"
 
 // RunWorkflowSetup executes the workspace provider setup hook (the
 // workflow-level lifecycle) and persists the result as the @workflow
-// pseudo-node in tasks. Semantics mirror RunSetup: idempotent (an
-// already-produced pseudo-node is skipped), `prev.*` carries the prior outputs
-// across retries, stdout is the JSON outputs contract.
+// pseudo-node. Semantics mirror RunSetup: idempotent (an already-produced
+// pseudo-node is skipped), `prev.*` carries the prior outputs across retries,
+// stdout is the JSON outputs contract.
+//
+// tasks must combine every collection Seq is shared across (a session's Nodes
+// and Tasks) — see domain.MergedTasks — since the pseudo-node's Seq is stamped
+// from the highest Seq found in it; the caller then persists the result key
+// (contract.WorkflowPseudoNodeID) into session.Nodes, the collection the
+// pseudo-node actually belongs to.
 //
 // Additional contract: the outputs MUST contain the reserved `workspace_dir`
 // key (non-empty string) — every downstream consumer (cascade resolution,
@@ -108,7 +114,9 @@ func RunWorkflowSetup(prov config.WorkspaceProviderConfig, vars effect.WorkflowH
 // RunWorkflowCleanup executes the workflow-level cleanup hook. Mirrors
 // RunCleanup semantics: missing/cleaned state is skipped, an empty cleanup
 // body flips the state to cleaned, errors mark the pseudo-node failed and
-// are returned (callers decide fail-fast vs --force).
+// are returned (callers decide fail-fast vs --force). Mutation is through the
+// pointer already stored in tasks, so a caller passing session.Nodes directly
+// (the pseudo-node's own collection) needs no write-back.
 //
 // The hook intentionally never deletes workspace_dir itself — setup/cleanup
 // symmetry is the script author's contract ("use an existing directory"

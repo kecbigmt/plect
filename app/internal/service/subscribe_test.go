@@ -120,7 +120,7 @@ args    = ["-c", 'printf "%%s" "$1" > "$2"', "provider", { from = "session.branc
 	now := time.Now()
 	if err := store.Put(&domain.Session{
 		Name: "org/repo-7",
-		Tasks: map[string]*contract.TaskState{
+		Nodes: map[string]*contract.TaskState{
 			contract.WorkflowPseudoNodeID: {
 				Scope:   contract.TaskScopeSession,
 				Status:  contract.TaskStatusProduced,

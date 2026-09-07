@@ -407,7 +407,7 @@ all = [
 		// mirroring a real session's persistent terminal/agent node — the
 		// same role TestSessionReactor_ReactiveTickReachesDoneWhenConsequence's
 		// own seed task plays in this same package.
-		Tasks: map[string]*contract.TaskState{
+		Nodes: map[string]*contract.TaskState{
 			"runtime": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced},
 		},
 	}); err != nil {
@@ -640,7 +640,7 @@ all = [
 	if err := st.Put(&domain.Session{
 		Name:          session,
 		ParentSession: parent,
-		Tasks: map[string]*contract.TaskState{
+		Nodes: map[string]*contract.TaskState{
 			// The session's own workspace branch: what a workspace
 			// provider's setup hook would have produced for a session
 			// created on this issue URL. Seeded directly since what this

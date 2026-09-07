@@ -43,7 +43,7 @@ func Capture(cfg *config.Config, store *state.Store, params CaptureParams) (*Cap
 		return nil, &Error{Code: ErrNotCapturable, Message: "this workflow has no capture-declaring task"}
 	}
 
-	st, ok := session.Tasks[target.NodeID]
+	st, ok := session.Nodes[target.NodeID]
 	if !ok || st == nil || st.Status != contract.TaskStatusProduced {
 		return nil, &Error{
 			Code:    ErrNotProduced,

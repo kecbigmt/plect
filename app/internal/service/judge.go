@@ -60,7 +60,7 @@ func RecordJudge(cfg *config.Config, store *state.Store, params JudgeParams) (*J
 	if err != nil {
 		return nil, err
 	}
-	st := session.Tasks[params.Instance]
+	st := domain.TaskState(session, params.Instance)
 	if st == nil {
 		return nil, &Error{Code: ErrInvalidInput, Message: fmt.Sprintf("instance %q not found in session %s", params.Instance, resolvedName)}
 	}
@@ -122,7 +122,7 @@ func RecordJudge(cfg *config.Config, store *state.Store, params JudgeParams) (*J
 	}
 
 	if err := store.Update(resolvedName, func(s *domain.Session) error {
-		cur := s.Tasks[params.Instance]
+		cur := domain.TaskState(s, params.Instance)
 		if cur == nil || cur.Status == contract.TaskStatusCleaned {
 			return fmt.Errorf("instance %q is not live in session %s", params.Instance, resolvedName)
 		}

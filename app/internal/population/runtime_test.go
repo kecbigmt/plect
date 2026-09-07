@@ -19,7 +19,7 @@ func TestFailedInitialTaskIsNotAcceptedAsSuccessfullyInstalled(t *testing.T) {
 		Tasks: map[string]*contract.TaskState{
 			"initial": {
 				Name: "initial", TaskID: "work", Resource: "urn:case:a",
-				Scope: contract.TaskScopeSession, Dynamic: true, Status: contract.TaskStatusFailed,
+				Scope: contract.TaskScopeSession, Status: contract.TaskStatusFailed,
 			},
 		},
 	}); err != nil {

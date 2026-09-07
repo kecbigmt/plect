@@ -104,8 +104,8 @@ func SetOutput(cfg *config.Config, store *state.Store, params SetOutputParams) (
 	// Re-resolve inside the lock: the snapshot read above only served to
 	// derive the schema/mutable-set, which depends on config, not state.
 	updateErr := store.Update(sessionName, func(s *domain.Session) error {
-		st, ok := s.Tasks[target]
-		if !ok || st == nil {
+		st := domain.TaskState(s, target)
+		if st == nil {
 			return &Error{Code: ErrNotProduced, Message: fmt.Sprintf("%s has no recorded state for session %q", target, sessionName)}
 		}
 		if st.Status != contract.TaskStatusProduced {
@@ -187,12 +187,12 @@ func resolveSetOutputTarget(cfg *config.Config, session *domain.Session, params 
 		handle := params.Task
 		st, ok := session.Tasks[handle]
 		if !ok || st == nil {
+			if nodeSt := session.Nodes[handle]; nodeSt != nil {
+				return "", nil, nil, nil, &Error{Code: ErrInvalidInput, Message: fmt.Sprintf("%q is a static workflow node, not a runtime task; use --node", handle)}
+			}
 			return "", nil, nil, nil, &Error{Code: ErrInvalidInput, Message: fmt.Sprintf("task handle %q not found in session %q", handle, session.Name)}
 		}
-		if !st.Dynamic {
-			return "", nil, nil, nil, &Error{Code: ErrInvalidInput, Message: fmt.Sprintf("%q is a static workflow node, not a runtime task; use --node", handle)}
-		}
-		taskID := instanceDefinitionAddress(handle, st, nodeAddresses(cfg, session))
+		taskID := instanceDefinitionAddress(handle, st, true, nodeAddresses(cfg, session))
 		// Both kinds are loaded together, so which one this id names is the
 		// loader's answer rather than this branch's guess — and a document
 		// that will not load is reported as that rather than as a missing

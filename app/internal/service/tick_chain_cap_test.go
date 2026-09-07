@@ -67,8 +67,8 @@ func TestTickSession_ChainCapRefusalReportsTypedOutcomeAndEmitsChainAttemptEvent
 	writeWorkflowFile(t, cfg, "reviewer_wf", "")
 	writeCapWorkflow(t, cfg.BaseDir, "parent_wf", intPtr(1))
 
-	seedSession(t, store, "parent1", "acct", 1, "parent_wf", nil)
-	seedSession(t, store, "sibling", "acct", 2, "", upTasks())
+	seedSessionWithNodes(t, store, "parent1", "acct", 1, "parent_wf", nil)
+	seedSessionWithNodes(t, store, "sibling", "acct", 2, "", upTasks())
 	setParent(t, store, "sibling", "parent1")
 	seedReviewWork(t, store, "work1", map[string]any{"checks_status": "SUCCESS", "revision": "sha1"})
 	setParent(t, store, "work1", "parent1")
@@ -126,8 +126,8 @@ func TestTickSession_ChainSpawnsOnceCapacityFreesAfterCapRefusal(t *testing.T) {
 	writeSpawnableWorkflowFile(t, cfg, "reviewer_wf", filepath.Join(t.TempDir(), "reviewer-wd"))
 	writeCapWorkflow(t, cfg.BaseDir, "parent_wf", intPtr(1))
 
-	seedSession(t, store, "parent1", "acct", 1, "parent_wf", nil)
-	seedSession(t, store, "sibling", "acct", 2, "", upTasks())
+	seedSessionWithNodes(t, store, "parent1", "acct", 1, "parent_wf", nil)
+	seedSessionWithNodes(t, store, "sibling", "acct", 2, "", upTasks())
 	setParent(t, store, "sibling", "parent1")
 	seedReviewWork(t, store, "work1", map[string]any{"checks_status": "SUCCESS", "revision": "sha1"})
 	setParent(t, store, "work1", "parent1")
@@ -143,7 +143,7 @@ func TestTickSession_ChainSpawnsOnceCapacityFreesAfterCapRefusal(t *testing.T) {
 
 	// The sibling frees its slot.
 	if err := store.Update("sibling", func(s *domain.Session) error {
-		s.Tasks["run_node"].Status = contract.TaskStatusCleaned
+		s.Nodes["run_node"].Status = contract.TaskStatusCleaned
 		return nil
 	}); err != nil {
 		t.Fatalf("bring sibling down: %v", err)
@@ -170,8 +170,8 @@ func TestTickSession_ChainCapAttemptEventRecordsNewStreakAfterSpawnAndDestroy(t 
 	writeSpawnableWorkflowFile(t, cfg, "reviewer_wf", filepath.Join(t.TempDir(), "reviewer-wd"))
 	writeCapWorkflow(t, cfg.BaseDir, "parent_wf", intPtr(1))
 
-	seedSession(t, store, "parent1", "acct", 1, "parent_wf", nil)
-	seedSession(t, store, "sibling", "acct", 2, "", upTasks())
+	seedSessionWithNodes(t, store, "parent1", "acct", 1, "parent_wf", nil)
+	seedSessionWithNodes(t, store, "sibling", "acct", 2, "", upTasks())
 	setParent(t, store, "sibling", "parent1")
 	seedReviewWork(t, store, "work1", map[string]any{"checks_status": "SUCCESS", "revision": "sha1"})
 	setParent(t, store, "work1", "parent1")
@@ -188,7 +188,7 @@ func TestTickSession_ChainCapAttemptEventRecordsNewStreakAfterSpawnAndDestroy(t 
 	}
 
 	if err := store.Update("sibling", func(s *domain.Session) error {
-		s.Tasks["run_node"].Status = contract.TaskStatusCleaned
+		s.Nodes["run_node"].Status = contract.TaskStatusCleaned
 		return nil
 	}); err != nil {
 		t.Fatalf("bring sibling down: %v", err)
@@ -208,7 +208,7 @@ func TestTickSession_ChainCapAttemptEventRecordsNewStreakAfterSpawnAndDestroy(t 
 	}
 
 	if err := store.Update("sibling", func(s *domain.Session) error {
-		s.Tasks["run_node"].Status = contract.TaskStatusProduced
+		s.Nodes["run_node"].Status = contract.TaskStatusProduced
 		return nil
 	}); err != nil {
 		t.Fatalf("bring sibling back up: %v", err)
@@ -238,8 +238,8 @@ func TestTickSession_ChainCapAttemptEventRecordsNewStreakAfterPredicateGoesUnmet
 	writeWorkflowFile(t, cfg, "reviewer_wf", "")
 	writeCapWorkflow(t, cfg.BaseDir, "parent_wf", intPtr(1))
 
-	seedSession(t, store, "parent1", "acct", 1, "parent_wf", nil)
-	seedSession(t, store, "sibling", "acct", 2, "", upTasks())
+	seedSessionWithNodes(t, store, "parent1", "acct", 1, "parent_wf", nil)
+	seedSessionWithNodes(t, store, "sibling", "acct", 2, "", upTasks())
 	setParent(t, store, "sibling", "parent1")
 	seedReviewWork(t, store, "work1", map[string]any{"checks_status": "SUCCESS", "revision": "sha1"})
 	setParent(t, store, "work1", "parent1")
@@ -256,7 +256,7 @@ func TestTickSession_ChainCapAttemptEventRecordsNewStreakAfterPredicateGoesUnmet
 	}
 
 	if err := store.Update("work1", func(s *domain.Session) error {
-		st := s.Tasks["work"]
+		st := s.Nodes["work"]
 		st.DoneWhen.Judges = map[string]*contract.DoneWhenJudge{
 			"ac-met": {
 				LeafID:       "ac-met",
@@ -281,7 +281,7 @@ func TestTickSession_ChainCapAttemptEventRecordsNewStreakAfterPredicateGoesUnmet
 	}
 
 	if err := store.Update("work1", func(s *domain.Session) error {
-		s.Tasks["work"].Observed.State["revision"] = "sha2"
+		s.Nodes["work"].Observed.State["revision"] = "sha2"
 		return nil
 	}); err != nil {
 		t.Fatalf("advance the observed revision past the recorded verdict: %v", err)
@@ -322,8 +322,8 @@ all = [ { check = "resource.state.checks_status", in = ["SUCCESS"] } ]
 	writeWorkflowFile(t, cfg, "reviewer_wf", "")
 	writeCapWorkflow(t, cfg.BaseDir, "parent_wf", intPtr(1))
 
-	seedSession(t, store, "parent1", "acct", 1, "parent_wf", nil)
-	seedSession(t, store, "sibling", "acct", 2, "", upTasks())
+	seedSessionWithNodes(t, store, "parent1", "acct", 1, "parent_wf", nil)
+	seedSessionWithNodes(t, store, "sibling", "acct", 2, "", upTasks())
 	setParent(t, store, "sibling", "parent1")
 	seedReviewWork(t, store, "work1", map[string]any{"checks_status": "SUCCESS"})
 	setParent(t, store, "work1", "parent1")
@@ -380,8 +380,8 @@ func TestTickSession_ChainCapAttemptMarkerDoesNotSurviveRecreationUnderTheSameNa
 	writeWorkflowFile(t, cfg, "reviewer_wf", "")
 	writeCapWorkflow(t, cfg.BaseDir, "parent_wf", intPtr(1))
 
-	seedSession(t, store, "parent1", "acct", 1, "parent_wf", nil)
-	seedSession(t, store, "sibling", "acct", 2, "", upTasks())
+	seedSessionWithNodes(t, store, "parent1", "acct", 1, "parent_wf", nil)
+	seedSessionWithNodes(t, store, "sibling", "acct", 2, "", upTasks())
 	setParent(t, store, "sibling", "parent1")
 	seedReviewWork(t, store, "work1", map[string]any{"checks_status": "SUCCESS", "revision": "sha1"})
 	setParent(t, store, "work1", "parent1")

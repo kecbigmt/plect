@@ -75,15 +75,57 @@ const branchOutputKey = "branch"
 // vocabulary, and core stays version-control-agnostic by identity, so the
 // fact lives only in the provider's own setup output.
 func SessionBranch(s *Session) string {
-	if s == nil || s.Tasks == nil {
+	if s == nil || s.Nodes == nil {
 		return ""
 	}
-	ws, ok := s.Tasks[contract.WorkflowPseudoNodeID]
+	ws, ok := s.Nodes[contract.WorkflowPseudoNodeID]
 	if !ok || ws == nil {
 		return ""
 	}
 	branch, _ := ws.Outputs[branchOutputKey].(string)
 	return branch
+}
+
+// MergedTasks returns a single map combining every node production record and
+// task instance in s, keyed exactly as the pre-split Session.Tasks was — for
+// a caller that reads across the whole session (a display projection, a
+// dependency/workflow-output lookup, an instantiation-Seq scan) and does not
+// care which collection a key came from. Node ids and dynamic instance keys
+// are disjoint namespaces (a `--name` collision is checked against both at
+// instantiation time — see the task package's TaskSetup path), so a real
+// session never collides. The returned map is a fresh shallow copy: writing
+// into it does not write through to s.Nodes/s.Tasks.
+func MergedTasks(s *Session) map[string]*contract.TaskState {
+	if s == nil {
+		return nil
+	}
+	merged := make(map[string]*contract.TaskState, len(s.Nodes)+len(s.Tasks))
+	for k, v := range s.Nodes {
+		merged[k] = v
+	}
+	for k, v := range s.Tasks {
+		merged[k] = v
+	}
+	return merged
+}
+
+// TaskState looks up key across both of s's collections — the workflow
+// pseudo-node and static workflow nodes live in Nodes, everything
+// `plect task setup`/a task document instantiated lives in Tasks — for a
+// caller that addresses one instance by a key that could structurally be
+// either (e.g. a user-supplied `plect judge`/`plect task finalize` instance
+// handle). The two are disjoint namespaces, so at most one ever holds a given
+// key. The returned pointer, when non-nil, is the same one stored in
+// whichever collection holds it, so a caller that mutates it through this
+// return value mutates the session's own record directly.
+func TaskState(s *Session, key string) *contract.TaskState {
+	if s == nil {
+		return nil
+	}
+	if st := s.Nodes[key]; st != nil {
+		return st
+	}
+	return s.Tasks[key]
 }
 
 // ImplicitRootParent returns the parent key a parentless session is deemed to

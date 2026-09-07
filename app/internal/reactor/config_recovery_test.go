@@ -49,7 +49,7 @@ func TestSessionReactor_ReArmsHeartbeatAfterWorkflowLoadRecovers(t *testing.T) {
 	session := &domain.Session{
 		Name:     "o/r-1",
 		Workflow: "wf",
-		Tasks: map[string]*contract.TaskState{
+		Nodes: map[string]*contract.TaskState{
 			"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced},
 		},
 	}
@@ -113,7 +113,7 @@ func TestSessionReactor_KeepsLastGoodTickConfigWhenWorkflowLoadFails(t *testing.
 	session := &domain.Session{
 		Name:     "o/r-1",
 		Workflow: "wf",
-		Tasks: map[string]*contract.TaskState{
+		Nodes: map[string]*contract.TaskState{
 			"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced},
 		},
 	}
@@ -178,7 +178,7 @@ func newRefreshFixture(t *testing.T, body string) (*sessionReactor, string) {
 	session := &domain.Session{
 		Name:     "o/r-1",
 		Workflow: "wf",
-		Tasks: map[string]*contract.TaskState{
+		Nodes: map[string]*contract.TaskState{
 			"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced},
 		},
 	}

@@ -37,7 +37,7 @@ all = [
 // a chain projection read them from.
 func seedReviewWork(t *testing.T, store *state.Store, name string, observed map[string]any) {
 	t.Helper()
-	seedSession(t, store, name, "owner/repo", 1, "wf", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, name, "owner/repo", 1, "wf", map[string]*contract.TaskState{
 		"work": {
 			Scope:    contract.TaskScopeSession,
 			TaskID:   "work",
@@ -99,7 +99,7 @@ revision = { from = "resource.state.revision" }
 	writeWorkflowFile(t, cfg, "codex", "")
 	seedReviewWork(t, store, "owner/repo-1", map[string]any{"checks_status": "SUCCESS", "revision": "sha1"})
 	// A parent so a sibling reviewer would be tree-attached.
-	seedSession(t, store, "owner/repo-orch", "owner/repo", 1, "", nil)
+	seedSessionWithNodes(t, store, "owner/repo-orch", "owner/repo", 1, "", nil)
 	setParent(t, store, "owner/repo-1", "owner/repo-orch")
 
 	res, err := CheckSession(cfg, store, CheckParams{SessionName: "owner/repo-1"})
@@ -331,7 +331,7 @@ pr_url = { from = "resource.state.pr_url" }
 	writeWorkflowFile(t, cfg, "codex", "")
 	seedReviewWork(t, store, "owner/repo-1", map[string]any{"checks_status": "SUCCESS", "revision": "sha1", "pr_url": "https://github.com/owner/repo/pull/9"})
 	// The reviewer session already exists → fire is idempotent (no spawn).
-	seedSession(t, store, "owner/repo-1+review-work", "owner/repo", 1, "codex", nil)
+	seedSessionWithNodes(t, store, "owner/repo-1+review-work", "owner/repo", 1, "codex", nil)
 
 	res, err := TickSession(cfg, store, TickParams{SessionName: "owner/repo-1", SkipRefresh: true})
 	if err != nil {
@@ -389,7 +389,7 @@ all = [ { judge_pending = "ac-met" } ]
 		[]nodeFixture{{id: "work"}})
 	writeWorkflowFile(t, cfg, "codex", "")
 	seedReviewWork(t, store, "owner/repo-1", map[string]any{"checks_status": "SUCCESS", "revision": "sha1"})
-	seedSession(t, store, "owner/repo-1+review-work", "owner/repo", 1, "codex", nil)
+	seedSessionWithNodes(t, store, "owner/repo-1+review-work", "owner/repo", 1, "codex", nil)
 	if err := store.UpdatePopulation("codex/standing", func(population *state.PopulationState) error {
 		population.Workflow = "codex"
 		population.Name = "standing"
@@ -504,8 +504,8 @@ all = [ { judge_pending = "ac-met" } ]
 		[]nodeFixture{{id: "work"}})
 	writeWorkflowFile(t, cfg, "codex", "")
 	seedReviewWork(t, store, "owner/repo-1", map[string]any{"checks_status": "SUCCESS", "revision": "sha1"})
-	seedSession(t, store, "owner/repo-orch", "owner/repo", 1, "", nil)
-	seedSession(t, store, "owner/repo-1+review-work", "owner/repo", 1, "codex", nil)
+	seedSessionWithNodes(t, store, "owner/repo-orch", "owner/repo", 1, "", nil)
+	seedSessionWithNodes(t, store, "owner/repo-1+review-work", "owner/repo", 1, "codex", nil)
 	setParent(t, store, "owner/repo-1", "owner/repo-orch")
 	setParent(t, store, "owner/repo-1+review-work", "owner/repo-orch")
 	// Record an approving sibling verdict at the current revision.
@@ -565,7 +565,7 @@ all = [ { judge = "ac met", id = "ac-met" } ]
 		},
 		[]nodeFixture{{id: "a"}, {id: "b"}})
 	writeWorkflowFile(t, cfg, "codex", "")
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "wf", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "wf", map[string]*contract.TaskState{
 		"a": {Scope: contract.TaskScopeSession, TaskID: "a", Status: contract.TaskStatusProduced, Outputs: map[string]any{}},
 		"b": {Scope: contract.TaskScopeSession, TaskID: "b", Status: contract.TaskStatusProduced, Outputs: map[string]any{}},
 	})
@@ -619,7 +619,7 @@ all = [ { judge_pending = "ac-met" } ]
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "wf", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "wf", map[string]*contract.TaskState{
 		"a": {Scope: contract.TaskScopeSession, TaskID: "a", Status: contract.TaskStatusProduced, Outputs: map[string]any{}},
 	})
 
@@ -658,7 +658,7 @@ pr_url   = { from = "self.state.pr_url" }
 	writeWorkflowFile(t, cfg, "codex", "")
 
 	const crossRepoPRURL = "https://github.com/owner/repo-2/pull/42"
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "wf", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "wf", map[string]*contract.TaskState{
 		"work": {
 			Scope:  contract.TaskScopeSession,
 			TaskID: "work",

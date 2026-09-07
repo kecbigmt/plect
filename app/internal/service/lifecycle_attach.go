@@ -45,8 +45,8 @@ func Attach(cfg *config.Config, store *state.Store, params AttachParams) (*Attac
 	// Resolved.Config is empty for nodes synthesized from workflow files (only
 	// legacy inline `[[tasks]]` populates it). Reach for NodeID/Terminal
 	// directly so the workflow path renders the right command instead of
-	// looking up `session.Tasks[""]`.
-	st, ok := session.Tasks[target.NodeID]
+	// looking up `session.Nodes[""]`.
+	st, ok := session.Nodes[target.NodeID]
 	if !ok || st == nil || st.Status != contract.TaskStatusProduced {
 		return nil, &Error{
 			Code:    ErrNotProduced,

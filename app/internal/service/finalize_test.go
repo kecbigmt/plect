@@ -21,7 +21,6 @@ func TestFinalizeTask_RefusesWhenNotSatisfied(t *testing.T) {
 			Scope:    contract.TaskScopeSession,
 			TaskID:   "work",
 			Status:   contract.TaskStatusProduced,
-			Dynamic:  true,
 			Observed: observedFacts(map[string]any{"checks_status": "PENDING"}),
 		},
 	})
@@ -47,7 +46,6 @@ func TestFinalizeTask_SatisfiedNoResourceLeavesInstanceForCleanup(t *testing.T) 
 			Scope:    contract.TaskScopeSession,
 			TaskID:   "work",
 			Status:   contract.TaskStatusProduced,
-			Dynamic:  true,
 			Observed: observedFacts(map[string]any{"checks_status": "SUCCESS"}),
 		},
 	})
@@ -117,7 +115,6 @@ args    = ["-c", 'echo "$1 $2" > %s', "finalize", { from = "resource.id" }, { fr
 			Scope:    contract.TaskScopeSession,
 			TaskID:   "work",
 			Status:   contract.TaskStatusProduced,
-			Dynamic:  true,
 			Resource: "local-okf://kec/goals/x.md",
 		},
 	})
@@ -177,7 +174,6 @@ args    = ["-c", "echo boom >&2; exit 1"]
 			Scope:    contract.TaskScopeSession,
 			TaskID:   "work",
 			Status:   contract.TaskStatusProduced,
-			Dynamic:  true,
 			Resource: "local-okf://kec/goals/x.md",
 			Observed: observedFacts(map[string]any{"checks_status": "SUCCESS"}),
 		},

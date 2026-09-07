@@ -12,7 +12,8 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// InstanceKey derives the session.Tasks key for the numbered form of a dynamic
+// InstanceKey derives the session.Tasks key (a dynamic instance always lives
+// there, never in session.Nodes) for the numbered form of a dynamic
 // task instance: "<taskID>#<instanceID>", where instanceID is a
 // per-task sequential number (see NextInstanceNumber). This is the `--name`-
 // less form; a `--name` instance keys on the name alone (ValidInstanceName), so
@@ -82,10 +83,10 @@ type InstanceSetup struct {
 // Stderr is returned so the caller's observer can surface diagnostic output.
 //
 // inputs are the already-bound input values (the caller applies the
-// --input > workspace-provider/workflow outputs > session vars precedence). workflowTasks
-// is the session's tasks map, read only to expose the @workflow pseudo-node's
-// outputs to the setup template.
-func ExecuteTaskSetup(goCtx context.Context, r Resolved, inputs map[string]any, session SessionVars, workflowTasks map[string]*contract.TaskState) (InstanceSetup, error) {
+// --input > workspace-provider/workflow outputs > session vars precedence).
+// nodes is the session's Nodes map, read only to expose the @workflow
+// pseudo-node's outputs to the setup template.
+func ExecuteTaskSetup(goCtx context.Context, r Resolved, inputs map[string]any, session SessionVars, nodes map[string]*contract.TaskState) (InstanceSetup, error) {
 	if inputs == nil {
 		inputs = map[string]any{}
 	}
@@ -97,7 +98,7 @@ func ExecuteTaskSetup(goCtx context.Context, r Resolved, inputs map[string]any, 
 	ctx := RenderContext{
 		Self:       map[string]any{},
 		Inputs:     inputs,
-		Workflow:   workflowOutputs(workflowTasks),
+		Workflow:   workflowOutputs(nodes),
 		Session:    session,
 		SourcePath: r.SourcePath,
 	}

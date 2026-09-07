@@ -278,7 +278,7 @@ type InsertNodeInstanceParams struct {
 	FinalizedAt             sql.NullString
 }
 
-// Workflow nodes (static; Session.Tasks entries with Dynamic == false)
+// Workflow nodes (static; Session.Nodes entries)
 func (q *Queries) InsertNodeInstance(ctx context.Context, arg InsertNodeInstanceParams) error {
 	_, err := q.db.ExecContext(ctx, insertNodeInstance,
 		arg.SessionID,
@@ -1319,7 +1319,7 @@ SELECT id, session_id, instance_name, task_id, scope, status, sequence,
 FROM task_instances WHERE session_id = ? ORDER BY instance_name
 `
 
-// Task instances (dynamic; Session.Tasks entries with Dynamic == true)
+// Task instances (dynamic; Session.Tasks entries)
 func (q *Queries) ListTaskInstances(ctx context.Context, sessionID string) ([]TaskInstance, error) {
 	rows, err := q.db.QueryContext(ctx, listTaskInstances, sessionID)
 	if err != nil {

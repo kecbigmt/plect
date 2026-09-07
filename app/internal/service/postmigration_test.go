@@ -39,7 +39,7 @@ func seedPostMigrationSession(t *testing.T, store *state.Store, name, resourceID
 		UpdatedAt:        createdAt,
 	}
 	if workflow != "" {
-		session.Tasks = map[string]*contract.TaskState{
+		session.Nodes = map[string]*contract.TaskState{
 			contract.WorkflowPseudoNodeID: {
 				Scope:   contract.TaskScopeSession,
 				Status:  contract.TaskStatusProduced,
@@ -48,13 +48,13 @@ func seedPostMigrationSession(t *testing.T, store *state.Store, name, resourceID
 		}
 	}
 	if branch != "" {
-		if session.Tasks == nil {
-			session.Tasks = map[string]*contract.TaskState{}
+		if session.Nodes == nil {
+			session.Nodes = map[string]*contract.TaskState{}
 		}
-		wf := session.Tasks[contract.WorkflowPseudoNodeID]
+		wf := session.Nodes[contract.WorkflowPseudoNodeID]
 		if wf == nil {
 			wf = &contract.TaskState{Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced}
-			session.Tasks[contract.WorkflowPseudoNodeID] = wf
+			session.Nodes[contract.WorkflowPseudoNodeID] = wf
 		}
 		if wf.Outputs == nil {
 			wf.Outputs = map[string]any{}

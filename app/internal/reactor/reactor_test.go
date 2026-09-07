@@ -53,7 +53,7 @@ func newTestReactor(t *testing.T, tc config.TickConfig) (*sessionReactor, *state
 	st := state.NewStore(dir)
 	if err := st.Put(&domain.Session{
 		Name: "o/r-1",
-		Tasks: map[string]*contract.TaskState{
+		Nodes: map[string]*contract.TaskState{
 			"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced},
 		},
 	}); err != nil {
@@ -475,7 +475,7 @@ func TestSupervisor_StartsAndStopsWithRunScope(t *testing.T) {
 	st := state.NewStore(t.TempDir())
 	if err := st.Put(&domain.Session{
 		Name: "o/r-1",
-		Tasks: map[string]*contract.TaskState{
+		Nodes: map[string]*contract.TaskState{
 			"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced},
 		},
 	}); err != nil {
@@ -507,7 +507,7 @@ func TestSupervisor_StartsAndStopsWithRunScope(t *testing.T) {
 
 	// Run scope goes down → supervisor cancels (suspend, not teardown).
 	if err := st.Update("o/r-1", func(s *domain.Session) error {
-		s.Tasks["claude"].Status = contract.TaskStatusCleaned
+		s.Nodes["claude"].Status = contract.TaskStatusCleaned
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -528,7 +528,7 @@ func TestSupervisor_ReconcileDoesNotCancelActiveReactorsWhenStoreUnreadable(t *t
 	st := state.NewStore(t.TempDir())
 	if err := st.Put(&domain.Session{
 		Name: "o/r-1",
-		Tasks: map[string]*contract.TaskState{
+		Nodes: map[string]*contract.TaskState{
 			"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced},
 		},
 	}); err != nil {
@@ -590,7 +590,7 @@ on = ["github.*"]
 	st := state.NewStore(t.TempDir())
 	if err := st.Put(&domain.Session{
 		Name: "o/r-1", Workflow: "coding",
-		Tasks: map[string]*contract.TaskState{
+		Nodes: map[string]*contract.TaskState{
 			"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced},
 		},
 	}); err != nil {
