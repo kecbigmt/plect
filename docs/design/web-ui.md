@@ -259,7 +259,9 @@ detail has ever been cached instead schedules the same coalesced refetch
 (detail only, never the list): the status snapshots the session before its
 slower work, so a fetch already in flight can resolve without this fact,
 and only a fresh fetch started after the event can be relied on to reflect
-it.
+it. That refetch cancels any fetch already in flight for the same detail
+query first, since an invalidation alone dedupes onto one already running
+rather than starting a new one.
 
 The selected session's own stream cannot observe another session's facts, so
 an unselected or newly created session's lifecycle/status change does not

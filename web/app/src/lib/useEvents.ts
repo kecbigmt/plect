@@ -13,12 +13,11 @@ export function isLifecycleEvent(type: string): boolean {
   return type.startsWith(LIFECYCLE_EVENT_PREFIX);
 }
 
-// Fires every few seconds per active session, so it's applied from the
-// event's own payload below rather than refetched.
+// Fires every few seconds per session, so it's applied from its own payload
+// rather than refetched.
 const STATUS_MESSAGE_EVENT_TYPE = "plect.status_message";
 
-// Returns whether a cached detail existed to patch; the caller invalidates
-// instead otherwise (docs/design/web-ui.md).
+// True if a cached detail existed to patch; the caller invalidates otherwise.
 function applyStatusMessagePatch(queryClient: QueryClient, sessionName: string, event: SessionEvent): boolean {
   let patched = false;
   queryClient.setQueryData(sessionDetailQueryKey(sessionName), (prev: SessionDetail | undefined) => {
@@ -38,8 +37,7 @@ function applyStatusMessagePatch(queryClient: QueryClient, sessionName: string, 
   return patched;
 }
 
-// Debounces a burst of lifecycle events into one refetch; never cleared by
-// an effect's own teardown, so a quick session switch can't force it early.
+// Debounces lifecycle-event bursts into one refetch that survives teardown, so a quick switch can't force it early.
 const INVALIDATE_COALESCE_MS = 300;
 
 export function sessionEventsQueryKey(sessionName: string) {
@@ -97,8 +95,7 @@ export function useLiveEvents(sessionName: string | null, historyReady: boolean,
   const [liveEvents, setLiveEvents] = useState<SessionEvent[]>([]);
   const [state, setState] = useState<EventStreamState>("connecting");
   const invalidateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // OR'd across whatever coalesces into the pending invalidation, so a
-  // status-only trigger can't drop a lifecycle trigger's list invalidation.
+  // OR'd so a status-only trigger can't drop a pending lifecycle trigger's list invalidation.
   const invalidateListTooRef = useRef(false);
 
   useEffect(() => {
@@ -115,6 +112,10 @@ export function useLiveEvents(sessionName: string | null, historyReady: boolean,
       }
       invalidateTimerRef.current = setTimeout(() => {
         invalidateTimerRef.current = null;
+        // invalidateQueries alone dedupes onto an in-flight fetch instead of
+        // starting a fresh one, so a slow, stale-snapshotting request could
+        // still win; cancelling it first forces a genuinely fresh fetch.
+        queryClient.cancelQueries({ queryKey: sessionDetailQueryKey(session) });
         queryClient.invalidateQueries({ queryKey: sessionDetailQueryKey(session) });
         if (invalidateListTooRef.current) {
           queryClient.invalidateQueries({ queryKey: sessionListQueryKey() });

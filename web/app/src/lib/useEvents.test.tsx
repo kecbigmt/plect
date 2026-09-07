@@ -189,6 +189,58 @@ describe("useLiveEvents", () => {
     }
   });
 
+  it("does not let a slow initial detail fetch's stale snapshot win over a status-message event", async () => {
+    vi.useFakeTimers();
+    const queryClient = new QueryClient();
+    function wrapper({ children }: { children: ReactNode }) {
+      return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+    }
+    const baseBody = {
+      sessionName: "team/a",
+      run: "up",
+      resourceId: "",
+      createdAt: "2026-01-01T00:00:00Z",
+      workspaceDirExists: false,
+    };
+    // The stale response, snapshotted before the event, carries no message;
+    // the fresh one, snapshotted after, does — only the fresh one may win.
+    const staleBody = baseBody;
+    const freshBody = { ...baseBody, message: { text: "hi", updatedAt: "2026-01-01T00:00:01Z" } };
+    vi.stubGlobal("fetch", vi.fn());
+    let resolveFirst: (value: Response) => void = () => {};
+    vi.mocked(fetch)
+      .mockImplementationOnce(
+        () =>
+          new Promise<Response>((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockImplementation(() => Promise.resolve(new Response(JSON.stringify(freshBody), { status: 200 })));
+
+    try {
+      const detail = renderHook(() => useSessionDetail("team/a"), { wrapper });
+      renderHook(() => useLiveEvents("team/a", true, ""), { wrapper });
+
+      const handlers = vi.mocked(openEventStream).mock.calls[0][2];
+      handlers.onEvent(
+        stubEvent({ type: "plect.status_message", metadata: { text: "hi", cleared: "false", previous: "" } }),
+      );
+
+      // The coalesced invalidation fires while the very first fetch — its
+      // snapshot taken before the event — is still unresolved.
+      await vi.advanceTimersByTimeAsync(400);
+      expect(fetch).toHaveBeenCalledTimes(2);
+
+      resolveFirst(new Response(JSON.stringify(staleBody), { status: 200 }));
+      await vi.waitFor(() => expect(detail.result.current.isSuccess).toBe(true));
+
+      expect(detail.result.current.data).toMatchObject({ message: { text: "hi" } });
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
   // A resume backlog or an actively narrating session can replay/emit many
   // status-message events in a row; none may reach the network.
   it("issues zero session-list requests for a burst of 50 status-message events", async () => {
