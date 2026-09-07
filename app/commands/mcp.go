@@ -59,8 +59,7 @@ var mcpListenCmd = &cobra.Command{
 		if socketPath == "" {
 			return fmt.Errorf("--socket is required (or pass --session to derive the per-session default)")
 		}
-		// Only the derived-default path under fallbackRuntimeSocketRoot needs
-		// this: an explicit --socket is the caller's own choice of location.
+		// An explicit --socket is the caller's own choice of location.
 		if usingFallbackDefault {
 			if err := ensurePrivateFallbackRoot(fallbackRuntimeSocketRoot()); err != nil {
 				return err
@@ -96,11 +95,10 @@ var mcpListenCmd = &cobra.Command{
 // defaultSessionMcpListenSocket derives a per-session socket path under
 // $XDG_RUNTIME_DIR. sessionName often contains "/" (e.g. "team/project"),
 // which filepath.Join turns into nested directories rather than a flat
-// filename. Without $XDG_RUNTIME_DIR (e.g. macOS, which has no
-// systemd-style runtime dir), it falls back to fallbackRuntimeSocketRoot
-// instead of os.TempDir(): os.TempDir() is a long per-process path that,
-// joined with a realistic session name, can push a unix socket path past
-// the sun_path length limit.
+// filename. Without $XDG_RUNTIME_DIR (e.g. macOS), it falls back to
+// fallbackRuntimeSocketRoot rather than os.TempDir(), which is a long
+// per-process path that, joined with a realistic session name, can push a
+// unix socket path past the sun_path length limit.
 func defaultSessionMcpListenSocket(sessionName string) string {
 	if rt := os.Getenv("XDG_RUNTIME_DIR"); rt != "" {
 		return filepath.Join(rt, "plect-mcp", sessionName+".sock")
@@ -108,22 +106,18 @@ func defaultSessionMcpListenSocket(sessionName string) string {
 	return filepath.Join(fallbackRuntimeSocketRoot(), sessionName+".sock")
 }
 
-// fallbackRuntimeSocketRoot is the directory defaultSessionMcpListenSocket
-// falls back to when $XDG_RUNTIME_DIR is unset. It embeds the current uid
-// rather than using a single shared "/tmp/plect-mcp": a bare shared path is
-// predictable and, unlike $XDG_RUNTIME_DIR, has no OS-enforced privacy
-// guarantee, so another local user could pre-create it (or a same-named
-// session's socket) ahead of this process on a shared multi-user host.
+// fallbackRuntimeSocketRoot embeds the current uid rather than using one
+// shared "/tmp/plect-mcp": unlike $XDG_RUNTIME_DIR, a bare shared path has
+// no OS-enforced privacy guarantee, so another local user could pre-create
+// it or connect to a same-named session's socket.
 func fallbackRuntimeSocketRoot() string {
 	return fmt.Sprintf("/tmp/plect-mcp-%d", os.Getuid())
 }
 
-// ensurePrivateFallbackRoot creates root 0700 if it does not exist yet, or
-// verifies a pre-existing root is a real directory, owned by the calling
-// user, with no group/other permission bits, before letting the caller
-// reuse it. Refusing an untrusted match closes the race fallbackRuntimeSocketRoot's
-// predictable, uid-scoped-but-still-guessable path leaves open: another
-// local process could have created it first.
+// ensurePrivateFallbackRoot creates root 0700, or, if it already exists,
+// verifies it is a real directory owned by the caller with no group/other
+// permission bits before reuse — refusing rather than trusting a directory
+// another local process could have pre-created at this guessable path.
 func ensurePrivateFallbackRoot(root string) error {
 	if err := os.Mkdir(root, 0o700); err == nil || !os.IsExist(err) {
 		if err != nil {
