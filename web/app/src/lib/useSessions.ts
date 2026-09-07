@@ -28,6 +28,12 @@ export function useSessionList() {
     // useBootstrap's own reasoning for disabling it.
     retry: false,
     ...NO_IMPLICIT_REFETCH,
+    // Interim cross-session fallback (docs/design/web-ui.md, #488): nothing
+    // yet tells this query about a session that isn't selected changing, so
+    // it polls at a low rate instead — only while the tab is visible, so a
+    // backgrounded tab doesn't keep polling for no one to see it.
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
   });
 }
 

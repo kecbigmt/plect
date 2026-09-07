@@ -242,36 +242,29 @@ and empty are distinguishable states.
 
 The session list and a session's detail are each fetched once per page load
 and otherwise held indefinitely: neither has an implicit staleness window, and
-neither refetches on window refocus or network reconnect. Each has its own
-live-update source, so a session need not be selected for its facts to reach
-the list.
+neither refetches on window refocus or network reconnect. Only the selected
+session's own live stream can mark either stale, and only for a lifecycle
+event (`lifecycle.*`: created, up, down, destroyed, task setup, task
+cleanup) — the one signal for a run/health change, itself a server-probed
+fact the event payload never carries, so learning the new value needs a real
+refetch. This debounces a burst of several lifecycle events from one
+operation into a single refetch, and the pending refetch runs to completion
+on its own schedule rather than being cancelled by a session switch or
+unmount, so quickly navigating through several sessions cannot force it
+early. A self-reported status-message event carries its own new value
+inline and instead patches the cached detail directly, with no request at
+all — necessary since it can fire every few seconds per session and a
+resume backlog can replay dozens at once; one that arrives before the
+detail has ever been fetched is applied once that fetch lands, not dropped.
 
-The selected session's own live stream is the detail query's only
-invalidation source, and only for a lifecycle event (`lifecycle.*`: created,
-up, down, destroyed, task setup, task cleanup) — the one signal for a
-run/health change, itself a server-probed fact the event payload never
-carries, so learning the new value needs a real refetch. This debounces a
-burst of several lifecycle events from one operation into a single refetch,
-and the pending refetch runs to completion on its own schedule rather than
-being cancelled by a session switch or unmount, so quickly navigating through
-several sessions cannot force it early. A self-reported status-message event
-carries its own new value inline and instead patches the cached detail
-directly, with no request at all — necessary since it can fire every few
-seconds per session and a resume backlog can replay dozens at once; one that
-arrives before the detail has ever been fetched is applied once that fetch
-lands, not dropped.
-
-The list's own live-update source follows every session, independent of
-selection, over a second, best-effort stream scoped server-side to only the
-same two fact families (lifecycle, status message): a lifecycle event
-(including a newly created session) triggers the list's own coalesced
-refetch, and a status-message event patches that one cached row directly.
-Unlike the selected session's resumable stream, a reconnect here never
-replays a session's history — it starts from each session's current
-position, so what already happened before the connection cannot resurface as
-if it just did; a session discovered only after connecting is a genuinely
-new one, so its own (necessarily new) history, including the lifecycle event
-that announced it, is delivered in full.
+The selected session's own stream cannot observe another session's facts, so
+an unselected or newly created session's lifecycle/status change does not
+reach the list this way. Until a session-independent subscription exists
+([#488](https://github.com/kecbigmt/plecture/issues/488)), the list instead
+polls every 60 seconds while its tab is visible (never while backgrounded) as
+a small, bounded interim fallback — one request per minute per open tab,
+correcting an unselected row's staleness within a minute, with no new server
+surface.
 
 Ordinary conversational events (`user.emit`, `plect.instruction`, and every
 other type) never touch either query; the timeline already renders them from

@@ -314,23 +314,6 @@ func EventTailSubtree(ctx context.Context, cfg *config.Config, store *state.Stor
 	}, f, fn)
 }
 
-// EventTailAll follows every session in state live, invoking fn only for a
-// matching event that lands after this call begins — unlike EventTailSubtree
-// (a bounded root's full history is what a subtree viewer wants), a session's
-// pre-existing lifecycle/status history is not replayed here, since every
-// browser reconnect would otherwise resurface it as if it just happened. A
-// session created after the follow started is picked up on the next
-// membership re-resolution the same way a subtree's new child is.
-func EventTailAll(ctx context.Context, store *state.Store, f event.Filter, fn func(event.Event)) error {
-	return eventlog.NewStore(store.Dir()).FollowAcrossLive(ctx, func() ([]string, error) {
-		sessions, err := store.AllE()
-		if err != nil {
-			return nil, err
-		}
-		return slices.Collect(maps.Keys(sessions)), nil
-	}, f, fn)
-}
-
 // EventList returns events for a session at or after sequence `since` that
 // match f, plus their sequences and the next read cursor. Works for destroyed
 // sessions too — the log is read directly, independent of state.

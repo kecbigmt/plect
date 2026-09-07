@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { useInfiniteQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 
 import { fetchEventPage, type SessionEvent, type SessionEventPage } from "@/lib/eventsApi";
-import { openAllSessionsEventStream, openEventStream, type EventStreamState } from "@/lib/eventStream";
-import type { SessionDetail, SessionSummary } from "@/lib/sessionsApi";
+import { openEventStream, type EventStreamState } from "@/lib/eventStream";
+import type { SessionDetail } from "@/lib/sessionsApi";
 import { sessionDetailQueryKey, sessionListQueryKey } from "@/lib/useSessions";
 
 // Run/health are server-probed and only a lifecycle.* event means either changed.
@@ -36,27 +36,6 @@ function applyStatusMessagePatch(queryClient: QueryClient, sessionName: string, 
     };
   });
   return patched;
-}
-
-// Best-effort, unlike detail's buffered retry above: nothing renders a list
-// row's message yet, so a row not yet cached just waits for its next fetch.
-function applyStatusMessageToListRow(queryClient: QueryClient, event: SessionEvent): void {
-  queryClient.setQueryData(sessionListQueryKey(), (prev: SessionSummary[] | undefined) => {
-    if (!prev) {
-      return prev;
-    }
-    const index = prev.findIndex((s) => s.sessionName === event.sessionName);
-    if (index === -1) {
-      return prev;
-    }
-    const cleared = event.metadata?.cleared === "true";
-    const next = prev.slice();
-    next[index] = {
-      ...next[index],
-      message: cleared ? undefined : { text: event.metadata?.text ?? event.summary, updatedAt: event.time },
-    };
-    return next;
-  });
 }
 
 // Debounces a burst of lifecycle events into one refetch; never cleared by
@@ -128,9 +107,6 @@ export function useLiveEvents(sessionName: string | null, historyReady: boolean,
     const session = sessionName;
     const controller = new AbortController();
 
-    // Only the detail: useSessionListLiveFacts (mounted for the app's whole
-    // lifetime, independent of selection) is the list's one invalidation
-    // source, so a lifecycle event never schedules two separate refetches.
     function scheduleInvalidate() {
       if (invalidateTimerRef.current !== null) {
         clearTimeout(invalidateTimerRef.current);
@@ -138,6 +114,7 @@ export function useLiveEvents(sessionName: string | null, historyReady: boolean,
       invalidateTimerRef.current = setTimeout(() => {
         invalidateTimerRef.current = null;
         queryClient.invalidateQueries({ queryKey: sessionDetailQueryKey(session) });
+        queryClient.invalidateQueries({ queryKey: sessionListQueryKey() });
       }, INVALIDATE_COALESCE_MS);
     }
 
@@ -190,50 +167,3 @@ export function useLiveEvents(sessionName: string | null, historyReady: boolean,
   return { liveEvents, state };
 }
 
-// The list's own live-update source: an unselected or newly created
-// session's facts reach it only through this, not useLiveEvents above.
-export function useSessionListLiveFacts(): void {
-  const queryClient = useQueryClient();
-  const invalidateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastStateRef = useRef<EventStreamState>("connecting");
-
-  useEffect(() => {
-    const controller = new AbortController();
-
-    function scheduleListInvalidate() {
-      if (invalidateTimerRef.current !== null) {
-        clearTimeout(invalidateTimerRef.current);
-      }
-      invalidateTimerRef.current = setTimeout(() => {
-        invalidateTimerRef.current = null;
-        queryClient.invalidateQueries({ queryKey: sessionListQueryKey() });
-      }, INVALIDATE_COALESCE_MS);
-    }
-
-    openAllSessionsEventStream(
-      {
-        onEvent: (event) => {
-          if (event.type === STATUS_MESSAGE_EVENT_TYPE) {
-            applyStatusMessageToListRow(queryClient, event);
-            return;
-          }
-          if (!isLifecycleEvent(event.type)) {
-            return;
-          }
-          scheduleListInvalidate();
-        },
-        onStateChange: (state) => {
-          // No resume cursor, so a gap (network drop, backgrounded tab) is
-          // otherwise invisible; refetch once on the way back from it, not
-          // on the initial connect (never "reconnecting" beforehand).
-          if (state === "live" && lastStateRef.current === "reconnecting") {
-            scheduleListInvalidate();
-          }
-          lastStateRef.current = state;
-        },
-      },
-      controller.signal,
-    );
-    return () => controller.abort();
-  }, [queryClient]);
-}
