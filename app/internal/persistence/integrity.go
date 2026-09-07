@@ -36,12 +36,10 @@ func (db *DB) IntegrityCheck(ctx context.Context) error {
 	return nil
 }
 
-// Checkpoint merges the WAL file's content into the main database file and
-// truncates it, so a caller about to move the database file alone does not
-// leave pending writes stranded in a `-wal` sidecar the destination never
-// gets. It runs in autocommit, outside any explicit transaction: a
-// caller-held BEGIN IMMEDIATE would only block the TRUNCATE checkpoint's own
-// need for exclusive WAL access.
+// Checkpoint merges the WAL file into the main database file and truncates
+// it, so moving the database file alone does not strand pending writes in a
+// `-wal` sidecar. It runs in autocommit: a caller-held BEGIN IMMEDIATE would
+// block the TRUNCATE checkpoint's own need for exclusive WAL access.
 func (db *DB) Checkpoint(ctx context.Context) error {
 	unlock, err := db.enterNormalAccess(ctx)
 	if err != nil {

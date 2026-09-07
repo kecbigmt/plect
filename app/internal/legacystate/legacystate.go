@@ -25,9 +25,7 @@ type StateFile struct {
 	Populations    map[string]*domain.PopulationState
 	UpReservations map[string]domain.UpReservation
 	// HeartbeatLogPositions is each session's legacy
-	// tick_backoff.last_log_position, keyed by session name: the field
-	// contract.TickBackoff dropped, so json.Unmarshal above silently drops
-	// it too, and only this side channel carries it forward.
+	// tick_backoff.last_log_position, keyed by name; see parseHeartbeatLogPositions.
 	HeartbeatLogPositions map[string]int64
 }
 
@@ -84,11 +82,9 @@ func Parse(data []byte) (*StateFile, error) {
 	return sf, nil
 }
 
-// parseHeartbeatLogPositions re-scans the raw envelope for each session's
-// tick_backoff.last_log_position, a field contract.TickBackoff no longer
-// declares (see StateFile.HeartbeatLogPositions). A malformed envelope
-// returns no positions rather than an error: the caller's own decode step
-// into the typed Sessions map already reports that failure.
+// parseHeartbeatLogPositions re-scans the raw envelope for a field
+// contract.TickBackoff no longer declares; a malformed envelope returns no
+// positions, since the caller's own decode already reports that failure.
 func parseHeartbeatLogPositions(data []byte) map[string]int64 {
 	var raw struct {
 		Sessions map[string]struct {

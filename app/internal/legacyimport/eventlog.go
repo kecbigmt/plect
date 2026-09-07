@@ -15,9 +15,8 @@ import (
 	"github.com/kecbigmt/plecture/contracts/event"
 )
 
-// legacyConsumerToCursorKind maps a pre-cutover `.cursor.<consumer>` file's
-// consumer name to its destination event_cursors.kind: frozen historical
-// literals (the commit before the SQLite event-store cutover), not today's
+// legacyConsumerToCursorKind maps a pre-cutover `.cursor.<consumer>` name to
+// its destination event_cursors.kind: a frozen historical fact, not today's
 // dispatcher.go/reactor.go vocabulary they coincidentally already match.
 var legacyConsumerToCursorKind = map[string]string{
 	"dispatcher":   "delivery",
@@ -59,10 +58,7 @@ func (l *SessionLog) Translate(offset int64) (nextSequence int64, ok bool) {
 	if offset < 0 {
 		return 0, false
 	}
-	// lineEndOffsets is small per session in practice and only consulted a
-	// handful of times per session (at most one per recognized cursor kind
-	// plus heartbeat); a linear scan keeps this package independent of a
-	// sorted-search invariant a future change could silently break.
+	// A linear scan is fine: consulted only once per cursor kind per session.
 	for i, end := range l.lineEndOffsets {
 		if end == offset {
 			return int64(i) + 2, true
@@ -78,9 +74,7 @@ func encodeSessionDir(session string) string {
 }
 
 // ListLegacySessionDirs returns every session name with a directory under
-// root (a legacy data directory's "events" subdirectory), sorted for
-// deterministic import order. A missing root is not an error: a backup with
-// no event history yet imports zero sessions from it.
+// root, sorted. A missing root is not an error: no event history yet.
 func ListLegacySessionDirs(root string) ([]string, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -128,10 +122,7 @@ func ReadSessionDir(eventsRoot, name string) (*SessionLog, error) {
 		case e.Name() == "log.jsonl":
 			haveLog = true
 		case e.Name() == ".gen", e.Name() == ".lock", e.Name() == "tombstone.json", e.Name() == "chain_attempts.json":
-			// Recognized, but not imported into SQLite: .gen is read below,
-			// .lock is validated by checkNotLocked, tombstone.json and
-			// chain_attempts.json stay file-based after cutover (see
-			// package doc).
+			// Recognized, not imported: see package doc.
 		case strings.HasPrefix(e.Name(), ".cursor."):
 			consumer := strings.TrimPrefix(e.Name(), ".cursor.")
 			kind, known := legacyConsumerToCursorKind[consumer]
@@ -194,14 +185,11 @@ func readCursorFile(path string) (int64, error) {
 	return n, nil
 }
 
-// readLegacyLog decodes log.jsonl's complete lines in byte order, exactly as
-// the pre-cutover eventlog.Store.List read them, except that a malformed
-// complete line, a session mismatch, a missing id, or a duplicate id fails
-// the import instead of being logged and skipped — the live reader's
-// tolerance existed to keep serving a still-running store through
-// corruption; a one-time import has no such excuse and must not silently
-// promote a database missing data. A trailing partial line (a torn
-// in-flight append) is still discarded silently, matching the live reader.
+// readLegacyLog decodes log.jsonl's complete lines in byte order, as the
+// pre-cutover eventlog.Store.List did, except a malformed line, a session
+// mismatch, a missing id, or a duplicate id fails the import rather than
+// being logged and skipped as the live reader tolerated. A trailing partial
+// line is still discarded silently, matching the live reader.
 func readLegacyLog(path, sessionName string) (events []event.Event, lineEndOffsets []int64, internalBackfilled int, err error) {
 	f, err := os.Open(path)
 	if err != nil {
