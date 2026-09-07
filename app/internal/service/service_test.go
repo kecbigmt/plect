@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,6 +24,15 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
+// sharedWorkspaceProviderBinariesOnce guards buildSharedWorkspaceProviderBinaries
+// (provider_github_e2e_test.go, integration-tagged); declared here, without that
+// tag, so TestMain's cleanup below runs identically whether or not the tag is set.
+var (
+	sharedWorkspaceProviderBinariesOnce sync.Once
+	sharedWorkspaceProviderBinariesDir  string
+	sharedWorkspaceProviderBinariesErr  error
+)
+
 // PLECT_CONFIG_HOME and XDG_CONFIG_HOME both outrank HOME in
 // confighome.Resolve()'s precedence, so left ambient either would bypass
 // every test's HOME-based isolation below; PLECT_SESSION_NAME is unset
@@ -31,7 +41,11 @@ func TestMain(m *testing.M) {
 	os.Unsetenv("PLECT_SESSION_NAME")
 	os.Unsetenv(confighome.EnvVar)
 	os.Unsetenv(confighome.XDGEnvVar)
-	os.Exit(m.Run())
+	code := m.Run()
+	if sharedWorkspaceProviderBinariesDir != "" {
+		os.RemoveAll(sharedWorkspaceProviderBinariesDir)
+	}
+	os.Exit(code)
 }
 
 func testStore(t *testing.T) *state.Store {

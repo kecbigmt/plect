@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/kecbigmt/plecture/app/internal/config"
@@ -18,14 +17,6 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/state"
 	"github.com/kecbigmt/plecture/app/internal/task"
 	contract "github.com/kecbigmt/plecture/contracts/state"
-)
-
-// sharedWorkspaceProviderBinariesDir/Err cache buildSharedWorkspaceProviderBinaries's
-// result for this run; never removed since the run's own temp dir goes with it.
-var (
-	sharedWorkspaceProviderBinariesOnce sync.Once
-	sharedWorkspaceProviderBinariesDir  string
-	sharedWorkspaceProviderBinariesErr  error
 )
 
 // shippedGithubWorkspaceProvider loads the workspace provider config that
@@ -157,8 +148,6 @@ func buildWorkspaceProviderBinaries(t *testing.T, root string) []plugins.Mounted
 	}}
 }
 
-// TestBuildWorkspaceProviderBinaries_BuildsOnce pins the once-only cache:
-// two mount requests must reuse one build, not each trigger `go build`.
 func TestBuildWorkspaceProviderBinaries_BuildsOnce(t *testing.T) {
 	root := repoRoot(t)
 	buildWorkspaceProviderBinaries(t, root)

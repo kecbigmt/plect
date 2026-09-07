@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sync"
 	"testing"
 	"time"
 
@@ -95,14 +94,6 @@ var githubPluginBinaries = []struct{ moduleDir, pkg, name string }{
 	{filepath.Join("plugins", pluginDirName, "src"), "./cmd/" + appTokenBin, appTokenBin},
 }
 
-// sharedGithubPluginBinariesDir/Err cache buildSharedGithubPluginBinaries's
-// result for this run; never removed since the run's own temp dir goes with it.
-var (
-	sharedGithubPluginBinariesOnce sync.Once
-	sharedGithubPluginBinariesDir  string
-	sharedGithubPluginBinariesErr  error
-)
-
 // buildSharedGithubPluginBinaries builds githubPluginBinaries once per test
 // binary run rather than once per call: this file's two tests each mount a
 // fresh copy, and each was separately rebuilding all four.
@@ -165,8 +156,6 @@ func buildGithubPluginBinaries(t *testing.T, root string) []plugins.Mounted {
 	}}
 }
 
-// TestBuildGithubPluginBinaries_BuildsOnce pins the once-only cache: two
-// mount requests must reuse one build, not each trigger `go build`.
 func TestBuildGithubPluginBinaries_BuildsOnce(t *testing.T) {
 	root := repoRootForE2E(t)
 	buildGithubPluginBinaries(t, root)
