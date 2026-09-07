@@ -24,14 +24,43 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// sharedWorkspaceProviderBinariesOnce guards buildSharedWorkspaceProviderBinaries
-// (provider_github_e2e_test.go, integration-tagged); declared here, without that
-// tag, so TestMain's cleanup below runs identically whether or not the tag is set.
-var (
-	sharedWorkspaceProviderBinariesOnce sync.Once
-	sharedWorkspaceProviderBinariesDir  string
-	sharedWorkspaceProviderBinariesErr  error
-)
+// onceBuiltBinaries builds a fixed list of Go binaries into a shared temp
+// directory exactly once per test binary run, recording the directory
+// before any build in the list runs — so a build partway through the list
+// failing still leaves dir set to something a caller can clean up, not just
+// the all-succeeded path. Declared here, without the integration tag its
+// only caller (provider_github_e2e_test.go) carries, so TestMain's cleanup
+// below runs identically whether or not that tag is set.
+type onceBuiltBinaries struct {
+	once sync.Once
+	dir  string
+	err  error
+}
+
+func (o *onceBuiltBinaries) build(root string, binaries []struct{ moduleDir, pkg, name string }, env []string) (string, error) {
+	o.once.Do(func() {
+		dir, err := os.MkdirTemp("", "plect-shared-bin-")
+		if err != nil {
+			o.err = err
+			return
+		}
+		o.dir = dir
+		for _, b := range binaries {
+			cmd := exec.Command("go", "build", "-o", filepath.Join(dir, b.name), b.pkg)
+			cmd.Dir = filepath.Join(root, b.moduleDir)
+			cmd.Env = append(os.Environ(), env...)
+			cmd.Stdout = os.Stderr
+			cmd.Stderr = os.Stderr
+			if err := cmd.Run(); err != nil {
+				o.err = fmt.Errorf("build %s: %w", b.name, err)
+				return
+			}
+		}
+	})
+	return o.dir, o.err
+}
+
+var sharedWorkspaceProviderBinaries onceBuiltBinaries
 
 // PLECT_CONFIG_HOME and XDG_CONFIG_HOME both outrank HOME in
 // confighome.Resolve()'s precedence, so left ambient either would bypass
@@ -42,8 +71,8 @@ func TestMain(m *testing.M) {
 	os.Unsetenv(confighome.EnvVar)
 	os.Unsetenv(confighome.XDGEnvVar)
 	code := m.Run()
-	if sharedWorkspaceProviderBinariesDir != "" {
-		os.RemoveAll(sharedWorkspaceProviderBinariesDir)
+	if sharedWorkspaceProviderBinaries.dir != "" {
+		os.RemoveAll(sharedWorkspaceProviderBinaries.dir)
 	}
 	os.Exit(code)
 }

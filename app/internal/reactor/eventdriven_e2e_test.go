@@ -98,26 +98,7 @@ var shippedPluginBinaries = []struct{ moduleDir, pkg, name string }{
 // binary run rather than once per call: this file's two tests each mount a
 // fresh copy, and each was separately rebuilding all four.
 func buildSharedShippedPluginBinaries(root string) (string, error) {
-	sharedShippedPluginBinariesOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "plect-shipped-plugin-bin-")
-		if err != nil {
-			sharedShippedPluginBinariesErr = err
-			return
-		}
-		sharedShippedPluginBinariesDir = dir
-		for _, b := range shippedPluginBinaries {
-			cmd := exec.Command("go", "build", "-o", filepath.Join(dir, b.name), b.pkg)
-			cmd.Dir = filepath.Join(root, b.moduleDir)
-			cmd.Env = append(os.Environ(), goToolCachesForE2E...)
-			cmd.Stdout = os.Stderr
-			cmd.Stderr = os.Stderr
-			if err := cmd.Run(); err != nil {
-				sharedShippedPluginBinariesErr = fmt.Errorf("build %s: %w", b.name, err)
-				return
-			}
-		}
-	})
-	return sharedShippedPluginBinariesDir, sharedShippedPluginBinariesErr
+	return sharedShippedPluginBinaries.build(root, shippedPluginBinaries, goToolCachesForE2E)
 }
 
 // buildGithubPluginBinaries symlinks the shared binaries (see
@@ -182,6 +163,34 @@ func TestBuildShippedPluginBinaries_BuildsOnce(t *testing.T) {
 	}
 	if !secondInfo.ModTime().Equal(firstInfo.ModTime()) {
 		t.Error("plect was rebuilt on a second mount request; shipped plugin binaries must build exactly once per test binary run")
+	}
+}
+
+// TestOnceBuiltBinaries_RecordsDirBeforeBuildsFinish uses its own
+// onceBuiltBinaries value (not the package's shared singleton, which a
+// forced failure here would otherwise poison for every other test in this
+// run) to pin the fix in buildSharedShippedPluginBinaries: a build failing
+// partway through the list must still leave dir set to where the binaries
+// built before it live, so a caller (TestMain here) can clean up the
+// partial result rather than leaking it.
+func TestOnceBuiltBinaries_RecordsDirBeforeBuildsFinish(t *testing.T) {
+	var o onceBuiltBinaries
+	root := repoRootForE2E(t)
+	binaries := []struct{ moduleDir, pkg, name string }{
+		{"app", "./cmd/plect", "plect"},
+		{"app", "./cmd/this-package-does-not-exist", "nope"},
+	}
+
+	dir, err := o.build(root, binaries, goToolCachesForE2E)
+	if err == nil {
+		t.Fatal("expected an error building a nonexistent package")
+	}
+	if dir == "" {
+		t.Fatal("dir must be recorded even though a later build failed, so it can be cleaned up")
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	if _, statErr := os.Stat(filepath.Join(dir, "plect")); statErr != nil {
+		t.Errorf("the binary built before the failure should exist: %v", statErr)
 	}
 }
 
