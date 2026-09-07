@@ -28,12 +28,12 @@ can still accommodate this restructuring cheaply; the live host cutover
 this schema will serve cannot, once real allocations exist under the old
 model.
 
-Three security-relevant obligations apply to whatever this record becomes:
-retained cleanup assets and their integrity/modification story; sensitive
-setup inputs/environment must not leak through inspection, Web, MCP, or
-audit surfaces by default; and a destructive cleanup's target-identity
-check is an adapter's job, not something core invents a generic framework
-for.
+The issue that opened this work also raised adjacent security-relevant
+questions (retained cleanup asset integrity, sensitive-data disclosure,
+adapter-side cleanup target identity). The owner later ruled those out of
+this decision's acceptance, tracked instead by
+[#513](https://github.com/kecbigmt/plecture/issues/513): this decision is
+the execution-identity data model alone.
 
 ## Decision
 
@@ -126,42 +126,32 @@ currently means. Release order follows each execution's own recorded
 falling back to ascending `Seq` to break ties and, for the whole list, on
 an unexpected cycle) instead of ascending `Seq` alone.
 
-### Security obligations disposition
+### Substrate this decision leaves for #513
 
-- **Retained cleanup assets.** The retained contract is a JSON snapshot of
-  already-declared config values (`lang.Action`, `config.OutputBinding`),
-  stored in the same database rows as every other execution fact, under
-  the same write authority (the process holding the SQLite write lock) —
-  no separate artifact store, and no new write path outside the existing
-  `writeTasksTx`. `plugin_ref`'s content revision identifies *which*
-  plugin content a cleanup action ran against, and `task.RunCleanup`
-  actively checks it: a plain node's cleanup refuses to run at all when the
-  currently mounted plugin's revision has drifted from what setup recorded,
-  rather than running against different content silently. This check does
-  not itself guarantee the original content remains reachable if the
-  catalog has since been garbage collected, and a managed retention store
-  for that guarantee is explicitly deferred — no consumer needs it yet, and
-  Nix-style GC-root retention is a real but separate design, not a
-  byproduct of this schema change. The same revision check is not yet
+This decision's retained facts and checks are the substrate
+[#513](https://github.com/kecbigmt/plecture/issues/513) builds its own
+acceptance on top of, not acceptance criteria of this decision itself:
+
+- `cleanup_json`/`execution_dir`/`plugin_ref` are a JSON snapshot of
+  already-declared config values, stored in the same database rows as
+  every other execution fact, under the same write authority (the process
+  holding the SQLite write lock) — no separate artifact store, and no new
+  write path outside the existing `writeTasksTx`.
+- `plugin_ref`'s content revision identifies *which* plugin content a
+  cleanup action ran against, and `task.RunCleanup` checks it: a plain
+  node's cleanup refuses to run when the currently mounted plugin's
+  revision has drifted from what setup recorded. The same check is not
   wired for a nested node's per-layer cleanup, since
-  `effect.RetainedLayerCleanup` does not yet retain a per-layer
-  `plugin_ref` at all — a scoped follow-up, not attempted here.
-- **Sensitive setup inputs/environment.** `ExecutionDir`, `PluginRef`, and
-  `Cleanup` are excluded from `contracts/state.TaskState`/`LayerState`'s
-  ordinary JSON output (`json:"-"`), so they never reach the Web UI, an MCP
-  tool response, or `plect status --json` by default. This does not extend
-  to `inputs_json`/`outputs_json`, which already round-trip through those
-  surfaces today for every existing table; a general secret-marking
-  mechanism for declaration-owned inputs is a separate concern with no
-  concrete consumer in this change, deferred rather than built
-  speculatively.
-- **Cleanup target identity.** Core retains the same resource-identifying
-  facts it always did (`resource`, `outputs`) on the execution record; it
-  does not gain, and does not attempt, a generic ownership-verification
-  framework. Which check an adapter must run before a destructive cleanup
-  (comparing a live resource's own identity against what setup recorded)
-  remains that adapter's own contract, entirely outside `plugins/*` code
-  this change touches.
+  `effect.RetainedLayerCleanup` does not retain a per-layer `plugin_ref`.
+- `ExecutionDir`, `PluginRef`, and `Cleanup` are excluded from
+  `contracts/state.TaskState`/`LayerState`'s ordinary JSON output
+  (`json:"-"`), so they do not reach the Web UI, an MCP tool response, or
+  `plect status --json` by default. `inputs_json`/`outputs_json` are not
+  excluded, and already round-trip through those surfaces for every
+  existing table.
+- The execution record carries the same resource-identifying facts
+  (`resource`, `outputs`) every prior shape did; it carries no
+  ownership-verification framework, generic or otherwise.
 
 ## Consequences
 
@@ -190,19 +180,25 @@ an unexpected cycle) instead of ascending `Seq` alone.
   per-plugin entry), not a general artifact store; the same revision check
   cleanup now performs is not yet extended to a nested node's per-layer
   cleanup, since layers don't retain a per-layer `plugin_ref` at all.
-- A same-pass liveness-invalidate-then-rebuild (an already-`produced` node
-  whose liveness probe fails, is cleaned up, and is immediately re-set-up
-  within the same `RunSetup` call) still collapses onto the released row's
-  own id instead of minting a fresh one: `task.RunSetup` holds one
-  in-memory `TaskState` per node id and cannot represent "old row now
-  cleaned" and "new row just produced" at the same time, so the
-  intermediate release is never itself persisted before the rebuild's own
-  write. Closing this fully needs either a persistence dependency inside
-  `RunSetup` to checkpoint the release before rebuilding, or a data-model
-  change letting one write carry more than one execution per node id —
-  both larger than this change's scope; the `ExecutionID` guard above
-  still protects the case that guard exists for (a genuinely different
-  writer racing the same node), just not this same-writer, same-pass one.
+- Two identity gaps remain, tracked by [#513](https://github.com/kecbigmt/plecture/issues/513), not by this change:
+  - A same-pass liveness-invalidate-then-rebuild (an already-`produced`
+    node whose liveness probe fails, is cleaned up, and is immediately
+    re-set-up within the same `RunSetup` call) collapses onto the released
+    row's own id instead of minting a fresh one: `task.RunSetup` holds one
+    in-memory `TaskState` per node id and cannot represent "old row now
+    cleaned" and "new row just produced" at the same time, so the
+    intermediate release is never itself persisted before the rebuild's
+    own write. Closing this needs either a persistence dependency inside
+    `RunSetup` to checkpoint the release before rebuilding, or a
+    data-model change letting one write carry more than one execution per
+    node id.
+  - A fresh setup attempt (`ExecutionID` empty, since it has no row to
+    name) that finds an unreleased row already present at write time
+    cannot distinguish "a different writer created this concurrently"
+    from the same-pass case above, so it updates that row in place rather
+    than refusing. The `ExecutionID` guard protects the case it exists
+    for — a writer that names a specific row it read — not this
+    no-prior-identity one.
 
 ## Alternatives considered
 

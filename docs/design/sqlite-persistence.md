@@ -294,18 +294,19 @@ already `'cleaned'`, which is a caller re-persisting a checkpoint it already
 wrote, not a conflict. Resolving by id rather than "current unreleased"
 is also what lets that re-persist target the same row instead of minting a
 duplicate cleaned one, since the "current unreleased" query would no longer
-see it. A write whose `ExecutionID` is empty makes no claim about
-continuing a specific row, so it instead falls back to "the current
-unreleased row for this node_id, if any" — update in place, or insert a
-fresh row when none exists. This fallback cannot always distinguish a
-genuinely new first attempt from a same-pass liveness-invalidate-then-
-rebuild (whose intermediate release was never itself persisted, since
-`task.RunSetup` operates on one in-memory state per node id and cannot
-represent "old row now cleaned" and "new row just produced" at once): both
-land on the same unreleased row it finds, collapsing what should be two
-generations into an update of the first. This is a known limitation, not
-something the fallback can safely resolve from the information available to
-it alone — see the ADR's Consequences section.
+see it. A write whose `ExecutionID` is empty makes no claim about continuing a
+specific row, so it instead falls back to "the current unreleased row for
+this node_id, if any" — update in place, or insert a fresh row when none
+exists. Two identity gaps live in this fallback, tracked by
+[#513](https://github.com/kecbigmt/plecture/issues/513) rather than
+closed here: a same-pass liveness-invalidate-then-rebuild's
+intermediate release is never itself persisted (`task.RunSetup` operates on
+one in-memory state per node id and cannot represent "old row now cleaned"
+and "new row just produced" at once), so it collapses onto an update of the
+released row instead of minting a fresh generation; and a genuinely new
+first attempt racing a different writer's concurrent setup of the same node
+lands on the same fallback and cannot tell the two cases apart either. See
+the ADR's Consequences section.
 
 Release is the only thing that clears a node: `service.unifiedTeardownList`
 enumerates every unreleased execution directly from `session.Nodes` — not

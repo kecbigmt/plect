@@ -1,7 +1,10 @@
 -- +goose Up
--- Hand-written: see doc.go. PRAGMA foreign_keys is a no-op inside goose's
--- own transaction, so node_instances is renamed out of the way (never
--- dropped) before node_executions' FK ever names the live table.
+-- Hand-written: a one-time owner-granted exception to schema.sql's
+-- Atlas-only rule, for this migration's data-preserving DML alone (see
+-- doc.go and 2026-09-07-node-execution-identity.md). PRAGMA foreign_keys
+-- is a no-op inside goose's own transaction, so node_instances is renamed
+-- out of the way (never dropped) before node_executions' FK ever names
+-- the live table.
 PRAGMA foreign_keys = off;
 ALTER TABLE `node_instances` RENAME TO `old_node_instances`;
 CREATE TABLE `node_instances` (`session_id` text NOT NULL, `node_id` text NOT NULL, PRIMARY KEY (`session_id`, `node_id`), CONSTRAINT `0` FOREIGN KEY (`session_id`) REFERENCES `sessions` (`id`) ON UPDATE NO ACTION ON DELETE CASCADE);
