@@ -375,7 +375,7 @@ func TestUp_ResolverAutoCreate(t *testing.T) {
 		t.Errorf("SessionName = %q, want org/repo-88+gh (workflow-id default tag)", result.SessionName)
 	}
 	s := store.Get("org/repo-88+gh")
-	if st := s.Tasks[contract.WorkflowPseudoNodeID]; st == nil || st.Status != contract.TaskStatusProduced {
+	if st := s.Nodes[contract.WorkflowPseudoNodeID]; st == nil || st.Status != contract.TaskStatusProduced {
 		t.Fatalf("auto-create did not run workflow setup: %+v", st)
 	}
 }

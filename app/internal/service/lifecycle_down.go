@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/config"
+	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/state"
 	"github.com/kecbigmt/plecture/app/internal/task"
 	contract "github.com/kecbigmt/plecture/contracts/state"
@@ -38,6 +39,9 @@ func Down(cfg *config.Config, store *state.Store, params DownParams) (*DownResul
 	if guardErr := checkLifecycleRelationGuard(store, sessionName, "down"); guardErr != nil {
 		return nil, guardErr
 	}
+	if session.Nodes == nil {
+		session.Nodes = make(map[string]*contract.TaskState)
+	}
 	if session.Tasks == nil {
 		session.Tasks = make(map[string]*contract.TaskState)
 	}
@@ -58,7 +62,7 @@ func Down(cfg *config.Config, store *state.Store, params DownParams) (*DownResul
 	if teardownErr != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: teardownErr.Error()}
 	}
-	cleanupErr := task.RunCleanup(context.Background(), teardown, sessionVars(cfg, session, plan), session.Tasks, params.Observer)
+	cleanupErr := runTaskCleanup(context.Background(), teardown, sessionVars(cfg, session, plan), session, params.Observer)
 	session.UpdatedAt = time.Now()
 	session.Status = contract.SessionStatusDown
 	if err := store.Put(session); err != nil {
@@ -68,5 +72,5 @@ func Down(cfg *config.Config, store *state.Store, params DownParams) (*DownResul
 		return nil, &Error{Code: ErrExecutionFailed, Message: cleanupErr.Error()}
 	}
 	recordLifecycle(store, sessionName, "down", "run-scoped tasks cleaned")
-	return &DownResult{SessionName: sessionName, Tasks: session.Tasks}, nil
+	return &DownResult{SessionName: sessionName, Tasks: domain.MergedTasks(session)}, nil
 }

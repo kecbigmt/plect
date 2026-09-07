@@ -59,7 +59,7 @@ func listEvents(t *testing.T, store *state.Store, session, typ string) []event.E
 func TestCheckHeartbeatDeadman_NoDeclaredHeartbeatNeverEscalates(t *testing.T) {
 	store := testStore(t)
 	cfg := &config.Config{}
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "", runningTasks())
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "", runningTasks())
 	setLastTickAt(t, store, "owner/repo-1", time.Now().Add(-time.Hour))
 
 	escalated, err := CheckHeartbeatDeadman(cfg, store, "owner/repo-1", config.TickConfig{}, time.Now())
@@ -74,7 +74,7 @@ func TestCheckHeartbeatDeadman_NoDeclaredHeartbeatNeverEscalates(t *testing.T) {
 func TestCheckHeartbeatDeadman_NotYetStaleDoesNotEscalate(t *testing.T) {
 	store := testStore(t)
 	cfg := &config.Config{}
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "", runningTasks())
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "", runningTasks())
 	now := time.Now()
 	setLastTickAt(t, store, "owner/repo-1", now.Add(-2*time.Minute)) // < 3x heartbeat below
 
@@ -90,7 +90,7 @@ func TestCheckHeartbeatDeadman_NotYetStaleDoesNotEscalate(t *testing.T) {
 func TestCheckHeartbeatDeadman_RunScopeDownNeverEscalates(t *testing.T) {
 	store := testStore(t)
 	cfg := &config.Config{}
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "", nil) // no run-scoped produced task
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "", nil) // no run-scoped produced task
 	now := time.Now()
 	setLastTickAt(t, store, "owner/repo-1", now.Add(-time.Hour))
 
@@ -106,7 +106,7 @@ func TestCheckHeartbeatDeadman_RunScopeDownNeverEscalates(t *testing.T) {
 func TestCheckHeartbeatDeadman_NeverTickedJudgesStalenessFromCreatedAt(t *testing.T) {
 	store := testStore(t)
 	cfg := &config.Config{}
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "", runningTasks())
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "", runningTasks())
 	now := time.Now()
 
 	// CreatedAt was stamped ~now by seedSession — well within one window, so
@@ -151,7 +151,7 @@ func TestCheckHeartbeatDeadman_NeverTickedJudgesStalenessFromCreatedAt(t *testin
 func TestCheckHeartbeatDeadman_BackedOffSessionUsesEffectiveIntervalNotBaseHeartbeat(t *testing.T) {
 	store := testStore(t)
 	cfg := &config.Config{}
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "", runningTasks())
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "", runningTasks())
 	now := time.Now()
 
 	tick := config.TickConfig{
@@ -188,8 +188,8 @@ func TestCheckHeartbeatDeadman_BackedOffSessionUsesEffectiveIntervalNotBaseHeart
 func TestCheckHeartbeatDeadman_EscalatesToLiveParentAndDedupsWithinEpisode(t *testing.T) {
 	store := testStore(t)
 	cfg := &config.Config{}
-	seedSession(t, store, "owner/repo-orchestrator", "owner/repo", 1, "", nil)
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "", runningTasks())
+	seedSessionWithNodes(t, store, "owner/repo-orchestrator", "owner/repo", 1, "", nil)
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "", runningTasks())
 	setParent(t, store, "owner/repo-1", "owner/repo-orchestrator")
 	now := time.Now()
 	setLastTickAt(t, store, "owner/repo-1", now.Add(-time.Hour))
@@ -232,8 +232,8 @@ func TestCheckHeartbeatDeadman_EscalatesToLiveParentAndDedupsWithinEpisode(t *te
 func TestCheckHeartbeatDeadman_ResumingTicksClosesEpisodeThenStallingAgainEscalatesAnew(t *testing.T) {
 	store := testStore(t)
 	cfg := &config.Config{}
-	seedSession(t, store, "owner/repo-orchestrator", "owner/repo", 1, "", nil)
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "", runningTasks())
+	seedSessionWithNodes(t, store, "owner/repo-orchestrator", "owner/repo", 1, "", nil)
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "", runningTasks())
 	setParent(t, store, "owner/repo-1", "owner/repo-orchestrator")
 	now := time.Now()
 	setLastTickAt(t, store, "owner/repo-1", now.Add(-time.Hour))
@@ -267,7 +267,7 @@ func TestCheckHeartbeatDeadman_ResumingTicksClosesEpisodeThenStallingAgainEscala
 func TestCheckHeartbeatDeadman_NoLiveAncestorRecordsUndeliverableOnOrigin(t *testing.T) {
 	store := testStore(t)
 	cfg := &config.Config{}
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "", runningTasks()) // no parent at all
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "", runningTasks()) // no parent at all
 	now := time.Now()
 	setLastTickAt(t, store, "owner/repo-1", now.Add(-time.Hour))
 

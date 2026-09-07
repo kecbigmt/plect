@@ -147,7 +147,7 @@ func EvaluateHealth(cfg *config.Config, store *state.Store, name string) (Health
 		healthCfg = config.NormalizeHealthcheckConfig(wf.Healthcheck)
 	}
 	nodes := nodeAddresses(cfg, s)
-	plan, err := healthTerminalPlan(s.Tasks, nodes, defs)
+	plan, err := healthTerminalPlan(s.Nodes, nodes, defs)
 	if err != nil {
 		return HealthReport{}, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("resolve terminal binding: %v", err)}
 	}
@@ -156,7 +156,7 @@ func EvaluateHealth(cfg *config.Config, store *state.Store, name string) (Health
 	// current plan up" (reactor, dispatch, and population capacity all go
 	// through it too), so the structural gate below defers to it rather than
 	// deriving its own answer.
-	report := evaluateHealthFor(name, cfg.RunScopeUp(s), s.Tasks, docs, defs, nodes, sessionVars(cfg, s, plan), healthCfg.StallThreshold.Duration, s.Health, now)
+	report := evaluateHealthFor(name, cfg.RunScopeUp(s), domain.MergedTasks(s), docs, defs, nodes, sessionVars(cfg, s, plan), healthCfg.StallThreshold.Duration, s.Health, now)
 	finalizeActivityObservation(&report, s.Health, healthCfg.StallThreshold.Duration, now)
 	persistHealthState(store, name, report, now)
 	return report, nil
@@ -177,8 +177,8 @@ func sessionWorkflowConfig(cfg *config.Config, workflowID, workspaceDirPath stri
 // currentPlanRunScopedNodeIDs returns every run-scoped node the session's
 // frozen workflow currently declares, sorted for a deterministic
 // first-failure report. A node the workflow no longer declares is absent
-// from this list regardless of what session.Tasks still holds for it, which
-// is what makes a stale task entry inert to health.
+// from this list regardless of what session.Nodes still holds for it, which
+// is what makes a stale node entry inert to health.
 func currentPlanRunScopedNodeIDs(nodes map[string]string, defs map[string]config.TaskDefinition) []string {
 	var ids []string
 	for id, address := range nodes {
@@ -192,11 +192,11 @@ func currentPlanRunScopedNodeIDs(nodes map[string]string, defs map[string]config
 	return ids
 }
 
-func healthTerminalPlan(tasks map[string]*contract.TaskState, nodes map[string]string, defs map[string]config.TaskDefinition) (*task.Plan, error) {
+func healthTerminalPlan(nodeStates map[string]*contract.TaskState, nodes map[string]string, defs map[string]config.TaskDefinition) (*task.Plan, error) {
 	var terminal *task.Resolved
-	for _, key := range sortedTaskKeys(tasks) {
-		st := tasks[key]
-		if st == nil || st.Status != contract.TaskStatusProduced || st.Dynamic {
+	for _, key := range sortedTaskKeys(nodeStates) {
+		st := nodeStates[key]
+		if st == nil || st.Status != contract.TaskStatusProduced {
 			continue
 		}
 		address, ok := nodes[key]
@@ -334,7 +334,7 @@ func evaluateHealthFor(name string, gateOpen bool, tasks map[string]*contract.Ta
 				continue
 			}
 
-			def := defs[instanceDefinitionAddress(nodeID, st, nodes)]
+			def := defs[instanceDefinitionAddress(nodeID, st, false, nodes)]
 			comp, compErr := composeInstance(def, st, vars)
 			if compErr != nil {
 				probeErrors = append(probeErrors, ProbeError{Instance: nodeID, Reason: compErr.Error()})

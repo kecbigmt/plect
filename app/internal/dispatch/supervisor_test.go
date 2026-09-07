@@ -83,7 +83,7 @@ include     = ["plect.instruction"]
 	sock, _ := startFakeSocket(t)
 	if err := stateStore.Put(&domain.Session{
 		Name: "o/r-1", Workflow: "coding", WorkspaceDirPath: t.TempDir(),
-		Tasks: map[string]*contract.TaskState{
+		Nodes: map[string]*contract.TaskState{
 			"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Outputs: map[string]any{"socket_path": sock}},
 		},
 	}); err != nil {
@@ -116,7 +116,7 @@ include     = ["plect.instruction"]
 
 	// Run scope goes down → supervisor cancels (suspend, not teardown).
 	if err := stateStore.Update("o/r-1", func(s *domain.Session) error {
-		s.Tasks["claude"].Status = contract.TaskStatusCleaned
+		s.Nodes["claude"].Status = contract.TaskStatusCleaned
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -178,7 +178,7 @@ include     = ["plect.instruction"]
 	sock, _ := startFakeSocket(t)
 	if err := stateStore.Put(&domain.Session{
 		Name: "o/r-1", Workflow: "coding", WorkspaceDirPath: t.TempDir(),
-		Tasks: map[string]*contract.TaskState{
+		Nodes: map[string]*contract.TaskState{
 			"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Outputs: map[string]any{"socket_path": sock}},
 		},
 	}); err != nil {
@@ -256,7 +256,7 @@ include     = ["plect.instruction"]
 	stateStore := state.NewStore(t.TempDir())
 	if err := stateStore.Put(&domain.Session{
 		Name: "o/r-1", Workflow: "coding", WorkspaceDirPath: t.TempDir(),
-		Tasks: map[string]*contract.TaskState{
+		Nodes: map[string]*contract.TaskState{
 			"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced},
 		},
 	}); err != nil {
@@ -335,7 +335,7 @@ include     = ["plect.instruction"]
 	stateStore := state.NewStore(t.TempDir())
 	if err := stateStore.Put(&domain.Session{
 		Name: "o/r-1", Workflow: "coding", WorkspaceDirPath: t.TempDir(),
-		Tasks: map[string]*contract.TaskState{
+		Nodes: map[string]*contract.TaskState{
 			"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced},
 		},
 	}); err != nil {
@@ -367,7 +367,7 @@ include     = ["plect.instruction"]
 	// then run scope comes back up: buildDispatcher re-validates on this
 	// fresh up-transition.
 	if err := stateStore.Update("o/r-1", func(s *domain.Session) error {
-		s.Tasks["claude"].Status = contract.TaskStatusCleaned
+		s.Nodes["claude"].Status = contract.TaskStatusCleaned
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -388,7 +388,7 @@ body = { json = { from = "event" } }
 path = { type = "string", required = true }
 `)
 	if err := stateStore.Update("o/r-1", func(s *domain.Session) error {
-		s.Tasks["claude"].Status = contract.TaskStatusProduced
+		s.Nodes["claude"].Status = contract.TaskStatusProduced
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -452,7 +452,7 @@ include     = ["plect.instruction"]
 	sock, _ := startFakeSocket(t)
 	if err := stateStore.Put(&domain.Session{
 		Name: "o/r-1", Workflow: "coding", WorkspaceDirPath: t.TempDir(),
-		Tasks: map[string]*contract.TaskState{
+		Nodes: map[string]*contract.TaskState{
 			"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Outputs: map[string]any{"socket_path": sock}},
 		},
 	}); err != nil {
@@ -542,7 +542,7 @@ include     = ["plect.instruction"]
 	sock, recv := startFakeSocket(t)
 	if err := stateStore.Put(&domain.Session{
 		Name: "o/r-1", Workflow: "coding", WorkspaceDirPath: t.TempDir(),
-		Tasks: map[string]*contract.TaskState{
+		Nodes: map[string]*contract.TaskState{
 			"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Outputs: map[string]any{"socket_path": sock}},
 		},
 	}); err != nil {

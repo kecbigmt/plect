@@ -82,7 +82,7 @@ func TestConfig_RunScopeUp_ProducedCurrentPlanNodeIsUp(t *testing.T) {
 	cfg := &Config{BaseDir: base}
 	s := &domain.Session{
 		Workflow: "default",
-		Tasks: map[string]*contract.TaskState{
+		Nodes: map[string]*contract.TaskState{
 			"pane": {Scope: contract.TaskScopeRun, TaskID: "pane", Status: contract.TaskStatusProduced},
 		},
 	}

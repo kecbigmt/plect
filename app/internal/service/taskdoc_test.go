@@ -640,7 +640,7 @@ func TestSetOutput_TaskDocumentInstanceNamesTheStateWritePath(t *testing.T) {
 	store := testStore(t)
 	cfg := writeTaskDocumentFixture(t, t.TempDir(), "wf", map[string]string{"resource_kind": "pull", "revision": "sha2"}, reviewDocument)
 	seedSession(t, store, "org/repo-1", "org/repo", 1, "wf", map[string]*contract.TaskState{
-		"review#1": {Scope: contract.TaskScopeSession, TaskID: "review", Status: contract.TaskStatusProduced, Dynamic: true, SetupAt: time.Now()},
+		"review#1": {Scope: contract.TaskScopeSession, TaskID: "review", Status: contract.TaskStatusProduced, SetupAt: time.Now()},
 	})
 	_, err := SetOutput(cfg, store, SetOutputParams{
 		Identifier: "org/repo-1", Task: "review#1", Outputs: map[string]any{"verdict_revision": "sha2"},
@@ -730,7 +730,7 @@ func TestSetOutput_ReportsAnUnloadableDocument(t *testing.T) {
 		t.Fatal(err)
 	}
 	seedSession(t, store, "org/repo-1", "org/repo", 1, "wf", map[string]*contract.TaskState{
-		"watch#1": {Scope: contract.TaskScopeSession, TaskID: "watch", Status: contract.TaskStatusProduced, Dynamic: true, SetupAt: time.Now()},
+		"watch#1": {Scope: contract.TaskScopeSession, TaskID: "watch", Status: contract.TaskStatusProduced, SetupAt: time.Now()},
 	})
 	_, err := SetOutput(cfg, store, SetOutputParams{
 		Identifier: "org/repo-1", Task: "watch#1", Outputs: map[string]any{"pr_state": "merged"},

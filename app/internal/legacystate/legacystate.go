@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/kecbigmt/plecture/app/internal/domain"
+	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
 // SupportedVersion is the last state.json envelope version core ever wrote.
@@ -75,9 +76,66 @@ func Parse(data []byte) (*StateFile, error) {
 		migrateResourceID(session)
 		sf.Sessions[name] = session
 	}
+	splitLegacyTasks(sf.Sessions, legacyDynamicFlags(data))
 	normalizeSessionTree(sf.Sessions)
 
 	return sf, nil
+}
+
+// legacyDynamicFlags re-derives Dynamic — a per-entry field the version-7
+// envelope wrote but contract.TaskState no longer declares — from the raw
+// bytes, keyed by session name then task/node key, so Parse can split a flat
+// legacy "tasks" map into today's Nodes/Tasks collections.
+func legacyDynamicFlags(data []byte) map[string]map[string]bool {
+	var raw struct {
+		Sessions map[string]struct {
+			Tasks map[string]struct {
+				IsTask bool `json:"dynamic"`
+			} `json:"tasks"`
+		} `json:"sessions"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil
+	}
+	out := make(map[string]map[string]bool, len(raw.Sessions))
+	for name, session := range raw.Sessions {
+		flags := make(map[string]bool, len(session.Tasks))
+		for key, t := range session.Tasks {
+			flags[key] = t.IsTask
+		}
+		out[name] = flags
+	}
+	return out
+}
+
+// splitLegacyTasks partitions each session's flat legacy task map (decoded
+// wholesale into Tasks, since Nodes did not exist in the version-7 envelope)
+// into today's Nodes/Tasks by dynamicFlagsBySession; an unflagged key
+// defaults to a node, matching the retired field's own zero value.
+func splitLegacyTasks(sessions map[string]*domain.Session, dynamicFlagsBySession map[string]map[string]bool) {
+	for name, session := range sessions {
+		if session == nil || len(session.Tasks) == 0 {
+			continue
+		}
+		dynamicFlags := dynamicFlagsBySession[name]
+		nodes := make(map[string]*contract.TaskState)
+		tasks := make(map[string]*contract.TaskState)
+		for key, st := range session.Tasks {
+			if dynamicFlags[key] {
+				tasks[key] = st
+			} else {
+				nodes[key] = st
+			}
+		}
+		if len(nodes) == 0 {
+			nodes = nil
+		}
+		if len(tasks) == 0 {
+			tasks = nil
+		}
+		session.Nodes = nodes
+		session.Tasks = tasks
+	}
 }
 
 // parseHeartbeatLogPositions re-scans data for a field contract.TickBackoff no longer declares.

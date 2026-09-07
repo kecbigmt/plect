@@ -69,10 +69,10 @@ func (c *Config) RunScopeUp(s *domain.Session) bool {
 	}
 	current, ok := c.CurrentPlanRunScopedNodeSet(s)
 	if !ok {
-		return anyProducedRunScopedTaskState(s.Tasks)
+		return anyProducedRunScopedTaskState(domain.MergedTasks(s))
 	}
 	for id := range current {
-		st := s.Tasks[id]
+		st := s.Nodes[id]
 		if st != nil && st.Scope == TaskScopeRun && st.Status == contract.TaskStatusProduced {
 			return true
 		}

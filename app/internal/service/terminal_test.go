@@ -13,7 +13,7 @@ import (
 func TestPublishTerminalToParent_NoParentIsNoOp(t *testing.T) {
 	store := testStore(t)
 	cfg := &config.Config{WorkspaceDirsRoot: t.TempDir()}
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "", nil)
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "", nil)
 
 	id, wakeErr, err := PublishTerminalToParent(cfg, store, "owner/repo-1", TerminalParams{
 		Type:    event.TypeTerminalDone,
@@ -33,8 +33,8 @@ func TestPublishTerminalToParent_NoParentIsNoOp(t *testing.T) {
 func TestPublishTerminalToParent_RootPrefixDeliversToRootTarget(t *testing.T) {
 	store := testStore(t)
 	cfg := &config.Config{WorkspaceDirsRoot: t.TempDir()}
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "", nil)
-	seedSession(t, store, "owner/repo-reviewer", "owner/repo", 1, "claude", nil)
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "", nil)
+	seedSessionWithNodes(t, store, "owner/repo-reviewer", "owner/repo", 1, "claude", nil)
 	setParent(t, store, "owner/repo-reviewer", "root:owner/repo-1")
 
 	id, _, err := PublishTerminalToParent(cfg, store, "owner/repo-reviewer", TerminalParams{
@@ -63,8 +63,8 @@ func TestPublishTerminalToParent_RootPrefixDeliversToRootTarget(t *testing.T) {
 func TestPublishTerminalToParent_WritesIntoParentsOwnLog(t *testing.T) {
 	store := testStore(t)
 	cfg := &config.Config{WorkspaceDirsRoot: t.TempDir()}
-	seedSession(t, store, "owner/repo-orchestrator", "owner/repo", 1, "", nil)
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "claude", nil)
+	seedSessionWithNodes(t, store, "owner/repo-orchestrator", "owner/repo", 1, "", nil)
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "claude", nil)
 	setParent(t, store, "owner/repo-1", "owner/repo-orchestrator")
 
 	// The parent has no run-scoped task, so a best-effort wake is attempted and
@@ -121,8 +121,8 @@ func TestPublishTerminalToParent_WritesIntoParentsOwnLog(t *testing.T) {
 func TestPublishTerminalToParent_DeadSummaryAlreadySelfDescribingIsNotDoubled(t *testing.T) {
 	store := testStore(t)
 	cfg := &config.Config{WorkspaceDirsRoot: t.TempDir()}
-	seedSession(t, store, "owner/repo-orchestrator", "owner/repo", 1, "", nil)
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "claude", nil)
+	seedSessionWithNodes(t, store, "owner/repo-orchestrator", "owner/repo", 1, "", nil)
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "claude", nil)
 	setParent(t, store, "owner/repo-1", "owner/repo-orchestrator")
 
 	_, _, err := PublishTerminalToParent(cfg, store, "owner/repo-1", TerminalParams{
@@ -148,8 +148,8 @@ func TestPublishTerminalToParent_DeadSummaryAlreadySelfDescribingIsNotDoubled(t 
 func TestPublishTerminalToParent_DedupSkipsRepeatedPush(t *testing.T) {
 	store := testStore(t)
 	cfg := &config.Config{WorkspaceDirsRoot: t.TempDir()}
-	seedSession(t, store, "owner/repo-orchestrator", "owner/repo", 1, "", nil)
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "claude", nil)
+	seedSessionWithNodes(t, store, "owner/repo-orchestrator", "owner/repo", 1, "", nil)
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "claude", nil)
 	setParent(t, store, "owner/repo-1", "owner/repo-orchestrator")
 
 	params := TerminalParams{
@@ -181,8 +181,8 @@ func TestPublishTerminalToParent_DedupSkipsRepeatedPush(t *testing.T) {
 func TestPublishTerminalToParent_DedupIsPerType(t *testing.T) {
 	store := testStore(t)
 	cfg := &config.Config{WorkspaceDirsRoot: t.TempDir()}
-	seedSession(t, store, "owner/repo-orchestrator", "owner/repo", 1, "", nil)
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "claude", nil)
+	seedSessionWithNodes(t, store, "owner/repo-orchestrator", "owner/repo", 1, "", nil)
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "claude", nil)
 	setParent(t, store, "owner/repo-1", "owner/repo-orchestrator")
 
 	sameKey := "initial|any|fpA"
@@ -205,10 +205,10 @@ func TestPublishTerminalToParent_DedupIsPerType(t *testing.T) {
 func TestPublishTerminalToParent_RunScopeUpTargetIsNotWoken(t *testing.T) {
 	store := testStore(t)
 	cfg := &config.Config{WorkspaceDirsRoot: t.TempDir()}
-	seedSession(t, store, "owner/repo-orchestrator", "owner/repo", 1, "", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-orchestrator", "owner/repo", 1, "", map[string]*contract.TaskState{
 		"tmux": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced},
 	})
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "claude", nil)
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "claude", nil)
 	setParent(t, store, "owner/repo-1", "owner/repo-orchestrator")
 
 	// The parent's run scope is already up: publishTerminalTo must not attempt
@@ -223,9 +223,9 @@ func TestPublishTerminalToParent_RunScopeUpTargetIsNotWoken(t *testing.T) {
 	if wakeErr != nil {
 		t.Fatalf("wakeErr = %v, want nil (target already up, no wake attempted)", wakeErr)
 	}
-	tasks := store.Get("owner/repo-orchestrator").Tasks
-	if len(tasks) != 1 {
-		t.Fatalf("parent tasks mutated: %+v, want untouched single tmux task", tasks)
+	nodes := store.Get("owner/repo-orchestrator").Nodes
+	if len(nodes) != 1 {
+		t.Fatalf("parent nodes mutated: %+v, want untouched single tmux node", nodes)
 	}
 }
 
@@ -237,8 +237,8 @@ func TestPublishTerminalToParent_DownTargetWakeFailureIsReturnedButDoesNotBreakT
 	// internally — the push itself must still have succeeded and been
 	// recorded (err is nil), but the wake failure must now be observable via
 	// wakeErr rather than silently discarded.
-	seedSession(t, store, "owner/repo-orchestrator", "owner/repo", 1, "", nil)
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "claude", nil)
+	seedSessionWithNodes(t, store, "owner/repo-orchestrator", "owner/repo", 1, "", nil)
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "claude", nil)
 	setParent(t, store, "owner/repo-1", "owner/repo-orchestrator")
 
 	id, wakeErr, err := PublishTerminalToParent(cfg, store, "owner/repo-1", TerminalParams{
@@ -266,7 +266,7 @@ func TestPublishTerminalTo_SelfTargetNeverWakesRegardlessOfCallerRequest(t *test
 	cfg := &config.Config{WorkspaceDirsRoot: t.TempDir()}
 	// No workflow configured, so an attempted Up would fail loudly — proving
 	// absence of a wake attempt (wakeErr == nil) rather than merely a failed one.
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "", nil)
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "", nil)
 
 	id, wakeErr, err := publishTerminalTo(cfg, store, "owner/repo-1", "owner/repo-1", true, TerminalParams{
 		Type:     event.TypeTerminalDead,

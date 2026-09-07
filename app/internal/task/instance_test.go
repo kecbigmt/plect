@@ -25,7 +25,7 @@ func TestInstanceKey(t *testing.T) {
 
 func TestNextInstanceNumber(t *testing.T) {
 	produced := func() *contract.TaskState {
-		return &contract.TaskState{Status: contract.TaskStatusProduced, Dynamic: true}
+		return &contract.TaskState{Status: contract.TaskStatusProduced}
 	}
 
 	t.Run("empty starts at 1", func(t *testing.T) {
@@ -50,8 +50,8 @@ func TestNextInstanceNumber(t *testing.T) {
 
 	t.Run("monotonic across cleaned (no reuse)", func(t *testing.T) {
 		tasks := map[string]*contract.TaskState{
-			"review#1": {Status: contract.TaskStatusCleaned, Dynamic: true},
-			"review#2": {Status: contract.TaskStatusCleaned, Dynamic: true},
+			"review#1": {Status: contract.TaskStatusCleaned},
+			"review#2": {Status: contract.TaskStatusCleaned},
 		}
 		if got := NextInstanceNumber("review", tasks); got != 3 {
 			t.Errorf("got %d, want 3 (cleaned instances still occupy numbers)", got)
@@ -141,7 +141,7 @@ func TestRunCleanup_DynamicInstanceReadsItsOwnOutputs(t *testing.T) {
 		},
 	}}
 	tasks := map[string]*contract.TaskState{
-		"review#1": {Scope: "session", Status: contract.TaskStatusProduced, Dynamic: true, Resource: "pr-99", Outputs: map[string]any{"resource": "pr-99"}},
+		"review#1": {Scope: "session", Status: contract.TaskStatusProduced, Resource: "pr-99", Outputs: map[string]any{"resource": "pr-99"}},
 	}
 	if err := RunCleanup(context.Background(), []Resolved{r}, SessionVars{ResourceID: "session-res"}, tasks, nil); err != nil {
 		t.Fatalf("RunCleanup: %v", err)

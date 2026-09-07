@@ -170,6 +170,9 @@ func Up(cfg *config.Config, store *state.Store, params UpParams) (*UpResult, err
 			return nil, guardErr
 		}
 	}
+	if session.Nodes == nil {
+		session.Nodes = make(map[string]*contract.TaskState)
+	}
 	if session.Tasks == nil {
 		session.Tasks = make(map[string]*contract.TaskState)
 	}
@@ -191,7 +194,7 @@ func Up(cfg *config.Config, store *state.Store, params UpParams) (*UpResult, err
 	} else if cleanupErr := cleanupStaleWorkflowNodes(cfg, store, sessionName, session, plan, params.Observer); cleanupErr != nil {
 		return nil, cleanupErr
 	}
-	setupErr := task.RunSetup(context.Background(), plan.UpOrder(), sessionVars(cfg, session, plan), session.Tasks, params.Observer)
+	setupErr := runNodeSetup(context.Background(), plan.UpOrder(), sessionVars(cfg, session, plan), session, params.Observer)
 	session.UpdatedAt = time.Now()
 	// A run-scope node's setup script can itself shell out to a nested `plect
 	// task setup` against this same session (e.g. goal_bootstrap re-deriving
@@ -220,7 +223,7 @@ func Up(cfg *config.Config, store *state.Store, params UpParams) (*UpResult, err
 		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to record session status: %v", err)}
 	}
 	recordLifecycle(store, sessionName, "up", "run-scoped tasks produced")
-	return &UpResult{SessionName: sessionName, Tasks: session.Tasks}, nil
+	return &UpResult{SessionName: sessionName, Tasks: domain.MergedTasks(session)}, nil
 }
 
 func cleanupStaleWorkflowNodes(cfg *config.Config, store *state.Store, sessionName string, session *domain.Session, plan *task.Plan, observer task.Observer) error {
@@ -231,7 +234,7 @@ func cleanupStaleWorkflowNodes(cfg *config.Config, store *state.Store, sessionNa
 	if len(stale) == 0 {
 		return nil
 	}
-	cleanupErr := task.RunCleanup(context.Background(), stale, sessionVars(cfg, session, plan), session.Tasks, observer)
+	cleanupErr := runTaskCleanup(context.Background(), stale, sessionVars(cfg, session, plan), session, observer)
 	session.UpdatedAt = time.Now()
 	if err := persistStaleWorkflowCleanup(store, sessionName, session, stale); err != nil {
 		return &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to save session state: %v", err)}
@@ -240,6 +243,9 @@ func cleanupStaleWorkflowNodes(cfg *config.Config, store *state.Store, sessionNa
 		slog.Warn("read session state for post-cleanup refresh failed; returning the pre-refresh view", "session", sessionName, "error", err)
 	} else if refreshed != nil {
 		*session = *refreshed
+		if session.Nodes == nil {
+			session.Nodes = make(map[string]*contract.TaskState)
+		}
 		if session.Tasks == nil {
 			session.Tasks = make(map[string]*contract.TaskState)
 		}
@@ -252,19 +258,19 @@ func cleanupStaleWorkflowNodes(cfg *config.Config, store *state.Store, sessionNa
 
 func persistStaleWorkflowCleanup(store *state.Store, sessionName string, session *domain.Session, stale []task.Resolved) error {
 	return store.Update(sessionName, func(s *domain.Session) error {
-		if s.Tasks == nil {
-			s.Tasks = make(map[string]*contract.TaskState)
+		if s.Nodes == nil {
+			s.Nodes = make(map[string]*contract.TaskState)
 		}
 		for _, r := range stale {
-			st := session.Tasks[r.NodeID]
+			st := session.Nodes[r.NodeID]
 			if st == nil {
 				continue
 			}
 			if st.Status == contract.TaskStatusCleaned {
-				delete(s.Tasks, r.NodeID)
+				delete(s.Nodes, r.NodeID)
 				continue
 			}
-			s.Tasks[r.NodeID] = st
+			s.Nodes[r.NodeID] = st
 		}
 		s.UpdatedAt = session.UpdatedAt
 		return nil
@@ -272,7 +278,7 @@ func persistStaleWorkflowCleanup(store *state.Store, sessionName string, session
 }
 
 func staleProducedWorkflowNodes(cfg *config.Config, session *domain.Session, plan *task.Plan) ([]task.Resolved, error) {
-	if session == nil || len(session.Tasks) == 0 {
+	if session == nil || len(session.Nodes) == 0 {
 		return nil, nil
 	}
 	current := make(map[string]bool)
@@ -288,9 +294,9 @@ func staleProducedWorkflowNodes(cfg *config.Config, session *domain.Session, pla
 		r   task.Resolved
 	}
 	var items []seqResolved
-	for _, key := range sortedTaskKeys(session.Tasks) {
-		st := session.Tasks[key]
-		if st == nil || st.Dynamic || st.Status == contract.TaskStatusCleaned || key == contract.WorkflowPseudoNodeID || current[key] {
+	for _, key := range sortedTaskKeys(session.Nodes) {
+		st := session.Nodes[key]
+		if st == nil || st.Status == contract.TaskStatusCleaned || key == contract.WorkflowPseudoNodeID || current[key] {
 			continue
 		}
 		taskID := taskIDForInstance(key, st)
@@ -327,7 +333,7 @@ func recreateSessionRuntime(cfg *config.Config, store *state.Store, sessionName 
 	if teardownErr != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: teardownErr.Error()}
 	}
-	cleanupErr := task.RunCleanup(context.Background(), teardown, sessionVars(cfg, session, teardownPlan), session.Tasks, observer)
+	cleanupErr := runTaskCleanup(context.Background(), teardown, sessionVars(cfg, session, teardownPlan), session, observer)
 	session.UpdatedAt = time.Now()
 	if cleanupErr != nil {
 		if err := mergeTasks(store, sessionName, session); err != nil {
@@ -336,7 +342,7 @@ func recreateSessionRuntime(cfg *config.Config, store *state.Store, sessionName 
 		return nil, &Error{Code: ErrExecutionFailed, Message: cleanupErr.Error()}
 	}
 
-	if wfState, ok := session.Tasks[contract.WorkflowPseudoNodeID]; ok && wfState != nil {
+	if wfState, ok := session.Nodes[contract.WorkflowPseudoNodeID]; ok && wfState != nil {
 		// Internal reset path, not an explicit operator destroy: no cleanup
 		// intents to forward.
 		if workflowCleanupErr := runWorkflowCleanupForDestroy(cfg, session, true, nil, observer); workflowCleanupErr != nil {
@@ -349,6 +355,7 @@ func recreateSessionRuntime(cfg *config.Config, store *state.Store, sessionName 
 	}
 
 	session.WorkspaceDirPath = ""
+	session.Nodes = make(map[string]*contract.TaskState)
 	session.Tasks = make(map[string]*contract.TaskState)
 	session.Health = nil
 	session.LastTickAt = time.Time{}
@@ -383,7 +390,7 @@ func recreateSessionRuntime(cfg *config.Config, store *state.Store, sessionName 
 	if err := replaceRuntimeState(store, sessionName, session); err != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to save session state: %v", err)}
 	}
-	setupErr = task.RunSetup(context.Background(), setupPlan.Session, sessionVars(cfg, session, setupPlan), session.Tasks, observer)
+	setupErr = runNodeSetup(context.Background(), setupPlan.Session, sessionVars(cfg, session, setupPlan), session, observer)
 	session.UpdatedAt = time.Now()
 	if err := mergeTasks(store, sessionName, session); err != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to save session state: %v", err)}
@@ -419,5 +426,5 @@ func runWorkflowSetupForSession(cfg *config.Config, wf config.WorkflowFile, sess
 		Plugins:           cfg.Plugins,
 		SourcePath:        prov.SourcePath,
 	}
-	return task.RunWorkflowSetup(prov, vars, session.Tasks, observer)
+	return runWorkflowSetup(prov, vars, session, observer)
 }

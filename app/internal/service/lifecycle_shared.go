@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -15,16 +16,62 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// mergeTasks persists the session by overlaying its in-memory task entries
-// onto the freshly-read on-disk session under the state lock, rather than a blind
-// Put. A nested `plect task setup` subprocess (the initial_task dispatcher) may
-// have written instances straight to disk during the parent's setup pass; a blind
-// Put of the parent's stale map would drop them. Overlaying keeps both: disk-only
-// keys survive, our keys win on overlap. Non-task fields the parent owns are
-// already persisted (this runs after the create's earlier Put), so only the
-// tasks map and UpdatedAt need writing back.
+// nameCollides reports whether name is already taken in s.Nodes/s.Tasks.
+func nameCollides(s *domain.Session, name string) bool {
+	return domain.TaskState(s, name) != nil
+}
+
+func runWorkflowSetup(prov config.WorkspaceProviderConfig, vars effect.WorkflowHookVars, session *domain.Session, observer task.Observer) (map[string]any, error) {
+	merged := domain.MergedTasks(session)
+	outputs, err := task.RunWorkflowSetup(prov, vars, merged, observer)
+	if session.Nodes == nil {
+		session.Nodes = make(map[string]*contract.TaskState)
+	}
+	if st, ok := merged[contract.WorkflowPseudoNodeID]; ok {
+		session.Nodes[contract.WorkflowPseudoNodeID] = st
+	}
+	return outputs, err
+}
+
+// A --name dynamic instance may legally occupy a node's id before that node
+// is ever produced (nameCollides only checks existing state), so runNodeSetup
+// excludes any such id from ordered before running or writing back setup
+// results — its merged entry is really that instance's record, not a node's.
+func runNodeSetup(ctx context.Context, ordered []task.Resolved, vars task.SessionVars, session *domain.Session, observer task.Observer) error {
+	nodesOnly := make([]task.Resolved, 0, len(ordered))
+	for _, r := range ordered {
+		if session.Tasks[r.NodeID] == nil {
+			nodesOnly = append(nodesOnly, r)
+		}
+	}
+	merged := domain.MergedTasks(session)
+	err := task.RunSetup(ctx, nodesOnly, vars, merged, observer)
+	if session.Nodes == nil {
+		session.Nodes = make(map[string]*contract.TaskState)
+	}
+	for _, r := range nodesOnly {
+		if st, ok := merged[r.NodeID]; ok {
+			session.Nodes[r.NodeID] = st
+		}
+	}
+	return err
+}
+
+func runTaskCleanup(ctx context.Context, ordered []task.Resolved, vars task.SessionVars, session *domain.Session, observer task.Observer) error {
+	return task.RunCleanup(ctx, ordered, vars, domain.MergedTasks(session), observer)
+}
+
+// mergeTasks persists Nodes/Tasks by overlay under the state lock rather
+// than a blind Put, so a nested `plect task setup` subprocess's disk-only
+// write during this call's own (unlocked) setup pass survives.
 func mergeTasks(store *state.Store, sessionName string, session *domain.Session) error {
 	return store.Update(sessionName, func(s *domain.Session) error {
+		if s.Nodes == nil {
+			s.Nodes = make(map[string]*contract.TaskState)
+		}
+		for k, v := range session.Nodes {
+			s.Nodes[k] = v
+		}
 		if s.Tasks == nil {
 			s.Tasks = make(map[string]*contract.TaskState)
 		}
@@ -39,6 +86,7 @@ func mergeTasks(store *state.Store, sessionName string, session *domain.Session)
 func replaceRuntimeState(store *state.Store, sessionName string, session *domain.Session) error {
 	return store.Update(sessionName, func(s *domain.Session) error {
 		s.WorkspaceDirPath = session.WorkspaceDirPath
+		s.Nodes = session.Nodes
 		s.Tasks = session.Tasks
 		s.Health = session.Health
 		s.LastTickAt = session.LastTickAt
@@ -137,7 +185,7 @@ func terminalBinding(plan *task.Plan, s *domain.Session) *task.TerminalBinding {
 		return nil
 	}
 	outputs := map[string]any{}
-	if st, ok := s.Tasks[t.NodeID]; ok && st != nil {
+	if st, ok := s.Nodes[t.NodeID]; ok && st != nil {
 		if self := effect.TerminalSelf(t.Layers, st); self != nil {
 			outputs = self
 		}
@@ -198,7 +246,7 @@ func hasIncompleteSessionTask(cfg *config.Config, session *domain.Session) bool 
 	// recover.
 	if workflows, err := cfg.LoadWorkflows(session.WorkspaceDirPath); err == nil {
 		if wf, ok := workflows[session.Workflow]; ok && wf.WorkspaceProvider != "" {
-			st, ok := session.Tasks[contract.WorkflowPseudoNodeID]
+			st, ok := session.Nodes[contract.WorkflowPseudoNodeID]
 			if !ok || st == nil || st.Status != contract.TaskStatusProduced {
 				return true
 			}
@@ -209,7 +257,7 @@ func hasIncompleteSessionTask(cfg *config.Config, session *domain.Session) bool 
 		return false
 	}
 	for _, r := range plan.Session {
-		st, ok := session.Tasks[r.NodeID]
+		st, ok := session.Nodes[r.NodeID]
 		if !ok || st == nil || st.Status != contract.TaskStatusProduced {
 			return true
 		}

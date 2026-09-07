@@ -31,7 +31,7 @@ func TestUp_RecordsNodeResultForProducedNode(t *testing.T) {
 		[]taskFixture{{id: "agent", scope: "run", setup: `echo '{}'`}},
 		[]nodeFixture{{id: "agent"}},
 	)
-	seedSession(t, store, sessionName, "acct", 1, "default", map[string]*contract.TaskState{})
+	seedSessionWithNodes(t, store, sessionName, "acct", 1, "default", map[string]*contract.TaskState{})
 
 	if _, err := Up(cfg, store, UpParams{Identifier: sessionName}); err != nil {
 		t.Fatalf("Up: %v", err)
@@ -63,7 +63,7 @@ func TestUp_RecordsNodeResultForFailedSetup(t *testing.T) {
 		[]taskFixture{{id: "agent", scope: "run", setup: `echo boom 1>&2; exit 1`}},
 		[]nodeFixture{{id: "agent"}},
 	)
-	seedSession(t, store, sessionName, "acct", 1, "default", map[string]*contract.TaskState{})
+	seedSessionWithNodes(t, store, sessionName, "acct", 1, "default", map[string]*contract.TaskState{})
 
 	if _, err := Up(cfg, store, UpParams{Identifier: sessionName}); err == nil {
 		t.Fatal("expected Up to fail")
@@ -92,7 +92,7 @@ func TestUp_RecordsNodeResultForAliveSkip(t *testing.T) {
 		[]taskFixture{{id: "agent", scope: "run", setup: `echo '{}'`, alive: "true"}},
 		[]nodeFixture{{id: "agent"}},
 	)
-	seedSession(t, store, sessionName, "acct", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, sessionName, "acct", 1, "default", map[string]*contract.TaskState{
 		"agent": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Outputs: map[string]any{}},
 	})
 
@@ -119,7 +119,7 @@ func TestDown_RecordsNodeResultForCleanedNode(t *testing.T) {
 		[]taskFixture{{id: "agent", scope: "run", setup: `echo '{}'`, cleanup: "true"}},
 		[]nodeFixture{{id: "agent"}},
 	)
-	seedSession(t, store, sessionName, "acct", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, sessionName, "acct", 1, "default", map[string]*contract.TaskState{
 		"agent": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Outputs: map[string]any{}},
 	})
 
@@ -149,7 +149,7 @@ func TestUp_PopulationMemberRepairRecordsNodeResultWithoutUpTransition(t *testin
 		},
 		[]nodeFixture{{id: "pane"}},
 	)
-	seedSession(t, store, sessionName, "acct", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, sessionName, "acct", 1, "default", map[string]*contract.TaskState{
 		"pane": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Outputs: map[string]any{}},
 	})
 	if err := store.UpdatePopulation("default/pop", func(population *state.PopulationState) error {

@@ -139,7 +139,7 @@ type TaskInstanceView struct {
 	TaskID            string                  `json:"task_id,omitempty"`
 	Scope             string                  `json:"scope"`
 	Status            string                  `json:"status"`
-	Dynamic           bool                    `json:"dynamic,omitempty"`
+	IsTask            bool                    `json:"dynamic,omitempty"`
 	Name              string                  `json:"name,omitempty"`
 	Resource          string                  `json:"resource,omitempty"`
 	DoneWhen          *task.DoneWhenResult    `json:"done_when,omitempty"`
@@ -178,45 +178,52 @@ type sessionTaskItem struct {
 // doesn't redundantly re-evaluate it; a cache miss (not produced, or no
 // done_when-bearing evaluation ran) still evaluates it directly.
 func sessionTaskItems(cfg *config.Config, declarations taskDeclarations, session *domain.Session, sessions map[string]*domain.Session, cached map[string]task.DoneWhenResult) []sessionTaskItem {
-	if session == nil || len(session.Tasks) == 0 {
+	if session == nil || (len(session.Nodes) == 0 && len(session.Tasks) == 0) {
 		return nil
 	}
 	var items []sessionTaskItem
-	for key, st := range session.Tasks {
-		if st == nil {
-			continue
-		}
-		if key == contract.WorkflowPseudoNodeID {
-			// The workflow pseudo-node carries session-level outputs (title,
-			// branch, ...) but no done_when or lifecycle status of its own —
-			// still one Task line + outputs, per the unified display rule.
-			if len(st.Outputs) > 0 {
-				items = append(items, sessionTaskItem{seq: st.Seq, instance: key, outputs: st.Outputs})
+	// dynamic tags every item appendCollection builds from this call: false
+	// for session.Nodes, true for session.Tasks — the same distinction the
+	// pre-split TaskState.Dynamic field used to carry per entry.
+	appendCollection := func(collection map[string]*contract.TaskState, dynamic bool) {
+		for key, st := range collection {
+			if st == nil {
+				continue
 			}
-			continue
-		}
-		taskID := taskIDForInstance(key, st)
-		var dwResult *task.DoneWhenResult
-		if r, ok := cached[key]; ok {
-			rc := r
-			dwResult = &rc
-		} else if declarations.declares(taskID) {
-			dw, live, err := declarations.gate(key, st)
-			if err == nil && dw != nil {
-				res := task.EvaluateTaskDoneWhenWithContext(dw, live, doneWhenEvalContext(session.Name, st, sessions))
-				dwResult = &res
+			if key == contract.WorkflowPseudoNodeID {
+				// The workflow pseudo-node carries session-level outputs (title,
+				// branch, ...) but no done_when or lifecycle status of its own —
+				// still one Task line + outputs, per the unified display rule.
+				if len(st.Outputs) > 0 {
+					items = append(items, sessionTaskItem{seq: st.Seq, instance: key, outputs: st.Outputs})
+				}
+				continue
 			}
+			taskID := taskIDForInstance(key, st)
+			var dwResult *task.DoneWhenResult
+			if r, ok := cached[key]; ok {
+				rc := r
+				dwResult = &rc
+			} else if declarations.declares(taskID) {
+				dw, live, err := declarations.gate(key, st)
+				if err == nil && dw != nil {
+					res := task.EvaluateTaskDoneWhenWithContext(dw, live, doneWhenEvalContext(session.Name, st, sessions))
+					dwResult = &res
+				}
+			}
+			if st.Status != contract.TaskStatusProduced && !dynamic && dwResult == nil {
+				continue // not produced, not dynamically named, no done_when to report — nothing to show yet
+			}
+			items = append(items, sessionTaskItem{
+				seq: st.Seq, instance: key, taskID: st.TaskID, scope: st.Scope, status: st.Status,
+				dynamic: dynamic, name: st.Name, resource: st.Resource, outputs: st.Outputs,
+				state: st.State, observed: st.Observed,
+				doneWhen: dwResult, finalized: !st.FinalizedAt.IsZero(),
+			})
 		}
-		if st.Status != contract.TaskStatusProduced && !st.Dynamic && dwResult == nil {
-			continue // not produced, not dynamically named, no done_when to report — nothing to show yet
-		}
-		items = append(items, sessionTaskItem{
-			seq: st.Seq, instance: key, taskID: st.TaskID, scope: st.Scope, status: st.Status,
-			dynamic: st.Dynamic, name: st.Name, resource: st.Resource, outputs: st.Outputs,
-			state: st.State, observed: st.Observed,
-			doneWhen: dwResult, finalized: !st.FinalizedAt.IsZero(),
-		})
 	}
+	appendCollection(session.Nodes, false)
+	appendCollection(session.Tasks, true)
 	slices.SortStableFunc(items, func(a, b sessionTaskItem) int {
 		if a.seq != b.seq {
 			return a.seq - b.seq
@@ -240,7 +247,7 @@ func taskViews(cfg *config.Config, declarations taskDeclarations, session *domai
 			TaskID:    it.taskID,
 			Scope:     it.scope,
 			Status:    it.status,
-			Dynamic:   it.dynamic,
+			IsTask:    it.dynamic,
 			Name:      it.name,
 			Resource:  it.resource,
 			DoneWhen:  it.doneWhen,
@@ -492,7 +499,7 @@ func applyDisplay(workflows map[string]config.WorkflowFile, s *domain.Session, c
 
 func workflowDisplayOutputs(s *domain.Session) map[string]any {
 	out := map[string]any{}
-	if ws, ok := s.Tasks[contract.WorkflowPseudoNodeID]; ok && ws != nil {
+	if ws, ok := s.Nodes[contract.WorkflowPseudoNodeID]; ok && ws != nil {
 		maps.Copy(out, ws.Outputs)
 	}
 	return out

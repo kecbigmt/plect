@@ -12,7 +12,6 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/effect"
 	"github.com/kecbigmt/plecture/app/internal/eventlog"
 	"github.com/kecbigmt/plecture/app/internal/state"
-	"github.com/kecbigmt/plecture/app/internal/task"
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
@@ -56,6 +55,9 @@ func createWithWorkflowSetup(cfg *config.Config, store *state.Store, params Crea
 			return nil, &Error{Code: ErrInvalidInput, Message: fmt.Sprintf("resource dispatches to workflow %q but session %q is frozen to %q; destroy and recreate to switch", wf.Address, sessionName, existing.Workflow)}
 		}
 		session = existing
+		if session.Nodes == nil {
+			session.Nodes = make(map[string]*contract.TaskState)
+		}
 		if session.Tasks == nil {
 			session.Tasks = make(map[string]*contract.TaskState)
 		}
@@ -82,6 +84,7 @@ func createWithWorkflowSetup(cfg *config.Config, store *state.Store, params Crea
 			Workflow:      wf.Address,
 			Population:    params.Population,
 			Inputs:        input,
+			Nodes:         make(map[string]*contract.TaskState),
 			Tasks:         make(map[string]*contract.TaskState),
 			CreatedAt:     now,
 		}
@@ -109,7 +112,7 @@ func createWithWorkflowSetup(cfg *config.Config, store *state.Store, params Crea
 	}
 
 	reused := false
-	if st, ok := session.Tasks[contract.WorkflowPseudoNodeID]; ok && st != nil && st.Status == contract.TaskStatusProduced {
+	if st, ok := session.Nodes[contract.WorkflowPseudoNodeID]; ok && st != nil && st.Status == contract.TaskStatusProduced {
 		reused = true
 	}
 
@@ -126,7 +129,7 @@ func createWithWorkflowSetup(cfg *config.Config, store *state.Store, params Crea
 		Plugins:           cfg.Plugins,
 		SourcePath:        prov.SourcePath,
 	}
-	outputs, setupErr := task.RunWorkflowSetup(prov, vars, session.Tasks, params.Observer)
+	outputs, setupErr := runWorkflowSetup(prov, vars, session, params.Observer)
 	session.UpdatedAt = time.Now()
 	if outputs != nil {
 		if workspaceDir, ok := outputs[contract.OutputKeyWorkspaceDir].(string); ok {
@@ -152,7 +155,7 @@ func createWithWorkflowSetup(cfg *config.Config, store *state.Store, params Crea
 	if err != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: err.Error()}
 	}
-	tasksErr := task.RunSetup(context.Background(), plan.Session, sessionVars(cfg, session, plan), session.Tasks, params.Observer)
+	tasksErr := runNodeSetup(context.Background(), plan.Session, sessionVars(cfg, session, plan), session, params.Observer)
 	session.UpdatedAt = time.Now()
 	// A session node (the initial_task dispatcher) can shell out to a nested
 	// `plect task setup` subprocess that writes its instance straight to disk.
@@ -187,6 +190,6 @@ func createWithWorkflowSetup(cfg *config.Config, store *state.Store, params Crea
 		WorkspaceDirPath:   session.WorkspaceDirPath,
 		Branch:             domain.SessionBranch(session),
 		ReusedWorkspaceDir: reused,
-		Tasks:              session.Tasks,
+		Tasks:              domain.MergedTasks(session),
 	}, nil
 }

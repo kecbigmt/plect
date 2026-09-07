@@ -87,7 +87,7 @@ func TaskCleanup(cfg *config.Config, store *state.Store, params TaskCleanupParam
 	// schema / done_when validation (teardown stays resilient to a def whose
 	// config drifted to invalid after the instance was created). Cleanup needs
 	// only the script plus the persisted inputs/outputs/resource.
-	taskID := instanceDefinitionAddress(params.Instance, st, nodeAddresses(cfg, session))
+	taskID := instanceDefinitionAddress(params.Instance, st, true, nodeAddresses(cfg, session))
 	r := task.Resolved{NodeID: params.Instance, TaskID: taskID, Scope: st.Scope}
 	defs, defErr := cfg.LoadTaskDefinitions(session.WorkspaceDirPath)
 	if defErr != nil {
@@ -107,7 +107,7 @@ func TaskCleanup(cfg *config.Config, store *state.Store, params TaskCleanupParam
 	// attach/capture and a `{ terminal = "..." }` binding are unavailable in this
 	// instance's own cleanup, the same as any sibling-task output it hasn't
 	// explicitly depended on.
-	cleanupErr := task.RunCleanup(context.Background(), []task.Resolved{r}, sessionVars(cfg, session, nil), session.Tasks, params.Observer)
+	cleanupErr := task.RunCleanup(context.Background(), []task.Resolved{r}, sessionVars(cfg, session, nil), domain.MergedTasks(session), params.Observer)
 	if cleanupErr != nil {
 		// Keep the failed status inspectable for retry, scoped to this key. A
 		// persist failure here means that inspectable status never lands, so it's

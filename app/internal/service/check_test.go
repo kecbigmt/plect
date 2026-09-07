@@ -27,7 +27,6 @@ func TestRecordJudge_PersistsReviewerInput(t *testing.T) {
 			Scope:    contract.TaskScopeSession,
 			TaskID:   "work",
 			Status:   contract.TaskStatusProduced,
-			Dynamic:  true,
 			Observed: observedFacts(map[string]any{"revision": "sha1"}),
 			// The instance carries the judge leaf its verdict is recorded
 			// against: a verdict on a leaf nothing declares is refused.
@@ -77,7 +76,6 @@ func TestRecordJudge_AppendsJudgeRecordedEvent(t *testing.T) {
 			Scope:    contract.TaskScopeSession,
 			TaskID:   "work",
 			Status:   contract.TaskStatusProduced,
-			Dynamic:  true,
 			Observed: observedFacts(map[string]any{"revision": "sha1"}),
 			// The instance carries the judge leaf its verdict is recorded
 			// against: a verdict on a leaf nothing declares is refused.
@@ -144,7 +142,6 @@ func TestRecordJudge_StampsRelationAndWorkflow(t *testing.T) {
 			Scope:    contract.TaskScopeSession,
 			TaskID:   "work",
 			Status:   contract.TaskStatusProduced,
-			Dynamic:  true,
 			Observed: observedFacts(map[string]any{"revision": "sha1"}),
 			// The instance carries the judge leaf its verdict is recorded
 			// against: a verdict on a leaf nothing declares is refused.
@@ -237,7 +234,7 @@ func TestRecordJudge_RequiresRevision(t *testing.T) {
 	store := testStore(t)
 	cfg := &config.Config{WorkspaceDirsRoot: t.TempDir()}
 	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "", map[string]*contract.TaskState{
-		"initial": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, Dynamic: true},
+		"initial": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced},
 	})
 
 	_, err := RecordJudge(cfg, store, JudgeParams{
@@ -261,7 +258,6 @@ func TestRecordJudge_RequiresJudgeSession(t *testing.T) {
 		"initial": {
 			Scope:    contract.TaskScopeSession,
 			Status:   contract.TaskStatusProduced,
-			Dynamic:  true,
 			Observed: observedFacts(map[string]any{"revision": "sha1"}),
 			// The instance carries the judge leaf its verdict is recorded
 			// against: a verdict on a leaf nothing declares is refused.
@@ -292,7 +288,6 @@ func TestRecordJudge_RejectsSelfReview(t *testing.T) {
 			Scope:    contract.TaskScopeSession,
 			TaskID:   "work",
 			Status:   contract.TaskStatusProduced,
-			Dynamic:  true,
 			Observed: observedFacts(map[string]any{"revision": "sha1"}),
 			// The instance carries the judge leaf its verdict is recorded
 			// against: a verdict on a leaf nothing declares is refused.
@@ -376,7 +371,6 @@ func seedJudgeWork(t *testing.T, store *state.Store, work, judgeLeaf string) {
 			Scope:         contract.TaskScopeSession,
 			TaskID:        "work",
 			Status:        contract.TaskStatusProduced,
-			Dynamic:       true,
 			Observed:      observedFacts(map[string]any{"checks_status": "SUCCESS", "revision": "sha1"}),
 			ExtraDoneWhen: []byte(judgeLeaf),
 		},
@@ -414,7 +408,6 @@ func TestTickSession_HeartbeatKickPersistsHeartbeatTick(t *testing.T) {
 			Scope:    contract.TaskScopeSession,
 			TaskID:   "work",
 			Status:   contract.TaskStatusProduced,
-			Dynamic:  true,
 			Observed: observedFacts(map[string]any{"checks_status": "FAILURE", "revision": "sha1"}),
 		},
 	})
@@ -454,7 +447,6 @@ func TestTickSession_KickBodyAdvisesRebaseWhenMergeableStateDirty(t *testing.T) 
 			Scope:    contract.TaskScopeSession,
 			TaskID:   "work",
 			Status:   contract.TaskStatusProduced,
-			Dynamic:  true,
 			Observed: observedFacts(map[string]any{"checks_status": "PENDING", "revision": "sha1", "mergeable_state": "dirty"}),
 		},
 	})
@@ -482,7 +474,6 @@ func TestTickSession_KickBodyOmitsRebaseHintWhenMergeableStateClean(t *testing.T
 			Scope:    contract.TaskScopeSession,
 			TaskID:   "work",
 			Status:   contract.TaskStatusProduced,
-			Dynamic:  true,
 			Observed: observedFacts(map[string]any{"checks_status": "FAILURE", "revision": "sha1", "mergeable_state": "clean"}),
 		},
 	})
@@ -511,7 +502,6 @@ func TestTickSession_KickCarriesStructuredUnmetItemsInEventMetadata(t *testing.T
 			Scope:    contract.TaskScopeSession,
 			TaskID:   "work",
 			Status:   contract.TaskStatusProduced,
-			Dynamic:  true,
 			Observed: observedFacts(map[string]any{"checks_status": "FAILURE", "revision": "sha1"}),
 		},
 	})
@@ -569,7 +559,6 @@ func TestTickSession_EventPollDoesNotConsumeHeartbeatBudget(t *testing.T) {
 			Scope:    contract.TaskScopeSession,
 			TaskID:   "work",
 			Status:   contract.TaskStatusProduced,
-			Dynamic:  true,
 			Observed: observedFacts(map[string]any{"checks_status": "SUCCESS", "revision": "sha1"}),
 		},
 	})
@@ -602,7 +591,6 @@ func TestTickSession_EventTickDoesNotEscalateAfterChangedDoneWhenState(t *testin
 			Scope:    contract.TaskScopeSession,
 			TaskID:   "work",
 			Status:   contract.TaskStatusProduced,
-			Dynamic:  true,
 			Observed: observedFacts(map[string]any{"checks_status": "SUCCESS", "revision": "sha1"}),
 		},
 	})
@@ -633,7 +621,6 @@ func TestCheckSession_HeartbeatBudgetZeroIsUnbounded(t *testing.T) {
 			Scope:    contract.TaskScopeSession,
 			TaskID:   "work",
 			Status:   contract.TaskStatusProduced,
-			Dynamic:  true,
 			Observed: observedFacts(map[string]any{"checks_status": "FAILURE", "revision": "sha1"}),
 			DoneWhen: &contract.DoneWhenState{
 				HeartbeatTicks: 100,
@@ -661,7 +648,6 @@ func TestTickSession_EscalatesOnNthHeartbeatTick(t *testing.T) {
 			Scope:    contract.TaskScopeSession,
 			TaskID:   "work",
 			Status:   contract.TaskStatusProduced,
-			Dynamic:  true,
 			Observed: observedFacts(map[string]any{"checks_status": "FAILURE", "revision": "sha1"}),
 			DoneWhen: &contract.DoneWhenState{
 				HeartbeatTicks: 0,
@@ -693,7 +679,6 @@ func TestTickSession_EscalatesWhenJudgeKeepsRequestingChanges(t *testing.T) {
 			Scope:    contract.TaskScopeSession,
 			TaskID:   "work",
 			Status:   contract.TaskStatusProduced,
-			Dynamic:  true,
 			Resource: "https://github.com/owner/repo/pull/1",
 			Observed: observedFacts(map[string]any{"checks_status": "SUCCESS", "revision": "sha1"}),
 		},
@@ -733,21 +718,18 @@ func TestCheckSession_StableOrderSkipsFailedAndReportsMissingReviewerCommand(t *
 			Scope:    contract.TaskScopeSession,
 			TaskID:   "work",
 			Status:   contract.TaskStatusProduced,
-			Dynamic:  true,
 			Observed: observedFacts(map[string]any{"checks_status": "SUCCESS", "revision": "sha1"}),
 		},
 		"alpha": {
 			Scope:    contract.TaskScopeSession,
 			TaskID:   "work",
 			Status:   contract.TaskStatusProduced,
-			Dynamic:  true,
 			Observed: observedFacts(map[string]any{"checks_status": "SUCCESS", "revision": "sha1"}),
 		},
 		"failed": {
 			Scope:    contract.TaskScopeSession,
 			TaskID:   "work",
 			Status:   contract.TaskStatusFailed,
-			Dynamic:  true,
 			Observed: observedFacts(map[string]any{"checks_status": "SUCCESS", "revision": "sha1"}),
 		},
 	})
@@ -786,7 +768,6 @@ func TestTickScenario_RequestChangesStaleThenApproved(t *testing.T) {
 			Scope:    contract.TaskScopeSession,
 			TaskID:   "work",
 			Status:   contract.TaskStatusProduced,
-			Dynamic:  true,
 			Resource: "https://github.com/owner/repo/pull/1",
 			Observed: observedFacts(map[string]any{"checks_status": "SUCCESS", "revision": "sha1"}),
 		},
@@ -918,7 +899,6 @@ func TestTickSession_PushesDoneToParentOnceOnSatisfied(t *testing.T) {
 			Scope:    contract.TaskScopeSession,
 			TaskID:   "work",
 			Status:   contract.TaskStatusProduced,
-			Dynamic:  true,
 			Observed: observedFacts(map[string]any{"checks_status": "SUCCESS", "revision": "sha1"}),
 		},
 	})
@@ -958,7 +938,6 @@ func TestTickSession_SatisfiedWithNoParentDoesNotError(t *testing.T) {
 			Scope:    contract.TaskScopeSession,
 			TaskID:   "work",
 			Status:   contract.TaskStatusProduced,
-			Dynamic:  true,
 			Observed: observedFacts(map[string]any{"checks_status": "SUCCESS", "revision": "sha1"}),
 		},
 	})
@@ -984,7 +963,6 @@ func TestTickSession_EscalatesAfterHeartbeatBudget_PushesToParent(t *testing.T) 
 			Scope:    contract.TaskScopeSession,
 			TaskID:   "work",
 			Status:   contract.TaskStatusProduced,
-			Dynamic:  true,
 			Observed: observedFacts(map[string]any{"checks_status": "FAILURE", "revision": "sha1"}),
 			DoneWhen: &contract.DoneWhenState{
 				HeartbeatTicks: 0,
@@ -1073,7 +1051,6 @@ func TestTickSession_PublishFailureLeavesMarkerUnadvancedForRetry(t *testing.T) 
 			Scope:    contract.TaskScopeSession,
 			TaskID:   "work",
 			Status:   contract.TaskStatusProduced,
-			Dynamic:  true,
 			Observed: observedFacts(map[string]any{"checks_status": "FAILURE", "revision": "sha1"}),
 		},
 	})
@@ -1114,7 +1091,6 @@ func TestTickSession_SatisfiedPublishFailureAllowsRetry(t *testing.T) {
 			Scope:    contract.TaskScopeSession,
 			TaskID:   "work",
 			Status:   contract.TaskStatusProduced,
-			Dynamic:  true,
 			Observed: observedFacts(map[string]any{"checks_status": "SUCCESS", "revision": "sha1"}),
 		},
 	})
@@ -1159,7 +1135,6 @@ func TestTickSession_SatisfiedWakeFailureIsWarnedNotFatal(t *testing.T) {
 			Scope:    contract.TaskScopeSession,
 			TaskID:   "work",
 			Status:   contract.TaskStatusProduced,
-			Dynamic:  true,
 			Observed: observedFacts(map[string]any{"checks_status": "SUCCESS", "revision": "sha1"}),
 		},
 	})
@@ -1198,7 +1173,6 @@ func TestCheckSession_ObservationOnly(t *testing.T) {
 			Scope:    contract.TaskScopeSession,
 			TaskID:   "work",
 			Status:   contract.TaskStatusProduced,
-			Dynamic:  true,
 			Observed: observedFacts(map[string]any{"checks_status": "FAILURE", "revision": "sha1"}),
 		},
 	})

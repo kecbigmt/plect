@@ -74,7 +74,7 @@ func TestStatus_RuntimeCarriesHealthMovementTimestamps(t *testing.T) {
 	cfg := aliveFixtureConfig(t, "true")
 	lastCheckedAt := time.Now().Add(-time.Minute).UTC()
 	lastMovementAt := time.Now().Add(-2 * time.Minute).UTC()
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"initial": {Scope: contract.TaskScopeRun, TaskID: "runner", Status: contract.TaskStatusProduced},
 	})
 	if err := store.Update("owner/repo-1", func(s *domain.Session) error {
@@ -107,7 +107,7 @@ func TestStatus_RuntimeCarriesHealthMovementTimestamps(t *testing.T) {
 func TestStatus_SurfacesActivityProbeFaultsAsWarnings(t *testing.T) {
 	store := testStore(t)
 	cfg := activityFixtureConfig(t, "echo 'pane is gone' >&2; exit 3")
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"initial": {Scope: contract.TaskScopeRun, TaskID: "runner", Status: contract.TaskStatusProduced},
 	})
 
@@ -132,7 +132,7 @@ func TestStatus_SurfacesActivityProbeFaultsAsWarnings(t *testing.T) {
 func TestStatus_IdentityCarriesCreateTimeInputs(t *testing.T) {
 	store := testStore(t)
 	cfg := aliveFixtureConfig(t, "true")
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", nil)
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", nil)
 	if err := store.Update("owner/repo-1", func(session *domain.Session) error {
 		session.Inputs = map[string]any{"reviewer": "alice", "retries": float64(3)}
 		return nil
@@ -157,7 +157,7 @@ func TestStatus_SlackThreadNodeOutputsAreReadableUnderTheNode(t *testing.T) {
 	cfg := writeWorkflowFixture(t, t.TempDir(), "default",
 		[]taskFixture{{id: "slack_thread", scope: contract.TaskScopeSession, setup: "true"}},
 		[]nodeFixture{{id: "slack_thread"}})
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"slack_thread": {
 			Scope:  contract.TaskScopeSession,
 			TaskID: "slack_thread",
@@ -261,5 +261,79 @@ all = [
 	}
 	if len(w.Chains) != 1 || w.Chains[0].ChainID != "review" {
 		t.Fatalf("Chains = %+v, want one entry for chain \"review\"", w.Chains)
+	}
+}
+
+// TestTombstoneStatusResult_ReportsNodesAndTasksSeparately pins a tombstone
+// migrated by docs/migrations/tombstone-nodes-tasks-migration.md's procedure
+// (a real tombstone.json blob with the split "nodes"/"tasks" keys that
+// procedure produces): the node entries (@workflow, tmux) must report
+// dynamic=false and the dynamic instance (review#1) dynamic=true, the same
+// distinction the pre-split flat map's per-entry field used to carry.
+func TestTombstoneStatusResult_ReportsNodesAndTasksSeparately(t *testing.T) {
+	const migratedTombstoneJSON = `{
+		"session_name": "org/repo-1",
+		"resource_id": "https://github.com/org/repo/issues/1",
+		"workflow": "default",
+		"nodes": {
+			"@workflow": {"scope": "session", "status": "cleaned", "outputs": {"branch": "issue/1"}},
+			"tmux": {"scope": "run", "status": "cleaned", "outputs": {}}
+		},
+		"tasks": {
+			"review#1": {"scope": "session", "status": "produced", "task_id": "review", "resource": "pr-1", "outputs": {"checks_status": "SUCCESS"}}
+		},
+		"created_at": "2026-01-01T00:00:00Z",
+		"updated_at": "2026-01-02T00:00:00Z",
+		"destroyed_at": "2026-01-03T00:00:00Z"
+	}`
+	var tomb contract.Tombstone
+	if err := json.Unmarshal([]byte(migratedTombstoneJSON), &tomb); err != nil {
+		t.Fatalf("unmarshal migrated tombstone: %v", err)
+	}
+	if len(tomb.Nodes) != 2 || len(tomb.Tasks) != 1 {
+		t.Fatalf("Nodes/Tasks = %d/%d, want 2/1", len(tomb.Nodes), len(tomb.Tasks))
+	}
+
+	result := tombstoneStatusResult(&tomb)
+	byInstance := make(map[string]StatusTask, len(result.Work))
+	for _, w := range result.Work {
+		byInstance[w.Instance] = w
+	}
+	if got := byInstance["tmux"]; got.IsTask {
+		t.Errorf("tmux.IsTask = %v, want false (a workflow node)", got.IsTask)
+	}
+	if got := byInstance["review#1"]; !got.IsTask {
+		t.Errorf("review#1.IsTask = %v, want true (a dynamic instance)", got.IsTask)
+	}
+	if got := byInstance["review#1"]; got.Resource != "pr-1" {
+		t.Errorf("review#1.Resource = %q, want pr-1", got.Resource)
+	}
+}
+
+// TestTombstoneStatusResult_TasksOnlyShapeIsNotMistakenForLegacy pins the
+// Go-side read of a tombstone with only dynamic instances and no "nodes" key
+// at all — omitempty drops Nodes when a session-scoped task document was set
+// up before any workflow node ever ran. It must read as entirely dynamic.
+func TestTombstoneStatusResult_TasksOnlyShapeIsNotMistakenForLegacy(t *testing.T) {
+	const tasksOnlyTombstoneJSON = `{
+		"session_name": "org/repo-2",
+		"tasks": {
+			"review#1": {"scope": "session", "status": "produced", "task_id": "review", "resource": "pr-2", "outputs": {}}
+		},
+		"created_at": "2026-01-01T00:00:00Z",
+		"updated_at": "2026-01-02T00:00:00Z",
+		"destroyed_at": "2026-01-03T00:00:00Z"
+	}`
+	var tomb contract.Tombstone
+	if err := json.Unmarshal([]byte(tasksOnlyTombstoneJSON), &tomb); err != nil {
+		t.Fatalf("unmarshal tasks-only tombstone: %v", err)
+	}
+	if len(tomb.Nodes) != 0 || len(tomb.Tasks) != 1 {
+		t.Fatalf("Nodes/Tasks = %d/%d, want 0/1", len(tomb.Nodes), len(tomb.Tasks))
+	}
+
+	result := tombstoneStatusResult(&tomb)
+	if len(result.Work) != 1 || !result.Work[0].IsTask {
+		t.Fatalf("Work = %+v, want one dynamic instance", result.Work)
 	}
 }

@@ -64,7 +64,7 @@ type = "string"
 func TestEvaluateHealth_NestedAliveComposesByAndNamingTheLayer(t *testing.T) {
 	store := testStore(t)
 	cfg := nestedConfig(t, taskFixture{alive: "false"}, bindPid+"\n[health.alive]\ntype = \"shell\"\nscript = \"true\"\n")
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default",
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default",
 		nestedTasks(map[string]any{"pid": "1"}, map[string]any{"pid": "1"}, nil))
 
 	report, err := EvaluateHealth(cfg, store, "owner/repo-1")
@@ -85,7 +85,7 @@ func TestEvaluateHealth_NestedAliveComposesByAndNamingTheLayer(t *testing.T) {
 func TestEvaluateHealth_NestedLayerDeclaringNoHealthIsVacuous(t *testing.T) {
 	store := testStore(t)
 	cfg := nestedConfig(t, taskFixture{alive: "true"}, bindPid)
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default",
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default",
 		nestedTasks(map[string]any{"pid": "1"}, map[string]any{"pid": "1"}, nil))
 
 	report, err := EvaluateHealth(cfg, store, "owner/repo-1")
@@ -105,7 +105,7 @@ func TestEvaluateHealth_NestedActivityComposesByOr(t *testing.T) {
 	cfg := nestedConfig(t,
 		taskFixture{activity: `echo '{"fingerprint":"inner-1"}'`},
 		bindPid+"\n[health.activity]\ntype = \"shell\"\nscript = \"echo '{\\\"fingerprint\\\":\\\"outer-1\\\"}'\"\n")
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default",
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default",
 		nestedTasks(map[string]any{"pid": "1"}, map[string]any{"pid": "1"}, nil))
 
 	report, err := EvaluateHealth(cfg, store, "owner/repo-1")
@@ -128,7 +128,7 @@ func TestEvaluateHealth_NestedActivityComposesByOr(t *testing.T) {
 func TestEvaluateHealth_NestedProbeRunsWithTheEnclosingBindEnv(t *testing.T) {
 	store := testStore(t)
 	cfg := nestedConfig(t, taskFixture{alive: `test "$PLECT_GUARD" = on`}, bindPid)
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default",
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default",
 		nestedTasks(map[string]any{"pid": "1"}, map[string]any{"pid": "1"}, map[string]string{"PLECT_GUARD": "on"}))
 
 	report, err := EvaluateHealth(cfg, store, "owner/repo-1")
@@ -185,7 +185,7 @@ type = "string"
 type = "string"
 `)
 	inner := map[string]any{"interactive_endpoint": "%1", "pid": "7"}
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default",
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default",
 		nestedTasks(map[string]any{"interactive_endpoint": "%1", "agent_pid": "7"}, inner, nil))
 
 	out, err := Capture(cfg, store, CaptureParams{Identifier: "owner/repo-1"})

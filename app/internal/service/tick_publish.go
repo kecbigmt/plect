@@ -172,7 +172,7 @@ func stampLastTick(store *state.Store, sessionName string) error {
 func persistTickAction(store *state.Store, sessionName, instance string, action CheckAction) error {
 	now := time.Now()
 	return store.Update(sessionName, func(s *domain.Session) error {
-		st := s.Tasks[instance]
+		st := domain.TaskState(s, instance)
 		if st == nil {
 			return fmt.Errorf("instance %q not found in session %s", instance, sessionName)
 		}

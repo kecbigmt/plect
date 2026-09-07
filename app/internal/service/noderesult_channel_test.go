@@ -107,7 +107,7 @@ include = ["plect.node.result"]
 path = { from = "nodes.agent.outputs.socket_path" }
 `)
 
-	seedSession(t, store, sessionName, "acct", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, sessionName, "acct", 1, "default", map[string]*contract.TaskState{
 		"agent": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Outputs: map[string]any{"socket_path": sock}},
 	})
 	if err := store.UpdatePopulation("default/pop", func(population *state.PopulationState) error {

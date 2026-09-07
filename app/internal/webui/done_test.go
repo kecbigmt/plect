@@ -15,7 +15,7 @@ func sampleTasks() []service.TaskInstanceView {
 		Instance: "engineer",
 		Scope:    "run",
 		Status:   "running",
-		Dynamic:  true,
+		IsTask:   true,
 		DoneWhen: &task.DoneWhenResult{
 			Overall: task.DonePending,
 			Leaves: []task.DoneLeafResult{
@@ -131,7 +131,7 @@ func sampleWork() []service.StatusTask {
 		Instance: t.Instance,
 		Scope:    t.Scope,
 		Status:   t.Status,
-		Dynamic:  t.Dynamic,
+		IsTask:   t.IsTask,
 		DoneWhen: t.DoneWhen,
 	}}
 }

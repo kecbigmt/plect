@@ -71,7 +71,7 @@ func TestUp_SuccessfulLaunchSetsStatusUp(t *testing.T) {
 		[]taskFixture{{id: "runtime", scope: "run", setup: `echo '{}'`}},
 		[]nodeFixture{{id: "runtime"}},
 	)
-	seedSession(t, store, sessionName, "acct", 20, "default", nil)
+	seedSessionWithNodes(t, store, sessionName, "acct", 20, "default", nil)
 	if s := store.Get(sessionName); s.Status != contract.SessionStatusDown {
 		t.Fatalf("precondition: Status = %q, want %q", s.Status, contract.SessionStatusDown)
 	}
@@ -94,7 +94,7 @@ func TestUp_FailedLaunchLeavesStatusDown(t *testing.T) {
 		[]taskFixture{{id: "runtime", scope: "run", setup: `exit 1`}},
 		[]nodeFixture{{id: "runtime"}},
 	)
-	seedSession(t, store, sessionName, "acct", 21, "default", nil)
+	seedSessionWithNodes(t, store, sessionName, "acct", 21, "default", nil)
 
 	if _, err := Up(cfg, store, UpParams{Identifier: sessionName}); err == nil {
 		t.Fatal("Up: want an error from the failing setup script")
@@ -114,7 +114,7 @@ func TestDown_SetsStatusDown(t *testing.T) {
 		[]taskFixture{{id: "runtime", scope: "run", setup: `echo '{}'`, cleanup: "true"}},
 		[]nodeFixture{{id: "runtime"}},
 	)
-	seedSession(t, store, sessionName, "acct", 22, "default", nil)
+	seedSessionWithNodes(t, store, sessionName, "acct", 22, "default", nil)
 	if _, err := Up(cfg, store, UpParams{Identifier: sessionName}); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestUp_FailedForceRecreateFromUpSessionSetsStatusDown(t *testing.T) {
 		[]taskFixture{{id: "runtime", scope: "run", setup: `echo '{}'`, cleanup: "true"}},
 		[]nodeFixture{{id: "runtime"}},
 	)
-	seedSession(t, store, sessionName, "acct", 23, "default", nil)
+	seedSessionWithNodes(t, store, sessionName, "acct", 23, "default", nil)
 	if _, err := Up(cfg, store, UpParams{Identifier: sessionName}); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestDown_PlanConstructionFailureSetsStatusDown(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cfg.BaseDir, "tasks", "broken.toml"), []byte("scope = \n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	seedSession(t, store, sessionName, "acct", 24, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, sessionName, "acct", 24, "default", map[string]*contract.TaskState{
 		"runtime": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Outputs: map[string]any{}},
 	})
 	if err := store.Update(sessionName, func(s *domain.Session) error {

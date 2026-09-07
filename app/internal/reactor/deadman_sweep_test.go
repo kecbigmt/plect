@@ -46,17 +46,17 @@ on = ["resource.*"]
 	for _, s := range []*domain.Session{
 		{
 			Name: "o/heartbeat-up", Workflow: "goal",
-			Tasks: map[string]*contract.TaskState{"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced}},
+			Nodes: map[string]*contract.TaskState{"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced}},
 		},
 		{
 			// Declares [tick].on but no heartbeat: nothing to be a deadman for.
 			Name: "o/reactive-up", Workflow: "reactive",
-			Tasks: map[string]*contract.TaskState{"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced}},
+			Nodes: map[string]*contract.TaskState{"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced}},
 		},
 		{
 			// Heartbeat declared, but run scope is down.
 			Name: "o/heartbeat-down", Workflow: "goal",
-			Tasks: map[string]*contract.TaskState{"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusCleaned}},
+			Nodes: map[string]*contract.TaskState{"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusCleaned}},
 		},
 	} {
 		if err := st.Put(s); err != nil {
@@ -112,7 +112,7 @@ heartbeat = "1h"
 	st := state.NewStore(t.TempDir())
 	if err := st.Put(&domain.Session{
 		Name: "o/r-1", Workflow: "goal",
-		Tasks: map[string]*contract.TaskState{"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced}},
+		Nodes: map[string]*contract.TaskState{"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced}},
 	}); err != nil {
 		t.Fatal(err)
 	}

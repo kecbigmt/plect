@@ -54,7 +54,7 @@ func aliveFixtureConfig(t *testing.T, alive string) *config.Config {
 func TestEvaluateHealth_NoRunScopedTasksIsHealthy(t *testing.T) {
 	store := testStore(t)
 	cfg := aliveFixtureConfig(t, "false")
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"initial": {Scope: contract.TaskScopeSession, TaskID: "runner", Status: contract.TaskStatusProduced},
 	})
 
@@ -70,7 +70,7 @@ func TestEvaluateHealth_NoRunScopedTasksIsHealthy(t *testing.T) {
 func TestEvaluateHealth_PassingAliveProbeIsHealthy(t *testing.T) {
 	store := testStore(t)
 	cfg := aliveFixtureConfig(t, "true")
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"initial": {Scope: contract.TaskScopeRun, TaskID: "runner", Status: contract.TaskStatusProduced},
 	})
 
@@ -86,7 +86,7 @@ func TestEvaluateHealth_PassingAliveProbeIsHealthy(t *testing.T) {
 func TestEvaluateHealth_FailingAliveProbeIsUnhealthy(t *testing.T) {
 	store := testStore(t)
 	cfg := aliveFixtureConfig(t, "false")
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"initial": {Scope: contract.TaskScopeRun, TaskID: "runner", Status: contract.TaskStatusProduced},
 	})
 
@@ -112,7 +112,7 @@ func currentPlanConfig(t *testing.T, paneAlive, agentAlive string) *config.Confi
 func TestEvaluateHealth_FailedCurrentPlanNodeIsUnhealthyNamingNodeAndError(t *testing.T) {
 	store := testStore(t)
 	cfg := currentPlanConfig(t, "true", "true")
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"pane":  {Scope: contract.TaskScopeRun, TaskID: "pane", Status: contract.TaskStatusProduced},
 		"agent": {Scope: contract.TaskScopeRun, TaskID: "agent", Status: contract.TaskStatusFailed, Error: "claude not detected within 120s"},
 	})
@@ -139,7 +139,7 @@ func TestEvaluateHealth_FailedCurrentPlanNodeIsUnhealthyNamingNodeAndError(t *te
 func TestEvaluateHealth_MissingCurrentPlanNodeIsUnhealthyNamingNode(t *testing.T) {
 	store := testStore(t)
 	cfg := currentPlanConfig(t, "true", "true")
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"pane": {Scope: contract.TaskScopeRun, TaskID: "pane", Status: contract.TaskStatusProduced},
 		// "agent" is declared by the workflow but has no task state at all.
 	})
@@ -159,7 +159,7 @@ func TestEvaluateHealth_MissingCurrentPlanNodeIsUnhealthyNamingNode(t *testing.T
 func TestEvaluateHealth_EveryCurrentPlanNodeProducedAndPassingIsHealthy(t *testing.T) {
 	store := testStore(t)
 	cfg := currentPlanConfig(t, "true", "true")
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"pane":  {Scope: contract.TaskScopeRun, TaskID: "pane", Status: contract.TaskStatusProduced},
 		"agent": {Scope: contract.TaskScopeRun, TaskID: "agent", Status: contract.TaskStatusProduced},
 	})
@@ -178,7 +178,7 @@ func TestEvaluateHealth_CleanedCurrentPlanNodesAreNotUnhealthyAfterDown(t *testi
 	// A failing alive command on both nodes proves cleaned nodes are never
 	// probed at all — if they were, this would read unhealthy instead.
 	cfg := currentPlanConfig(t, "false", "false")
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"pane":  {Scope: contract.TaskScopeRun, TaskID: "pane", Status: contract.TaskStatusCleaned},
 		"agent": {Scope: contract.TaskScopeRun, TaskID: "agent", Status: contract.TaskStatusCleaned},
 	})
@@ -202,7 +202,7 @@ func TestEvaluateHealth_CleanedCurrentPlanNodesAreNotUnhealthyAfterDown(t *testi
 func TestEvaluateHealth_NoProducedRunScopedNodeAfterAbortedFirstUpIsNotUnhealthy(t *testing.T) {
 	store := testStore(t)
 	cfg := currentPlanConfig(t, "true", "true")
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"pane": {Scope: contract.TaskScopeRun, TaskID: "pane", Status: contract.TaskStatusFailed, Error: "setup failed"},
 		// "agent" never attempted since "pane" failed first.
 	})
@@ -230,7 +230,7 @@ func TestEvaluateHealth_StaleTaskEntryContributesNothing(t *testing.T) {
 		{id: "pane", scope: contract.TaskScopeRun, alive: "true"},
 		{id: "stale_runtime", scope: contract.TaskScopeRun, alive: "false"},
 	}, []nodeFixture{{id: "pane"}}) // "stale_runtime" keeps a definition but no node uses it anymore.
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"pane":          {Scope: contract.TaskScopeRun, TaskID: "pane", Status: contract.TaskStatusProduced},
 		"stale_runtime": {Scope: contract.TaskScopeRun, TaskID: "stale_runtime", Status: contract.TaskStatusProduced},
 	})
@@ -247,7 +247,7 @@ func TestEvaluateHealth_StaleTaskEntryContributesNothing(t *testing.T) {
 func TestEvaluateHealth_StaleProducedNodeAloneReadsDownWithNoVerdict(t *testing.T) {
 	store := testStore(t)
 	cfg := currentPlanConfig(t, "true", "true") // declares only "pane" and "agent"
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		// "removed_node" is a stale record: the workflow above no longer
 		// declares any node using it. Neither "pane" nor "agent" has any
 		// task state at all.
@@ -278,7 +278,7 @@ func TestEvaluateHealth_FailedSessionScopedNodeDoesNotAffectRunScopedHealthRepor
 		{id: "guard", scope: contract.TaskScopeSession, alive: "false"},
 		{id: "pane", scope: contract.TaskScopeRun, alive: "true"},
 	}, []nodeFixture{{id: "guard"}, {id: "pane"}})
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"guard": {Scope: contract.TaskScopeSession, TaskID: "guard", Status: contract.TaskStatusFailed, Error: "guard missing"},
 		"pane":  {Scope: contract.TaskScopeRun, TaskID: "pane", Status: contract.TaskStatusProduced},
 	})
@@ -295,7 +295,7 @@ func TestEvaluateHealth_FailedSessionScopedNodeDoesNotAffectRunScopedHealthRepor
 func TestEvaluateHealth_UnresolvableWorkflowReturnsError(t *testing.T) {
 	store := testStore(t)
 	cfg := currentPlanConfig(t, "true", "true") // only declares workflow "default"
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "ghost-workflow", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "ghost-workflow", map[string]*contract.TaskState{
 		"pane": {Scope: contract.TaskScopeRun, TaskID: "pane", Status: contract.TaskStatusProduced},
 	})
 
@@ -310,7 +310,7 @@ func TestEvaluateHealth_UnresolvableWorkflowReturnsError(t *testing.T) {
 func TestEvaluateHealth_AliveProbeCanReadNodeInputs(t *testing.T) {
 	store := testStore(t)
 	cfg := aliveFixtureConfig(t, `[ "{{.Inputs.tmux_session}}" = "work:0" ]`)
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"initial": {
 			Scope:  contract.TaskScopeRun,
 			TaskID: "runner",
@@ -354,7 +354,7 @@ kill -0 "{{.Self.pid}}" 2>/dev/null
 `,
 		},
 	}, []nodeFixture{{id: "pane"}, {id: "runtime"}})
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"pane": {
 			Scope:   contract.TaskScopeRun,
 			TaskID:  "pane",
@@ -425,7 +425,7 @@ type = 1
 `,
 		},
 	}, []nodeFixture{{id: "pane"}, {id: "runtime"}, {id: "drifted"}})
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"pane": {
 			Scope:   contract.TaskScopeRun,
 			TaskID:  "pane",
@@ -466,7 +466,7 @@ script = "true"
 		{id: "pane_b", scope: contract.TaskScopeRun, extra: terminal},
 		{id: "runtime", scope: contract.TaskScopeRun, alive: "true"},
 	}, []nodeFixture{{id: "pane_a"}, {id: "pane_b"}, {id: "runtime"}})
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"pane_a":  {Scope: contract.TaskScopeRun, TaskID: "pane_a", Status: contract.TaskStatusProduced},
 		"pane_b":  {Scope: contract.TaskScopeRun, TaskID: "pane_b", Status: contract.TaskStatusProduced},
 		"runtime": {Scope: contract.TaskScopeRun, TaskID: "runtime", Status: contract.TaskStatusProduced},
@@ -558,7 +558,7 @@ func TestSessionRunAndHealthState_AliveProbeBacked(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			store := testStore(t)
 			cfg := aliveFixtureConfig(t, tt.alive)
-			seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", tt.tasks)
+			seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", tt.tasks)
 
 			s := store.Get("owner/repo-1")
 			if gotRun := sessionRunState(cfg, s); gotRun != tt.wantRun {
@@ -641,7 +641,7 @@ func TestEvaluateHealth_WedgedButAliveProbePassingReadsStalled(t *testing.T) {
 	store := testStore(t)
 	longAgo := time.Now().Add(-24 * time.Hour)
 	cfg := activityFixtureConfig(t, activityProbeCmd(t, "fp-1", false, longAgo))
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"initial": {
 			Scope:    contract.TaskScopeRun,
 			TaskID:   "runner",
@@ -682,7 +682,7 @@ func TestEvaluateHealth_SilenceExpectedNarrowsExpectationToHealthy(t *testing.T)
 	store := testStore(t)
 	longAgo := time.Now().Add(-24 * time.Hour)
 	cfg := activityFixtureConfig(t, activityProbeCmd(t, "fp-1", true, longAgo))
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"initial": {
 			Scope:    contract.TaskScopeRun,
 			TaskID:   "runner",
@@ -711,7 +711,7 @@ func TestEvaluateHealth_SilenceExpectedNarrowsExpectationToHealthy(t *testing.T)
 func TestEvaluateHealth_NoActivitySignalDeclaredStaysUndeclaredNotStalled(t *testing.T) {
 	store := testStore(t)
 	cfg := activityFixtureConfig(t, "") // no activity probe declared at all
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"initial": {
 			Scope:    contract.TaskScopeRun,
 			TaskID:   "runner",
@@ -737,7 +737,7 @@ func TestEvaluateHealth_NoActivitySignalDeclaredStaysUndeclaredNotStalled(t *tes
 func TestEvaluateHealth_EmptyProbeOutputStaysUndeclared(t *testing.T) {
 	store := testStore(t)
 	cfg := activityFixtureConfig(t, noBasisProbeCmd)
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"initial": {
 			Scope:    contract.TaskScopeRun,
 			TaskID:   "runner",
@@ -768,7 +768,7 @@ func TestEvaluateHealth_EmptyProbeOutputStaysUndeclared(t *testing.T) {
 func TestEvaluateHealth_ProbeExitFailureContributesNothingAndReportsFault(t *testing.T) {
 	store := testStore(t)
 	cfg := activityFixtureConfig(t, "echo 'pane is gone' >&2; exit 3")
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"initial": {
 			Scope:    contract.TaskScopeRun,
 			TaskID:   "runner",
@@ -814,7 +814,7 @@ func TestEvaluateHealth_ProbeExitFailureContributesNothingAndReportsFault(t *tes
 func TestEvaluateHealth_InvalidEnvelopeContributesNothingAndWarns(t *testing.T) {
 	store := testStore(t)
 	cfg := activityFixtureConfig(t, `echo '{"status":"active"}'`)
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"initial": {
 			Scope:    contract.TaskScopeRun,
 			TaskID:   "runner",
@@ -852,7 +852,7 @@ func TestEvaluateHealth_LapsedProbeWithPriorActivityReadsStalledNotUndeclared(t 
 	// The probe itself now reports no basis to judge activity this tick,
 	// standing in for its source having died.
 	cfg := activityFixtureConfig(t, noBasisProbeCmd)
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"initial": {
 			Scope:    contract.TaskScopeRun,
 			TaskID:   "runner",
@@ -883,7 +883,7 @@ func TestEvaluateHealth_LapsedProbeWithPriorActivityReadsStalledNotUndeclared(t 
 func TestEvaluateHealth_FreshActivityEvidenceReadsHealthy(t *testing.T) {
 	store := testStore(t)
 	cfg := activityFixtureConfig(t, activityProbeCmd(t, "fp-1", false, time.Now()))
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"initial": {
 			Scope:    contract.TaskScopeRun,
 			TaskID:   "runner",
@@ -912,7 +912,7 @@ func TestEvaluateHealth_NoUnmetWorkStaysHealthyRegardlessOfSignal(t *testing.T) 
 	store := testStore(t)
 	longAgo := time.Now().Add(-24 * time.Hour)
 	cfg := activityFixtureConfig(t, activityProbeCmd(t, "fp-1", false, longAgo))
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"initial": {
 			Scope:   contract.TaskScopeRun,
 			TaskID:  "runner",
@@ -938,7 +938,7 @@ func TestEvaluateHealth_EscalatedWorkStillExpectsActivity(t *testing.T) {
 	store := testStore(t)
 	longAgo := time.Now().Add(-24 * time.Hour)
 	cfg := activityFixtureConfig(t, activityProbeCmd(t, "fp-1", false, longAgo))
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"initial": {
 			Scope:    contract.TaskScopeRun,
 			TaskID:   "runner",
@@ -997,7 +997,7 @@ func TestEvaluateHealth_ActivityFingerprintUnchangedPastWindowReadsStalled(t *te
 	store := testStore(t)
 	longAgo := time.Now().Add(-24 * time.Hour)
 	cfg := activityFixtureConfig(t, activityFingerprintCmd(t, "fp-1"))
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"initial": {
 			Scope:    contract.TaskScopeRun,
 			TaskID:   "runner",
@@ -1025,7 +1025,7 @@ func TestEvaluateHealth_ActivityFingerprintAdvancedReadsHealthy(t *testing.T) {
 	store := testStore(t)
 	longAgo := time.Now().Add(-24 * time.Hour)
 	cfg := activityFixtureConfig(t, activityFingerprintCmd(t, "fp-2"))
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"initial": {
 			Scope:    contract.TaskScopeRun,
 			TaskID:   "runner",
@@ -1059,7 +1059,7 @@ func TestEvaluateHealth_ActivityFingerprintAdvancedReadsHealthy(t *testing.T) {
 func TestEvaluateHealth_ActivityFingerprintUnchangedWithinWindowReadsHealthy(t *testing.T) {
 	store := testStore(t)
 	cfg := activityFixtureConfig(t, activityFingerprintCmd(t, "fp-1"))
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"initial": {
 			Scope:    contract.TaskScopeRun,
 			TaskID:   "runner",
@@ -1086,7 +1086,7 @@ func TestEvaluateHealth_ActivityFingerprintUnchangedWithinWindowReadsHealthy(t *
 func TestEvaluateHealth_NoActivityProbeDeclaredFallsBackToUndeclared(t *testing.T) {
 	store := testStore(t)
 	cfg := activityFixtureConfig(t, "") // no activity probe anywhere
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"initial": {
 			Scope:    contract.TaskScopeRun,
 			TaskID:   "runner",
@@ -1108,8 +1108,8 @@ func TestEvaluateHealth_NoActivityProbeDeclaredFallsBackToUndeclared(t *testing.
 func TestHealthcheckSession_PushesHealthEscalationAndRenotifies(t *testing.T) {
 	store := testStore(t)
 	cfg := aliveFixtureConfig(t, "false")
-	seedSession(t, store, "owner/repo-orchestrator", "owner/repo", 1, "", nil)
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-orchestrator", "owner/repo", 1, "", nil)
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"initial": {Scope: contract.TaskScopeRun, TaskID: "runner", Status: contract.TaskStatusProduced},
 	})
 	setParent(t, store, "owner/repo-1", "owner/repo-orchestrator")
@@ -1171,8 +1171,8 @@ func TestHealthcheckSession_PushesStalledEscalationWithActivityTimestamp(t *test
 	store := testStore(t)
 	longAgo := time.Now().Add(-24 * time.Hour)
 	cfg := activityFixtureConfig(t, activityFingerprintCmd(t, "fp-1"))
-	seedSession(t, store, "owner/repo-orchestrator", "owner/repo", 1, "", nil)
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-orchestrator", "owner/repo", 1, "", nil)
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"initial": {
 			Scope:    contract.TaskScopeRun,
 			TaskID:   "runner",
@@ -1214,11 +1214,11 @@ func TestHealthcheckSession_PushesStalledEscalationWithActivityTimestamp(t *test
 func TestHealthcheckSession_SkipsDeadIntermediateParent(t *testing.T) {
 	store := testStore(t)
 	cfg := aliveFixtureConfig(t, "false")
-	seedSession(t, store, "owner/repo-grandparent", "owner/repo", 1, "", nil)
-	seedSession(t, store, "owner/repo-parent", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-grandparent", "owner/repo", 1, "", nil)
+	seedSessionWithNodes(t, store, "owner/repo-parent", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"initial": {Scope: contract.TaskScopeRun, TaskID: "runner", Status: contract.TaskStatusProduced},
 	})
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"initial": {Scope: contract.TaskScopeRun, TaskID: "runner", Status: contract.TaskStatusProduced},
 	})
 	setParent(t, store, "owner/repo-parent", "owner/repo-grandparent")
@@ -1257,10 +1257,10 @@ func TestHealthcheckSession_SkipsDeadIntermediateParent(t *testing.T) {
 func TestHealthcheckSession_RecordsUndeliverableEscalationWithNoLiveAncestor(t *testing.T) {
 	store := testStore(t)
 	cfg := aliveFixtureConfig(t, "false")
-	seedSession(t, store, "owner/repo-parent", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-parent", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"initial": {Scope: contract.TaskScopeRun, TaskID: "runner", Status: contract.TaskStatusProduced},
 	})
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"initial": {Scope: contract.TaskScopeRun, TaskID: "runner", Status: contract.TaskStatusProduced},
 	})
 	setParent(t, store, "owner/repo-1", "owner/repo-parent")
@@ -1302,7 +1302,7 @@ func TestHealthcheckSession_DownSessionStaysDownAcrossRepeatedSweeps(t *testing.
 	cfg := &config.Config{WorkspaceDirsRoot: t.TempDir()}
 	// No parent: a health escalation with nowhere to go is exactly the
 	// undeliverable case the loop hinged on.
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "", nil)
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "", nil)
 	staleCheck := time.Now().Add(-time.Hour)
 	if err := store.Update("owner/repo-1", func(s *domain.Session) error {
 		s.Health = &contract.HealthState{
@@ -1385,7 +1385,7 @@ func twoInstanceHealthConfig(t *testing.T, workerAlive, workerActivity, sidecarA
 
 func seedTwoInstances(t *testing.T, store *state.Store) {
 	t.Helper()
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"worker": {
 			Scope:    contract.TaskScopeRun,
 			TaskID:   "worker",
@@ -1505,7 +1505,7 @@ uses = "official.acme.runner"
 	}
 	// TaskID omitted, as it is for every node whose id equals the referenced
 	// definition's id.
-	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
 		"initial": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced},
 	})
 

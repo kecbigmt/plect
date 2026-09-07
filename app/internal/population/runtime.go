@@ -46,7 +46,7 @@ func serviceHooks(cfg func() *config.Config, store *state.Store, def Definition,
 				return fmt.Errorf("session %q disappeared before initial task setup", session)
 			}
 			if existing := current.Tasks["initial"]; existing != nil {
-				if !existing.Dynamic || existing.Name != "initial" || existing.TaskID != taskID || existing.Resource != resource {
+				if existing.Name != "initial" || existing.TaskID != taskID || existing.Resource != resource {
 					return fmt.Errorf("session %q already has a conflicting initial task instance", session)
 				}
 				if existing.Status == contract.TaskStatusProduced {

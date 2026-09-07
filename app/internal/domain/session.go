@@ -75,15 +75,43 @@ const branchOutputKey = "branch"
 // vocabulary, and core stays version-control-agnostic by identity, so the
 // fact lives only in the provider's own setup output.
 func SessionBranch(s *Session) string {
-	if s == nil || s.Tasks == nil {
+	if s == nil || s.Nodes == nil {
 		return ""
 	}
-	ws, ok := s.Tasks[contract.WorkflowPseudoNodeID]
+	ws, ok := s.Nodes[contract.WorkflowPseudoNodeID]
 	if !ok || ws == nil {
 		return ""
 	}
 	branch, _ := ws.Outputs[branchOutputKey].(string)
 	return branch
+}
+
+// MergedTasks combines s.Nodes and s.Tasks into one map (a fresh shallow
+// copy — writing into it does not reach s.Nodes/s.Tasks).
+func MergedTasks(s *Session) map[string]*contract.TaskState {
+	if s == nil {
+		return nil
+	}
+	merged := make(map[string]*contract.TaskState, len(s.Nodes)+len(s.Tasks))
+	for k, v := range s.Nodes {
+		merged[k] = v
+	}
+	for k, v := range s.Tasks {
+		merged[k] = v
+	}
+	return merged
+}
+
+// TaskState looks up key across s.Nodes and s.Tasks, returning the same
+// pointer stored in whichever holds it (so mutating it mutates the session).
+func TaskState(s *Session, key string) *contract.TaskState {
+	if s == nil {
+		return nil
+	}
+	if st := s.Nodes[key]; st != nil {
+		return st
+	}
+	return s.Tasks[key]
 }
 
 // ImplicitRootParent returns the parent key a parentless session is deemed to

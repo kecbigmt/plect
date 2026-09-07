@@ -123,9 +123,9 @@ args    = ["-c", 'printf "%s" "$1" > "$2"', "provider", { from = "session.branch
 		t.Fatal(err)
 	}
 	store := testStore(t)
-	// seedSession stamps "issue/1" onto an @workflow node's branch output
-	// when the caller's own tasks map already includes one.
-	seedSession(t, store, "o/r-1", "o/r", 1, "coding", map[string]*contract.TaskState{
+	// seedSessionWithNodes stamps "issue/1" onto an @workflow node's branch
+	// output when the caller's own nodes map already includes one.
+	seedSessionWithNodes(t, store, "o/r-1", "o/r", 1, "coding", map[string]*contract.TaskState{
 		contract.WorkflowPseudoNodeID: {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced},
 	})
 
@@ -303,7 +303,7 @@ func TestTaskSetup_NoResurrectAfterConcurrentDown(t *testing.T) {
 	)
 	store := testStore(t)
 	// Run scope is up (a live run-scoped static node), so storybook may instantiate.
-	seedSession(t, store, "o/r-1", "o/r", 1, "coding", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "o/r-1", "o/r", 1, "coding", map[string]*contract.TaskState{
 		"tmux": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Seq: 4, Outputs: map[string]any{}},
 	})
 
@@ -368,7 +368,7 @@ func TestTaskSetup_SessionScopedWhileDown(t *testing.T) {
 		t.Errorf("instance = %q, want review#1", res.Instance)
 	}
 	st := store.Get("o/r-1").Tasks[res.Instance]
-	if st == nil || st.Status != contract.TaskStatusProduced || !st.Dynamic {
+	if st == nil || st.Status != contract.TaskStatusProduced {
 		t.Fatalf("expected produced dynamic instance, got %+v", st)
 	}
 	if st.Resource != "pr-1" || st.TaskID != "review" {
@@ -427,7 +427,7 @@ func TestTaskSetup_RunScopedAllowedWhenUp(t *testing.T) {
 		[]nodeFixture{{id: "storybook"}, {id: "runtime"}},
 	)
 	store := testStore(t)
-	seedSession(t, store, "o/r-1", "o/r", 1, "coding", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "o/r-1", "o/r", 1, "coding", map[string]*contract.TaskState{
 		"runtime": {Scope: contract.TaskScopeRun, TaskID: "runtime", Status: contract.TaskStatusProduced, Seq: 4},
 	})
 
@@ -446,7 +446,7 @@ func TestTaskSetup_RunScopedRejectedWhenOnlyStaleProducedRecord(t *testing.T) {
 		[]nodeFixture{{id: "storybook"}},
 	)
 	store := testStore(t)
-	seedSession(t, store, "o/r-1", "o/r", 1, "coding", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "o/r-1", "o/r", 1, "coding", map[string]*contract.TaskState{
 		// "removed_runtime" is a stale record: the workflow above declares no
 		// node using it.
 		"removed_runtime": {Scope: contract.TaskScopeRun, TaskID: "removed_runtime", Status: contract.TaskStatusProduced},
@@ -527,7 +527,7 @@ func TestTaskSetup_NamedInstanceKeysOnName(t *testing.T) {
 		t.Errorf("instance = %q, want initial (name-only key)", res.Instance)
 	}
 	st := store.Get("o/r-1").Tasks["initial"]
-	if st == nil || st.Name != "initial" || st.TaskID != "work" || !st.Dynamic {
+	if st == nil || st.Name != "initial" || st.TaskID != "work" {
 		t.Fatalf("named instance state = %+v", st)
 	}
 }
@@ -643,7 +643,7 @@ func TestDown_ReclaimsDynamicRunInstance(t *testing.T) {
 		[]nodeFixture{{id: "tmux"}},
 	)
 	store := testStore(t)
-	seedSession(t, store, "o/r-1", "o/r", 1, "coding", map[string]*contract.TaskState{
+	seedSessionWithNodes(t, store, "o/r-1", "o/r", 1, "coding", map[string]*contract.TaskState{
 		"tmux": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Seq: 4, Outputs: map[string]any{}},
 	})
 
@@ -664,8 +664,8 @@ func TestDown_ReclaimsDynamicRunInstance(t *testing.T) {
 	if s.Tasks[storyRes.Instance].Status != contract.TaskStatusCleaned {
 		t.Errorf("storybook should be cleaned: %+v", s.Tasks[storyRes.Instance])
 	}
-	if s.Tasks["tmux"].Status != contract.TaskStatusCleaned {
-		t.Errorf("tmux should be cleaned: %+v", s.Tasks["tmux"])
+	if s.Nodes["tmux"].Status != contract.TaskStatusCleaned {
+		t.Errorf("tmux should be cleaned: %+v", s.Nodes["tmux"])
 	}
 	if s.Tasks[reviewRes.Instance].Status != contract.TaskStatusProduced {
 		t.Errorf("session-scoped review should survive down: %+v", s.Tasks[reviewRes.Instance])
@@ -769,10 +769,11 @@ func TestDestroy_StrictReverseSeqAcrossStaticDynamic(t *testing.T) {
 	// Seq inversion: the dynamic review (seq 3) sits between tmux (2) and a
 	// later-stamped claude (4) — e.g. a re-`up` re-stamped claude after review
 	// was instantiated.
-	seedSession(t, store, "o/r-1", "o/r", 1, "coding", map[string]*contract.TaskState{
-		"tmux":        {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Seq: 2, Outputs: map[string]any{}},
-		"review#pr-1": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, Seq: 3, Dynamic: true, TaskID: "review", Resource: "pr-1", Outputs: map[string]any{}},
-		"claude":      {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Seq: 4, Outputs: map[string]any{}},
+	seedSessionSplit(t, store, "o/r-1", "o/r", 1, "coding", map[string]*contract.TaskState{
+		"tmux":   {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Seq: 2, Outputs: map[string]any{}},
+		"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Seq: 4, Outputs: map[string]any{}},
+	}, map[string]*contract.TaskState{
+		"review#pr-1": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, Seq: 3, TaskID: "review", Resource: "pr-1", Outputs: map[string]any{}},
 	})
 
 	obs := &orderObserver{}

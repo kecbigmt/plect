@@ -73,7 +73,7 @@ func FinalizeTask(cfg *config.Config, store *state.Store, params FinalizeTaskPar
 	if err != nil {
 		return nil, err
 	}
-	st := session.Tasks[params.Instance]
+	st := domain.TaskState(session, params.Instance)
 	if st == nil {
 		return nil, &Error{Code: ErrInvalidInput, Message: fmt.Sprintf("instance %q not found in session %s", params.Instance, resolvedName)}
 	}
@@ -125,7 +125,7 @@ func FinalizeTask(cfg *config.Config, store *state.Store, params FinalizeTaskPar
 	}
 
 	if err := store.Update(resolvedName, func(s *domain.Session) error {
-		if cur := s.Tasks[params.Instance]; cur != nil {
+		if cur := domain.TaskState(s, params.Instance); cur != nil {
 			cur.FinalizedAt = time.Now()
 		}
 		s.UpdatedAt = time.Now()

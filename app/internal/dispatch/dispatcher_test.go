@@ -634,7 +634,7 @@ func TestDispatcher_TerminalHelperResolvesThroughSessionPlan(t *testing.T) {
 
 	s := &domain.Session{
 		Name: "o/r-1",
-		Tasks: map[string]*contract.TaskState{
+		Nodes: map[string]*contract.TaskState{
 			"tmux": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Outputs: map[string]any{"session_name": "mysession"}},
 		},
 	}
