@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -166,26 +167,42 @@ func TestBuildShippedPluginBinaries_BuildsOnce(t *testing.T) {
 	}
 }
 
-func TestOnceBuiltBinaries_CleanupRemovesDirAfterAFailedBuild(t *testing.T) {
-	var o onceBuiltBinaries
-	root := repoRootForE2E(t)
-	binaries := []struct{ moduleDir, pkg, name string }{
-		{"app", "./cmd/plect", "plect"},
-		{"app", "./cmd/this-package-does-not-exist", "nope"},
-	}
+const forceSharedBuildFailureEnvVar = "PLECT_TEST_FORCE_SHARED_BUILD_FAILURE"
 
-	dir, err := o.build(root, binaries, goToolCachesForE2E)
+func TestForceSharedBuildFailure(t *testing.T) {
+	if os.Getenv(forceSharedBuildFailureEnvVar) != "1" {
+		t.Skip("subprocess helper; set " + forceSharedBuildFailureEnvVar + " to run")
+	}
+	dir, err := sharedShippedPluginBinaries.build(repoRootForE2E(t), []struct{ moduleDir, pkg, name string }{
+		{"app", "./cmd/this-package-does-not-exist", "nope"},
+	}, goToolCachesForE2E)
 	if err == nil {
 		t.Fatal("expected an error building a nonexistent package")
 	}
-	if _, statErr := os.Stat(filepath.Join(dir, "plect")); statErr != nil {
-		t.Fatalf("the binary built before the failure should exist: %v", statErr)
+	os.Stdout.WriteString("SHARED_BIN_DIR=" + dir + "\n")
+}
+
+func TestMain_RemovesTheSharedDirAfterAFailedBuild(t *testing.T) {
+	cmd := exec.Command("go", "test", "-tags", "integration", "-run", "^TestForceSharedBuildFailure$", "-v", "./internal/reactor/...")
+	cmd.Dir = filepath.Join(repoRootForE2E(t), "app")
+	cmd.Env = append(os.Environ(), forceSharedBuildFailureEnvVar+"=1")
+	cmd.Env = append(cmd.Env, goToolCachesForE2E...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("subprocess failed: %v\n%s", err, out)
 	}
 
-	o.cleanup()
-
+	var dir string
+	for _, line := range strings.Split(string(out), "\n") {
+		if after, ok := strings.CutPrefix(line, "SHARED_BIN_DIR="); ok {
+			dir = after
+		}
+	}
+	if dir == "" {
+		t.Fatalf("subprocess output missing SHARED_BIN_DIR=...:\n%s", out)
+	}
 	if _, statErr := os.Stat(dir); !os.IsNotExist(statErr) {
-		t.Errorf("cleanup should have removed %s, stat err = %v", dir, statErr)
+		t.Errorf("TestMain should have removed %s, stat err = %v", dir, statErr)
 	}
 }
 

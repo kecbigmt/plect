@@ -157,28 +157,47 @@ func TestBuildWorkspaceProviderBinaries_BuildsOnce(t *testing.T) {
 	}
 }
 
-// A throwaway onceBuiltBinaries, not the package's shared singleton: a
-// forced failure there would poison it for every other test in this run.
-func TestOnceBuiltBinaries_CleanupRemovesDirAfterAFailedBuild(t *testing.T) {
-	var o onceBuiltBinaries
-	root := repoRoot(t)
-	binaries := []struct{ moduleDir, pkg, name string }{
-		{"app", "./cmd/plect", "plect"},
-		{"app", "./cmd/this-package-does-not-exist", "nope"},
-	}
+// Gates TestForceSharedBuildFailure, a no-op without it.
+const forceSharedBuildFailureEnvVar = "PLECT_TEST_FORCE_SHARED_BUILD_FAILURE"
 
-	dir, err := o.build(root, binaries, goToolCaches)
+// Runs only as a subprocess (see TestMain_RemovesTheSharedDirAfterAFailedBuild):
+// poisoning the real shared build singleton is safe only in a throwaway process.
+func TestForceSharedBuildFailure(t *testing.T) {
+	if os.Getenv(forceSharedBuildFailureEnvVar) != "1" {
+		t.Skip("subprocess helper; set " + forceSharedBuildFailureEnvVar + " to run")
+	}
+	dir, err := sharedWorkspaceProviderBinaries.build(repoRoot(t), []struct{ moduleDir, pkg, name string }{
+		{"app", "./cmd/this-package-does-not-exist", "nope"},
+	}, goToolCaches)
 	if err == nil {
 		t.Fatal("expected an error building a nonexistent package")
 	}
-	if _, statErr := os.Stat(filepath.Join(dir, "plect")); statErr != nil {
-		t.Fatalf("the binary built before the failure should exist: %v", statErr)
+	os.Stdout.WriteString("SHARED_BIN_DIR=" + dir + "\n")
+}
+
+// Spawns TestForceSharedBuildFailure as a subprocess so its real TestMain,
+// not a copy of its logic, is what cleans up.
+func TestMain_RemovesTheSharedDirAfterAFailedBuild(t *testing.T) {
+	cmd := exec.Command("go", "test", "-tags", "integration", "-run", "^TestForceSharedBuildFailure$", "-v", "./internal/service/...")
+	cmd.Dir = filepath.Join(repoRoot(t), "app")
+	cmd.Env = append(os.Environ(), forceSharedBuildFailureEnvVar+"=1")
+	cmd.Env = append(cmd.Env, goToolCaches...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("subprocess failed: %v\n%s", err, out)
 	}
 
-	o.cleanup()
-
+	var dir string
+	for _, line := range strings.Split(string(out), "\n") {
+		if after, ok := strings.CutPrefix(line, "SHARED_BIN_DIR="); ok {
+			dir = after
+		}
+	}
+	if dir == "" {
+		t.Fatalf("subprocess output missing SHARED_BIN_DIR=...:\n%s", out)
+	}
 	if _, statErr := os.Stat(dir); !os.IsNotExist(statErr) {
-		t.Errorf("cleanup should have removed %s, stat err = %v", dir, statErr)
+		t.Errorf("TestMain should have removed %s, stat err = %v", dir, statErr)
 	}
 }
 
