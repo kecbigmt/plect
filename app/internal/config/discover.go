@@ -120,8 +120,7 @@ func (lc *layerResultCache) evict(path string) {
 	delete(lc.byPath, path)
 }
 
-// layerResultCache lazily creates c's cache instance via CompareAndSwap, so
-// concurrent first callers race safely.
+// layerResultCache lazily creates c's cache instance, racing safely via CompareAndSwap.
 func (c *Config) layerResultCache() *layerResultCache {
 	if lc := c.layerCache.Load(); lc != nil {
 		return lc
