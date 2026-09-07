@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -87,35 +88,70 @@ const (
 	ciStatusEventType  = "github.ci_status" // boundary-allow: real event type the watcher publishes
 )
 
-// buildGithubPluginBinaries compiles plect and the shipped plugin's two
-// executables into a temp bin dir, prepends it to PATH, and returns the
-// mounted-plugin entry the shipped worktree.toml's `{{bin ...}}` references
-// need to resolve. Mirrors app/internal/service's own
-// buildWorkspaceProviderBinaries — duplicated here rather than shared,
+var githubPluginBinaries = []struct{ moduleDir, pkg, name string }{
+	{"app", "./cmd/plect", "plect"},
+	{filepath.Join("plugins", pluginDirName, "src"), "./cmd/" + worktreeBin, worktreeBin},
+	{filepath.Join("plugins", pluginDirName, "src"), "./cmd/" + watcherBin, watcherBin},
+	{filepath.Join("plugins", pluginDirName, "src"), "./cmd/" + appTokenBin, appTokenBin},
+}
+
+// sharedGithubPluginBinariesDir/Err cache buildSharedGithubPluginBinaries's
+// result for this run; never removed since the run's own temp dir goes with it.
+var (
+	sharedGithubPluginBinariesOnce sync.Once
+	sharedGithubPluginBinariesDir  string
+	sharedGithubPluginBinariesErr  error
+)
+
+// buildSharedGithubPluginBinaries builds githubPluginBinaries once per test
+// binary run rather than once per call: this file's two tests each mount a
+// fresh copy, and each was separately rebuilding all four.
+func buildSharedGithubPluginBinaries(root string) (string, error) {
+	sharedGithubPluginBinariesOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "plect-github-plugin-bin-")
+		if err != nil {
+			sharedGithubPluginBinariesErr = err
+			return
+		}
+		for _, b := range githubPluginBinaries {
+			cmd := exec.Command("go", "build", "-o", filepath.Join(dir, b.name), b.pkg)
+			cmd.Dir = filepath.Join(root, b.moduleDir)
+			cmd.Env = append(os.Environ(), goToolCachesForE2E...)
+			cmd.Stdout = os.Stderr
+			cmd.Stderr = os.Stderr
+			if err := cmd.Run(); err != nil {
+				sharedGithubPluginBinariesErr = fmt.Errorf("build %s: %w", b.name, err)
+				return
+			}
+		}
+		sharedGithubPluginBinariesDir = dir
+	})
+	return sharedGithubPluginBinariesDir, sharedGithubPluginBinariesErr
+}
+
+// buildGithubPluginBinaries symlinks the shared binaries (see
+// buildSharedGithubPluginBinaries) into a fresh per-test directory and PATH,
+// and returns the mounted-plugin entry the shipped worktree.toml's
+// `{{bin ...}}` references need to resolve. Mirrors app/internal/service's
+// own buildWorkspaceProviderBinaries — duplicated here rather than shared,
 // because that helper is unexported in a package this one cannot import (see
 // the comment on TestE2E_TaskSetupResourceDeliversRealWatcherEventToReactiveTick
 // for why this test lives in this package at all).
 func buildGithubPluginBinaries(t *testing.T, root string) []plugins.Mounted {
 	t.Helper()
+	sharedDir, err := buildSharedGithubPluginBinaries(root)
+	if err != nil {
+		t.Fatalf("build github plugin binaries: %v", err)
+	}
 	binDir := filepath.Join(t.TempDir(), "bin")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	build := func(moduleDir, pkg, out string) {
-		t.Helper()
-		cmd := exec.Command("go", "build", "-o", filepath.Join(binDir, out), pkg)
-		cmd.Dir = filepath.Join(root, moduleDir)
-		cmd.Env = append(os.Environ(), goToolCachesForE2E...)
-		cmd.Stdout = os.Stderr
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			t.Fatalf("build %s: %v", out, err)
+	for _, b := range githubPluginBinaries {
+		if err := os.Symlink(filepath.Join(sharedDir, b.name), filepath.Join(binDir, b.name)); err != nil {
+			t.Fatalf("symlink %s: %v", b.name, err)
 		}
 	}
-	build("app", "./cmd/plect", "plect")
-	build(filepath.Join("plugins", pluginDirName, "src"), "./cmd/"+worktreeBin, worktreeBin)
-	build(filepath.Join("plugins", pluginDirName, "src"), "./cmd/"+watcherBin, watcherBin)
-	build(filepath.Join("plugins", pluginDirName, "src"), "./cmd/"+appTokenBin, appTokenBin)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	return []plugins.Mounted{{
@@ -127,6 +163,37 @@ func buildGithubPluginBinaries(t *testing.T, root string) []plugins.Mounted {
 			{Name: appTokenBin, Path: appTokenBin},
 		}},
 	}}
+}
+
+// TestBuildGithubPluginBinaries_BuildsOnce pins the once-only cache: two
+// mount requests must reuse one build, not each trigger `go build`.
+func TestBuildGithubPluginBinaries_BuildsOnce(t *testing.T) {
+	root := repoRootForE2E(t)
+	buildGithubPluginBinaries(t, root)
+	firstDir, err := buildSharedGithubPluginBinaries(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstInfo, err := os.Stat(filepath.Join(firstDir, "plect"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	buildGithubPluginBinaries(t, root)
+	secondDir, err := buildSharedGithubPluginBinaries(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondDir != firstDir {
+		t.Fatalf("shared binaries directory changed between calls: %q vs %q", firstDir, secondDir)
+	}
+	secondInfo, err := os.Stat(filepath.Join(secondDir, "plect"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !secondInfo.ModTime().Equal(firstInfo.ModTime()) {
+		t.Error("plect was rebuilt on a second mount request; github plugin binaries must build exactly once per test binary run")
+	}
 }
 
 // apiCLIBin is the API CLI binary name the real watcher poller shells out
