@@ -278,8 +278,8 @@ func TestRunCleanup_RequiredSelfOutputAbsenceFailsTheRelease(t *testing.T) {
 
 // TestRunSetup_RetainsCleanupContractAndExecutionDir proves a plain node's
 // setup snapshots its own cleanup action, execution directory, and plugin
-// reference onto TaskState -- see issue #496's node_executions.cleanup_json/
-// execution_dir/plugin_ref. persistence.writeTasksTx persists Cleanup
+// reference onto TaskState (see docs/design/sqlite-persistence.md's "Node
+// execution identity" section). persistence.writeTasksTx persists Cleanup
 // opaquely; this test only proves the task package's own producer side.
 func TestRunSetup_RetainsCleanupContractAndExecutionDir(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
@@ -314,21 +314,12 @@ func TestRunSetup_RetainsCleanupContractAndExecutionDir(t *testing.T) {
 	}
 }
 
-// TestRunSetup_NestedNodeRetainsCleanupPerLayerNotOnTheComposedState proves
-// a nested (layered) node's own, composed TaskState.Cleanup is left nil
-// (the plain-node retained-contract shape does not fit a layered chain),
-// while EACH layer's own cleanup is retained separately on
-// LayerState.Cleanup instead (effect.RetainLayerCleanup, wired into
-// effect.RunLayers) -- schema-free, since cleanup never needs the compiled
-// input/locals/outputs schemas a layer's setup answers to (see
-// effect.CleanupLayers, which never sets them either).
-// TestRunSetup_RefusesUnreleasedNodeWhenNestingChainShapeChanges is issue
-// #496's acceptance case 3: a node whose task id and scope are unchanged
-// but whose nesting chain shape was revised (a different inner effect) is
-// still a different declaration -- the old chain's own retained per-layer
-// release recipe must survive untouched until something explicitly
-// releases it, not be silently discarded because the composed identity
-// looked the same.
+// TestRunSetup_RefusesUnreleasedNodeWhenNestingChainShapeChanges proves a
+// node whose task id and scope are unchanged but whose nesting chain shape
+// was revised (a different inner effect) is still a different declaration
+// -- the old chain's own retained per-layer release recipe must survive
+// untouched until something explicitly releases it, not be silently
+// discarded because the composed identity looked the same.
 func TestRunSetup_RefusesUnreleasedNodeWhenNestingChainShapeChanges(t *testing.T) {
 	withScriptedExecutor(t, &scriptedExecutor{stdout: map[string]string{"inner-a-setup": `{"pid":1}`}})
 	outer := config.TaskDefinition{ID: "outer", Scope: "run", Cleanup: shellStub("outer-cleanup")}
@@ -351,6 +342,14 @@ func TestRunSetup_RefusesUnreleasedNodeWhenNestingChainShapeChanges(t *testing.T
 	}
 }
 
+// TestRunSetup_NestedNodeRetainsCleanupPerLayerNotOnTheComposedState proves
+// a nested (layered) node's own, composed TaskState.Cleanup is left nil
+// (the plain-node retained-contract shape does not fit a layered chain),
+// while EACH layer's own cleanup is retained separately on
+// LayerState.Cleanup instead (effect.RetainLayerCleanup, wired into
+// effect.RunLayers) -- schema-free, since cleanup never needs the compiled
+// input/locals/outputs schemas a layer's setup answers to (see
+// effect.CleanupLayers, which never sets them either).
 func TestRunSetup_NestedNodeRetainsCleanupPerLayerNotOnTheComposedState(t *testing.T) {
 	withScriptedExecutor(t, &scriptedExecutor{stdout: map[string]string{"inner-setup": `{"pid":42}`}})
 	outer := config.TaskDefinition{ID: "outer", Scope: "run", Cleanup: shellStub("outer-cleanup")}
@@ -443,8 +442,7 @@ func TestRunSetup_CapturesOutputsAndRespectsDeps(t *testing.T) {
 // records its own resolved dependency edges onto TaskState.DependsOn --
 // persistence.writeTasksTx snapshots these into node_execution_dependencies
 // so release ordering survives even once the workflow declaration that
-// derived them changes or the dependency node disappears from it. See
-// issue #496.
+// derived them changes or the dependency node disappears from it.
 func TestRunSetup_StampsDependsOnFromResolvedNode(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -560,12 +558,12 @@ func TestRunSetup_RetriesFailed(t *testing.T) {
 	}
 }
 
-// TestRunSetup_RefusesUnreleasedNodeUnderADifferentDeclaration is the
-// issue #496 acceptance case: a node whose recorded, unreleased (here
-// "failed") attempt names a different task than the one about to be set up
-// must be refused rather than silently overwritten -- the old attempt's own
-// release recipe (task "old", not "new") would otherwise be discarded with
-// no way to release it later.
+// TestRunSetup_RefusesUnreleasedNodeUnderADifferentDeclaration proves a
+// node whose recorded, unreleased (here "failed") attempt names a
+// different task than the one about to be set up is refused rather than
+// silently overwritten -- the old attempt's own release recipe (task
+// "old", not "new") would otherwise be discarded with no way to release it
+// later.
 func TestRunSetup_RefusesUnreleasedNodeUnderADifferentDeclaration(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")

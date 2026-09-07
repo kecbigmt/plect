@@ -715,7 +715,7 @@ func reportCleanupFailure(obs Observer, r Resolved, elapsed time.Duration, err e
 // recipe must not be discarded just because the node id it lived under now
 // means something else. Release it
 // first (`plect down`/`plect destroy`) and retry. This is deliberately not
-// gated by a force flag yet — no caller needs one — see issue #496.
+// gated by a force flag yet, since no caller needs one.
 func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, tasks map[string]*contract.TaskState, observer Observer) error {
 	obs := observerOr(observer)
 	terminalOwner := terminalOwnerIn(ordered)
@@ -940,8 +940,7 @@ func declarationChanged(r Resolved, existing *contract.TaskState) bool {
 	// removed, reordered, or swapped) is also a different declaration: the
 	// existing, retained per-layer release recipe (contract.LayerState.
 	// Cleanup) belongs to the OLD chain shape and must not be silently
-	// reused against a differently-shaped one. See issue #496's acceptance
-	// case 3.
+	// reused against a differently-shaped one.
 	if len(r.Layers) != len(existing.Layers) {
 		return true
 	}

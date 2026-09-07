@@ -157,7 +157,7 @@ type TaskState struct {
 	// *current* workspace_dir. Meaningful only for a workflow-DAG node.
 	// Excluded from ordinary JSON output: it is a persistence-internal
 	// retention detail, not a fact external consumers (Web UI, MCP) need to
-	// see, per issue #496's security obligations.
+	// see.
 	ExecutionDir string `json:"-"`
 	// PluginRef is the resolved plugin catalog address and revision this
 	// execution's cleanup action's `bin` references resolve against, empty
@@ -234,8 +234,8 @@ type LayerState struct {
 	// JSON; shape is effect.RetainedLayerCleanup), so releasing a nested
 	// node's chain does not need to re-read whatever the *current*
 	// task/effect definition says for this layer. Nil for a layer with no
-	// cleanup, and for every task_instance_layers row: only node_execution_layers
-	// populates it today (see issue #496). Excluded from ordinary JSON
+	// cleanup, and for every task_instance_layers row: only
+	// node_execution_layers populates it today. Excluded from ordinary JSON
 	// output for the same reason as TaskState's own retained fields.
 	Cleanup json.RawMessage `json:"-"`
 }

@@ -75,8 +75,7 @@ type teardownItem struct {
 // which only reflects the *current* workflow declaration — so a node the
 // workflow no longer declares is still torn down, using whatever THAT
 // execution itself retained (see resolveNodeCleanup), never whatever the
-// current plan says its node_id currently means. This is the fix for issue
-// #496's acceptance case 1.
+// current plan says its node_id currently means.
 //
 // runOnly restricts to run-scoped tasks (the `down` lifecycle); destroy
 // passes false to reclaim every task regardless of scope. A dynamic

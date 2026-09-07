@@ -551,9 +551,9 @@ func TestPutSession_NodeInstanceDoneWhenRoundTripsAsEmbeddedJSON(t *testing.T) {
 	}
 }
 
-// TestPutSession_UnreleasedNodeSurvivesBeingDroppedFromTheMap proves the
-// core fix for issue #496: a node whose latest execution is still
-// unreleased (produced/failed) is never discarded just because a later Put
+// TestPutSession_UnreleasedNodeSurvivesBeingDroppedFromTheMap proves a node
+// whose latest execution is still unreleased (produced/failed) is never
+// discarded just because a later Put
 // stops mentioning it -- a workflow revision doing exactly that must not
 // silently destroy the execution record and cleanup obligation that
 // `plect down`/`destroy` still needs. See

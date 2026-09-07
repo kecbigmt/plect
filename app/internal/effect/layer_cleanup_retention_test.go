@@ -13,7 +13,7 @@ import (
 // compiled *jsonschema.Schema values RunSetup's own ResolveLayers would set
 // -- RetainLayerCleanup only ever copies the schema-free fields
 // CleanupLayers itself builds, so those compiled fields never need to be
-// (and cannot be) serialized. See issue #496.
+// (and cannot be) serialized.
 func TestRetainLayerCleanup_OmitsCompiledSchemaFields(t *testing.T) {
 	schema, err := lang.CompileSchema(map[string]any{"type": "object"}, "", "plect:test")
 	if err != nil {

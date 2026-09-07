@@ -17,9 +17,8 @@ import (
 
 // TestDestroy_ReleasesNodeRemovedFromWorkflow proves Destroy itself (not
 // just plect up's own separate stale-cleanup path) tears down a produced
-// node the current workflow no longer declares -- issue #496's acceptance
-// case 1, exercised end to end through the real Destroy call rather than
-// unifiedTeardownList directly.
+// node the current workflow no longer declares, exercised end to end
+// through the real Destroy call rather than unifiedTeardownList directly.
 func TestDestroy_ReleasesNodeRemovedFromWorkflow(t *testing.T) {
 	cfg := writeWorkflowFixture(t, t.TempDir(), "coding",
 		[]taskFixture{{id: "kept", scope: "run", setup: `echo '{}'`, cleanup: "true"}},
@@ -74,9 +73,9 @@ func TestDown_ReleasesRunScopedNodeRemovedFromWorkflow(t *testing.T) {
 	}
 }
 
-// TestUp_FailedSetupRetainsCleanupContractAcrossARestart proves issue #496's
-// acceptance case 4: a failed/partial setup's attempt record and its
-// retained cleanup contract survive being read back fresh -- state.Store
+// TestUp_FailedSetupRetainsCleanupContractAcrossARestart proves a
+// failed/partial setup's attempt record and its retained cleanup contract
+// survive being read back fresh -- state.Store
 // holds nothing in Go memory across calls, so a later, independent read is
 // exactly what a restarted process's own first read would see -- and a
 // later Destroy can still release it using that retained contract alone,
@@ -123,11 +122,11 @@ func TestUp_FailedSetupRetainsCleanupContractAcrossARestart(t *testing.T) {
 	}
 }
 
-// TestUnifiedTeardownList_ReleasesNodeRemovedFromCurrentWorkflow is issue
-// #496's acceptance case 1: a produced node the current workflow no longer
-// declares must still be enumerated for teardown, using its own retained
-// identity rather than the current plan (which has nothing to say about a
-// node it doesn't declare at all).
+// TestUnifiedTeardownList_ReleasesNodeRemovedFromCurrentWorkflow proves a
+// produced node the current workflow no longer declares must still be
+// enumerated for teardown, using its own retained identity rather than the
+// current plan (which has nothing to say about a node it doesn't declare
+// at all).
 func TestUnifiedTeardownList_ReleasesNodeRemovedFromCurrentWorkflow(t *testing.T) {
 	cfg := writeWorkflowFixture(t, t.TempDir(), "wf",
 		[]taskFixture{{id: "kept", scope: "session", setup: "echo '{}'", cleanup: "true"}},
@@ -190,9 +189,9 @@ func TestUnifiedTeardownList_UsesRetainedCleanupWhenCurrentDefinitionIsGone(t *t
 // release ordering follows each execution's own recorded DependsOn edge
 // even when it disagrees with plain ascending-Seq order (the case a
 // dependent's Seq happens to be lower than its prerequisite's, e.g. after
-// the prerequisite's own later generation) -- issue #496's acceptance case
-// 2. RunCleanup reclaims this list in reverse, so the dependent ("b") must
-// come out AFTER its prerequisite ("a") for "b" to release first.
+// the prerequisite's own later generation). RunCleanup reclaims this list
+// in reverse, so the dependent ("b") must come out AFTER its prerequisite
+// ("a") for "b" to release first.
 func TestUnifiedTeardownList_OrdersByRecordedDependencyNotSeqAlone(t *testing.T) {
 	cfg := writeWorkflowFixture(t, t.TempDir(), "wf", nil, nil)
 	session := &domain.Session{
