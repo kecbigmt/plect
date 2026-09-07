@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/kecbigmt/plecture/app/internal/procexec"
+	"github.com/kecbigmt/plecture/app/internal/testpath"
 )
 
 // newLocalCatalogGitRepo creates a git repository at a local path shaped as
@@ -118,7 +119,7 @@ func TestFetchCatalog_PathSource(t *testing.T) {
 }
 
 func TestFetchCatalog_PathSource_Subdir(t *testing.T) {
-	root := t.TempDir()
+	root := testpath.Real(t, t.TempDir())
 	writeCatalogManifest(t, filepath.Join(root, "plugins"), "schema_version = 2\nplugins = [\"okf\"]\n")
 	writeMinimalPlugin(t, filepath.Join(root, "plugins", "okf"))
 

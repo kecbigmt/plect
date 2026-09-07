@@ -87,11 +87,15 @@ var mcpListenCmd = &cobra.Command{
 // defaultSessionMcpListenSocket derives a per-session socket path under
 // $XDG_RUNTIME_DIR. sessionName often contains "/" (e.g. "team/project"),
 // which filepath.Join turns into nested directories rather than a flat
-// filename.
+// filename. The fallback is the fixed "/tmp", not os.TempDir(): on a host
+// with no $XDG_RUNTIME_DIR (e.g. macOS), os.TempDir() is a long per-process
+// path that, joined with a realistic session name, can push a unix socket
+// path past the sun_path length limit — the same convention the shipped
+// claude runtime effect's own socket path already follows.
 func defaultSessionMcpListenSocket(sessionName string) string {
 	rt := os.Getenv("XDG_RUNTIME_DIR")
 	if rt == "" {
-		rt = os.TempDir()
+		rt = "/tmp"
 	}
 	return filepath.Join(rt, "plect-mcp", sessionName+".sock")
 }

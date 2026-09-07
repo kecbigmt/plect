@@ -775,7 +775,7 @@ func TestIntegration_CaptureResolvesRenderedOutput(t *testing.T) {
 				setup:   `echo '{"session_name":"owner-701"}'`,
 				cleanup: "true",
 				attach:  "tmux attach -t {{.Self.session_name}}",
-				capture: `echo -n "view of {{.Self.session_name}}"`,
+				capture: `printf '%s' "view of {{.Self.session_name}}"`,
 			},
 		},
 		[]nodeFixture{{id: "envfile"}, {id: "tmux"}},

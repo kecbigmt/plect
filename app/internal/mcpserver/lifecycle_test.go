@@ -48,7 +48,7 @@ script = "true"
 
 [noop.terminal.capture]
 type   = "shell"
-script = "echo -n hello"
+script = "printf '%s' hello"
 
 [noop.terminal.send_text]
 type   = "shell"

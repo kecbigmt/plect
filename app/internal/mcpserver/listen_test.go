@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/kecbigmt/plecture/app/internal/sockettest"
 )
 
 func TestListenSetsSocketPermissions(t *testing.T) {
@@ -23,7 +25,7 @@ func TestListenSetsSocketPermissions(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	socket := filepath.Join(t.TempDir(), "plect.sock")
+	socket := filepath.Join(sockettest.Dir(t), "plect.sock")
 	done := runTestListener(t, ctx, socket)
 	waitForSocketMode(t, socket, 0o666)
 
@@ -38,7 +40,7 @@ func TestListenAcceptsConcurrentConnections(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	socket := filepath.Join(t.TempDir(), "plect.sock")
+	socket := filepath.Join(sockettest.Dir(t), "plect.sock")
 	done := runTestListener(t, ctx, socket)
 	waitForSocketMode(t, socket, 0o666)
 
@@ -87,7 +89,7 @@ func TestListenReapsChildAfterDisconnect(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	socket := filepath.Join(t.TempDir(), "plect.sock")
+	socket := filepath.Join(sockettest.Dir(t), "plect.sock")
 	done := runTestListener(t, ctx, socket)
 	waitForSocketMode(t, socket, 0o666)
 
