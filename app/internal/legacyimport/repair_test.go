@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -89,6 +90,49 @@ func TestRepairImportedSessions_DryRunReportsWithoutWriting(t *testing.T) {
 			t.Errorf("dry run left a backup file %q behind", e.Name())
 		}
 	}
+}
+
+// TestRepairImportedSessions_DryRunCreatesNoGateOrBackupFiles is the
+// regression test for a real bug: DryRun read via persistence.Open/
+// EnsureCurrent, both of which create this package's own
+// .access.lock/.coordination.lock gate sidecars (EnsureCurrent can also
+// migrate the schema) as a side effect of opening -- filesystem mutation a
+// dry run's own "reports without writing anything" promise must not have.
+// listSessionNamesReadOnly's immutable=1 connection also skips the -wal/-shm
+// a plain mode=ro one would still create, so the comparison below is exact.
+func TestRepairImportedSessions_DryRunCreatesNoGateOrBackupFiles(t *testing.T) {
+	sourceDir, destDir := buggyImportedFixture(t)
+	ctx := context.Background()
+
+	before, err := direntNames(destDir)
+	if err != nil {
+		t.Fatalf("ReadDir(destDir) before: %v", err)
+	}
+
+	if _, err := RepairImportedSessions(ctx, RepairOptions{SourceDir: sourceDir, DestDir: destDir, DryRun: true}); err != nil {
+		t.Fatalf("RepairImportedSessions (dry-run): %v", err)
+	}
+
+	after, err := direntNames(destDir)
+	if err != nil {
+		t.Fatalf("ReadDir(destDir) after: %v", err)
+	}
+	if !slices.Equal(before, after) {
+		t.Errorf("destDir contents changed by a dry run:\nbefore=%v\nafter= %v", before, after)
+	}
+}
+
+func direntNames(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.Name()
+	}
+	slices.Sort(names)
+	return names, nil
 }
 
 func TestRepairImportedSessions_DeletesGhostsAndBacksUpFirst(t *testing.T) {

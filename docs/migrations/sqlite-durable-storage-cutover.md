@@ -186,6 +186,12 @@ that host's already-promoted `storage.db`; it is not a standing migration
 path and can be removed once every host that needs it has run it, or once
 v0.3.0 ships, whichever comes first.
 
+Stop every plect process against the target data directory first, the same
+prerequisite `plect storage import` has (see "Prerequisites" above): the
+backup below is a raw file copy, and the delete pass reads the database
+once up front, so either step run against a live writer is not a reliable
+snapshot of what actually existed.
+
 It takes the same `--from <legacy backup dir>` the original import used:
 
 ```bash

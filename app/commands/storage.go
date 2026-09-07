@@ -103,6 +103,11 @@ on a host that already ran that older import. This command deletes every
 session (and its events) that the already-promoted storage.db at
 --data-home holds but --from's state.json does not name.
 
+Stop every plect process against --data-home first (same prerequisite as
+'plect storage import'): this command's raw file-copy backup and its delete
+pass both assume nothing else is writing to storage.db concurrently, or
+neither is a reliable snapshot of what existed.
+
 It takes a dated backup of storage.db (plus its -wal/-shm siblings, if any)
 before deleting anything, unless --dry-run. This command is a stopgap: it can
 be removed once every host has run it, or once v0.3.0 ships, whichever comes
