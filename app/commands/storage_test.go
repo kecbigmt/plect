@@ -29,6 +29,38 @@ func TestStorageMigrate_CreatesAndReportsSchemaVersion(t *testing.T) {
 	}
 }
 
+// TestStorageMigrate_CreatesTheLiterallyNamedStorageFiles pins the exact
+// on-disk file names by literal, independent of persistence.PathIn: every
+// other test in this file resolves its expected path through PathIn, so a
+// regression in PathIn itself (or the fileName constant it derives from)
+// would go unnoticed rather than being caught here.
+func TestStorageMigrate_CreatesTheLiterallyNamedStorageFiles(t *testing.T) {
+	fakeHome := t.TempDir()
+	t.Setenv("HOME", fakeHome)
+	t.Setenv("XDG_DATA_HOME", "")
+
+	if out, err := execRoot(t, "storage", "migrate"); err != nil {
+		t.Fatalf("Execute() error = %v; output:\n%s", err, out)
+	}
+
+	dataDir := filepath.Join(fakeHome, ".local", "share", "plect")
+	for _, name := range []string{"storage.db", "storage.db.access.lock", "storage.db.coordination.lock"} {
+		if _, statErr := os.Stat(filepath.Join(dataDir, name)); statErr != nil {
+			t.Errorf("%s not created: %v", name, statErr)
+		}
+	}
+
+	entries, err := os.ReadDir(dataDir)
+	if err != nil {
+		t.Fatalf("ReadDir(%s): %v", dataDir, err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "store.db") {
+			t.Errorf("legacy store.db artifact present in a fresh data dir: %s", entry.Name())
+		}
+	}
+}
+
 func TestStorageMigrate_IsANoOpOnASecondRun(t *testing.T) {
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)

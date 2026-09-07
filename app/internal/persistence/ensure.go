@@ -8,16 +8,16 @@ import (
 	"path/filepath"
 )
 
-// FileName is the database's file name within its data directory, matching
+// fileName is the database's file name within its data directory, matching
 // the plect storage vocabulary already in place (`plect storage migrate`/
 // `plect storage import`, the SQLite durable storage ADR): every caller that
 // needs the path derives it via PathIn rather than joining this literal
 // itself, so the name has one source.
-const FileName = "storage.db"
+const fileName = "storage.db"
 
 // PathIn returns the database path within dir.
 func PathIn(dir string) string {
-	return filepath.Join(dir, FileName)
+	return filepath.Join(dir, fileName)
 }
 
 // DefaultPath is the production database location: $XDG_DATA_HOME/plect/storage.db,
