@@ -443,13 +443,45 @@ func TestEventListAndPageStillReturnEventsAfterDestroyWithNoRecreate(t *testing.
 	if err != nil || len(ascPage.Events) != 1 || ascPage.Events[0].Summary != "hello" {
 		t.Fatalf("EventPage (asc) after destroy: err=%v page=%+v", err, ascPage)
 	}
-	if ascPage.NextCursor != "" {
-		t.Errorf("NextCursor = %q, want empty (no live generation to resume against)", ascPage.NextCursor)
+	if ascPage.NextCursor == "" {
+		t.Error("NextCursor = \"\", want a cursor over the destroyed incarnation (its history is still pageable)")
 	}
 
 	descPage, err := EventPage(nil, store, session, EventPageParams{Order: event.OrderDesc})
 	if err != nil || len(descPage.Events) != 1 || descPage.Events[0].Summary != "hello" {
 		t.Fatalf("EventPage (desc) after destroy: err=%v page=%+v", err, descPage)
+	}
+}
+
+// A destroyed session's history beyond one page limit must still be
+// reachable by resuming the cursor a prior page returned — pagination, not
+// just the first page, survives destroy the same way reads do.
+func TestEventPageAscPaginatesAfterDestroyWithNoRecreate(t *testing.T) {
+	store := state.NewStore(t.TempDir())
+	const session = "owner/repo-7"
+	for _, summary := range []string{"one", "two", "three"} {
+		if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote, Summary: summary}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Destroy(session); err != nil {
+		t.Fatalf("destroy: %v", err)
+	}
+
+	first, err := EventPage(nil, store, session, EventPageParams{Filter: event.Filter{Limit: 2}})
+	if err != nil || len(first.Events) != 2 || first.Events[0].Summary != "one" || first.Events[1].Summary != "two" {
+		t.Fatalf("first page: err=%v page=%+v", err, first)
+	}
+	if first.NextCursor == "" {
+		t.Fatal("first page's NextCursor is empty, want one to resume from")
+	}
+
+	second, err := EventPage(nil, store, session, EventPageParams{Cursor: first.NextCursor})
+	if err != nil {
+		t.Fatalf("second page: %v", err)
+	}
+	if len(second.Events) != 1 || second.Events[0].Summary != "three" {
+		t.Fatalf("second page = %+v, want exactly [three]", second.Events)
 	}
 }
 

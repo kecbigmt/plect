@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -155,5 +156,123 @@ func TestRepairImportedSessions_MarksGhostsDestroyedAndBacksUpFirst(t *testing.T
 func TestRepairImportedSessions_RequiresSourceAndDestDir(t *testing.T) {
 	if _, err := RepairImportedSessions(context.Background(), RepairOptions{}); err == nil {
 		t.Fatal("RepairImportedSessions with no SourceDir/DestDir must fail")
+	}
+}
+
+// TestRepairImportedSessions_BacksUpEvenWhenOpeningTheDatabaseFails is the
+// regression test for a real bug: RepairImportedSessions called
+// EnsureCurrent (which migrates as a side effect of opening) before the
+// backup step, so a schema migration -- or here, EnsureCurrent's own
+// dev-build refusal against a behind-schema database -- could land with no
+// backup covering it. The backup must exist and be untouched even when
+// opening the target afterward fails outright.
+func TestRepairImportedSessions_BacksUpEvenWhenOpeningTheDatabaseFails(t *testing.T) {
+	sourceDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sourceDir, "state.json"), []byte(`{"version":7,"sessions":{}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	destDir := t.TempDir()
+	ctx := context.Background()
+	dbPath := persistence.PathIn(destDir)
+
+	if err := persistence.SeedWithMigrationsForTest(ctx, dbPath, persistence.RealMigrationsMinusLatestForTest()); err != nil {
+		t.Fatalf("seed behind-schema db: %v", err)
+	}
+	behindDB, err := persistence.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	behindVersion, err := behindDB.Version(ctx)
+	behindDB.Close()
+	if err != nil {
+		t.Fatalf("read behind-schema version: %v", err)
+	}
+
+	report, err := RepairImportedSessions(ctx, RepairOptions{SourceDir: sourceDir, DestDir: destDir})
+	if err == nil {
+		t.Fatal("RepairImportedSessions against a behind-schema database in a dev-build test binary unexpectedly succeeded")
+	}
+	if report.BackupPath == "" {
+		t.Fatal("BackupPath empty despite the open/migrate failure -- the backup must be taken before EnsureCurrent is ever called")
+	}
+
+	backupDB, err := persistence.Open(report.BackupPath)
+	if err != nil {
+		t.Fatalf("open backup: %v", err)
+	}
+	backupVersion, err := backupDB.Version(ctx)
+	backupDB.Close()
+	if err != nil {
+		t.Fatalf("read backup version: %v", err)
+	}
+	if backupVersion != behindVersion {
+		t.Errorf("backup schema version = %d, want %d (its pre-open state)", backupVersion, behindVersion)
+	}
+}
+
+func TestRepairImportedSessions_ErrorsWhenTargetNeverImportedTheBackup(t *testing.T) {
+	sourceDir, _, _ := legacyFixture(t)
+	destDir := t.TempDir()
+	ctx := context.Background()
+
+	db, err := persistence.EnsureCurrent(ctx, persistence.PathIn(destDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	_, err = RepairImportedSessions(ctx, RepairOptions{SourceDir: sourceDir, DestDir: destDir})
+	if err == nil {
+		t.Fatal("RepairImportedSessions against a target that never imported --from's backup unexpectedly succeeded")
+	}
+	if !strings.Contains(err.Error(), "never imported") {
+		t.Errorf("error = %v, want it to mention the session was never imported (a --data-home mismatch, not an already-destroyed ghost)", err)
+	}
+}
+
+// TestRepairImportedSessions_LeavesARecreatedLiveSessionAlone is the
+// regression test for a real bug: a ghost name legitimately reused (e.g. an
+// operator running `plect up orphan-events-only` between the buggy import
+// and this repair) must not be destroyed just because it is absent from
+// --from's state.json -- that absence is also true of every real, never
+// pre-existing session name.
+func TestRepairImportedSessions_LeavesARecreatedLiveSessionAlone(t *testing.T) {
+	sourceDir, destDir := buggyImportedFixture(t)
+	ctx := context.Background()
+
+	db, err := persistence.EnsureCurrent(ctx, persistence.PathIn(destDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	later := time.Now().UTC().Add(time.Hour)
+	if err := db.UpdateSession(ctx, "orphan-events-only", func(s *domain.Session) error {
+		s.Status = contract.SessionStatusUp
+		s.Workflow = "wf-real"
+		s.UpdatedAt = later
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	report, err := RepairImportedSessions(ctx, RepairOptions{SourceDir: sourceDir, DestDir: destDir})
+	if err != nil {
+		t.Fatalf("RepairImportedSessions: %v", err)
+	}
+	if report.Recreated != 1 || report.WouldMark != 0 {
+		t.Errorf("report = %+v, want Recreated=1 WouldMark=0", report)
+	}
+
+	db2, err := persistence.EnsureCurrent(ctx, persistence.PathIn(destDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db2.Close()
+	got, err := db2.GetSession(ctx, "orphan-events-only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.Status != contract.SessionStatusUp || got.Workflow != "wf-real" {
+		t.Errorf("orphan-events-only = %+v, want still live, up, and untouched", got)
 	}
 }

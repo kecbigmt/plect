@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/persistence"
 	"github.com/kecbigmt/plecture/contracts/atomicfile"
+	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
 // RepairOptions configures one RepairImportedSessions call.
@@ -23,6 +25,7 @@ type RepairReport struct {
 	WouldMark        int // marked, or would be on DryRun
 	AlreadyDestroyed int // a prior repair run, or a manual fix
 	Kept             int // sessions state.json also names
+	Recreated        int // a live row exists but isn't the original ghost -- left alone
 	BackupPath       string
 }
 
@@ -31,13 +34,13 @@ func (r *RepairReport) String() string {
 	if backup == "" {
 		backup = "(none: dry run)"
 	}
-	return fmt.Sprintf("would-mark=%d already-destroyed=%d kept=%d backup=%s", r.WouldMark, r.AlreadyDestroyed, r.Kept, backup)
+	return fmt.Sprintf("would-mark=%d already-destroyed=%d kept=%d recreated=%d backup=%s",
+		r.WouldMark, r.AlreadyDestroyed, r.Kept, r.Recreated, backup)
 }
 
 // RepairImportedSessions is the one-time fix for a host that ran an older
-// `plect storage import` before it marked an events/-only session destroyed
-// (see Run): it marks each one destroyed here the same way, against the
-// live storage.db in place, backing it up first (unless DryRun).
+// `plect storage import`, before it marked an events/-only session
+// destroyed (see Run), against the live storage.db in place.
 func RepairImportedSessions(ctx context.Context, opts RepairOptions) (*RepairReport, error) {
 	report := &RepairReport{}
 
@@ -56,20 +59,31 @@ func RepairImportedSessions(ctx context.Context, opts RepairOptions) (*RepairRep
 		return report, fmt.Errorf("legacyimport: %w", err)
 	}
 
+	// A missing storage.db means --data-home names the wrong directory --
+	// fail before EnsureCurrent below can silently mint an empty one.
 	dbPath := persistence.PathIn(opts.DestDir)
-	db, err := persistence.EnsureCurrent(ctx, dbPath)
-	if err != nil {
-		return report, fmt.Errorf("legacyimport: open %s: %w", dbPath, err)
+	if _, statErr := os.Stat(dbPath); statErr != nil {
+		if os.IsNotExist(statErr) {
+			return report, fmt.Errorf("legacyimport: %s does not exist; --data-home must name an already-imported plect data directory", dbPath)
+		}
+		return report, fmt.Errorf("legacyimport: stat %s: %w", dbPath, statErr)
 	}
-	defer db.Close()
 
 	if !opts.DryRun {
-		backupPath, err := backupDatabase(ctx, db, dbPath)
+		backupPath, err := backupDatabaseFiles(dbPath)
 		if err != nil {
 			return report, fmt.Errorf("legacyimport: back up %s: %w", dbPath, err)
 		}
 		report.BackupPath = backupPath
 	}
+
+	// EnsureCurrent may itself migrate the schema, so it opens only once
+	// the backup above already exists to precede that write.
+	db, err := persistence.EnsureCurrent(ctx, dbPath)
+	if err != nil {
+		return report, fmt.Errorf("legacyimport: open %s: %w", dbPath, err)
+	}
+	defer db.Close()
 
 	for _, name := range sessionNames {
 		if _, hasState := sf.Sessions[name]; hasState {
@@ -82,17 +96,31 @@ func RepairImportedSessions(ctx context.Context, opts RepairOptions) (*RepairRep
 			return report, fmt.Errorf("legacyimport: get session %q: %w", name, err)
 		}
 		if row == nil {
+			everExisted, err := db.EventStreamIDsBySession(ctx, name)
+			if err != nil {
+				return report, fmt.Errorf("legacyimport: list incarnations for %q: %w", name, err)
+			}
+			if len(everExisted) == 0 {
+				return report, fmt.Errorf("legacyimport: %q was never imported into %s; check --data-home", name, dbPath)
+			}
 			report.AlreadyDestroyed++
-			continue
-		}
-		report.WouldMark++
-		if opts.DryRun {
 			continue
 		}
 
 		sl, err := ReadSessionDir(eventsRoot, name)
 		if err != nil {
 			return report, fmt.Errorf("legacyimport: %w", err)
+		}
+		if !isUntouchedGhost(row, sl) {
+			// A real session (e.g. `plect up`) reused this name since the
+			// buggy import -- destroying it would discard real work.
+			report.Recreated++
+			continue
+		}
+
+		report.WouldMark++
+		if opts.DryRun {
+			continue
 		}
 		destroyedAt := time.Now().UTC()
 		if len(sl.Events) > 0 {
@@ -106,15 +134,24 @@ func RepairImportedSessions(ctx context.Context, opts RepairOptions) (*RepairRep
 	return report, nil
 }
 
-// backupDatabase checkpoints db (so a copy of dbPath alone never strands
-// pending writes in its WAL) then copies it and its WAL-mode siblings to a
-// dated backup next to it, returning the backup's storage.db path.
-func backupDatabase(ctx context.Context, db *persistence.DB, dbPath string) (string, error) {
-	if err := db.Checkpoint(ctx); err != nil {
-		return "", err
+// isUntouchedGhost reports whether row is still the exact placeholder Run's
+// buggy predecessor created for name, not a later, unrelated incarnation.
+// sl.GenID, when present, is authoritative -- ImportSession always reuses it
+// as the row's id. Without one (a freshly minted id, indistinguishable by
+// value alone), an untouched "down" placeholder's own shape is the only
+// signal left.
+func isUntouchedGhost(row *domain.Session, sl *SessionLog) bool {
+	if sl != nil && sl.GenID != "" {
+		return row.ID == sl.GenID
 	}
-	// Nanosecond precision so a quick re-run never collides with, and
-	// silently overwrites, the backup it is trying to recover from.
+	return row.Status == contract.SessionStatusDown && row.CreatedAt.Equal(row.UpdatedAt)
+}
+
+// backupDatabaseFiles copies dbPath and its WAL-mode siblings, if any, to a
+// dated backup next to it, called before dbPath is ever opened.
+func backupDatabaseFiles(dbPath string) (string, error) {
+	// Nanosecond precision: a quick re-run must never overwrite the very
+	// backup it is trying to recover from.
 	stamp := time.Now().UTC().Format("20060102T150405.000000000Z")
 	backupPath := dbPath + ".backup-" + stamp
 	if err := copyFileIfExists(dbPath, backupPath); err != nil {

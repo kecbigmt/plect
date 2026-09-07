@@ -137,7 +137,7 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 		report.PopulationMembers += len(pop.Members)
 	}
 
-	// eventOnlyDestroyedAt: applied in the third pass, once events exist to append.
+	// eventOnlyDestroyedAt: the row must stay live until its events are appended below.
 	eventOnlyDestroyedAt := make(map[string]time.Time)
 
 	for _, name := range allNames {
@@ -221,8 +221,7 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 		}
 	}
 
-	// Third pass: AppendEvent errors against a non-live session, so this
-	// retirement cannot happen in the first pass.
+	// AppendEvent refuses a non-live session, so this waits until now.
 	for _, name := range allNames {
 		destroyedAt, isEventOnly := eventOnlyDestroyedAt[name]
 		if !isEventOnly {
@@ -358,7 +357,8 @@ func removeDatabaseFiles(path string) error {
 // session and event this run intended to import is actually present, the
 // second validation pass docs/design/sqlite-persistence.md's importer
 // section calls for (IntegrityCheck is the first: SQLite's own structural
-// check). eventOnlyDestroyedAt names the subset imported as destroyed.
+// check). eventOnlyDestroyedAt is required too: AllSessions is live-only,
+// so it can't tell a destroyed import from a missing one by itself.
 func validateCounts(ctx context.Context, db *persistence.DB, allNames []string, sessionLogs map[string]*SessionLog, eventOnlyDestroyedAt map[string]time.Time, report *Report) error {
 	live, err := db.AllSessions(ctx)
 	if err != nil {
@@ -381,7 +381,8 @@ func validateCounts(ctx context.Context, db *persistence.DB, allNames []string, 
 		if sl == nil {
 			continue
 		}
-		// ListEventsFrom is live-name-only; a destroyed session needs its incarnation id.
+		// A destroyed session has no live row for ListEventsFrom to resolve
+		// by name, so its events are checked by incarnation id instead.
 		var evs []event.Event
 		if wantDestroyed {
 			ids, err := db.EventStreamIDsBySession(ctx, name)

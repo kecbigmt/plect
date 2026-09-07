@@ -233,6 +233,33 @@ func TestRootPersistentPreRun_DoesNotPreCreateStorageDBForStorageImport(t *testi
 	}
 }
 
+// TestRootPersistentPreRun_DoesNotPreCreateStorageDBForStorageRepair: the
+// same pre-run carve-out storage import already has -- repair must back up
+// --data-home's own storage.db before anything opens or migrates it, and
+// this hook opening the default path first would risk exactly that.
+func TestRootPersistentPreRun_DoesNotPreCreateStorageDBForStorageRepair(t *testing.T) {
+	fakeHome := t.TempDir()
+	t.Setenv("HOME", fakeHome)
+	t.Setenv("XDG_DATA_HOME", "")
+	t.Setenv(confighome.EnvVar, "")
+	t.Setenv(confighome.XDGEnvVar, "")
+
+	backupDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(backupDir, "state.json"), []byte(`{"version":7,"sessions":{}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Missing --from fails RunE, but PersistentPreRunE still runs first.
+	if _, err := execRoot(t, "storage", "repair-imported-sessions"); err == nil {
+		t.Fatal("storage repair-imported-sessions with no --from unexpectedly succeeded")
+	}
+
+	dbPath := persistence.PathIn(filepath.Join(fakeHome, ".local", "share", "plect"))
+	if _, statErr := os.Stat(dbPath); !os.IsNotExist(statErr) {
+		t.Fatalf("stat %s = %v, want not-exist (PersistentPreRunE must not pre-create it for storage repair)", dbPath, statErr)
+	}
+}
+
 // TestStorageRepairImportedSessions_MarksGhostsDestroyed exercises the CLI
 // wiring end to end against a storage.db left exactly as the pre-fix
 // importer would leave it: an events/-only legacy session imported live as
