@@ -60,7 +60,7 @@ func NewStore(dir string) *Store {
 // and without sharing each would leak its own connection pool in a resident
 // process.
 func (s *Store) dbHandle() (*persistence.DB, error) {
-	db, err := persistence.EnsureCurrentShared(context.Background(), filepath.Join(s.dir, "store.db"))
+	db, err := persistence.EnsureCurrentShared(context.Background(), persistence.PathIn(s.dir))
 	if err != nil {
 		return nil, fmt.Errorf("eventlog: open database: %w", err)
 	}
@@ -76,7 +76,7 @@ var (
 // FailNextAppend makes the next Append against dir's database return err instead of writing, then reverts to normal. Production code never needs this: with one shared connection per path, a real file-level fault (a permission or lock change) would also block state.Store's unrelated writes to the same file.
 func FailNextAppend(dir string, err error) {
 	injectedAppendFailuresMu.Lock()
-	injectedAppendFailures[filepath.Join(dir, "store.db")] = err
+	injectedAppendFailures[persistence.PathIn(dir)] = err
 	injectedAppendFailuresMu.Unlock()
 }
 
@@ -127,7 +127,7 @@ func (s *Store) Append(ev event.Event) (stored event.Event, seq, next int64, err
 		ev.ID = newULID(ev.Time)
 	}
 
-	dbPath := filepath.Join(s.dir, "store.db")
+	dbPath := persistence.PathIn(s.dir)
 	if ferr := takeInjectedAppendFailure(dbPath); ferr != nil {
 		return ev, 0, 0, ferr
 	}

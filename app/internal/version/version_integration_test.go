@@ -9,9 +9,10 @@ import (
 )
 
 // TestIntegration_LdflagsInjectsCurrent exercises the exact -ldflags -X
-// string the release workflow injects into a built binary, so a typo in
-// that import path (a rename this package's own tests would not otherwise
-// catch) fails here instead of only in a published release archive.
+// string a packager (the release pipeline, a Nix package, ...) must inject,
+// so a typo in that import path — a rename this package's own tests would
+// not otherwise catch — fails here instead of only surfacing as every
+// packaged binary silently staying classified as a development build.
 func TestIntegration_LdflagsInjectsCurrent(t *testing.T) {
 	const injected = "9.9.9"
 	bin := filepath.Join(t.TempDir(), "versionprobe")

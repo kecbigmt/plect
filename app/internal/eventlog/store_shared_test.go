@@ -2,7 +2,6 @@ package eventlog_test
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
 	"github.com/kecbigmt/plecture/app/internal/eventlog"
@@ -13,7 +12,7 @@ import (
 
 func TestEventlogAndStateShareOneConnectionPoolClosedByOwner(t *testing.T) {
 	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "store.db")
+	dbPath := persistence.PathIn(dir)
 
 	if err := state.NewStore(dir).CheckReadable(); err != nil {
 		t.Fatalf("state store touch: %v", err)

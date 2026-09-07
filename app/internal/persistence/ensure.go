@@ -6,9 +6,23 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/kecbigmt/plecture/app/internal/version"
 )
 
-// DefaultPath is the production database location: $XDG_DATA_HOME/plect/store.db,
+// fileName is the database's file name within its data directory, matching
+// the plect storage vocabulary already in place (`plect storage migrate`/
+// `plect storage import`, the SQLite durable storage ADR): every caller that
+// needs the path derives it via PathIn rather than joining this literal
+// itself, so the name has one source.
+const fileName = "storage.db"
+
+// PathIn returns the database path within dir.
+func PathIn(dir string) string {
+	return filepath.Join(dir, fileName)
+}
+
+// DefaultPath is the production database location: $XDG_DATA_HOME/plect/storage.db,
 // matching state.NewStore's directory resolution for the sibling state.json.
 func DefaultPath() string {
 	dataHome := os.Getenv("XDG_DATA_HOME")
@@ -16,7 +30,7 @@ func DefaultPath() string {
 		home, _ := os.UserHomeDir()
 		dataHome = filepath.Join(home, ".local", "share")
 	}
-	return filepath.Join(dataHome, "plect", "store.db")
+	return PathIn(filepath.Join(dataHome, "plect"))
 }
 
 // EnsureCurrent is the single entry point every plect process calls before
@@ -26,19 +40,26 @@ func DefaultPath() string {
 // `plect storage migrate` command. It waits out or refuses a concurrent
 // migration, refuses a database newer than this binary supports, and
 // migrates the schema itself (via Migrate) if this process is the one that
-// finds it behind — see docs/design/sqlite-persistence.md's "Migration
+// finds it behind, unless it is a development build refusing a database it
+// did not create — see docs/design/sqlite-persistence.md's "Migration
 // access gate".
 //
 // The caller owns the returned DB's lifetime and must Close it.
 func EnsureCurrent(ctx context.Context, path string) (*DB, error) {
-	return ensureCurrent(ctx, path, migrationsSourceFS())
+	return ensureCurrent(ctx, path, migrationsSourceFS(), version.IsDevelopmentBuild(), false)
 }
 
-// ensureCurrent is EnsureCurrent with an injectable migration source, so
-// this package's own tests can exercise interrupted and concurrent
-// migrations against a small, controllable migration set instead of the
-// real migrations/ tree.
-func ensureCurrent(ctx context.Context, path string, migrations fs.FS) (*DB, error) {
+// EnsureCurrentAllowDevBuild is EnsureCurrent's explicit opt-in for a
+// development build; `plect storage migrate --allow-dev-build` is its only caller.
+func EnsureCurrentAllowDevBuild(ctx context.Context, path string) (*DB, error) {
+	return ensureCurrent(ctx, path, migrationsSourceFS(), version.IsDevelopmentBuild(), true)
+}
+
+// ensureCurrent is EnsureCurrent with an injectable migration source and
+// dev-build determination, so this package's own tests can exercise
+// migrations and the refusal below without the real migrations/ tree or the
+// process's actual build stamp.
+func ensureCurrent(ctx context.Context, path string, migrations fs.FS, isDevBuild, allowDevBuild bool) (*DB, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("persistence: create database directory: %w", err)
 	}
@@ -63,6 +84,14 @@ func ensureCurrent(ctx context.Context, path string, migrations fs.FS) (*DB, err
 	}
 	if current == target {
 		return db, nil
+	}
+
+	// current == 0 means this call is creating the store, not migrating one it did not create.
+	if current > 0 && isDevBuild && !allowDevBuild {
+		db.Close()
+		return nil, fmt.Errorf("persistence: %s is at schema %d; this development build would migrate it to %d.\n"+
+			"Refusing: point XDG_DATA_HOME at a scratch directory, or run `plect storage migrate --allow-dev-build` deliberately.",
+			filepath.Base(path), current, target)
 	}
 
 	if err := db.Migrate(ctx); err != nil {

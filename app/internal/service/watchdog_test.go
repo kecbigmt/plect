@@ -564,8 +564,18 @@ func TestSessionRunAndHealthState_AliveProbeBacked(t *testing.T) {
 			if gotRun := sessionRunState(cfg, s); gotRun != tt.wantRun {
 				t.Errorf("sessionRunState = %q, want %q", gotRun, tt.wantRun)
 			}
-			if gotHealth := sessionHealthState(cfg, store, "owner/repo-1"); gotHealth != tt.wantHealth {
-				t.Errorf("sessionHealthState = %q, want %q", gotHealth, tt.wantHealth)
+			// The reactor's periodic sweep (service.HealthcheckSession) is
+			// what actually persists a health verdict; run its core here so
+			// the read below exercises the same path List uses.
+			if _, err := EvaluateHealth(cfg, store, "owner/repo-1"); err != nil {
+				t.Fatalf("EvaluateHealth (sweep): %v", err)
+			}
+			swept, err := store.GetE("owner/repo-1")
+			if err != nil {
+				t.Fatalf("GetE: %v", err)
+			}
+			if gotHealth, _ := persistedHealth(swept); gotHealth != tt.wantHealth {
+				t.Errorf("persistedHealth = %q, want %q", gotHealth, tt.wantHealth)
 			}
 		})
 	}

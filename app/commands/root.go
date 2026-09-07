@@ -41,10 +41,17 @@ identifier no resolver matches selects a workflow explicitly (see
 				return fmt.Errorf("set %s from --config-home: %w", confighome.EnvVar, err)
 			}
 		}
+		if cmd == storageMigrateCmd {
+			// storageMigrateCmd's own RunE performs this exact currency
+			// check, choosing EnsureCurrent or EnsureCurrentAllowDevBuild by
+			// its --allow-dev-build flag; running the strict variant here
+			// first would refuse before that flag ever took effect.
+			return nil
+		}
 		if err := state.NewStore("").CheckReadable(); err != nil {
 			return err
 		}
-		// Keeps store.db's own schema current independently of the
+		// Keeps storage.db's own schema current independently of the
 		// state.json check above, which covers session/task state only.
 		db, err := persistence.EnsureCurrent(cmd.Context(), persistence.DefaultPath())
 		if err != nil {

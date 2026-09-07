@@ -3,7 +3,7 @@
 This design implements [the SQLite durable-storage decision](../adr/2026-09-06-sqlite-durable-storage.md).
 
 Core runtime persistence is one SQLite database at
-`$XDG_DATA_HOME/plect/store.db`. The `app/internal/persistence` package owns
+`$XDG_DATA_HOME/plect/storage.db`. The `app/internal/persistence` package owns
 opening it, schema checks, the access gate, migrations, and translation between
 database records and domain values. It opens every connection with WAL mode, a
 non-zero bounded busy timeout, and foreign-key enforcement. Production opens
@@ -329,14 +329,14 @@ transaction.
 
 SQLite's single-writer rule is insufficient: it does not make a running binary
 aware that its schema assumptions are incompatible. `persistence` therefore
-uses two local advisory lock files next to `store.db`:
+uses two local advisory lock files next to `storage.db`:
 
-- `store.db.access.lock` is the data-access gate. Every query and explicit
+- `storage.db.access.lock` is the data-access gate. Every query and explicit
   transaction takes a shared lock for its duration. A migration takes its
   exclusive lock for the full migration.
-- `store.db.coordination.lock` serializes migration intent. A normal access
+- `storage.db.coordination.lock` serializes migration intent. A normal access
   briefly takes a shared lock before taking the access gate. A migration takes
-  it exclusively, writes and fsyncs `store.db.migration.json`, and retains it
+  it exclusively, writes and fsyncs `storage.db.migration.json`, and retains it
   until the migration completes or fails.
 
 The marker records only diagnostics: process ID, binary version, start time,
@@ -367,6 +367,29 @@ first obtains migration exclusion; concurrent startup waits only for the
 bounded period and otherwise refuses without accessing data. A database whose
 goose ledger contains a version newer than the binary embeds always refuses
 normal and migration access with an upgrade instruction and makes no change.
+
+A development build — one `app/internal/version.IsDevelopmentBuild` reports
+true for, because the release pipeline never stamped it — additionally
+refuses to advance a database it did not create: a ledger already holding an
+applied migration (schema version greater than zero) behind the embedded
+migration set. The refusal names both schema versions and points at
+`XDG_DATA_HOME` (isolate onto a scratch database) and
+`plect storage migrate --allow-dev-build` (migrate this one deliberately) as
+the two ways to proceed, and makes no change, the same as the newer-than-
+supported refusal above. A database at schema zero carries none of that risk
+— this call is the one creating it — so a development build migrates it to
+the embedded target without needing the flag. A release-stamped build keeps
+today's automatic migration in every case, flag or not.
+
+Any packager building plect from source, not only the release pipeline's own
+matrix build, must inject the version the same way: a source build that
+skips `-ldflags "-X github.com/kecbigmt/plecture/app/internal/version.Current=<version>"`
+leaves `Current` at its unstamped placeholder and is a development build by
+this section's definition, regardless of what version string the packaging
+system otherwise derives (a Nix flake revision, a distribution's own package
+version, ...) for purposes outside this binary. Such a build refuses implicit
+migration of an existing store exactly as above until the packager passes
+that flag.
 
 The resident service keeps pools but uses the persistence access gate around
 each database operation, not around the process lifetime. Its HTTP event
@@ -441,7 +464,7 @@ heartbeat position imports under `heartbeat`.
 
 The import command runs only against an operator-created backup while writers
 are stopped. It builds and validates a temporary database, validates it again,
-then atomically promotes it as `store.db`. It never writes JSON and JSONL
+then atomically promotes it as `storage.db`. It never writes JSON and JSONL
 alongside the database. The command reads the following runtime paths.
 
 | Legacy path | Validation and destination |

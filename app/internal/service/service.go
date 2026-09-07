@@ -8,7 +8,6 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/config"
@@ -296,6 +295,7 @@ type ListEntry struct {
 	Title            string             `json:"title,omitempty"`
 	Run              domain.RunState    `json:"run"`
 	Health           domain.HealthState `json:"health,omitempty"`
+	HealthReason     string             `json:"health_reason,omitempty"`
 	DisplayStatus    string             `json:"display_status"`
 	ResourceID       string             `json:"resource_id"`
 	Tracked          bool               `json:"tracked"`
@@ -309,7 +309,9 @@ type ListEntry struct {
 	Tasks []TaskInstanceView `json:"tasks,omitempty"`
 }
 
-// List returns all sessions with their statuses.
+// List returns all sessions with their statuses. Health is whatever the
+// periodic healthcheck sweep already persisted — a listing must never
+// itself run a probe.
 func List(cfg *config.Config, store *state.Store) ([]ListEntry, error) {
 	sessions, err := store.AllE()
 	if err != nil {
@@ -318,26 +320,10 @@ func List(cfg *config.Config, store *state.Store) ([]ListEntry, error) {
 	displayWorkflows := loadDisplayWorkflows(cfg)
 	displayTasks := loadDisplayTasks(cfg)
 
-	// Each session may need a health probe subprocess. Doing 50+
-	// serially is the dominant cost, so fan out over a bounded pool and fill a
-	// preallocated slice by index; the sort below restores order.
-	tracked := make([]*domain.Session, 0, len(sessions))
+	entries := make([]ListEntry, 0, len(sessions))
 	for _, s := range sessions {
-		tracked = append(tracked, s)
+		entries = append(entries, buildListEntry(cfg, displayWorkflows, displayTasks, s, sessions))
 	}
-	entries := make([]ListEntry, len(tracked))
-	sem := make(chan struct{}, listConcurrency)
-	var wg sync.WaitGroup
-	for i := range tracked {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(i int) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			entries[i] = buildListEntry(cfg, store, displayWorkflows, displayTasks, tracked[i], sessions)
-		}(i)
-	}
-	wg.Wait()
 
 	// store.All ranges a map, so sort by name to make List deterministic —
 	// callers (plect ls, MCP, web UI auto-refresh) get a stable order.
@@ -348,21 +334,24 @@ func List(cfg *config.Config, store *state.Store) ([]ListEntry, error) {
 	return entries, nil
 }
 
-// listConcurrency bounds the per-session health-probe fan-out in List.
-const listConcurrency = 16
-
-// buildListEntry gathers one session's runtime status. Safe to call
-// concurrently: it only reads the shared workflows and spawns its own
-// subprocesses.
-func buildListEntry(cfg *config.Config, store *state.Store, displayWorkflows map[string]config.WorkflowFile, displayTasks taskDeclarations, s *domain.Session, sessions map[string]*domain.Session) ListEntry {
+func buildListEntry(cfg *config.Config, displayWorkflows map[string]config.WorkflowFile, displayTasks taskDeclarations, s *domain.Session, sessions map[string]*domain.Session) ListEntry {
 	var cached cachedInfo
 	applyDisplay(displayWorkflows, s, &cached)
 
+	run := sessionRunState(cfg, s)
+	health, healthReason := persistedHealth(s)
+	if run != domain.RunUp {
+		// The sweep skips a down session, so its last recorded verdict can
+		// predate the shutdown by any amount; a down session has no verdict
+		// at all, so a stale one must not survive into its row.
+		health, healthReason = "", ""
+	}
 	entry := ListEntry{
 		SessionName:      s.Name,
 		Title:            cached.Title,
-		Run:              sessionRunState(cfg, s),
-		Health:           sessionHealthState(cfg, store, s.Name),
+		Run:              run,
+		Health:           health,
+		HealthReason:     healthReason,
 		DisplayStatus:    cached.DisplayStatus,
 		ResourceID:       s.ResourceID,
 		Tracked:          true,
@@ -386,12 +375,14 @@ func sessionRunState(cfg *config.Config, s *domain.Session) domain.RunState {
 	return domain.RunDown
 }
 
-// sessionHealthState reports the "health" fact: the declared-alive-probe
-// evaluation, independent of run state. An evaluation error surfaces as
-// unhealthy — the same treatment the old three-value collapse gave it.
-func sessionHealthState(cfg *config.Config, store *state.Store, name string) domain.HealthState {
-	_, state := sessionHealthReport(cfg, store, name)
-	return state
+// persistedHealth reads the sweep's own record rather than evaluating
+// anything; an unreached session's zero HealthState renders as absent via
+// ListEntry's omitempty rather than a fabricated verdict.
+func persistedHealth(s *domain.Session) (domain.HealthState, string) {
+	if s == nil || s.Health == nil {
+		return "", ""
+	}
+	return domain.HealthState(s.Health.LastState), s.Health.LastReason
 }
 
 func sessionHealthReport(cfg *config.Config, store *state.Store, name string) (HealthReport, domain.HealthState) {
