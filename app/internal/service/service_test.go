@@ -1,9 +1,14 @@
 package service
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -69,7 +74,156 @@ func TestList_SortsTrackedByName(t *testing.T) {
 	}
 }
 
-func TestList_UnresolvableWorkflowIsUnhealthyButOtherSessionsListNormally(t *testing.T) {
+func findEntry(t *testing.T, entries []ListEntry, name string) ListEntry {
+	t.Helper()
+	for _, e := range entries {
+		if e.SessionName == name {
+			return e
+		}
+	}
+	t.Fatalf("%q missing from List results", name)
+	return ListEntry{}
+}
+
+// probeCallCount treats a missing marker file as zero calls, not an error.
+func probeCallCount(t *testing.T, path string) int {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0
+	}
+	if err != nil {
+		t.Fatalf("read probe marker %q: %v", path, err)
+	}
+	trimmed := strings.TrimRight(string(b), "\n")
+	if trimmed == "" {
+		return 0
+	}
+	return len(strings.Split(trimmed, "\n"))
+}
+
+func TestList_ReadsPersistedHealthWithoutProbing(t *testing.T) {
+	store := testStore(t)
+	marker := filepath.Join(t.TempDir(), "probe-calls")
+	cfg := aliveFixtureConfig(t, fmt.Sprintf("echo hit >> %s", marker))
+	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+		"initial": {Scope: contract.TaskScopeRun, TaskID: "runner", Status: contract.TaskStatusProduced},
+	})
+
+	// Simulate the reactor's periodic sweep (service.HealthcheckSession),
+	// which runs independently of any listing.
+	if _, err := EvaluateHealth(cfg, store, "owner/repo-1"); err != nil {
+		t.Fatalf("EvaluateHealth (sweep): %v", err)
+	}
+	if got := probeCallCount(t, marker); got != 1 {
+		t.Fatalf("probe calls after the sweep = %d, want 1", got)
+	}
+
+	for i := range 3 {
+		entries, err := List(cfg, store)
+		if err != nil {
+			t.Fatalf("List call %d: %v", i, err)
+		}
+		if got := findEntry(t, entries, "owner/repo-1").Health; got != domain.HealthHealthy {
+			t.Errorf("List call %d: Health = %q, want healthy (the sweep's verdict)", i, got)
+		}
+	}
+
+	if got := probeCallCount(t, marker); got != 1 {
+		t.Errorf("probe calls after 3 List calls = %d, want 1 — List must never probe", got)
+	}
+}
+
+func TestList_NeverSweptSessionHasNoHealth(t *testing.T) {
+	store := testStore(t)
+	cfg := aliveFixtureConfig(t, "true")
+	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+		"initial": {Scope: contract.TaskScopeRun, TaskID: "runner", Status: contract.TaskStatusProduced},
+	})
+
+	entries, err := List(cfg, store)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	entry := findEntry(t, entries, "owner/repo-1")
+	if entry.Health != domain.HealthState("") {
+		t.Errorf("Health = %q, want absent (never swept)", entry.Health)
+	}
+
+	b, err := json.Marshal(entry)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if strings.Contains(string(b), `"health"`) {
+		t.Errorf("JSON = %s, want the health field omitted for a never-swept session", b)
+	}
+}
+
+func TestList_SurfacesSweptUnhealthyReason(t *testing.T) {
+	store := testStore(t)
+	cfg := aliveFixtureConfig(t, "false")
+	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+		"initial": {Scope: contract.TaskScopeRun, TaskID: "runner", Status: contract.TaskStatusProduced},
+	})
+	if _, err := EvaluateHealth(cfg, store, "owner/repo-1"); err != nil {
+		t.Fatalf("EvaluateHealth (sweep): %v", err)
+	}
+
+	entries, err := List(cfg, store)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	entry := findEntry(t, entries, "owner/repo-1")
+	if entry.Health != domain.HealthUnhealthy {
+		t.Fatalf("Health = %q, want unhealthy", entry.Health)
+	}
+	sess, err := store.GetE("owner/repo-1")
+	if err != nil {
+		t.Fatalf("GetE: %v", err)
+	}
+	if sess.Health == nil || entry.HealthReason != sess.Health.LastReason || entry.HealthReason == "" {
+		t.Errorf("HealthReason = %q, want the sweep's persisted reason %+v", entry.HealthReason, sess.Health)
+	}
+}
+
+// The sweep skips a down session, so its last recorded verdict can predate
+// the shutdown by any amount.
+func TestList_DownSessionMasksStalePersistedHealth(t *testing.T) {
+	store := testStore(t)
+	cfg := aliveFixtureConfig(t, "true")
+	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "default", map[string]*contract.TaskState{
+		"initial": {Scope: contract.TaskScopeRun, TaskID: "runner", Status: contract.TaskStatusProduced},
+	})
+	if _, err := EvaluateHealth(cfg, store, "owner/repo-1"); err != nil {
+		t.Fatalf("EvaluateHealth (sweep while up): %v", err)
+	}
+	// Bring the session down without a further sweep, mirroring the reactor,
+	// which skips a down session's healthcheck entirely.
+	if err := store.Update("owner/repo-1", func(s *domain.Session) error {
+		s.Tasks["initial"].Status = contract.TaskStatusCleaned
+		return nil
+	}); err != nil {
+		t.Fatalf("bring down: %v", err)
+	}
+
+	entries, err := List(cfg, store)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	entry := findEntry(t, entries, "owner/repo-1")
+	if entry.Run != domain.RunDown {
+		t.Fatalf("Run = %q, want down (test setup)", entry.Run)
+	}
+	if entry.Health != domain.HealthState("") {
+		t.Errorf("Health = %q, want absent — a down session has no verdict, even with a stale prior sweep", entry.Health)
+	}
+	if entry.HealthReason != "" {
+		t.Errorf("HealthReason = %q, want empty", entry.HealthReason)
+	}
+}
+
+// A workflow that never resolves never completes a sweep either.
+func TestList_GhostWorkflowSessionHasNoHealthButOthersListNormally(t *testing.T) {
 	store := testStore(t)
 	cfg := currentPlanConfig(t, "true", "true") // only declares workflow "default"
 	seedSession(t, store, "owner/repo-1", "owner/repo", 1, "ghost-workflow", map[string]*contract.TaskState{
@@ -79,28 +233,21 @@ func TestList_UnresolvableWorkflowIsUnhealthyButOtherSessionsListNormally(t *tes
 		"pane":  {Scope: contract.TaskScopeRun, TaskID: "pane", Status: contract.TaskStatusProduced},
 		"agent": {Scope: contract.TaskScopeRun, TaskID: "agent", Status: contract.TaskStatusProduced},
 	})
+	if _, err := EvaluateHealth(cfg, store, "owner/repo-2"); err != nil {
+		t.Fatalf("EvaluateHealth (sweep): %v", err)
+	}
 
 	entries, err := List(cfg, store)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	byName := make(map[string]ListEntry, len(entries))
-	for _, e := range entries {
-		byName[e.SessionName] = e
+	broken := findEntry(t, entries, "owner/repo-1")
+	if broken.Health != domain.HealthState("") {
+		t.Errorf("never-swept session Health = %q, want absent", broken.Health)
 	}
-	broken, ok := byName["owner/repo-1"]
-	if !ok {
-		t.Fatal("owner/repo-1 missing from List results")
-	}
-	if broken.Health != domain.HealthUnhealthy {
-		t.Errorf("broken session Health = %q, want unhealthy", broken.Health)
-	}
-	healthy, ok := byName["owner/repo-2"]
-	if !ok {
-		t.Fatal("owner/repo-2 missing from List results")
-	}
+	healthy := findEntry(t, entries, "owner/repo-2")
 	if healthy.Health != domain.HealthHealthy {
-		t.Errorf("other session Health = %q, want healthy — one broken workflow must not affect it", healthy.Health)
+		t.Errorf("swept session Health = %q, want healthy — one never-swept session must not affect it", healthy.Health)
 	}
 }
 
