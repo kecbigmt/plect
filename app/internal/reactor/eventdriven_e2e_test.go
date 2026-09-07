@@ -87,43 +87,41 @@ const (
 	ciStatusEventType  = "github.ci_status" // boundary-allow: real event type the watcher publishes
 )
 
-var githubPluginBinaries = []struct{ moduleDir, pkg, name string }{
+var shippedPluginBinaries = []struct{ moduleDir, pkg, name string }{
 	{"app", "./cmd/plect", "plect"},
 	{filepath.Join("plugins", pluginDirName, "src"), "./cmd/" + worktreeBin, worktreeBin},
 	{filepath.Join("plugins", pluginDirName, "src"), "./cmd/" + watcherBin, watcherBin},
 	{filepath.Join("plugins", pluginDirName, "src"), "./cmd/" + appTokenBin, appTokenBin},
 }
 
-// buildSharedGithubPluginBinaries builds githubPluginBinaries once per test
+// buildSharedShippedPluginBinaries builds shippedPluginBinaries once per test
 // binary run rather than once per call: this file's two tests each mount a
 // fresh copy, and each was separately rebuilding all four.
-func buildSharedGithubPluginBinaries(root string) (string, error) {
-	sharedGithubPluginBinariesOnce.Do(func() {
+func buildSharedShippedPluginBinaries(root string) (string, error) {
+	sharedShippedPluginBinariesOnce.Do(func() {
 		dir, err := os.MkdirTemp("", "plect-shipped-plugin-bin-")
 		if err != nil {
-			sharedGithubPluginBinariesErr = err
+			sharedShippedPluginBinariesErr = err
 			return
 		}
-		// Recorded before any build runs, so TestMain's cleanup removes a
-		// partially-populated dir too if a later build in this loop fails.
-		sharedGithubPluginBinariesDir = dir
-		for _, b := range githubPluginBinaries {
+		sharedShippedPluginBinariesDir = dir
+		for _, b := range shippedPluginBinaries {
 			cmd := exec.Command("go", "build", "-o", filepath.Join(dir, b.name), b.pkg)
 			cmd.Dir = filepath.Join(root, b.moduleDir)
 			cmd.Env = append(os.Environ(), goToolCachesForE2E...)
 			cmd.Stdout = os.Stderr
 			cmd.Stderr = os.Stderr
 			if err := cmd.Run(); err != nil {
-				sharedGithubPluginBinariesErr = fmt.Errorf("build %s: %w", b.name, err)
+				sharedShippedPluginBinariesErr = fmt.Errorf("build %s: %w", b.name, err)
 				return
 			}
 		}
 	})
-	return sharedGithubPluginBinariesDir, sharedGithubPluginBinariesErr
+	return sharedShippedPluginBinariesDir, sharedShippedPluginBinariesErr
 }
 
 // buildGithubPluginBinaries symlinks the shared binaries (see
-// buildSharedGithubPluginBinaries) into a fresh per-test directory and PATH,
+// buildSharedShippedPluginBinaries) into a fresh per-test directory and PATH,
 // and returns the mounted-plugin entry the shipped worktree.toml's
 // `{{bin ...}}` references need to resolve. Mirrors app/internal/service's
 // own buildWorkspaceProviderBinaries — duplicated here rather than shared,
@@ -132,7 +130,7 @@ func buildSharedGithubPluginBinaries(root string) (string, error) {
 // for why this test lives in this package at all).
 func buildGithubPluginBinaries(t *testing.T, root string) []plugins.Mounted {
 	t.Helper()
-	sharedDir, err := buildSharedGithubPluginBinaries(root)
+	sharedDir, err := buildSharedShippedPluginBinaries(root)
 	if err != nil {
 		t.Fatalf("build shipped plugin binaries: %v", err)
 	}
@@ -140,7 +138,7 @@ func buildGithubPluginBinaries(t *testing.T, root string) []plugins.Mounted {
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, b := range githubPluginBinaries {
+	for _, b := range shippedPluginBinaries {
 		if err := os.Symlink(filepath.Join(sharedDir, b.name), filepath.Join(binDir, b.name)); err != nil {
 			t.Fatalf("symlink %s: %v", b.name, err)
 		}
@@ -158,10 +156,10 @@ func buildGithubPluginBinaries(t *testing.T, root string) []plugins.Mounted {
 	}}
 }
 
-func TestBuildGithubPluginBinaries_BuildsOnce(t *testing.T) {
+func TestBuildShippedPluginBinaries_BuildsOnce(t *testing.T) {
 	root := repoRootForE2E(t)
 	buildGithubPluginBinaries(t, root)
-	firstDir, err := buildSharedGithubPluginBinaries(root)
+	firstDir, err := buildSharedShippedPluginBinaries(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +169,7 @@ func TestBuildGithubPluginBinaries_BuildsOnce(t *testing.T) {
 	}
 
 	buildGithubPluginBinaries(t, root)
-	secondDir, err := buildSharedGithubPluginBinaries(root)
+	secondDir, err := buildSharedShippedPluginBinaries(root)
 	if err != nil {
 		t.Fatal(err)
 	}

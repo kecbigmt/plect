@@ -19,19 +19,19 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// sharedGithubPluginBinariesOnce guards buildSharedGithubPluginBinaries
+// sharedShippedPluginBinariesOnce guards buildSharedShippedPluginBinaries
 // (eventdriven_e2e_test.go, integration-tagged); declared here, without that
 // tag, so TestMain's cleanup below runs identically whether or not the tag is set.
 var (
-	sharedGithubPluginBinariesOnce sync.Once
-	sharedGithubPluginBinariesDir  string
-	sharedGithubPluginBinariesErr  error
+	sharedShippedPluginBinariesOnce sync.Once
+	sharedShippedPluginBinariesDir  string
+	sharedShippedPluginBinariesErr  error
 )
 
 func TestMain(m *testing.M) {
 	code := m.Run()
-	if sharedGithubPluginBinariesDir != "" {
-		os.RemoveAll(sharedGithubPluginBinariesDir)
+	if sharedShippedPluginBinariesDir != "" {
+		os.RemoveAll(sharedShippedPluginBinariesDir)
 	}
 	os.Exit(code)
 }
