@@ -44,11 +44,16 @@ func loadTasks(ctx context.Context, q sqlcgen.DBTX, sessionID string) (nodes, ta
 	if err != nil {
 		return nil, nil, fmt.Errorf("list node execution dependencies for %q: %w", sessionID, err)
 	}
-	nodeDepsByNodeID := map[string][]string{}
+	// Keyed by the dependent's own execution_id, not its node_id: a
+	// cleaned-and-recreated node's superseded execution can still have
+	// dependency rows of its own (nothing prunes them until the node
+	// itself is pruned), and grouping by node_id would merge a stale
+	// generation's edges into the current one's DependsOn.
+	nodeDepsByExecutionID := map[string][]string{}
 	for _, r := range nodeDepRows {
-		nodeDepsByNodeID[r.NodeID] = append(nodeDepsByNodeID[r.NodeID], r.DependsOnNodeID)
+		nodeDepsByExecutionID[r.ExecutionID] = append(nodeDepsByExecutionID[r.ExecutionID], r.DependsOnNodeID)
 	}
-	for _, deps := range nodeDepsByNodeID {
+	for _, deps := range nodeDepsByExecutionID {
 		sort.Strings(deps)
 	}
 
@@ -108,7 +113,7 @@ func loadTasks(ctx context.Context, q sqlcgen.DBTX, sessionID string) (nodes, ta
 			return nil, nil, fmt.Errorf("parse node execution %q/%q layers: %w", sessionID, row.NodeID, err)
 		}
 		ts.Layers = layers
-		ts.DependsOn = nodeDepsByNodeID[row.NodeID]
+		ts.DependsOn = nodeDepsByExecutionID[row.ID]
 		nodes[row.NodeID] = ts
 	}
 	tasks = make(map[string]*contract.TaskState, len(instanceRows))

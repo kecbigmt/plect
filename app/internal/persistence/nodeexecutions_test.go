@@ -346,3 +346,58 @@ func TestPutSession_RewritingAnAlreadyCleanedStateDoesNotDuplicateTheRow(t *test
 		t.Fatalf("node_executions rows for %q/%q = %d, want 1 (no duplicate cleaned row)", "s1", "a", got)
 	}
 }
+
+// TestPutSession_NodeDependencyEdgeDoesNotLeakAcrossReleaseAndRecreate proves
+// a released generation's own retained dependency row does not leak into a
+// later recreation's DependsOn, checked through both GetSession and
+// AllSessions.
+func TestPutSession_NodeDependencyEdgeDoesNotLeakAcrossReleaseAndRecreate(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	seed := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Nodes: map[string]*contract.TaskState{
+		"dep": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "producer"},
+		"a":   {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "work", DependsOn: []string{"dep"}},
+	}}
+	if err := db.PutSession(ctx, seed); err != nil {
+		t.Fatalf("PutSession (seed): %v", err)
+	}
+
+	// A release write carries over DependsOn: RunCleanup mutates the loaded
+	// TaskState's Status/CleanedAt in place and never clears it.
+	released := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Nodes: map[string]*contract.TaskState{
+		"dep": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "producer"},
+		"a":   {Scope: contract.TaskScopeSession, Status: contract.TaskStatusCleaned, TaskID: "work", DependsOn: []string{"dep"}},
+	}}
+	if err := db.PutSession(ctx, released); err != nil {
+		t.Fatalf("PutSession (release): %v", err)
+	}
+
+	recreated := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Nodes: map[string]*contract.TaskState{
+		"dep": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "producer"},
+		"a":   {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "other-work"},
+	}}
+	if err := db.PutSession(ctx, recreated); err != nil {
+		t.Fatalf("PutSession (recreate): %v", err)
+	}
+	if countNodeExecutionsForTest(t, db, "s1", "a") != 2 {
+		t.Fatalf("release-then-recreate should retain both generations as history, got %d rows", countNodeExecutionsForTest(t, db, "s1", "a"))
+	}
+
+	got, err := db.GetSession(ctx, "s1")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if a := got.Nodes["a"]; a == nil || len(a.DependsOn) != 0 {
+		t.Fatalf("GetSession node %q DependsOn = %v, want none (the new generation declared no dependencies)", "a", a)
+	}
+
+	all, err := db.AllSessions(ctx)
+	if err != nil {
+		t.Fatalf("AllSessions: %v", err)
+	}
+	if a := all["s1"].Nodes["a"]; a == nil || len(a.DependsOn) != 0 {
+		t.Fatalf("AllSessions node %q DependsOn = %v, want none", "a", a)
+	}
+}
