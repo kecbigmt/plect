@@ -10,6 +10,7 @@ import (
 
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/domain"
+	"github.com/kecbigmt/plecture/app/internal/testpath"
 	"github.com/kecbigmt/plecture/contracts/event"
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
@@ -32,7 +33,9 @@ func writeSetupWorkflow(t *testing.T, cfg *config.Config, wfID, extra string) {
 
 func TestCreate_WorkflowSetupPath(t *testing.T) {
 	store := testStore(t)
-	workdir := filepath.Join(t.TempDir(), "wd")
+	// A subprocess's $(pwd) reports the kernel's resolved cwd (/private/var/...
+	// on darwin), so workdir must be resolved the same way before comparing.
+	workdir := filepath.Join(testpath.Real(t, t.TempDir()), "wd")
 
 	cfg := writeWorkflowFixture(t, t.TempDir(), "wf",
 		[]taskFixture{{id: "probe", scope: "session", setup: `echo "{\"cwd\":\"$(pwd)\"}"`}},
