@@ -7,9 +7,6 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/domain"
 )
 
-// A second call for the same (workflow, workspaceDirPath) on one *Config
-// must reuse the first's result, proven by rewriting the workflow file
-// between the two calls and checking the second still sees the pre-edit set.
 func TestCurrentPlanRunScopedNodeSet_CachesPerConfigLifetime(t *testing.T) {
 	base := writeRunScopedWorkflow(t)
 	cfg := &Config{BaseDir: base}
@@ -43,8 +40,6 @@ uses = "agent"
 	}
 }
 
-// A new *Config invalidates the cache: the same edit, read through a fresh
-// one, must be seen immediately.
 func TestCurrentPlanRunScopedNodeSet_NewConfigSeesEdit(t *testing.T) {
 	base := writeRunScopedWorkflow(t)
 	s := &domain.Session{Workflow: "default", WorkspaceDirPath: ""}
@@ -76,9 +71,8 @@ uses = "agent"
 	}
 }
 
-// workspaceB's own `.plect/workflows/` overlay appends a third run-scoped
-// node, so the two keys' correct answers genuinely differ (2 vs. 3) — a
-// cache conflating them would return the wrong count for one.
+// workspaceB's overlay must produce a genuinely different node count than
+// the global layer's, or a cache-key collision would go undetected.
 func TestCurrentPlanRunScopedNodeSet_CachesPerWorkspaceDirPathIndependently(t *testing.T) {
 	base := writeRunScopedWorkflow(t)
 	cfg := &Config{BaseDir: base}
@@ -102,8 +96,6 @@ uses = "agent"
 		t.Fatalf("workspace b = %+v, ok=%v, want the overlay's three-node set including \"extra\"", b, ok)
 	}
 
-	// Repeat a: must still be the cached, correct two-node answer, not
-	// disturbed by (or leaking into) workspace b's three-node one.
 	again, ok := cfg.CurrentPlanRunScopedNodeSet(&domain.Session{Workflow: "default", WorkspaceDirPath: ""})
 	if !ok || len(again) != 2 || again["extra"] {
 		t.Errorf("repeat workspace a = %+v, ok=%v, want the unchanged two-node set", again, ok)

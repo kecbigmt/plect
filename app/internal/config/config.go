@@ -94,8 +94,8 @@ type Config struct {
 	catalogRegistrations *plugins.CatalogRegistrations
 	catalogLock          *plugins.Lockfile
 	catalogCacheRoot     string
-	// runScopeCache backs CurrentPlanRunScopedNodeSet's memoization; see
-	// runScopeCache and CurrentPlanRunScopedNodeSet in runstate.go.
+	// runScopeCache memoizes CurrentPlanRunScopedNodeSet's per-session run
+	// scope resolution for this Config's lifetime.
 	runScopeCache    atomic.Pointer[runScopeCache]
 	Detached         bool           `toml:"detached"`
 	Channels         []string       `toml:"channels"`

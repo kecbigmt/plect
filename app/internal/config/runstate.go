@@ -81,8 +81,9 @@ func (c *Config) runScopeCacheInstance() *runScopeCache {
 // legitimately empty node set (ok=true).
 // Memoized per (workflow, workspaceDirPath) for this *Config's lifetime:
 // dispatch/reactor Supervisor.reconcile calls RunScopeUp every ~1s poll per
-// up session, re-parsing the whole definition tree just to answer it; a new
-// *Config (config.Live's own refresh) invalidates the cache.
+// up session, re-resolving the workflow and task definitions from scratch
+// just to answer it; a new *Config (config.Live's own refresh) invalidates
+// the cache.
 func (c *Config) CurrentPlanRunScopedNodeSet(s *domain.Session) (set map[string]bool, ok bool) {
 	key := runScopeCacheKey{workflow: s.Workflow, workspaceDirPath: s.WorkspaceDirPath}
 	cache := c.runScopeCacheInstance()

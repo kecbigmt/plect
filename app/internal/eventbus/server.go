@@ -71,8 +71,7 @@ func (s *Server) Routes() http.Handler {
 // registerPprofRoutes exposes net/http/pprof's handlers under /debug/pprof/
 // on this server's own mux, not on net/http/pprof's package-level
 // DefaultServeMux, so every pprof route stays behind s.auth like the rest of
-// the bus API rather than bypassing it. See docs/design/resident-daemon-diagnostics.md
-// for the trust boundary this shares with every other route.
+// the bus API rather than bypassing it.
 func registerPprofRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /debug/pprof/", pprof.Index)
 	mux.HandleFunc("GET /debug/pprof/cmdline", pprof.Cmdline)
