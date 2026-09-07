@@ -16,13 +16,11 @@ import (
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
-// nameCollides reports whether a `--name` is already taken in s.Nodes or
-// s.Tasks (an uninstantiated node leaves its id free to take).
+// nameCollides reports whether name is already taken in s.Nodes/s.Tasks.
 func nameCollides(s *domain.Session, name string) bool {
 	return domain.TaskState(s, name) != nil
 }
 
-// runWorkflowSetup wraps task.RunWorkflowSetup per its own doc comment.
 func runWorkflowSetup(prov config.WorkspaceProviderConfig, vars effect.WorkflowHookVars, session *domain.Session, observer task.Observer) (map[string]any, error) {
 	merged := domain.MergedTasks(session)
 	outputs, err := task.RunWorkflowSetup(prov, vars, merged, observer)
@@ -35,7 +33,6 @@ func runWorkflowSetup(prov config.WorkspaceProviderConfig, vars effect.WorkflowH
 	return outputs, err
 }
 
-// runNodeSetup wraps task.RunSetup per its own doc comment.
 func runNodeSetup(ctx context.Context, ordered []task.Resolved, vars task.SessionVars, session *domain.Session, observer task.Observer) error {
 	merged := domain.MergedTasks(session)
 	err := task.RunSetup(ctx, ordered, vars, merged, observer)
@@ -50,7 +47,6 @@ func runNodeSetup(ctx context.Context, ordered []task.Resolved, vars task.Sessio
 	return err
 }
 
-// runTaskCleanup wraps task.RunCleanup per its own doc comment.
 func runTaskCleanup(ctx context.Context, ordered []task.Resolved, vars task.SessionVars, session *domain.Session, observer task.Observer) error {
 	return task.RunCleanup(ctx, ordered, vars, domain.MergedTasks(session), observer)
 }
