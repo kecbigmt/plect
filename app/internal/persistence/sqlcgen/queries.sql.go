@@ -85,29 +85,10 @@ func (q *Queries) DeleteNodeExecutionLayers(ctx context.Context, executionID str
 	return err
 }
 
-const deleteNodeInstance = `-- name: DeleteNodeInstance :exec
-DELETE FROM node_instances WHERE session_id = ? AND node_id = ?
-`
-
-type DeleteNodeInstanceParams struct {
-	SessionID string
-	NodeID    string
-}
-
-func (q *Queries) DeleteNodeInstance(ctx context.Context, arg DeleteNodeInstanceParams) error {
-	_, err := q.db.ExecContext(ctx, deleteNodeInstance, arg.SessionID, arg.NodeID)
-	return err
-}
-
 const deleteNodeInstancesForSession = `-- name: DeleteNodeInstancesForSession :exec
 DELETE FROM node_instances WHERE session_id = ?
 `
 
-// Unconditionally wipes every node (and, via cascade, every execution,
-// layer, and dependency edge) for the session -- used only by an explicit
-// whole-runtime reset (--force-recreate), which deliberately discards every
-// node's execution history rather than retaining an unreleased one the way
-// an ordinary write does. See ResetNodes.
 func (q *Queries) DeleteNodeInstancesForSession(ctx context.Context, sessionID string) error {
 	_, err := q.db.ExecContext(ctx, deleteNodeInstancesForSession, sessionID)
 	return err
@@ -143,13 +124,6 @@ type DeleteReleasedNodeInstanceParams struct {
 	NodeID    string
 }
 
-// Prunes node_id only if it currently has no unreleased execution -- a
-// caller-driven, immediate counterpart to writeTasksTx's own
-// absence-triggered pruning, for a caller (persistStaleWorkflowCleanup) that
-// knows in the same breath a specific node's cleanup just succeeded and
-// wants it gone from this same operation's result rather than the next
-// write that happens to omit it. A non-zero result means it was pruned; zero
-// means an unreleased execution still exists (nothing was touched).
 func (q *Queries) DeleteReleasedNodeInstance(ctx context.Context, arg DeleteReleasedNodeInstanceParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteReleasedNodeInstance, arg.SessionID, arg.NodeID)
 	if err != nil {
@@ -243,14 +217,6 @@ type EnsureNodeInstanceParams struct {
 }
 
 // Workflow nodes (static; Session.Nodes entries)
-//
-// node_instances is the logical node's identity; node_executions holds one
-// row per setup attempt, at most one of which may be unreleased (status <>
-// 'cleaned') per node at a time. A write reconciles by finding the current
-// unreleased execution (CurrentNodeExecution) and updating it in place, or
-// inserting a fresh one when none exists -- see persistence/tasks.go's
-// upsertNodeExecutionTx, which is the sole caller of the Insert/Update pair
-// below.
 func (q *Queries) EnsureNodeInstance(ctx context.Context, arg EnsureNodeInstanceParams) error {
 	_, err := q.db.ExecContext(ctx, ensureNodeInstance, arg.SessionID, arg.NodeID)
 	return err
@@ -847,13 +813,6 @@ AND NOT EXISTS (
 ORDER BY ne.node_id
 `
 
-// One row per node_id: its latest execution by (sequence, id), whatever
-// that execution's status -- a released node stays visible (matching
-// task_instances' own until-explicitly-pruned convention) until
-// DeleteNodeInstance removes it. The id tiebreak only matters when two
-// generations somehow share a sequence (callers are expected to assign a
-// strictly increasing one per attempt); it keeps the pick deterministic
-// rather than leaving it to join-order chance.
 func (q *Queries) ListCurrentNodeExecutions(ctx context.Context, sessionID string) ([]NodeExecution, error) {
 	rows, err := q.db.QueryContext(ctx, listCurrentNodeExecutions, sessionID)
 	if err != nil {
@@ -1145,10 +1104,6 @@ type ListNodeExecutionDependenciesForSessionRow struct {
 	DependsOnNodeID string
 }
 
-// One row per recorded edge, resolved back to the node_ids on both ends so a
-// reader that only knows node_ids (see loadTasks) can rebuild
-// TaskState.DependsOn without carrying raw execution ids into the domain
-// layer.
 func (q *Queries) ListNodeExecutionDependenciesForSession(ctx context.Context, sessionID string) ([]ListNodeExecutionDependenciesForSessionRow, error) {
 	rows, err := q.db.QueryContext(ctx, listNodeExecutionDependenciesForSession, sessionID)
 	if err != nil {

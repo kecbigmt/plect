@@ -156,7 +156,7 @@ func (db *DB) writeTasksTx(ctx context.Context, tx *sql.Tx, sessionID string, no
 		if row.Status != contract.TaskStatusCleaned {
 			continue
 		}
-		if err := q.DeleteNodeInstance(ctx, sqlcgen.DeleteNodeInstanceParams{SessionID: sessionID, NodeID: row.NodeID}); err != nil {
+		if _, err := q.DeleteReleasedNodeInstance(ctx, sqlcgen.DeleteReleasedNodeInstanceParams{SessionID: sessionID, NodeID: row.NodeID}); err != nil {
 			return fmt.Errorf("prune released node instance %q/%q: %w", sessionID, row.NodeID, err)
 		}
 	}

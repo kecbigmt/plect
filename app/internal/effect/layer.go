@@ -110,8 +110,7 @@ func CleanupLayers(def config.TaskDefinition) []Layer {
 	return out
 }
 
-// RetainedLayerCleanup is the JSON shape persisted as
-// contracts/state.LayerState.Cleanup -- the same fields CleanupLayers builds.
+// RetainedLayerCleanup is contracts/state.LayerState.Cleanup's JSON shape.
 type RetainedLayerCleanup struct {
 	EffectID    string                 `json:"effect_id"`
 	Cleanup     *lang.Action           `json:"cleanup,omitempty"`
@@ -120,8 +119,7 @@ type RetainedLayerCleanup struct {
 	BindOutputs []config.OutputBinding `json:"bind_outputs,omitempty"`
 }
 
-// RetainLayerCleanup returns l's retained cleanup contract, or nil when l
-// declares no cleanup.
+// RetainLayerCleanup returns nil when l declares no cleanup.
 func RetainLayerCleanup(l Layer) json.RawMessage {
 	if l.Cleanup == nil {
 		return nil
@@ -131,16 +129,14 @@ func RetainLayerCleanup(l Layer) json.RawMessage {
 		From: l.From, BindOutputs: l.BindOutputs,
 	})
 	if err != nil {
-		// l's fields are plain config-loaded data; a marshal failure here
-		// is not a condition a caller can act on.
+		// Plain config-loaded data; cannot fail in practice.
 		return nil
 	}
 	return encoded
 }
 
-// DecodeRetainedLayerCleanup decodes contracts/state.LayerState.Cleanup, as
-// written by RetainLayerCleanup. ok is false with a nil error for an empty
-// raw value (a layer with no cleanup).
+// DecodeRetainedLayerCleanup: ok is false with a nil error for an empty raw
+// value (a layer with no cleanup).
 func DecodeRetainedLayerCleanup(raw json.RawMessage) (rc RetainedLayerCleanup, ok bool, err error) {
 	if len(raw) == 0 {
 		return RetainedLayerCleanup{}, false, nil
@@ -151,9 +147,8 @@ func DecodeRetainedLayerCleanup(raw json.RawMessage) (rc RetainedLayerCleanup, o
 	return rc, true, nil
 }
 
-// LayersFromRetained rebuilds a layer chain from persisted per-layer
-// records. ok is false (no partial result) when any state lacks a
-// retained contract, so the caller falls back to CleanupLayers wholesale.
+// LayersFromRetained: ok is false (no partial result) when any state lacks
+// a retained contract.
 func LayersFromRetained(states []contract.LayerState) ([]Layer, bool) {
 	if len(states) == 0 {
 		return nil, false

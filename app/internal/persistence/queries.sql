@@ -98,9 +98,6 @@ SELECT DISTINCT name FROM sessions ORDER BY name;
 INSERT INTO node_instances (session_id, node_id) VALUES (?, ?)
 ON CONFLICT (session_id, node_id) DO NOTHING;
 
--- name: DeleteNodeInstance :exec
-DELETE FROM node_instances WHERE session_id = ? AND node_id = ?;
-
 -- name: DeleteNodeInstancesForSession :exec
 DELETE FROM node_instances WHERE session_id = ?;
 

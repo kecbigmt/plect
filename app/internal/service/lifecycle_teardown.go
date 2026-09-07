@@ -61,16 +61,12 @@ type teardownItem struct {
 	r   task.Resolved
 }
 
-// unifiedTeardownList builds the single cleanup-ordered Resolved list for a
-// teardown phase, merging every retained unreleased node execution with
-// every dynamic instance (RunCleanup reclaims in reverse, so the result is
-// ordered prerequisites-before-dependents; see orderTeardownItems). The
-// @workflow pseudo-node is excluded; it releases last via the workspace
-// provider cleanup hook. Static nodes are enumerated from session.Nodes, not
-// plan, so a node the current workflow no longer declares is still torn
-// down using what that execution itself retained (resolveNodeCleanup).
-// runOnly restricts to run-scoped tasks (the `down` lifecycle); destroy
-// passes false for every scope.
+// unifiedTeardownList merges every retained unreleased node execution with
+// every dynamic instance into one dependency-ordered Resolved list (see
+// orderTeardownItems); the @workflow pseudo-node releases last, via the
+// workspace provider cleanup hook. Static nodes are enumerated from
+// session.Nodes, not plan, so a node the current workflow no longer
+// declares is still torn down using what it retained (resolveNodeCleanup).
 func unifiedTeardownList(cfg *config.Config, session *domain.Session, runOnly bool) ([]task.Resolved, error) {
 	defs, err := cfg.LoadTaskDefinitions(session.WorkspaceDirPath)
 	if err != nil {
@@ -90,13 +86,8 @@ func unifiedTeardownList(cfg *config.Config, session *domain.Session, runOnly bo
 			continue
 		}
 		if session.Tasks[key] != nil {
-			// A `--name` collides only against existing state, so an
-			// uninstantiated node leaves its id free for a dynamic
-			// instance to take. What the key holds is then that instance,
-			// not this node, and tearing it down as the node would run a
-			// cleanup belonging to another declaration entirely -- so this
-			// key is deliberately NOT marked static, letting the dynamic
-			// branch below enumerate it as that instance instead.
+			// key holds a dynamic instance, not this node; deliberately not
+			// marked static, so the dynamic branch below enumerates it.
 			continue
 		}
 		if runOnly && st.Scope != contract.TaskScopeRun {
@@ -109,8 +100,7 @@ func unifiedTeardownList(cfg *config.Config, session *domain.Session, runOnly bo
 		static[key] = true
 	}
 
-	// Sort dynamic keys for a deterministic input order before ordering
-	// (map iteration is random; equal-seq legacy entries would otherwise vary).
+	// Deterministic input order; map iteration is random.
 	dynKeys := make([]string, 0, len(session.Tasks))
 	for key, st := range session.Tasks {
 		if st == nil || static[key] {
@@ -125,13 +115,8 @@ func unifiedTeardownList(cfg *config.Config, session *domain.Session, runOnly bo
 	for _, key := range dynKeys {
 		st := session.Tasks[key]
 		taskID := instanceDefinitionAddress(key, st, true, nodes)
-		// Build only the cleanup-relevant fields straight from the definition —
-		// no schema / requires / done_when validation (that runs at create / up /
-		// task run). Teardown must stay resilient to a def whose config drifted
-		// to invalid after the instance was created: a present-but-invalid def
-		// must be no more fatal than a disappeared one, so `plect destroy --force`
-		// can still reclaim the session. Cleanup needs only the script plus the
-		// persisted inputs/outputs.
+		// Only the cleanup-relevant fields, so a def drifted invalid since
+		// creation is no more fatal than a disappeared one.
 		r := task.Resolved{NodeID: key, TaskID: taskID, Scope: st.Scope}
 		if def, ok := defs[taskID]; ok {
 			r.Cleanup = def.Cleanup
@@ -144,11 +129,8 @@ func unifiedTeardownList(cfg *config.Config, session *domain.Session, runOnly bo
 	return orderTeardownItems(items), nil
 }
 
-// resolveNodeCleanup fills r's cleanup fields from st's own retained
-// contract when one exists (task.DecodeRetainedCleanup or
-// effect.LayersFromRetained), falling back to re-resolving r.TaskID against
-// defs -- tolerant of a missing/drifted definition, like a dynamic
-// instance's teardown -- only when st retains nothing usable.
+// resolveNodeCleanup prefers st's own retained contract, falling back to
+// re-resolving r.TaskID against defs only when st retains nothing usable.
 func resolveNodeCleanup(r *task.Resolved, st *contract.TaskState, defs map[string]config.TaskDefinition) {
 	if rc, ok, err := task.DecodeRetainedCleanup(st.Cleanup); err == nil && ok {
 		r.Cleanup = rc.Action
@@ -167,10 +149,8 @@ func resolveNodeCleanup(r *task.Resolved, st *contract.TaskState, defs map[strin
 	}
 }
 
-// orderTeardownItems orders each item's dependent before its prerequisite
-// (per DependsOn), so RunCleanup's reverse iteration releases the dependent
-// first. Ties and unrecorded edges fall back to ascending Seq; a cycle
-// falls back to plain Seq order for the whole list.
+// orderTeardownItems orders each dependent before its prerequisite (per
+// DependsOn); ties, unrecorded edges, and any cycle fall back to Seq.
 func orderTeardownItems(items []teardownItem) []task.Resolved {
 	n := len(items)
 	if n == 0 {
@@ -186,9 +166,6 @@ func orderTeardownItems(items []teardownItem) []task.Resolved {
 		for _, dep := range it.r.DependsOn {
 			j, ok := indexByKey[dep]
 			if !ok {
-				// The dependency has no entry in this same teardown pass
-				// (already released, or never existed) -- nothing left to
-				// order this item against.
 				continue
 			}
 			inDegree[i]++

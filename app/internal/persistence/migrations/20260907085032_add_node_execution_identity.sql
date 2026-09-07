@@ -1,9 +1,7 @@
 -- +goose Up
--- Hand-written, not Atlas-generated: see doc.go and
--- docs/design/sqlite-persistence.md. PRAGMA foreign_keys does not take
--- effect inside goose's own transaction, so node_instances is renamed out
--- of the way below (never dropped) before node_executions' FK ever names
--- the live table, so no later DROP TABLE can cascade-delete through it.
+-- Hand-written: see doc.go. PRAGMA foreign_keys is a no-op inside goose's
+-- own transaction, so node_instances is renamed out of the way (never
+-- dropped) before node_executions' FK ever names the live table.
 PRAGMA foreign_keys = off;
 ALTER TABLE `node_instances` RENAME TO `old_node_instances`;
 CREATE TABLE `node_instances` (`session_id` text NOT NULL, `node_id` text NOT NULL, PRIMARY KEY (`session_id`, `node_id`), CONSTRAINT `0` FOREIGN KEY (`session_id`) REFERENCES `sessions` (`id`) ON UPDATE NO ACTION ON DELETE CASCADE);
