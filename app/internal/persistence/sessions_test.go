@@ -551,10 +551,8 @@ func TestPutSession_NodeInstanceDoneWhenRoundTripsAsEmbeddedJSON(t *testing.T) {
 	}
 }
 
-// A workflow revision that stops declaring a still-unreleased node must not
-// silently destroy the execution record `plect down`/`destroy` still needs.
-// See TestPutSession_ReleasedNodeIsPrunedWhenDroppedFromTheMap for the
-// complementary, already-released case.
+// A dropped-but-unreleased node must not lose the execution record
+// `plect down`/`destroy` still needs.
 func TestPutSession_UnreleasedNodeSurvivesBeingDroppedFromTheMap(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
@@ -619,12 +617,8 @@ func TestPutSession_ReleasedNodeIsPrunedWhenDroppedFromTheMap(t *testing.T) {
 	}
 }
 
-// TestPutSession_ReplacesTasksRatherThanAccumulating covers the task_instances
-// reconciliation path (upsert current, delete any instance_name no longer
-// present) unconditionally, regardless of status -- a different write
-// strategy from node_instances' released-only pruning (see
-// TestPutSession_UnreleasedNodeSurvivesBeingDroppedFromTheMap and
-// TestPutSession_ReleasedNodeIsPrunedWhenDroppedFromTheMap).
+// Unlike node_instances' released-only pruning, task_instances deletes any
+// instance_name no longer present unconditionally, regardless of status.
 func TestPutSession_ReplacesTasksRatherThanAccumulating(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()

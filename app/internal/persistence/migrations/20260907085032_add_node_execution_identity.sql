@@ -1,21 +1,14 @@
 -- +goose Up
--- Hand-written, not Atlas-generated (see doc.go and
--- docs/design/sqlite-persistence.md): a diff would drop
--- node_instance_layers and create node_executions/node_execution_layers
--- with no data conversion, losing every existing row's setup-attempt data.
---
--- PRAGMA foreign_keys does not take effect inside an already-open
--- transaction, and goose always runs a migration's Up block in one. The
--- statement below is only documentation of intent: node_instances is
--- renamed out of the way (never dropped) before node_executions' FK ever
--- names the live node_instances table, so no later DROP TABLE can
--- cascade-delete rows through a foreign key SQLite still enforces.
+-- Hand-written, not Atlas-generated: see doc.go and
+-- docs/design/sqlite-persistence.md. PRAGMA foreign_keys does not take
+-- effect inside goose's own transaction, so node_instances is renamed out
+-- of the way below (never dropped) before node_executions' FK ever names
+-- the live table, so no later DROP TABLE can cascade-delete through it.
 PRAGMA foreign_keys = off;
 ALTER TABLE `node_instances` RENAME TO `old_node_instances`;
 CREATE TABLE `node_instances` (`session_id` text NOT NULL, `node_id` text NOT NULL, PRIMARY KEY (`session_id`, `node_id`), CONSTRAINT `0` FOREIGN KEY (`session_id`) REFERENCES `sessions` (`id`) ON UPDATE NO ACTION ON DELETE CASCADE);
 INSERT INTO `node_instances` (`session_id`, `node_id`) SELECT `session_id`, `node_id` FROM `old_node_instances`;
 CREATE TABLE `node_executions` (`id` text NULL, `session_id` text NOT NULL, `node_id` text NOT NULL, `sequence` integer NOT NULL, `task_id` text NULL, `name` text NULL, `scope` text NOT NULL, `status` text NOT NULL, `resource` text NULL, `execution_dir` text NULL, `inputs_json` text NULL, `outputs_json` text NULL, `state_json` text NULL, `resource_observation_json` text NULL, `resource_observed_at` text NULL, `done_when_json` text NULL, `extra_done_when_json` text NULL, `cleanup_json` text NULL, `plugin_ref` text NULL, `error` text NULL, `setup_at` text NULL, `failed_at` text NULL, `cleaned_at` text NULL, `finalized_at` text NULL, PRIMARY KEY (`id`), CONSTRAINT `0` FOREIGN KEY (`session_id`, `node_id`) REFERENCES `node_instances` (`session_id`, `node_id`) ON UPDATE NO ACTION ON DELETE CASCADE, CHECK (scope IN ('session', 'run')), CHECK (status IN ('produced', 'failed', 'cleaned')), CHECK (inputs_json IS NULL OR json_valid(inputs_json)), CHECK (outputs_json IS NULL OR json_valid(outputs_json)), CHECK (state_json IS NULL OR json_valid(state_json)), CHECK (resource_observation_json IS NULL OR json_valid(resource_observation_json)), CHECK (done_when_json IS NULL OR json_valid(done_when_json)), CHECK (extra_done_when_json IS NULL OR json_valid(extra_done_when_json)), CHECK (cleanup_json IS NULL OR json_valid(cleanup_json)));
--- carry every existing row forward as that node's first recorded execution
 INSERT INTO `node_executions` (`id`, `session_id`, `node_id`, `sequence`, `task_id`, `name`, `scope`, `status`, `resource`, `execution_dir`, `inputs_json`, `outputs_json`, `state_json`, `resource_observation_json`, `resource_observed_at`, `done_when_json`, `extra_done_when_json`, `cleanup_json`, `plugin_ref`, `error`, `setup_at`, `failed_at`, `cleaned_at`, `finalized_at`)
 SELECT lower(hex(randomblob(16))), `session_id`, `node_id`, `sequence`, `task_id`, `name`, `scope`, `status`, `resource`, NULL, `inputs_json`, `outputs_json`, `state_json`, `resource_observation_json`, `resource_observed_at`, `done_when_json`, `extra_done_when_json`, NULL, NULL, `error`, `setup_at`, `failed_at`, `cleaned_at`, `finalized_at`
 FROM `old_node_instances`;
@@ -24,8 +17,6 @@ INSERT INTO `node_execution_layers` (`execution_id`, `position`, `effect_id`, `s
 SELECT `ne`.`id`, `nil`.`position`, `nil`.`effect_id`, `nil`.`status`, `nil`.`inputs_json`, `nil`.`locals_json`, `nil`.`outputs_json`, `nil`.`env_json`, `nil`.`heartbeat_ticks`, `nil`.`heartbeat_escalations`, `nil`.`setup_at`, `nil`.`failed_at`, `nil`.`cleaned_at`, `nil`.`error`, NULL
 FROM `node_instance_layers` AS `nil`
 JOIN `node_executions` AS `ne` ON `ne`.`session_id` = `nil`.`session_id` AND `ne`.`node_id` = `nil`.`node_id`;
--- neither drop below can cascade: nothing's FK names node_instance_layers,
--- and node_executions' FK already names the final node_instances table
 DROP TABLE `node_instance_layers`;
 DROP TABLE `old_node_instances`;
 CREATE INDEX `node_executions_session_node_idx` ON `node_executions` (`session_id`, `node_id`, `sequence`);
@@ -35,10 +26,8 @@ CREATE INDEX `node_execution_dependencies_depends_on_idx` ON `node_execution_dep
 PRAGMA foreign_keys = on;
 
 -- +goose Down
--- Best-effort, not lossless: a node with more than one recorded execution
--- collapses onto its latest one, and every node_execution_dependencies
--- edge is discarded, since the pre-this-change schema had no column or
--- table to hold either.
+-- Best-effort, not lossless: a node with multiple recorded executions
+-- collapses onto its latest, and every dependency edge is discarded.
 PRAGMA foreign_keys = off;
 CREATE TABLE `old_node_instances` (`session_id` text NOT NULL, `node_id` text NOT NULL, `task_id` text NULL, `name` text NULL, `scope` text NOT NULL, `status` text NOT NULL, `sequence` integer NOT NULL, `resource` text NULL, `inputs_json` text NULL, `outputs_json` text NULL, `state_json` text NULL, `resource_observation_json` text NULL, `resource_observed_at` text NULL, `done_when_json` text NULL, `extra_done_when_json` text NULL, `error` text NULL, `setup_at` text NULL, `failed_at` text NULL, `cleaned_at` text NULL, `finalized_at` text NULL, PRIMARY KEY (`session_id`, `node_id`), CONSTRAINT `0` FOREIGN KEY (`session_id`) REFERENCES `sessions` (`id`) ON UPDATE NO ACTION ON DELETE CASCADE, CHECK (scope IN ('session', 'run')), CHECK (status IN ('produced', 'failed', 'cleaned')), CHECK (inputs_json IS NULL OR json_valid(inputs_json)), CHECK (outputs_json IS NULL OR json_valid(outputs_json)), CHECK (state_json IS NULL OR json_valid(state_json)), CHECK (resource_observation_json IS NULL OR json_valid(resource_observation_json)), CHECK (done_when_json IS NULL OR json_valid(done_when_json)), CHECK (extra_done_when_json IS NULL OR json_valid(extra_done_when_json)));
 INSERT INTO `old_node_instances` (`session_id`, `node_id`, `task_id`, `name`, `scope`, `status`, `sequence`, `resource`, `inputs_json`, `outputs_json`, `state_json`, `resource_observation_json`, `resource_observed_at`, `done_when_json`, `extra_done_when_json`, `error`, `setup_at`, `failed_at`, `cleaned_at`, `finalized_at`)

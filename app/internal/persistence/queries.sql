@@ -92,8 +92,7 @@ SELECT EXISTS(SELECT 1 FROM sessions WHERE name = ?);
 -- name: ListEverSessionNames :many
 SELECT DISTINCT name FROM sessions ORDER BY name;
 
--- Workflow nodes (static; Session.Nodes entries). See
--- docs/design/sqlite-persistence.md's "Node execution identity" section.
+-- Workflow nodes (static; Session.Nodes entries)
 
 -- name: EnsureNodeInstance :exec
 INSERT INTO node_instances (session_id, node_id) VALUES (?, ?)
@@ -103,12 +102,9 @@ ON CONFLICT (session_id, node_id) DO NOTHING;
 DELETE FROM node_instances WHERE session_id = ? AND node_id = ?;
 
 -- name: DeleteNodeInstancesForSession :exec
--- Unconditional whole-runtime wipe; see ResetNodes.
 DELETE FROM node_instances WHERE session_id = ?;
 
 -- name: DeleteReleasedNodeInstance :execrows
--- A non-zero result means node_id was pruned; zero means an unreleased
--- execution still exists (nothing was touched).
 DELETE FROM node_instances
 WHERE session_id = ? AND node_id = ?
 AND NOT EXISTS (
@@ -146,9 +142,6 @@ UPDATE node_executions SET
 WHERE id = ?;
 
 -- name: ListCurrentNodeExecutions :many
--- One row per node_id: its latest execution by (sequence, id) -- the id
--- tiebreak keeps the pick deterministic if two generations ever share a
--- sequence.
 SELECT ne.id, ne.session_id, ne.node_id, ne.sequence, ne.task_id, ne.name,
        ne.scope, ne.status, ne.resource, ne.execution_dir, ne.inputs_json,
        ne.outputs_json, ne.state_json, ne.resource_observation_json,
@@ -192,8 +185,6 @@ INSERT INTO node_execution_dependencies (execution_id, depends_on_execution_id)
 VALUES (?, ?) ON CONFLICT (execution_id, depends_on_execution_id) DO NOTHING;
 
 -- name: ListNodeExecutionDependenciesForSession :many
--- Resolved back to the node_ids on both ends so loadTasks can rebuild
--- TaskState.DependsOn without carrying raw execution ids into the domain layer.
 SELECT dependent.node_id AS node_id, ned.execution_id AS execution_id, prereq.node_id AS depends_on_node_id
 FROM node_execution_dependencies ned
 INNER JOIN node_executions dependent ON dependent.id = ned.execution_id

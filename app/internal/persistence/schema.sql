@@ -58,19 +58,17 @@ CREATE UNIQUE INDEX sessions_live_name ON sessions(name) WHERE status <> 'destro
 CREATE INDEX sessions_alias_idx ON sessions(alias);
 CREATE INDEX sessions_parent_idx ON sessions(parent_session_id);
 
--- Static workflow-DAG nodes; task_instances holds the dynamic ones.
--- node_instances is the logical node's identity only -- see
--- docs/design/sqlite-persistence.md's "Node execution identity" section for
--- why a setup attempt's own facts live on node_executions instead.
+-- Static workflow-DAG nodes' identity only; a setup attempt's own facts
+-- live on node_executions below. See docs/design/sqlite-persistence.md's
+-- "Node execution identity" section.
 CREATE TABLE node_instances (
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     node_id TEXT NOT NULL,
     PRIMARY KEY (session_id, node_id)
 );
 
--- One row per setup attempt for a node_instances row; at most one per
--- (session_id, node_id) may be unreleased (status <> 'cleaned') at a time,
--- enforced below by node_executions_one_unreleased_idx.
+-- One row per setup attempt; node_executions_one_unreleased_idx below
+-- enforces at most one unreleased (status <> 'cleaned') row per node.
 CREATE TABLE node_executions (
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
@@ -102,8 +100,7 @@ CREATE TABLE node_executions (
 CREATE INDEX node_executions_session_node_idx ON node_executions(session_id, node_id, sequence);
 CREATE UNIQUE INDEX node_executions_one_unreleased_idx ON node_executions(session_id, node_id) WHERE status <> 'cleaned';
 
--- One row per layer of one execution's nested effect chain, keyed by
--- execution rather than node_id -- see "Node execution identity" above.
+-- One row per layer of one execution's nested effect chain.
 CREATE TABLE node_execution_layers (
     execution_id TEXT NOT NULL REFERENCES node_executions(id) ON DELETE CASCADE,
     position INTEGER NOT NULL,
@@ -124,7 +121,7 @@ CREATE TABLE node_execution_layers (
 );
 
 -- execution_id is the dependent (released first); depends_on_execution_id
--- is the prerequisite -- see "Node execution identity" above.
+-- is the prerequisite.
 CREATE TABLE node_execution_dependencies (
     execution_id TEXT NOT NULL REFERENCES node_executions(id) ON DELETE CASCADE,
     depends_on_execution_id TEXT NOT NULL REFERENCES node_executions(id) ON DELETE CASCADE,

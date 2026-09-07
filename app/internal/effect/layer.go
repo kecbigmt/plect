@@ -111,9 +111,7 @@ func CleanupLayers(def config.TaskDefinition) []Layer {
 }
 
 // RetainedLayerCleanup is the JSON shape persisted as
-// contracts/state.LayerState.Cleanup -- the same fields CleanupLayers builds
-// fresh from a definition, schema-free, so retention needs no serialization
-// beyond encoding/json.
+// contracts/state.LayerState.Cleanup -- the same fields CleanupLayers builds.
 type RetainedLayerCleanup struct {
 	EffectID    string                 `json:"effect_id"`
 	Cleanup     *lang.Action           `json:"cleanup,omitempty"`
@@ -140,10 +138,9 @@ func RetainLayerCleanup(l Layer) json.RawMessage {
 	return encoded
 }
 
-// DecodeRetainedLayerCleanup decodes one layer's contracts/state.LayerState.
-// Cleanup, as written by RetainLayerCleanup. ok is false with a nil error
-// for an empty raw value (a layer with no cleanup) -- not an error
-// condition a caller need report.
+// DecodeRetainedLayerCleanup decodes contracts/state.LayerState.Cleanup, as
+// written by RetainLayerCleanup. ok is false with a nil error for an empty
+// raw value (a layer with no cleanup).
 func DecodeRetainedLayerCleanup(raw json.RawMessage) (rc RetainedLayerCleanup, ok bool, err error) {
 	if len(raw) == 0 {
 		return RetainedLayerCleanup{}, false, nil
@@ -154,10 +151,9 @@ func DecodeRetainedLayerCleanup(raw json.RawMessage) (rc RetainedLayerCleanup, o
 	return rc, true, nil
 }
 
-// LayersFromRetained rebuilds a nested node's cleanup-relevant layer chain
-// entirely from its own persisted per-layer records. ok is false (no
-// partial result) when any state lacks a retained contract, so the caller
-// falls back to CleanupLayers wholesale rather than mixing chains.
+// LayersFromRetained rebuilds a layer chain from persisted per-layer
+// records. ok is false (no partial result) when any state lacks a
+// retained contract, so the caller falls back to CleanupLayers wholesale.
 func LayersFromRetained(states []contract.LayerState) ([]Layer, bool) {
 	if len(states) == 0 {
 		return nil, false
