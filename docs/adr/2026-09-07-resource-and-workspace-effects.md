@@ -51,12 +51,15 @@ acquires a worktree or Slack-thread directory, using ordinary setup, liveness,
 invalidation, and cleanup rules. There is no reserved output, session column,
 or `@workflow` node.
 
-A workflow may declare one `workdir` projection from a node output. Its
+A workflow may declare one `workdir` projection from a node output. It must
+resolve to an absolute local filesystem directory path; an environment without
+such a path omits `workdir`. Its
 producer and that producer's transitive prerequisites are preparation nodes;
 the set is derived before default-workdir edges are added. Every other node
-executes in the declared directory and depends on its producer. Preparation
-actions execute in the invocation process directory; this gives setup no
-unstated dependency on a directory it is creating. A workflow without
+executes its setup and liveness actions in the declared directory and depends
+on its producer. Preparation setup, liveness, and cleanup actions execute in
+the invocation process directory; this gives setup no unstated dependency on
+a directory it is creating. A workflow without
 `workdir` has no default directory. Cleanup uses the directory selected for
 that node's setup; if it has disappeared, cleanup fails and records that fact.
 It never falls back to the invocation directory or another node's directory.

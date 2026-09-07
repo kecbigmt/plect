@@ -72,11 +72,11 @@ uses = "pane"
 
 A nested effect that declares no `scope` takes the innermost layer's scope.
 
-When a workflow declares `workdir`, graph-derived preparation nodes execute in
-the invocation process directory and all other nodes receive that declared
-directory. Effects cannot override it per node or action. Cleanup uses the
-directory its setup used; a vanished directory is a cleanup failure, not an
-invitation to run elsewhere.
+When a workflow declares `workdir`, graph-derived preparation nodes execute
+setup, liveness, and cleanup in the invocation process directory and all other
+nodes execute setup and liveness in that declared directory. Effects cannot
+override it per node or action. Cleanup uses the directory its setup used; a
+vanished directory is a cleanup failure, not an invitation to run elsewhere.
 
 ## Outputs are production records
 

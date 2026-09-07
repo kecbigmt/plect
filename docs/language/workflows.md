@@ -30,7 +30,9 @@ Nodes are ordinary effects. A projection from `nodes.<id>.outputs.*` creates a
 dependency edge; `blocks` states a reverse edge. A workflow has no provider
 node or special lifecycle.
 
-`workdir`, when present, is exactly one projection from a node output:
+`workdir`, when present, is exactly one projection from a node output and must
+resolve to an absolute local filesystem directory path. Environments without a
+local directory omit it:
 
 ```toml
 [pull_review]
@@ -52,10 +54,11 @@ workspace_dir = { from = "nodes.checkout.outputs.workspace_dir" }
 
 The workdir producer and all its transitive prerequisites are preparation
 nodes. The graph determines that set before default-workdir dependencies are
-added. Preparation actions execute in the invocation process directory. Every
-other node runs in the declared directory and depends on its producer. If
-`workdir` is omitted, no node receives a default directory. There are no
-per-node or per-action cwd overrides.
+added. Their setup, liveness, and cleanup actions execute in the invocation
+process directory. Every other node's setup and liveness actions run in the
+declared directory and depend on its producer. If `workdir` is omitted, no node
+receives a default directory. There are no per-node or per-action cwd
+overrides.
 
 Cleanup uses the directory chosen for its node setup. If that directory has
 vanished, cleanup records a failure and does not run in any fallback directory.
@@ -173,6 +176,7 @@ neither turns the issue into the session's entry resource.
 - A selected entry identifier resolves to that resource type.
 - An omitted workflow is valid only with exactly one accepting workflow.
 - `workdir` is a projection from a node output declared by this workflow.
+- A `workdir` resolves to an absolute local filesystem directory path.
 - Node dependencies plus derived default-workdir edges have no cycle.
 - A population uses its containing workflow's resource and its query contract.
 - An initial task is caller-selected and compatible with its concrete binding.
