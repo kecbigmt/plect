@@ -8,7 +8,19 @@ import (
 	"path/filepath"
 )
 
-// DefaultPath is the production database location: $XDG_DATA_HOME/plect/store.db,
+// fileName is the database's file name within its data directory, matching
+// the plect storage vocabulary already in place (`plect storage migrate`/
+// `plect storage import`, the SQLite durable storage ADR): every caller that
+// needs the path derives it via PathIn rather than joining this literal
+// itself, so the name has one source.
+const fileName = "storage.db"
+
+// PathIn returns the database path within dir.
+func PathIn(dir string) string {
+	return filepath.Join(dir, fileName)
+}
+
+// DefaultPath is the production database location: $XDG_DATA_HOME/plect/storage.db,
 // matching state.NewStore's directory resolution for the sibling state.json.
 func DefaultPath() string {
 	dataHome := os.Getenv("XDG_DATA_HOME")
@@ -16,7 +28,7 @@ func DefaultPath() string {
 		home, _ := os.UserHomeDir()
 		dataHome = filepath.Join(home, ".local", "share")
 	}
-	return filepath.Join(dataHome, "plect", "store.db")
+	return PathIn(filepath.Join(dataHome, "plect"))
 }
 
 // EnsureCurrent is the single entry point every plect process calls before

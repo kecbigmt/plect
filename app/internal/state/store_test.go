@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/domain"
+	"github.com/kecbigmt/plecture/app/internal/persistence"
 	"github.com/kecbigmt/plecture/app/internal/persistence/sqlcgen"
 )
 
@@ -581,7 +582,7 @@ func TestFindByAlias(t *testing.T) {
 func TestStore_UnreadableDatabaseFailsWritesInsteadOfSilentlyInitializing(t *testing.T) {
 	dir := t.TempDir()
 	garbage := []byte("this is not a sqlite database file, just garbage bytes of substantial length\x00\x01\x02")
-	if err := os.WriteFile(filepath.Join(dir, "store.db"), garbage, 0644); err != nil {
+	if err := os.WriteFile(persistence.PathIn(dir), garbage, 0644); err != nil {
 		t.Fatal(err)
 	}
 	store := NewStore(dir)

@@ -27,7 +27,7 @@ func migrationsSourceFS() fs.FS {
 }
 
 // Migrate is the migration runner protocol in full — the only path that is
-// allowed to change store.db's schema, whether called directly (as this
+// allowed to change storage.db's schema, whether called directly (as this
 // package's own tests do for setup) or from EnsureCurrent: it records
 // intent by acquiring the coordination lock exclusively, waits out any
 // already-in-flight normal access by then acquiring the access lock

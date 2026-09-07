@@ -11,6 +11,7 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/eventlog"
+	"github.com/kecbigmt/plecture/app/internal/persistence"
 	"github.com/kecbigmt/plecture/app/internal/sessionhub"
 	"github.com/kecbigmt/plecture/app/internal/state"
 	"github.com/kecbigmt/plecture/contracts/event"
@@ -207,7 +208,7 @@ include     = ["plect.instruction"]
 	// Swap in a store whose database file is unreadable, simulating the
 	// store becoming unreadable mid-flight.
 	brokenDir := t.TempDir()
-	writeFile(t, filepath.Join(brokenDir, "store.db"), "not a database")
+	writeFile(t, persistence.PathIn(brokenDir), "not a database")
 	sup.state = state.NewStore(brokenDir)
 
 	sup.reconcile(ctx, active, skip, &wg)

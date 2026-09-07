@@ -152,7 +152,7 @@ restart, within one refresh interval.`,
 		// the session hub) has now stopped using it, so this process — the
 		// deterministic owner that opened it — closes the pool it shares with
 		// state.Store rather than leaving it open for the rest of the exit path.
-		_ = persistence.CloseShared(filepath.Join(stateStore.Dir(), "store.db"))
+		_ = persistence.CloseShared(persistence.PathIn(stateStore.Dir()))
 		if serveErr != nil && serveErr != http.ErrServerClosed {
 			return serveErr
 		}
