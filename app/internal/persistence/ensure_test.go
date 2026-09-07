@@ -10,6 +10,8 @@ import (
 	"testing"
 	"testing/fstest"
 	"time"
+
+	"github.com/kecbigmt/plecture/app/internal/version"
 )
 
 // migrationFixture builds an in-memory goose migration source so tests can
@@ -224,6 +226,59 @@ func TestEnsureCurrent_ReleaseBuildMigratesAnExistingDatabaseAutomatically(t *te
 	}
 	if current != target || current != 2 {
 		t.Fatalf("version = (%d, %d), want (2, 2): a release build migrates automatically", current, target)
+	}
+}
+
+// seedRealBehindSchemaDatabase brings path to one migration short of the
+// real embedded target, so the exported EnsureCurrent (which always uses
+// the full real tree, unlike the injectable ensureCurrent above) sees a
+// real database genuinely behind its schema.
+func seedRealBehindSchemaDatabase(t *testing.T, ctx context.Context, path string) {
+	t.Helper()
+	if err := SeedWithMigrationsForTest(ctx, path, RealMigrationsMinusLatestForTest()); err != nil {
+		t.Fatalf("SeedWithMigrationsForTest: %v", err)
+	}
+}
+
+func TestEnsureCurrent_RealDevelopmentBuildRefusesARealExistingDatabase(t *testing.T) {
+	if !version.IsDevelopmentBuild() {
+		t.Fatal("this test binary is not classified as a development build, want the unstamped default")
+	}
+	ctx := context.Background()
+	path := testDBPath(t)
+	seedRealBehindSchemaDatabase(t, ctx, path)
+
+	db, err := EnsureCurrent(ctx, path)
+	if err == nil {
+		db.Close()
+		t.Fatal("EnsureCurrent on this dev-build test binary against a real behind-schema database unexpectedly succeeded")
+	}
+	if !strings.Contains(err.Error(), "development build") {
+		t.Errorf("error = %q, want it to mention a development build", err)
+	}
+}
+
+func TestEnsureCurrent_RealReleaseStampedVersionMigratesARealExistingDatabase(t *testing.T) {
+	original := version.Current
+	version.Current = "1.2.3"
+	t.Cleanup(func() { version.Current = original })
+
+	ctx := context.Background()
+	path := testDBPath(t)
+	seedRealBehindSchemaDatabase(t, ctx, path)
+
+	db, err := EnsureCurrent(ctx, path)
+	if err != nil {
+		t.Fatalf("EnsureCurrent with a stamped version.Current: %v", err)
+	}
+	defer db.Close()
+
+	current, target, err := db.version(ctx)
+	if err != nil {
+		t.Fatalf("version: %v", err)
+	}
+	if current != target {
+		t.Errorf("current = %d, target = %d, want a release-stamped build to migrate the real database automatically", current, target)
 	}
 }
 
