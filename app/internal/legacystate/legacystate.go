@@ -1,9 +1,8 @@
 // Package legacystate parses the state.json envelope core wrote before the
-// SQLite cutover (see docs/design/sqlite-persistence.md), giving
-// app/internal/legacyimport a validated, in-memory form of a pre-cutover
-// data directory to translate into SQLite rows. This is a byte-slice
-// parser, not a file reader: the importer owns locating and reading the
-// operator-supplied backup.
+// SQLite cutover (see docs/design/sqlite-persistence.md); app/internal/
+// legacyimport is its one live consumer. This is a byte-slice parser, not a
+// file reader: the importer owns locating and reading the operator-supplied
+// backup.
 package legacystate
 
 import (

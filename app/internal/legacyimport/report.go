@@ -8,7 +8,7 @@ type Report struct {
 	Sessions                 int
 	SessionsFromEventLogOnly int // present only via events/, no state.json entry
 	Events                   int
-	InternalBackfilled       int // events with no direction, imported as internal
+	InternalBackfilled       int // see SessionLog.InternalBackfilled
 	Cursors                  int
 	Populations              int
 	PopulationMembers        int
