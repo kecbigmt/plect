@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/domain"
@@ -43,6 +44,20 @@ func replaceRuntimeState(store *state.Store, sessionName string, session *domain
 		s.LastTickAt = session.LastTickAt
 		s.TickBackoff = session.TickBackoff
 		s.UpdatedAt = session.UpdatedAt
+		return nil
+	})
+}
+
+// setSessionStatus durably records a lifecycle-status transition on its
+// own, separate from mergeTasks/replaceRuntimeState's narrower field sets:
+// a caller sets it only once it has already confirmed the outcome the
+// transition depends on (Up's own success, or Down's own completion),
+// which mergeTasks' own unconditional persist-before-checking-the-error
+// cannot express.
+func setSessionStatus(store *state.Store, sessionName, status string) error {
+	return store.Update(sessionName, func(s *domain.Session) error {
+		s.Status = status
+		s.UpdatedAt = time.Now()
 		return nil
 	})
 }

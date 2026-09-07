@@ -57,6 +57,11 @@ func Down(cfg *config.Config, store *state.Store, params DownParams) (*DownResul
 	}
 	cleanupErr := task.RunCleanup(context.Background(), teardown, sessionVars(cfg, session, plan), session.Tasks, params.Observer)
 	session.UpdatedAt = time.Now()
+	// Status moves to down here regardless of cleanupErr: run-scoped
+	// cleanup was attempted either way, and the session is no longer in
+	// the "up" phase Up's own success declared it in, whether or not that
+	// attempt fully succeeded.
+	session.Status = contract.SessionStatusDown
 	if err := store.Put(session); err != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to save session state: %v", err)}
 	}

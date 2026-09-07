@@ -68,10 +68,9 @@ core-owned shape, but declaring one is rare (no shipped workflow node relies
 on it) and it is never relationally queried, so splitting it into the same
 `task_done_when_states`/`task_done_when_judges` shape `task_instances` gets
 would add relational structure with no query that uses it. This is a
-one-off carve-out for that reason alone, not a reopening of the
-`record_json` grab-bag this design's own follow-up (kecbigmt/plecture#465)
-removed. The table below classifies every `_json` column by its owning
-declaration:
+one-off carve-out for that reason alone, not a general license for
+core-owned structure to hide in a `_json` column. The table below
+classifies every `_json` column by its owning declaration:
 
 | Column | Owning declaration |
 | --- | --- |
@@ -213,10 +212,9 @@ are not part of the runtime import.
 Sessions are retained across destroy. `sessions.id` is a ULID minted once,
 by `plect up`/`plect create`, when a session is first created (or recreated
 under a reused name after a prior destroy); it never changes thereafter. A
-session row *is* one incarnation — the per-incarnation `event_streams` table
-from an earlier revision of this design folds into the session row itself
-(see "Event positions and cursors" below), rather than staying a second,
-independent table.
+session row *is* one incarnation: there is no separate per-incarnation
+table (see "Event positions and cursors" below for how events and cursors
+key off it directly).
 
 `name` stays a mutable label but is unique only among live rows:
 `CREATE UNIQUE INDEX sessions_live_name ON sessions(name) WHERE status <>
@@ -228,7 +226,7 @@ incarnation stays reachable only by its own `id`.
 `status TEXT CHECK (status IN ('down', 'up', 'destroyed'))` is a lifecycle
 phase, not liveness or health — `domain.HealthState` (a derived runtime
 observation, in the `health_*` columns) and `config.RunScopeUp` (a derived
-fact about which run-scoped tasks are currently produced) answer those
+fact about which run-scoped tasks are produced) answer those
 separately. Transitions: create leaves a session `down`; `plect up` moves it
 to `up`; `plect down` moves it back to `down`; `plect destroy` moves it to
 `destroyed`, which is terminal and sets `destroyed_at` (`CHECK ((status =
@@ -241,7 +239,7 @@ Because no write path ever deletes a `sessions` row,
 `parent_session_id`/`root_session_id` use `ON DELETE NO ACTION` rather than
 `SET NULL`, and a destroyed parent keeps every child's history — including
 its own parent link — intact: `child.ParentSession` still resolves to the
-destroyed parent's name, even though that parent no longer appears in a
+destroyed parent's name, even though that parent is absent from a
 live listing (`plect ls`, `plect status`, and the Web UI all hide destroyed
 rows by default). History reads (an event read, or a listing that opts into
 `--all`) take an `id` rather than a name. Retention and purge of destroyed
@@ -267,7 +265,7 @@ of them onto the referenced row's current name (with a `root:` prefix for
 `Session.Message` is not a stored field: the fact lives entirely in the
 session's `plect.status_message` event stream. The current value is the
 most recent such event on the session's live row; `metadata.cleared =
-"true"` (or an empty `summary`) means no message is currently set, and the
+"true"` (or an empty `summary`) means no message is set, and the
 event's own `time` is the message's `updated_at`. Readers (`plect ls`'s
 MESSAGE column, `plect status`, the Web UI session list and detail) resolve
 it through one query — `service.LatestStatusMessage`, backed by
@@ -468,9 +466,8 @@ An event cursor is the opaque `event.Cursor{Off, Ord, StreamID}` value, with
 `CursorVersion` set to `2`. `Off` is the exclusive logical sequence for the
 selected session incarnation: `1` starts at the first row, and a cursor
 after event sequence `n` has `Off == n + 1`. `StreamID` is that
-incarnation's `sessions.id`, and `Ord` is the requested order — the field
-keeps its `event.Cursor` name from the now-retired `event_streams` table it
-originally named, since it is still opaque to every caller that carries it.
+incarnation's `sessions.id`, opaque to every caller that carries it, and
+`Ord` is the requested order.
 
 A session row is the log of one incarnation, not of a session name (see
 "Session identity and lifecycle" above): a session create mints a new row
@@ -523,15 +520,12 @@ heartbeat position imports under `heartbeat`.
 
 ## One-time importer inventory
 
-This inventory predates the record_json dissolution and session-id rework
-(kecbigmt/plecture#465) and describes the shape the one-time importer
-(kecbigmt/plecture#436, not yet built) will need to target once it lands:
-every `sessions`/`node_instances`/`task_instances` destination column below
-is now the current, named-column schema (no `record_json`), and every
-`event_streams` reference is now a minted `sessions.id`. The importer issue
-owns working out the exact per-column legacy-JSON-field mapping; this table
-records the source-side validation contract, which the schema change does
-not affect.
+This inventory describes the shape the one-time importer (not yet built)
+targets: every `sessions`/`node_instances`/`task_instances` destination
+column below is this design's own named-column schema (no `record_json`),
+and a legacy incarnation reference resolves to a minted `sessions.id`. A
+later change works out the exact per-column legacy-JSON-field mapping;
+this table records only the source-side validation contract.
 
 The import command runs only against an operator-created backup while writers
 are stopped. It builds and validates a temporary database, validates it again,

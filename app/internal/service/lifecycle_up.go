@@ -216,6 +216,13 @@ func Up(cfg *config.Config, store *state.Store, params UpParams) (*UpResult, err
 	} else if refreshed != nil {
 		session = refreshed
 	}
+	// Status only ever moves to up here, once setup has already fully
+	// succeeded (every earlier return above leaves it exactly as it was —
+	// down from creation, or destroyed — matching the runtime failure
+	// model's own failure-atomic guarantee for a launch that fails).
+	if err := setSessionStatus(store, sessionName, contract.SessionStatusUp); err != nil {
+		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to record session status: %v", err)}
+	}
 	recordLifecycle(store, sessionName, "up", "run-scoped tasks produced")
 	return &UpResult{SessionName: sessionName, Tasks: session.Tasks}, nil
 }
