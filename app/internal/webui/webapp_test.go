@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+
+	"github.com/kecbigmt/plecture/app/internal/webui/webapp"
 )
 
 // builtWebApp stands in for a real Vite build, so these tests don't depend
@@ -113,5 +115,19 @@ func TestWebApp_NotBuiltDoesNotAffectOtherRoutes(t *testing.T) {
 	rec := getWebApp(t, notBuiltWebApp(), "/healthz")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /healthz: status = %d, want 200", rec.Code)
+	}
+}
+
+// The real static/unbuilt.html, not a synthetic fixture: "pnpm build" from
+// web/ fails (no build script there; only web/app has one).
+func TestUnbuiltNotice_NamesAWorkingBuildCommand(t *testing.T) {
+	notice, err := fs.ReadFile(webapp.FS, "static/unbuilt.html")
+	if err != nil {
+		t.Fatalf("read static/unbuilt.html: %v", err)
+	}
+	for _, want := range []string{"pnpm --dir web install", "pnpm --dir web/app build"} {
+		if !strings.Contains(string(notice), want) {
+			t.Errorf("static/unbuilt.html missing %q", want)
+		}
 	}
 }

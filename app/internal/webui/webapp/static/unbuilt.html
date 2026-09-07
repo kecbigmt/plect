@@ -5,6 +5,9 @@
     <title>Plecture</title>
   </head>
   <body>
-    <p>Web UI not built; run pnpm build in web/ (the release archive includes it).</p>
+    <p>Web UI not built. From the repository root, run:</p>
+    <pre>pnpm --dir web install --frozen-lockfile
+pnpm --dir web/app build</pre>
+    <p>then restart plect-web. A release archive includes the built Web UI already.</p>
   </body>
 </html>
