@@ -311,10 +311,9 @@ func TestTombstoneStatusResult_ReportsNodesAndTasksSeparately(t *testing.T) {
 }
 
 // TestTombstoneStatusResult_TasksOnlyShapeIsNotMistakenForLegacy pins the
-// shape docs/migrations/tombstone-nodes-tasks-migration.md's procedure must
-// leave untouched: a genuinely new tombstone with only dynamic instances and
-// no "nodes" key at all (a session-scoped task document set up before any
-// workflow node ever ran). It must read as entirely dynamic, not as nodes.
+// Go-side read of a tombstone with only dynamic instances and no "nodes" key
+// at all — omitempty drops Nodes when a session-scoped task document was set
+// up before any workflow node ever ran. It must read as entirely dynamic.
 func TestTombstoneStatusResult_TasksOnlyShapeIsNotMistakenForLegacy(t *testing.T) {
 	const tasksOnlyTombstoneJSON = `{
 		"session_name": "org/repo-2",
