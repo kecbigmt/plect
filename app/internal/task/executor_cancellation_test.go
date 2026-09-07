@@ -18,27 +18,15 @@ import (
 // the marker file it would otherwise write never appears) and the error
 // must surface to the caller promptly instead of the call blocking for the
 // child's full lifetime.
-//
-// "Promptly" is measured from the moment the context is actually cancelled,
-// not from the call's start: waitForFile is the synchronization point that
-// confirms the child has started before cancel() runs, so the measured
-// window is kill latency alone, not kill latency plus however long process
-// fork/exec happened to take under whatever load the machine is under.
 
 const cancellationCharChildSleep = 5 * time.Second
 
-// cancellationCharKillBudget bounds how long a caller may take to return
-// once the context is cancelled. It is generous relative to real kill
-// latency so it tolerates CPU contention, but stays far under
-// cancellationCharChildSleep so a regression that fails to kill the child
-// (letting it run to completion) still fails the test instead of passing
-// under a loose bound.
+// Generous relative to real kill latency (tolerates CPU contention), but far
+// under cancellationCharChildSleep, so a kill regression still fails loudly.
 const cancellationCharKillBudget = 3 * time.Second
 
-// waitForFile polls for path to appear, the synchronization point a test
-// uses to know the child process has actually started before it cancels the
-// context — avoiding a guessed wall-clock deadline for "surely started by
-// now", which is what made these tests flaky under CPU load.
+// waitForFile is the synchronization point: a test cancels only once the
+// child has actually started, instead of guessing a wall-clock deadline.
 func waitForFile(t *testing.T, path string) {
 	t.Helper()
 	deadline := time.Now().Add(cancellationCharKillBudget)
@@ -51,10 +39,8 @@ func waitForFile(t *testing.T, path string) {
 	t.Fatalf("waitForFile: %s did not appear within %v", path, cancellationCharKillBudget)
 }
 
-// hungChildScript builds the shared shell script: it touches started before
-// sleeping, so waitForFile has something to poll for, and touches marker
-// after — its absence is what proves the child was killed rather than left
-// to run to completion.
+// hungChildScript signals start via `started`; `marker` appears only if left
+// to finish, so its absence is what proves the kill.
 func hungChildScript(started, marker, trailing string) string {
 	script := fmt.Sprintf("touch '%s'; sleep %d; touch '%s'", started, int(cancellationCharChildSleep/time.Second), marker)
 	if trailing != "" {
