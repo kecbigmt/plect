@@ -122,20 +122,34 @@ case "${1:-}" in
     # `read` (its own line terminator) and plain `$(...)` (strips every
     # trailing one) would corrupt.
     payload="$(cat)"
-    jq_field_exact '.last_assistant_message // empty'
-    message="$REPLY"
-    [ -n "$message" ] || exit 0
 
     # plect.message is emitted exactly once per message_id: when
     # MessageDisplay is enabled, its final delta already published this
     # turn's plect.message (full text known at that point), and consuming
     # the marker here is this hook's only way to tell — Stop's own payload
-    # carries no message_id.
+    # carries no message_id. Checked before last_assistant_message even
+    # below: a turn whose last content block carries no text (an empty
+    # last_assistant_message, e.g. it ends on a tool call) must still
+    # clear a marker an earlier message in the same turn left behind, or
+    # it survives to the *next* turn's Stop and wrongly suppresses a
+    # message MessageDisplay never actually covered.
     last_emitted="$(last_emitted_path "$PLECT_SESSION_NAME")"
     if [ -s "$last_emitted" ]; then
       rm -f "$last_emitted" 2>/dev/null
       exit 0
     fi
+
+    # last_assistant_message is documented on Stop/SubagentStop specifically
+    # so a hook never needs to parse the transcript file, which is written
+    # asynchronously and can lag the turn that just ended. prompt_id is
+    # Stop's name for the same per-turn correlation id MessageDisplay calls
+    # turn_id. Extracted via jq_field_exact, not a joined multi-field read:
+    # a real assistant message routinely contains newlines, which both
+    # `read` (its own line terminator) and plain `$(...)` (strips every
+    # trailing one) would corrupt.
+    jq_field_exact '.last_assistant_message // empty'
+    message="$REPLY"
+    [ -n "$message" ] || exit 0
 
     turn_id="$(printf '%s' "$payload" | jq -r '.prompt_id // empty' 2>/dev/null)" || turn_id=""
 

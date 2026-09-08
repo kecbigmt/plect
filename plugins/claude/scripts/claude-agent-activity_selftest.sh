@@ -178,6 +178,21 @@ case "$got" in
   *) printf 'Stop on the next turn should publish again once the marker is consumed, got: %s\n' "$got" >&2; exit 1 ;;
 esac
 
+# message_display + reply: a marker left by a message_display final delta
+# must be consumed even by a Stop whose own last_assistant_message is empty
+# (e.g. the turn's last content block was a tool call, carrying no text) --
+# otherwise it survives into the *next* turn's Stop and wrongly suppresses a
+# message message_display never covered at all, silently dropping it.
+run_report message_display '{"hook_event_name":"MessageDisplay","message_id":"msg-tool-tail","turn_id":"turn-ghi","index":0,"final":true,"delta":"streamed before a trailing tool call"}' >/dev/null
+got="$(run_report reply '{"hook_event_name":"Stop","last_assistant_message":"","prompt_id":"turn-ghi"}')"
+[ -z "$got" ] || { printf 'an empty-text Stop should still publish nothing, got: %s\n' "$got" >&2; exit 1; }
+[ ! -s "$tmp/state/plect/claude-activity/owner_repo-1.last-message-id" ] || { echo "an empty-text Stop must still consume the message_display marker" >&2; exit 1; }
+got="$(run_report reply '{"hook_event_name":"Stop","last_assistant_message":"a genuinely new turn","prompt_id":"turn-jkl"}')"
+case "$got" in
+  event\ publish*) ;;
+  *) printf 'a later turn must not be suppressed by a marker an empty-text Stop failed to clear, got: %s\n' "$got" >&2; exit 1 ;;
+esac
+
 # message_display: no turn_id means no turn_id metadata, rather than an
 # empty one -- on both the delta and the message it completes.
 got="$(run_report message_display '{"hook_event_name":"MessageDisplay","message_id":"msg-2","index":0,"final":true,"delta":"hi"}')"
