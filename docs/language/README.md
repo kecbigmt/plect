@@ -26,6 +26,7 @@ general-purpose expression language of its own.
 | [`effects.md`](effects.md) | The effect kind: lifecycle, health, terminal, and nesting |
 | [`workflows.md`](workflows.md) | The workflow kind: nodes, event channels, display, and the clocks |
 | [`channels.md`](channels.md) | The channel kind and its delivery primitives |
+| [`events.md`](events.md) | The core, provider-neutral event vocabulary channels and clocks select by type glob |
 | [`resources.md`](resources.md) | The resource kind: identity, observation, and delivery binding |
 | [`declarations.md`](declarations.md) | Definition blocks, discovery, namespaces, and the reference grammar |
 | [`values.md`](values.md) | The five value forms, the tagged-value vocabulary, and the per-surface roots |

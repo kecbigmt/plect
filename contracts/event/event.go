@@ -124,6 +124,63 @@ const (
 	// log's ordinary append identity: a repeated attempt is a separate fact,
 	// not a dedup collision.
 	TypeNodeResult = "plect.node.result"
+	TypeMessage    = "plect.message"
+	// The name avoids a term one surveyed runtime's own event vocabulary
+	// already assigns to a different kind of streamed unit.
+	TypeMessageDelta = "plect.message_delta"
+)
+
+const (
+	MetaMessageID       = "message_id"
+	MetaMessageIDOrigin = "message_id_origin"
+	MetaSource          = "source"
+	MetaRole            = "role"
+	MetaKind            = "kind"
+	MetaIndex           = "index"
+	MetaFinal           = "final"
+	MetaTurnID          = "turn_id"
+	MetaTurnIndex       = "turn_index"
+	MetaStepIndex       = "step_index"
+	MetaRunID           = "run_id"
+	MetaSourceSeq       = "source_seq"
+	MetaRaw             = "raw"
+	MetaInterim         = "interim"
+	MetaStopReason      = "stop_reason"
+	MetaTruncated       = "truncated"
+	MetaModel           = "model"
+	MetaProvider        = "provider"
+	MetaSurface         = "surface"
+	MetaAgentID         = "agent_id"
+	MetaParentAgentID   = "parent_agent_id"
+	MetaDepth           = "depth"
+	MetaAgentRole       = "agent_role"
+	MetaOrdering        = "ordering"
+	MetaBlockIndex      = "block_index"
+)
+
+const (
+	MessageIDOriginNative    = "native"
+	MessageIDOriginSynthetic = "synthetic"
+)
+
+const RoleAssistant = "assistant"
+
+const (
+	DeltaKindText      = "text"
+	DeltaKindReasoning = "reasoning"
+)
+
+const (
+	StopReasonCompleted   = "completed"
+	StopReasonMaxTokens   = "max_tokens"
+	StopReasonAborted     = "aborted"
+	StopReasonError       = "error"
+	StopReasonInterrupted = "interrupted"
+)
+
+const (
+	OrderingStrict     = "strict"
+	OrderingBestEffort = "best_effort"
 )
 
 // NodeResultAction is TypeNodeResult's closed set of "action" metadata
