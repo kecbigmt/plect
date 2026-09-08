@@ -644,13 +644,11 @@ type ResultObserver interface {
 	OnResult(scope, node, effectID, action, result string, elapsed time.Duration, body string)
 }
 
-// ReleaseObserver is an optional Observer extension invalidateProducedNode
-// type-asserts for: when a same-pass liveness-invalidate cleanup releases
-// nodes, it calls OnRelease with their final (cleaned) states before
-// RunSetup rebuilds any of them, so a durable caller can flush the release
-// as its own checkpoint -- otherwise, with one state slot per node id, the
-// release is invisible by the time RunSetup's own result is persisted and
-// collapses into the new generation's row.
+// ReleaseObserver is an optional Observer extension: invalidateProducedNode
+// calls OnRelease with a same-pass release's final states before RunSetup
+// rebuilds any of them, so a durable caller can flush the release as its
+// own checkpoint -- otherwise, with one state slot per node id, it is
+// invisible by the time RunSetup's own result is persisted.
 type ReleaseObserver interface {
 	OnRelease(released map[string]*contract.TaskState) error
 }

@@ -146,16 +146,13 @@ func TestPutSession_NodeExecutionMintsFreshIdentityAfterRelease(t *testing.T) {
 }
 
 // TestPutSession_NewExecutionRefusesAConcurrentWritersUnreleasedRow proves a
-// write claiming NewExecution (a genuinely new setup attempt, no prior
-// identity known) is refused rather than silently overwriting a different
-// writer's unreleased row for the same node -- the losing side of a race
-// between two concurrent first-time setups.
+// write claiming NewExecution is refused rather than silently overwriting a
+// different writer's unreleased row for the same node.
 func TestPutSession_NewExecutionRefusesAConcurrentWritersUnreleasedRow(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
 
-	// Writer A's setup finishes first and lands its row.
 	winner := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Nodes: map[string]*contract.TaskState{
 		"a": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "work", Outputs: map[string]any{"from": "writer-a"}, NewExecution: true},
 	}}
@@ -164,8 +161,6 @@ func TestPutSession_NewExecutionRefusesAConcurrentWritersUnreleasedRow(t *testin
 	}
 	winnerID := nodeExecutionIDForTest(t, db, "s1", "a")
 
-	// Writer B started its own setup before writer A's write landed, so it
-	// also believes node "a" has no prior identity.
 	loser := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Nodes: map[string]*contract.TaskState{
 		"a": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "work", Outputs: map[string]any{"from": "writer-b"}, NewExecution: true},
 	}}
@@ -187,9 +182,7 @@ func TestPutSession_NewExecutionRefusesAConcurrentWritersUnreleasedRow(t *testin
 }
 
 // TestPutSession_NewExecutionInsertsFreshRowWhenNodeIsGenuinelyNew proves
-// NewExecution does not itself change behavior for the ordinary case it is
-// meant to leave alone: a node with no prior row at all still inserts
-// normally.
+// NewExecution still inserts normally when the node has no prior row.
 func TestPutSession_NewExecutionInsertsFreshRowWhenNodeIsGenuinelyNew(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
@@ -207,12 +200,9 @@ func TestPutSession_NewExecutionInsertsFreshRowWhenNodeIsGenuinelyNew(t *testing
 }
 
 // TestPutSession_RestartAfterReleaseThenNewSetupMintsFreshGeneration proves
-// a same-pass liveness-invalidate-then-rebuild's release checkpoint (flushed
-// on its own, before the follow-up setup write -- see task.ReleaseObserver)
-// survives a crash landing exactly between the two writes: after restart,
-// the release is durably recorded on its own, retained (not pruned, since
-// nothing has acknowledged or superseded it yet), and a later setup still
-// mints a fresh generation rather than colliding with or resurrecting it.
+// a release flushed durably on its own (see task.ReleaseObserver) survives a
+// crash landing right after it, and a later setup still mints a fresh
+// generation rather than colliding with or resurrecting the released one.
 func TestPutSession_RestartAfterReleaseThenNewSetupMintsFreshGeneration(t *testing.T) {
 	dir := t.TempDir()
 	path := PathIn(dir)
@@ -239,8 +229,6 @@ func TestPutSession_RestartAfterReleaseThenNewSetupMintsFreshGeneration(t *testi
 	}}); err != nil {
 		t.Fatalf("PutSession (release): %v", err)
 	}
-	// Simulate a crash exactly here, between the release write and the
-	// follow-up setup write.
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
