@@ -184,28 +184,19 @@ message_envelope = { type = "string", default = "[{type}] {body_or_summary}{url_
 
 An exec action names its executable exactly once, through `bin` or `command`.
 
-## Cleanup contract digest
+## Lifecycle-configuration change notification
 
-Setup records a cleanup-contract digest for every nested cleanup layer. The
-digest is comparison evidence, not stored executable code: teardown resolves
-the action again from the current trusted configuration tree and refuses to run
-it unless it matches the setup-time evidence. The complete contract is defined
-in [the minimum cleanup ADR](../adr/2026-09-08-minimum-cleanup-contract.md).
+Lifecycle actions contribute their parsed declarations to the session-wide
+lifecycle-configuration change notification. The projection includes an
+action's declared type, literal shell source or executable reference, declared
+argument vector, and input/environment binding expressions. It never resolves
+`PATH`, reads a referenced file, hashes a binary or plugin tree, or inspects a
+script's transitive dependencies.
 
-Its canonical object distinguishes `shell` from `exec`; preserves a shell
-script's exact body; includes an exec action's resolved command or plugin path
-and declared argument vector; and includes every cleanup binding expression.
-Object keys are recursively sorted, arrays retain their order, and the
-canonical UTF-8 JSON bytes are SHA-256 hashed. The locked plugin content hash
-from `plect.lock` is a separate comparison input for every plugin-owned layer
-or executable. `force` and plugin-owned `cleanup.inputs.*` are supplied by the
-current teardown invocation, so they are neither setup-time facts nor digest
-inputs.
-
-The comparison does not cover commands resolved through `PATH` or transitive
-dependencies of a shell script or executable. A missing or changed item within
-the stated contract makes cleanup unavailable; it never permits a newer action
-to run against the old allocation.
+A changed action declaration warns before the next `up`, `down`, or `destroy`
+execution, then plect executes the current trusted configuration. It does not
+make cleanup unavailable. The complete baseline and projection rules are
+defined in [the lifecycle-configuration ADR](../adr/2026-09-08-minimum-cleanup-contract.md).
 
 ## Validation rules
 

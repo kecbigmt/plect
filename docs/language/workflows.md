@@ -137,16 +137,19 @@ outputs remain the authority for produced and cleaned nodes.
 
 The workflow loaded from the session's selected project root is the latest
 desired workflow. It is reloaded for each desired operation and a population
-reload; a changed digest is reported, not rejected. It never tears down or
-rebuilds a node on its own.
+reload. Before `up`, `down`, or `destroy` executes it is compared with the
+session's shared lifecycle-configuration baseline. A change warns and then
+executes the current trusted configuration; it never tears down or rebuilds a
+node on its own.
 
 Each setup attempt has a session-owned execution record, including partial and
 failed attempts. It records the acquired resource identity, setup facts,
-directory, per-layer cleanup-contract digests, locked plugin content revisions,
-and the dependency edges and allocation-lifetime information needed to release
-the existing plan. It does not retain executable cleanup code, plugin binaries,
-or a replayable cleanup declaration. The local session-state store protects
-writes to this evidence but is not a trust boundary for executable code.
+directory, nested-layer facts and environment, and the dependency edges and
+allocation-lifetime information needed to release the existing plan. It does
+not retain executable cleanup code, plugin binaries, a replayable cleanup
+declaration, per-layer refusal digests, or plugin content pins. The local
+session-state store protects writes to this evidence but is not a trust boundary
+for executable code.
 
 Retained execution records are a retained execution plan. Release follows its
 recorded dependency order rather than an order derived from the latest desired
@@ -155,8 +158,8 @@ checkout is released. This preserves the lifetime boundaries of allocations
 whose declarations were removed or changed.
 
 The current operation supplies `force` and plugin-owned cleanup inputs; they
-do not replace setup-time facts or digest evidence. A record that still matches
-a desired node remains in use. New nodes are set up from the latest desired
+do not replace setup-time facts. A record that still matches a desired node
+remains in use. New nodes are set up from the latest desired
 workflow. A changed node effect, resolved setup inputs, scope, or execution
 directory requires reconstruction; the diagnostic directs the caller to
 `--force-recreate`. A node removed from the desired workflow is not set up
@@ -170,12 +173,12 @@ as specified below.
 ## Cleanup and reconstruction
 
 Before teardown, plect resolves the matching cleanup layer from the current
-trusted configuration tree and compares its digest and locked plugin content
-revision with the execution record. A missing definition, changed contract,
-unavailable plugin content, setup fact, directory, credential, environment, or
-reliable target identity makes cleanup unavailable. The record stays
-inspectable with its outstanding obligation and a non-secret reason; current
-configuration is never replayed merely because it is newer.
+trusted configuration tree. A changed lifecycle-configuration baseline warns
+before this execution but does not make cleanup unavailable. A missing
+definition, valid project trust, setup fact, directory, credential, environment,
+or reliable target identity is a cleanup precondition failure. The record stays
+inspectable with its outstanding obligation and a non-secret reason; cleanup
+never falls back to another directory or infers release.
 
 Release follows execution-owned dependency edges, dependents before
 prerequisites. A failed or unavailable dependent blocks release of its

@@ -4,179 +4,159 @@ supersedes:
   - 2026-09-07-invocation-project-context
 ---
 
-# Minimum cleanup contract for execution records
+# Lifecycle-configuration change notification and cleanup contract
 
 ## Context
 
-Execution records distinguish an allocation from the editable workflow that
-would create one today. The prior resource-effect and project-context decisions
-correctly require retained release obligations, recorded dependency order, and
-configuration selected from a trusted project root. Their cleanup wording,
-however, describes retaining cleanup declarations, plugin references, and
-executables. That would make `storage.db` a source of executable code and
-would permit an older allocation to run code that is no longer current trusted
-configuration.
+Workflows are editable trusted configuration. A changed lifecycle definition can
+intentionally repair cleanup for an allocation created by an earlier revision,
+so refusing current cleanup merely because configuration changed prevents a
+legitimate release. At the same time, an operator needs notice that the
+configuration about to execute differs from the one used previously.
 
-The SQLite execution-identity work intentionally removed retained cleanup
-code. It leaves the minimum evidence needed to decide whether current trusted
-configuration is the same cleanup contract as the one accepted during setup.
-An operator also needs distinct outcomes for a successful cleanup, an external
-release assertion, and deliberate loss of a record.
+Execution records answer a different question: what allocation exists, what
+facts are needed to clean it up, and which allocations must be released first.
+They must not become a source of executable cleanup code. The previous
+per-layer cleanup-digest and plugin-content-pin proposal conflated notification
+with execution authorization and added retention solely to refuse an edited
+cleanup.
 
 ## Decision
 
-The resource-entry and ordinary-effect decisions remain in force, with this
-contract defining their cleanup and reconstruction semantics.
+### Lifecycle-configuration change notification
 
-### Trust and retained evidence
+Before `plect up`, `plect down`, or `plect destroy` begins execution, plect
+loads the current trusted configuration and computes one session-wide lifecycle
+configuration digest. If it differs from the session's prior baseline, plect
+warns before execution and then executes the current trusted configuration. A
+change notification neither adds a confirmation prompt nor requires
+`--force-recreate`; a digest mismatch never makes cleanup unavailable.
 
-Cleanup executable code is resolved only from the session's current trusted
-configuration tree. `storage.db` retains no shell body, command, executable
-artifact, or replayable cleanup declaration. It is not a security boundary and
-does not establish provenance for code.
+The digest is SHA-256 over canonical UTF-8 JSON for an explicit projection of
+the parsed lifecycle configuration. Object keys are sorted recursively, arrays
+retain declared order, and the encoded object has no insignificant whitespace.
+For every configured node, the projection includes its composition, effect
+reference, scope, dependency structure, cwd selection, setup/cleanup/liveness
+action declarations, and input/environment binding expressions. It includes
+the referenced effect declarations needed to form that lifecycle configuration,
+including nested effects. Action declarations include their declared type,
+literal shell source or executable reference, and declared argument vector.
 
-At setup, each execution records the acquired resource identity, its execution
-generation, its release obligation, the setup directory, and the setup-time
-facts that its cleanup bindings need. It also records one cleanup-contract
-digest and one plugin content revision for every nested cleanup layer. These
-are comparison evidence, not executable artifacts. The layer position and
-retained execution declaration identify the corresponding current layer; a
-missing, reordered, or different layer makes cleanup unavailable.
+The projection excludes display and description prose, instruction bodies as
+such, external-file contents, plugin content hashes, executable binaries,
+`PATH` resolution, and transitive executable dependencies. A changed reference
+is still a configuration change. If ordinary compared input data happens to
+contain embedded instruction text, the resulting extra warning is acceptable;
+the projection does not inspect values semantically to suppress it. Editable
+and locked plugins use the same declaration comparison. This is lifecycle-
+configuration change notification, not tamper detection, provenance
+verification, or a security boundary against an actor able to modify both
+configuration and the stored digest.
 
-The digest is SHA-256 over a canonical UTF-8 JSON object. Object keys are
-sorted recursively, arrays retain their declared order, strings retain their
-exact values, and the encoded object has no insignificant whitespace. The
-object contains the layer position, action type, and exactly one action body:
+The session retains one nullable baseline shared by `up`, `down`, and
+`destroy`. After all execution preconditions pass, plect warns when appropriate
+and records the current digest when the lifecycle executor starts. An execution
+failure does not erase that fact. A first execution, including the first
+execution of a migrated session with no baseline, records the baseline without
+a warning. Read-only operations and configuration inspection do not change it.
+The digest and configuration loaded for comparison are the same configuration
+used by that operation.
 
-- a shell action's literal script body;
-- an exec action's resolved command path or plugin executable path and its
-  declared argument vector;
-- the complete cleanup binding table, including the canonical value expression
-  for every key; and
-- the containing plugin's `plect.lock` content hash when the layer or its
-  executable comes from a locked plugin, or `null` for user-owned content.
+### Cleanup and execution records
 
-The setup record stores the same plugin content hash separately so a diagnostic
-can identify whether an otherwise matching definition is unavailable because
-the lock resolution changed. An editable plugin has no lock content hash and
-therefore cannot satisfy this cleanup contract for an acquired allocation.
+Cleanup executable code is always resolved from the current trusted
+configuration tree, never replayed from `storage.db`. An execution record
+retains operational facts: allocation and execution identity, retained
+declaration identity, setup inputs and outputs, nested-layer facts and
+environment, setup cwd, dependency edges, release state, and failure
+information. Updating the notification baseline never rewrites an older
+allocation's identity, facts, or release obligation.
 
-Before cleanup, plect resolves every required layer from the current trusted
-tree, computes the same digest, and compares both the digest and recorded
-plugin content hash. A missing definition, unreadable tree, changed digest,
-changed or absent locked plugin content, missing setup directory, missing
-required setup fact, unavailable credential or environment value, or missing
-reliable target identity makes cleanup unavailable. It leaves the obligation
-outstanding and records a non-secret reason. It never substitutes a newer
-definition, a caller directory, or a different layer.
+Missing required definitions, valid project trust, recorded cwd, or cleanup
+inputs are execution-precondition failures. They leave the obligation
+outstanding and do not cause cwd fallback, implicit release, or reconstruction.
+They are distinct from a lifecycle-configuration change notification. When
+cleanup starts and actually fails, its obligation also remains outstanding; its
+unresolved dependents prevent release and reconstruction of prerequisites that
+they need, while independent release branches continue. The configuration
+author is responsible for whether current cleanup suits an existing allocation.
 
-The cleanup invocation combines current trusted executable code with retained
-setup-time facts. Current invocation `force` and validated plugin-owned cleanup
-inputs are supplied only at teardown; they are neither setup facts nor digest
-inputs. A credential, environment value, or target identity that is necessary
-to run the current cleanup is required at teardown, but it is retained only
-when a concrete cleanup binding needs a setup-time value. Inspection, Web,
-MCP, diagnostics, audit events, and backups do not expose retained sensitive
-values merely because they are cleanup evidence.
+`plect up --force-recreate` retains its release-then-new-generation behavior:
+it cannot reconstruct an allocation whose required release failed. `plect
+destroy --force` remains the separate, explicit record-discard operation. It
+records that release was not verified before removing remaining execution
+records; it is neither successful cleanup nor an external-release
+acknowledgement.
 
-This comparison covers the declared action, bindings, resolved command path
-and arguments, and locked plugin content. It does not promise integrity or
-availability of commands found through `PATH`, a script's transitive executable
-dependencies, or arbitrary external state. Effects and adapters remain
-responsible for the resource-specific ownership evidence required before a
-destructive action; a directory that happens to exist never proves ownership of
-what is in it.
+### External-release acknowledgement
 
-### Release, failure, and reconstruction
+The proposed command, still subject to owner approval before implementation, is
+`plect execution acknowledge-release --session <name> --execution <ulid>
+--reason <text>`. Its MCP operation carries the same fields. The same local
+CLI or MCP authority that issues teardown authorizes the assertion; an actor
+label is audit attribution, not a separate human authorization boundary.
 
-An execution's release obligation has one of these outcomes: outstanding,
-released by successful cleanup, released by an external-release acknowledgement,
-or discarded. Unavailable cleanup and a failed cleanup leave the outcome
-outstanding; the former records why cleanup cannot safely start, while the
-latter records a completed failed attempt and may be retried.
-
-Teardown uses the execution-owned dependency edges, with dependents before
-their prerequisites. It attempts every released-order item whose unreleased
-dependents are already resolved. An unavailable or failed dependent prevents
-release of its prerequisites, because those prerequisites may still be needed
-to release it. It does not prevent teardown of independent branches. The
-result reports every attempted, unavailable, and dependency-blocked execution
-without treating any of them as released.
-
-Ordinary `up` may retry cleanup for an existing allocation. It cannot recreate
-that execution or a prerequisite needed by its retained release plan until all
-of the allocation's applicable obligations are resolved. Once they are,
-reconstruction uses the latest desired workflow and creates a new execution
-generation. `plect up --force-recreate` requests this normal release-then-new-
-generation path when a desired change requires reconstruction; it still refuses
-to reconstruct while cleanup is failed or unavailable. It neither acknowledges
-external release nor discards records.
-
-`plect destroy --force` is deliberately different. It records a tombstone and
-audit event, warns that release was not verified, then discards the session and
-every remaining execution record. It is an operator-directed record discard,
-not successful cleanup or an acknowledgement of external release. A later
-resource with the same apparent identity is a new allocation and is never
-treated as released by that discard.
-
-The proposed acknowledgement surface, for owner approval before implementation,
-is `plect execution acknowledge-release --session <name> --execution <ulid>
---reason <text>`. The corresponding MCP operation takes the same session,
-execution, and reason fields. It is authorized by the same local CLI or MCP
-authority that can issue teardown; an actor label is audit attribution, not a
-separate human authorization boundary. The command atomically verifies that
-the exact execution in that session still has an outstanding obligation,
-records its externally-released outcome, and appends
+The command atomically verifies that the exact execution in that session has an
+outstanding obligation, records the external-release outcome, and appends
 `plect.execution.external_release_acknowledged` with the session id, execution
-id, reason, authority label when available, and timestamp. Retrying after that
-same acknowledgement is idempotent and returns the recorded outcome. A retry
-that finds successful cleanup, a discarded record, another execution, or no
-outstanding obligation fails rather than clearing anything else. Concurrent
-cleanup and acknowledgement serialize on that execution's release transition.
+id, reason, authority label when available, and timestamp. A retry against an
+execution that still exists and is already externally acknowledged returns that
+recorded outcome without another transition or audit event. A removed execution
+returns not found; audit history is not a command-result authority. Successful
+cleanup, discard, another execution, and any other release outcome are never
+relabeled as an external acknowledgement. Cleanup and acknowledgement serialize
+on the execution's release transition.
 
 ### Migration
 
-The migration stops resident processes, then backs up every configuration tree
-and the durable data directory. An unreleased legacy allocation should be
-released with the pre-upgrade binary before migration whenever possible.
+The migration stops resident processes and backs up every configuration tree
+and the durable data directory. It initializes the notification baseline when a
+legacy session next begins lifecycle execution; an absent historical digest or
+plugin hash alone does not make the execution uncleanable and produces no first-
+execution warning.
 
-No migration backfills today's configuration, cleanup digest, plugin content
-revision, setup directory, or setup-time binding fact as though it had existed
-at setup. An unreleased legacy execution lacking any required evidence migrates
-as an outstanding obligation with cleanup unavailable and the reason
-`historical cleanup evidence is unavailable`. It remains inspectable but cannot
-be cleaned up or reconstructed by the new release. The operator either releases
-it before upgrade, waits for the approved acknowledgement operation after an
-external release, or explicitly discards it with `plect destroy --force`.
+Migration preserves concrete execution facts already recorded. It does not
+manufacture a missing declaration identity, cwd, input, output, nested-layer
+fact, trust decision, or allocation identity from today's workflow. A legacy
+retained declaration using a retired spelling, such as the spellings addressed
+by #541, has the named outcome `legacy declaration spelling is unresolved` when
+it no longer resolves from current trusted configuration. It remains an
+outstanding precondition failure until the allocation is released externally
+and acknowledged or the operator uses `plect destroy --force`; migration does
+not infer a replacement spelling from current workflow declarations.
 
 ## Consequences
 
-The contract refuses more cleanup attempts than a retained-code replay design:
-a configuration change, missing lock content, or unavailable setup fact can
-leave an obligation unresolved. That is intentional. Running newer code against
-an older allocation is less safe than preserving an inspectable failure.
+Lifecycle configuration changes are visible before they execute without
+blocking a configuration repair. The design stores one compact notification
+baseline per session, not declaration snapshots, retained comparison graphs,
+per-field digests, detailed differences, or configuration history.
 
-Execution records gain concrete per-layer evidence and release outcomes, while
-the current trusted tree remains the only executable authority. The next
-implementation work must add validation and user-visible unavailable reasons,
-then implement the approved acknowledgement surface. It does not add an
-artifact store, garbage collector, dependency-closure retention, generic replay,
-signing, secret-management system, or isolation between actors sharing the same
-operating-system authority.
+Execution records retain the concrete facts needed for cleanup and generation
+correctness but not executable cleanup code, per-layer refusal digests, plugin
+content pins, artifact retention, or a new secret-management system. Existing
+runtime values may be sensitive; warnings and inspection surfaces do not dump
+them merely because they are operational facts.
+
+The design adds no automatic restoration, artifact store or garbage collector,
+dependency-closure retention, generic replay, signing, or isolation between
+actors sharing operating-system authority.
 
 ## Alternatives considered
 
-### Retain cleanup code in the database
+### Refuse cleanup when lifecycle configuration changes
 
-Rejected. It makes mutable local state executable authority and turns a digest
-into an insufficient substitute for configuration trust.
+Rejected. It prevents a trusted configuration edit from repairing cleanup for
+an existing allocation and mistakes a notification for an authorization gate.
 
-### Treat a changed digest as permission to run current cleanup
+### Compare plugin content hashes and executable files
 
-Rejected. A digest mismatch detects that the setup-time contract cannot be
-shown to match; it does not authorize a newer cleanup definition.
+Rejected. The required consumer is a lifecycle-configuration change warning,
+not comprehensive tamper detection. Declaration references provide the useful
+change signal without expanding into external-file or binary hashing.
 
-### Let force-recreate discard unreleased allocations
+### Preserve separate baselines by lifecycle operation
 
-Rejected. Reconstruction needs a confirmed release boundary. `destroy --force`
-is the explicit, auditable record-discard operation for the exceptional case.
+Rejected. One session-wide baseline tells the operator whether the next
+lifecycle execution uses different configuration; separate operation histories
+would warn repeatedly without a consumer.

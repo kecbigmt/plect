@@ -121,7 +121,9 @@ run elsewhere. A probe launch failure caused by that directory invalidates the
 node, then cleanup attempts the stored directory. The failed record and its
 release obligation remain durable. The execution-release and reconstruction
 rules, including unavailable cleanup and external-release acknowledgement, are
-defined in [workflows](workflows.md#cleanup-and-reconstruction).
+defined in [workflows](workflows.md#cleanup-and-reconstruction). A lifecycle-
+configuration change warns before execution but does not itself make cleanup
+unavailable.
 
 ## Outputs are production records
 

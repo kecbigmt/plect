@@ -126,10 +126,10 @@ classifies every `_json` column by its owning declaration:
 
 | Table | Key and relational columns | JSON or scalar payload | Source |
 | --- | --- | --- | --- |
-| `sessions` | `id` (ULID) primary key; `name` (unique only among live rows — see "Session identity and lifecycle"); `status`, nullable `destroyed_at`; nullable `parent_session_id` and `root_session_id`, each referencing `sessions(id)`; nullable `resource_id`, `alias`, `workspace_dir`, `population_workflow`, `population_name` (the pair also references `populations(workflow, name)`); `workflow`, `created_at`, `updated_at` | inputs, health, tick backoff | `state.json` `sessions` entries |
+| `sessions` | `id` (ULID) primary key; `name` (unique only among live rows — see "Session identity and lifecycle"); `status`, nullable `destroyed_at`; nullable `parent_session_id` and `root_session_id`, each referencing `sessions(id)`; nullable `resource_id`, `alias`, `workspace_dir`, `population_workflow`, `population_name` (the pair also references `populations(workflow, name)`); nullable lifecycle-configuration digest baseline; `workflow`, `created_at`, `updated_at` | inputs, health, tick backoff | `state.json` `sessions` entries |
 | `node_instances` | `(session_id, node_id)` primary key; session foreign key; no other columns | none — purely the logical node's identity | `state.json` `sessions.*.tasks` entries with `dynamic` unset (keys only) |
 | `node_executions` | `id` (ULID, minted per setup attempt) primary key; `(session_id, node_id)` foreign key to `node_instances`; `sequence`; nullable `task_id`, `name`, `resource`; `scope`, `status`, nullable `finalized_at`; release outcome and unavailable reason; at most one unreleased row per `(session_id, node_id)` — see "Node execution identity" | inputs, outputs, state, observed value, `done_when` (rare, not relationally queried), setup-time cleanup facts, error, lifecycle timestamps | `state.json` `sessions.*.tasks` entries with `dynamic` unset (per-attempt facts) |
-| `node_execution_layers` | `(execution_id, position)` primary key; execution foreign key (`ON DELETE CASCADE`); cleanup-contract digest and locked plugin content revision | inputs, locals, outputs, env, heartbeat counters, lifecycle timestamps, error | `TaskState.Layers` (static node instances) |
+| `node_execution_layers` | `(execution_id, position)` primary key; execution foreign key (`ON DELETE CASCADE`) | inputs, locals, outputs, env, heartbeat counters, lifecycle timestamps, error | `TaskState.Layers` (static node instances) |
 | `node_execution_dependencies` | `(execution_id, depends_on_execution_id)` primary key; both reference `node_executions(id)` (`ON DELETE CASCADE`) | none — the edge itself is the payload | snapshotted from `task.Resolved.DependsOn` at the dependent's own setup time — see "Node execution identity" |
 | `task_instances` | `id` (ULID, stable across every write that still names the same `(session_id, instance_name)`; re-minted only when a cleanup removes the row before a later setup recreates it) primary key; `(session_id, instance_name)` unique; session foreign key; `task_id`, `scope`, `status`, `sequence`, nullable `resource`, `named`, nullable `finalized_at` | inputs, outputs, state, observed value, extra completion data, error, lifecycle timestamps | `state.json` `sessions.*.tasks` entries with `dynamic: true` |
 | `task_instance_layers` | `(task_instance_id, position)` primary key; task-instance foreign key | inputs, locals, outputs, env, heartbeat counters, lifecycle timestamps, error | `TaskState.Layers` (dynamic instances) |
@@ -337,20 +337,27 @@ documented limitations rather than something this fallback can resolve
 from the information available to it alone.
 
 Each execution retains its setup directory, the setup-time values needed by
-cleanup bindings, a release outcome, a non-secret unavailable reason when one
-exists, and per-layer cleanup-contract digest and locked plugin content
-revision. It retains no cleanup script, command, executable, or serialized
-cleanup declaration. The exact digest object and canonicalization are defined
-in [the minimum cleanup ADR](../adr/2026-09-08-minimum-cleanup-contract.md).
+cleanup bindings, nested-layer facts and environment, a release outcome, and a
+non-secret unavailable reason when one exists. It retains no cleanup script,
+command, executable, serialized cleanup declaration, per-layer cleanup digest,
+or plugin content pin.
+
+`sessions.lifecycle_configuration_digest` is one nullable comparison baseline
+shared by `up`, `down`, and `destroy`. After their preconditions pass, the
+lifecycle executor warns if the current trusted lifecycle configuration differs
+from that baseline, then records the current digest as execution starts. The
+baseline advances even if execution later fails. It stores no configuration
+snapshot or history and does not rewrite execution-owned facts.
 
 `service.unifiedTeardownList` enumerates every execution with an outstanding
 release obligation directly from `session.Nodes` — not from the *current* plan,
 which has nothing to say about a node it no longer declares. It resolves each
 cleanup layer from the current trusted configuration tree by the execution's
-retained declaration and layer position, then compares the digest and locked
-plugin content revision before it runs. A missing definition, changed evidence,
-or missing required cleanup input marks the execution unavailable and leaves it
-outstanding; it never applies a newer declaration to the older allocation.
+retained declaration and layer position. A changed lifecycle-configuration
+baseline warns but does not prevent current trusted cleanup from running. A
+missing definition, trust, cwd, or required cleanup input is a precondition
+failure that leaves the obligation outstanding; it never falls back or infers
+release.
 
 Release is recorded as either successful cleanup or external-release
 acknowledgement. The latter is one exact execution's atomic, auditable operator
