@@ -4,6 +4,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/eventlog"
@@ -19,6 +20,53 @@ func nodeResultEvents(t *testing.T, store interface{ Dir() string }, sessionName
 		t.Fatalf("list node.result events: %v", err)
 	}
 	return evs
+}
+
+// TestNodeResultObserver_OnReleasePersistsGivenNodesOnly proves OnRelease
+// writes through the real store, touching only the nodes it was given.
+func TestNodeResultObserver_OnReleasePersistsGivenNodesOnly(t *testing.T) {
+	store := testStore(t)
+	sessionName := "session1"
+	now := time.Now()
+	if err := store.Put(&domain.Session{
+		Name: sessionName, CreatedAt: now, UpdatedAt: now,
+		Nodes: map[string]*contract.TaskState{
+			"a": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Outputs: map[string]any{"k": "v"}},
+			"b": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Outputs: map[string]any{"k": "unchanged"}},
+		},
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	obs := withNodeResultRecording(store, sessionName, nil).(*nodeResultObserver)
+	if err := obs.OnRelease(map[string]*contract.TaskState{
+		"a": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusCleaned, CleanedAt: now},
+	}); err != nil {
+		t.Fatalf("OnRelease: %v", err)
+	}
+
+	got, err := store.GetE(sessionName)
+	if err != nil {
+		t.Fatalf("GetE: %v", err)
+	}
+	if node := got.Nodes["a"]; node == nil || node.Status != contract.TaskStatusCleaned {
+		t.Fatalf("node a = %+v, want cleaned", node)
+	}
+	if node := got.Nodes["b"]; node == nil || node.Outputs["k"] != "unchanged" {
+		t.Fatalf("node b = %+v, want left untouched by a's release", node)
+	}
+}
+
+// TestNodeResultObserver_OnReleaseFailurePropagates proves a failed flush
+// surfaces as a real error, unlike OnResult's swallowed event-log append.
+func TestNodeResultObserver_OnReleaseFailurePropagates(t *testing.T) {
+	store := testStore(t)
+	obs := withNodeResultRecording(store, "does-not-exist", nil).(*nodeResultObserver)
+	if err := obs.OnRelease(map[string]*contract.TaskState{
+		"a": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusCleaned},
+	}); err == nil {
+		t.Fatal("OnRelease against a nonexistent session: want an error, got nil")
+	}
 }
 
 func TestUp_RecordsNodeResultForProducedNode(t *testing.T) {

@@ -530,9 +530,8 @@ func upsertNodeExecutionTx(ctx context.Context, q *sqlcgen.Queries, sessionID, n
 		}
 	} else {
 		// No claimed identity: insert if nothing unreleased exists, else
-		// update the one that does -- see docs/design/sqlite-persistence.md's
-		// "Node execution identity" section for the one case (a same-pass
-		// liveness-invalidate-then-rebuild) this cannot fully resolve.
+		// ts.NewExecution (see its own doc comment) decides whether this
+		// updates that row or is refused.
 		current, err := q.CurrentNodeExecution(ctx, sqlcgen.CurrentNodeExecutionParams{SessionID: sessionID, NodeID: nodeID})
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
@@ -564,6 +563,8 @@ func upsertNodeExecutionTx(ctx context.Context, q *sqlcgen.Queries, sessionID, n
 			}
 		case err != nil:
 			return fmt.Errorf("find current node execution %q/%q: %w", sessionID, nodeID, err)
+		case ts.NewExecution:
+			return fmt.Errorf("node %q/%q: a concurrent writer already created execution %q for this node since this attempt's setup began", sessionID, nodeID, current.ID)
 		default:
 			executionID = current.ID
 			if err := q.UpdateNodeExecution(ctx, sqlcgen.UpdateNodeExecutionParams{

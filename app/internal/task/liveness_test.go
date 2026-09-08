@@ -2,7 +2,9 @@ package task
 
 import (
 	"context"
+	"errors"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -271,6 +273,115 @@ func TestRunSetup_NestedInnerLayerAliveFails_RebuildsWholeChainLIFO(t *testing.T
 	}
 	if tasks["outer"].Status != contract.TaskStatusProduced {
 		t.Fatalf("rebuilt outer.Status = %q, want produced", tasks["outer"].Status)
+	}
+}
+
+// releaseTrackingObserver implements both Observer and ReleaseObserver so a
+// test can prove invalidateProducedNode flushes a same-pass release before
+// the loop rebuilds the node it just released -- and that the loop honors a
+// flush failure by aborting rather than proceeding to rebuild on an
+// unpersisted release.
+type releaseTrackingObserver struct {
+	events   []string
+	releases []map[string]*contract.TaskState
+	failWith error
+}
+
+func (o *releaseTrackingObserver) OnStart(_, id string)          { o.events = append(o.events, "start:"+id) }
+func (o *releaseTrackingObserver) OnSkip(string, string, string) {}
+func (o *releaseTrackingObserver) OnSuccess(_, id string, _ time.Duration, _ []byte) {
+	o.events = append(o.events, "success:"+id)
+}
+func (o *releaseTrackingObserver) OnFailure(_, id string, _ time.Duration, _ error, _ []byte) {
+	o.events = append(o.events, "failure:"+id)
+}
+func (o *releaseTrackingObserver) OnRelease(released map[string]*contract.TaskState) error {
+	o.events = append(o.events, "release")
+	snapshot := make(map[string]*contract.TaskState, len(released))
+	for k, v := range released {
+		cp := *v
+		snapshot[k] = &cp
+	}
+	o.releases = append(o.releases, snapshot)
+	return o.failWith
+}
+
+// TestRunSetup_LivenessInvalidate_FlushesReleaseBeforeRebuild proves a
+// same-pass liveness-invalidate-then-rebuild reports the release to a
+// ReleaseObserver -- carrying the released row's own execution id -- before
+// the rebuild's own setup begins, and marks the rebuilt state NewExecution
+// so persistence never folds it into the row it just released.
+func TestRunSetup_LivenessInvalidate_FlushesReleaseBeforeRebuild(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	tmpDir := t.TempDir()
+	aMarker := tmpDir + "/a-setup-ran"
+	plan := buildPlan(t,
+		[]taskStub{{id: "a", scope: "run", setup: "touch " + aMarker + `; echo '{"value":"rebuilt"}'`, cleanup: "true", alive: "exit 1"}},
+		[]nodeStub{{id: "a"}},
+	)
+	tasks := map[string]*contract.TaskState{
+		"a": {Scope: "run", Status: contract.TaskStatusProduced, Outputs: map[string]any{"value": "stale"}, ExecutionID: "exec-1"},
+	}
+	obs := &releaseTrackingObserver{}
+	if err := RunSetup(context.Background(), plan.Run, SessionVars{}, tasks, obs); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	wantEvents := []string{"start:a", "success:a", "release", "start:a", "success:a"}
+	if !equalStrings(obs.events, wantEvents) {
+		t.Fatalf("event order = %v, want %v (the release must be flushed before the rebuild starts)", obs.events, wantEvents)
+	}
+	if len(obs.releases) != 1 {
+		t.Fatalf("OnRelease calls = %d, want 1", len(obs.releases))
+	}
+	released := obs.releases[0]["a"]
+	if released == nil || released.Status != contract.TaskStatusCleaned || released.ExecutionID != "exec-1" {
+		t.Fatalf("released state = %+v, want cleaned with the original execution id", released)
+	}
+
+	if tasks["a"].Status != contract.TaskStatusProduced || tasks["a"].Outputs["value"] != "rebuilt" {
+		t.Fatalf("a = %+v, want rebuilt and produced", tasks["a"])
+	}
+	if tasks["a"].ExecutionID != "" {
+		t.Fatalf("rebuilt a.ExecutionID = %q, want empty (a fresh generation, not a continuation of the released row)", tasks["a"].ExecutionID)
+	}
+	if !tasks["a"].NewExecution {
+		t.Fatal("rebuilt a.NewExecution = false, want true: persistence must not silently adopt whatever row it finds")
+	}
+}
+
+// TestRunSetup_LivenessInvalidate_ReleaseFlushFailureAbortsBeforeRebuild
+// proves that when a ReleaseObserver cannot durably record the release, the
+// rebuild never runs -- proceeding anyway would leave the in-memory state
+// produced again with nothing on disk recording that the prior generation
+// was ever released, exactly the collapse this checkpoint exists to avoid.
+func TestRunSetup_LivenessInvalidate_ReleaseFlushFailureAbortsBeforeRebuild(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	tmpDir := t.TempDir()
+	aMarker := tmpDir + "/a-setup-ran"
+	plan := buildPlan(t,
+		[]taskStub{{id: "a", scope: "run", setup: "touch " + aMarker + `; echo '{"value":"rebuilt"}'`, cleanup: "true", alive: "exit 1"}},
+		[]nodeStub{{id: "a"}},
+	)
+	tasks := map[string]*contract.TaskState{
+		"a": {Scope: "run", Status: contract.TaskStatusProduced, Outputs: map[string]any{"value": "stale"}, ExecutionID: "exec-1"},
+	}
+	flushErr := errors.New("boom: disk full")
+	obs := &releaseTrackingObserver{failWith: flushErr}
+
+	err := RunSetup(context.Background(), plan.Run, SessionVars{}, tasks, obs)
+	if err == nil || !strings.Contains(err.Error(), flushErr.Error()) {
+		t.Fatalf("RunSetup error = %v, want it to wrap %v", err, flushErr)
+	}
+	if _, statErr := exec.Command("bash", "-c", "test -f "+aMarker).CombinedOutput(); statErr == nil {
+		t.Fatal("a's setup must not re-run when its release could not be flushed durably")
+	}
+	if tasks["a"].Status != contract.TaskStatusCleaned {
+		t.Fatalf("a.Status = %q, want cleaned (the rebuild must not proceed on an unflushed release)", tasks["a"].Status)
 	}
 }
 

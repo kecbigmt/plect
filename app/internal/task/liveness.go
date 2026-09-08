@@ -67,6 +67,21 @@ func invalidateProducedNode(goCtx context.Context, r Resolved, ordered []Resolve
 	if err := RunCleanup(goCtx, toClean, session, tasks, obs); err != nil {
 		return fmt.Errorf("node %q: liveness check failed (%v), cleanup: %w", r.NodeID, aliveErr, err)
 	}
+	// Flush the release (see ReleaseObserver) before the loop below sets any
+	// of these nodes up again.
+	if ro, ok := obs.(ReleaseObserver); ok {
+		released := make(map[string]*contract.TaskState, len(toClean))
+		for _, cleaned := range toClean {
+			if st := tasks[cleaned.NodeID]; st != nil && st.Status == contract.TaskStatusCleaned {
+				released[cleaned.NodeID] = st
+			}
+		}
+		if len(released) > 0 {
+			if err := ro.OnRelease(released); err != nil {
+				return fmt.Errorf("node %q: liveness check failed (%v), persisting release: %w", r.NodeID, aliveErr, err)
+			}
+		}
+	}
 	return nil
 }
 

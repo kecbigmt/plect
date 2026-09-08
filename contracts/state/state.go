@@ -152,6 +152,14 @@ type TaskState struct {
 	// persistence refuses the write instead of silently overwriting a
 	// different generation when the row it would update no longer matches.
 	ExecutionID string `json:"-"`
+	// NewExecution marks a write that claims no prior identity at all for
+	// this node -- a first-ever setup, or a same-pass rebuild following a
+	// release this same caller already flushed on its own. Node-only.
+	// persistence refuses such a write when it finds an unreleased execution
+	// already recorded for the node instead of silently adopting it, since
+	// that can only mean a concurrent writer got there first; see
+	// docs/design/sqlite-persistence.md's "Node execution identity" section.
+	NewExecution bool `json:"-"`
 	// State is what a task instance holds about itself: the keys a reviewer
 	// or another session records into it, read by a completion predicate as
 	// `self.state.*`. Distinct from Outputs, which is what an effect's setup

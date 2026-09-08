@@ -5,10 +5,12 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/eventlog"
 	"github.com/kecbigmt/plecture/app/internal/state"
 	"github.com/kecbigmt/plecture/app/internal/task"
 	"github.com/kecbigmt/plecture/contracts/event"
+	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
 type noopTaskObserver struct{}
@@ -21,6 +23,7 @@ func (noopTaskObserver) OnFailure(string, string, time.Duration, error, []byte) 
 type nodeResultObserver struct {
 	inner       task.Observer
 	log         *eventlog.Store
+	store       *state.Store
 	sessionName string
 }
 
@@ -28,7 +31,7 @@ func withNodeResultRecording(store *state.Store, sessionName string, inner task.
 	if inner == nil {
 		inner = noopTaskObserver{}
 	}
-	return &nodeResultObserver{inner: inner, log: eventlog.NewStore(store.Dir()), sessionName: sessionName}
+	return &nodeResultObserver{inner: inner, log: eventlog.NewStore(store.Dir()), store: store, sessionName: sessionName}
 }
 
 func (o *nodeResultObserver) OnStart(scope, id string)        { o.inner.OnStart(scope, id) }
@@ -38,6 +41,21 @@ func (o *nodeResultObserver) OnSuccess(scope, id string, elapsed time.Duration, 
 }
 func (o *nodeResultObserver) OnFailure(scope, id string, elapsed time.Duration, err error, stderr []byte) {
 	o.inner.OnFailure(scope, id, elapsed, err, stderr)
+}
+
+// OnRelease implements task.ReleaseObserver. Unlike OnResult's swallowed
+// event-log append, a failure here is returned rather than absorbed.
+func (o *nodeResultObserver) OnRelease(released map[string]*contract.TaskState) error {
+	return o.store.Update(o.sessionName, func(s *domain.Session) error {
+		if s.Nodes == nil {
+			s.Nodes = make(map[string]*contract.TaskState)
+		}
+		for nodeID, st := range released {
+			s.Nodes[nodeID] = st
+		}
+		s.UpdatedAt = time.Now()
+		return nil
+	})
 }
 
 // A failed append is swallowed, like the population engine's own

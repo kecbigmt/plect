@@ -65,7 +65,7 @@ func runTaskCleanup(ctx context.Context, ordered []task.Resolved, vars task.Sess
 // than a blind Put, so a nested `plect task setup` subprocess's disk-only
 // write during this call's own (unlocked) setup pass survives.
 func mergeTasks(store *state.Store, sessionName string, session *domain.Session) error {
-	return store.Update(sessionName, func(s *domain.Session) error {
+	if err := store.Update(sessionName, func(s *domain.Session) error {
 		if s.Nodes == nil {
 			s.Nodes = make(map[string]*contract.TaskState)
 		}
@@ -80,11 +80,14 @@ func mergeTasks(store *state.Store, sessionName string, session *domain.Session)
 		}
 		s.UpdatedAt = session.UpdatedAt
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	return refreshNodeIdentities(store, sessionName, session)
 }
 
 func replaceRuntimeState(store *state.Store, sessionName string, session *domain.Session) error {
-	return store.Update(sessionName, func(s *domain.Session) error {
+	if err := store.Update(sessionName, func(s *domain.Session) error {
 		s.WorkspaceDirPath = session.WorkspaceDirPath
 		s.Nodes = session.Nodes
 		s.Tasks = session.Tasks
@@ -93,7 +96,33 @@ func replaceRuntimeState(store *state.Store, sessionName string, session *domain
 		s.TickBackoff = session.TickBackoff
 		s.UpdatedAt = session.UpdatedAt
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	return refreshNodeIdentities(store, sessionName, session)
+}
+
+// refreshNodeIdentities copies each of session.Nodes' now-confirmed
+// ExecutionID back from store, so Up's UpOrder() re-walk (which persists the
+// same objects again later) targets its own row by exact id instead of the
+// identity-less fallback (see TaskState.ExecutionID).
+func refreshNodeIdentities(store *state.Store, sessionName string, session *domain.Session) error {
+	if len(session.Nodes) == 0 {
+		return nil
+	}
+	refreshed, err := store.GetE(sessionName)
+	if err != nil {
+		return err
+	}
+	if refreshed == nil {
+		return nil
+	}
+	for id := range session.Nodes {
+		if st, ok := refreshed.Nodes[id]; ok {
+			session.Nodes[id] = st
+		}
+	}
+	return nil
 }
 
 // setSessionStatus durably records a lifecycle-status transition on its

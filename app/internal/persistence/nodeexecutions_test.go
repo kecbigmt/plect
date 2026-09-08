@@ -122,7 +122,7 @@ func TestPutSession_NodeExecutionMintsFreshIdentityAfterRelease(t *testing.T) {
 	}
 
 	recreated := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Nodes: map[string]*contract.TaskState{
-		"a": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "other-work"},
+		"a": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "other-work", NewExecution: true},
 	}}
 	if err := db.PutSession(ctx, recreated); err != nil {
 		t.Fatalf("PutSession (recreate): %v", err)
@@ -142,6 +142,146 @@ func TestPutSession_NodeExecutionMintsFreshIdentityAfterRelease(t *testing.T) {
 	}
 	if node := got.Nodes["a"]; node == nil || node.TaskID != "other-work" || node.Status != contract.TaskStatusProduced {
 		t.Fatalf("node after recreate = %+v, want the new generation's fields", node)
+	}
+}
+
+// TestPutSession_NewExecutionRefusesAConcurrentWritersUnreleasedRow proves a
+// write claiming NewExecution is refused rather than silently overwriting a
+// different writer's unreleased row for the same node -- including that
+// row's own layers and dependency edge, which the refusal must leave
+// untouched rather than clear-then-reinsert against the loser's data.
+func TestPutSession_NewExecutionRefusesAConcurrentWritersUnreleasedRow(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	winner := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Nodes: map[string]*contract.TaskState{
+		"dep": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "producer"},
+		"a": {
+			Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "work",
+			Outputs:      map[string]any{"from": "writer-a"},
+			Layers:       []contract.LayerState{{EffectID: "outer", Status: contract.TaskStatusProduced}},
+			DependsOn:    []string{"dep"},
+			NewExecution: true,
+		},
+	}}
+	if err := db.PutSession(ctx, winner); err != nil {
+		t.Fatalf("PutSession (writer A): %v", err)
+	}
+	winnerID := nodeExecutionIDForTest(t, db, "s1", "a")
+
+	loser := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Nodes: map[string]*contract.TaskState{
+		"a": {
+			Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "work",
+			Outputs:      map[string]any{"from": "writer-b"},
+			Layers:       []contract.LayerState{{EffectID: "different", Status: contract.TaskStatusProduced}},
+			NewExecution: true,
+		},
+	}}
+	if err := db.PutSession(ctx, loser); err == nil {
+		t.Fatal("PutSession (writer B, concurrent new setup): want a conflict error, got nil")
+	}
+
+	if got := countNodeExecutionsForTest(t, db, "s1", "a"); got != 1 {
+		t.Fatalf("node_executions rows for %q/%q = %d, want 1 (the losing writer must not mint a second row)", "s1", "a", got)
+	}
+	got, err := db.GetSession(ctx, "s1")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	node := got.Nodes["a"]
+	if node == nil || node.Outputs["from"] != "writer-a" || node.ExecutionID != winnerID {
+		t.Fatalf("node after the refused race = %+v, want writer A's execution left untouched", node)
+	}
+	if len(node.Layers) != 1 || node.Layers[0].EffectID != "outer" {
+		t.Fatalf("node layers after the refused race = %+v, want writer A's own layer left untouched", node.Layers)
+	}
+	if len(node.DependsOn) != 1 || node.DependsOn[0] != "dep" {
+		t.Fatalf("node depends_on after the refused race = %v, want writer A's own dependency edge left untouched", node.DependsOn)
+	}
+}
+
+// TestPutSession_NewExecutionInsertsFreshRowWhenNodeIsGenuinelyNew proves
+// NewExecution still inserts normally when the node has no prior row.
+func TestPutSession_NewExecutionInsertsFreshRowWhenNodeIsGenuinelyNew(t *testing.T) {
+	db := migratedTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	session := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Nodes: map[string]*contract.TaskState{
+		"a": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "work", NewExecution: true},
+	}}
+	if err := db.PutSession(ctx, session); err != nil {
+		t.Fatalf("PutSession: %v", err)
+	}
+	if got := countNodeExecutionsForTest(t, db, "s1", "a"); got != 1 {
+		t.Fatalf("node_executions rows for %q/%q = %d, want 1", "s1", "a", got)
+	}
+}
+
+// TestPutSession_RestartAfterReleaseThenNewSetupMintsFreshGeneration proves
+// a release flushed durably on its own (see task.ReleaseObserver) survives a
+// crash landing right after it, and a later setup still mints a fresh
+// generation rather than colliding with or resurrecting the released one.
+func TestPutSession_RestartAfterReleaseThenNewSetupMintsFreshGeneration(t *testing.T) {
+	dir := t.TempDir()
+	path := PathIn(dir)
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	ctx := context.Background()
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	now := time.Now().UTC()
+
+	seed := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Nodes: map[string]*contract.TaskState{
+		"a": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "work"},
+	}}
+	if err := db.PutSession(ctx, seed); err != nil {
+		t.Fatalf("PutSession (seed): %v", err)
+	}
+	releasedID := nodeExecutionIDForTest(t, db, "s1", "a")
+
+	if err := db.PutSession(ctx, &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Nodes: map[string]*contract.TaskState{
+		"a": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusCleaned, TaskID: "work", ExecutionID: releasedID},
+	}}); err != nil {
+		t.Fatalf("PutSession (release): %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	restarted, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open (restart): %v", err)
+	}
+	defer restarted.Close()
+	if err := restarted.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate (restart): %v", err)
+	}
+
+	got, err := restarted.GetSession(ctx, "s1")
+	if err != nil {
+		t.Fatalf("GetSession (after restart): %v", err)
+	}
+	node := got.Nodes["a"]
+	if node == nil || node.Status != contract.TaskStatusCleaned || node.ExecutionID != releasedID {
+		t.Fatalf("node after restart = %+v, want the release durably recorded on its own", node)
+	}
+
+	if err := restarted.PutSession(ctx, &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Nodes: map[string]*contract.TaskState{
+		"a": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "work", NewExecution: true},
+	}}); err != nil {
+		t.Fatalf("PutSession (setup after restart): %v", err)
+	}
+	if got := countNodeExecutionsForTest(t, restarted, "s1", "a"); got != 2 {
+		t.Fatalf("node_executions rows after restart + fresh setup = %d, want 2 (both generations retained)", got)
+	}
+	newID := nodeExecutionIDForTest(t, restarted, "s1", "a")
+	if newID == releasedID {
+		t.Fatalf("fresh setup after restart reused the released execution's id %q", releasedID)
 	}
 }
 
