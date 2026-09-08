@@ -1,0 +1,30 @@
+# Channel: render a plect.message_delta chunk sequence as one live-updating
+# Slack thread reply via slack-adapter's POST /stream (src/slack-adapter).
+# index/final are strings, matching plect.message_delta metadata's own type
+# (contracts/event) — the adapter parses them on receipt.
+[stream]
+kind    = "channel"
+type    = "exec"
+command = "curl"
+args = [
+  "-sf",
+  "--max-time",
+  "10",
+  "-X",
+  "POST",
+  { expr = "inputs.base_url + '/stream'" },
+  "-H",
+  "Content-Type: application/json",
+  "-d",
+  { json = { thread_ts = { from = "inputs.thread_ts" }, channel_id = { from = "inputs.channel_id" }, stream_key = { from = "inputs.stream_key" }, text = { from = "inputs.text" }, index = { from = "inputs.index" }, final = { from = "inputs.final" } } },
+]
+timeout = "10s"
+
+[stream.input_schema]
+base_url   = { type = "string", required = true }
+channel_id = { type = "string", required = true }
+thread_ts  = { type = "string", required = true }
+stream_key = { type = "string", required = true }
+text       = { type = "string", required = true }
+index      = { type = "string", required = true }
+final      = { type = "string", required = true }

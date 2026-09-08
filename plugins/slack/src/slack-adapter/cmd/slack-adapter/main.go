@@ -111,6 +111,7 @@ func runServer() {
 	mux.HandleFunc("/unbound-mentions", a.HandleUnboundMentions)
 	mux.HandleFunc("/notify", a.HandleNotify)
 	mux.HandleFunc("/status", a.HandleSetStatus)
+	mux.HandleFunc("/stream", a.HandleStream)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

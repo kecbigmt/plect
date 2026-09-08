@@ -22,6 +22,7 @@ type Adapter struct {
 	api            *slack.Client
 	sm             *socketmode.Client
 	workspace      string
+	teamID         string
 	socketPool     *SocketPool
 	broker         *Broker
 	poster         ThreadPoster
@@ -29,6 +30,7 @@ type Adapter struct {
 	threadFetcher  threadFetcher
 	eventPublisher eventPublisher
 	statusManager  *StatusManager
+	streamManager  *StreamManager
 	logger         *slog.Logger
 
 	permalinkResolver permalinkResolver
@@ -87,7 +89,9 @@ func New(cfg *Config, logger *slog.Logger) *Adapter {
 				logger.Info("workspace resolved", "workspace", a.workspace)
 			}
 		}
+		a.teamID = resp.TeamID
 	}
+	a.streamManager = NewStreamManager(a, a.poster, a.teamID, cfg.StreamRecipientUserID(), logger)
 
 	// Pre-connect so restored subscribers can push replies immediately.
 	for _, sub := range a.broker.List() {

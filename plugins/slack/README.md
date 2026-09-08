@@ -40,6 +40,15 @@ another plugin's package.
   `include` list decides which events reach it. An event's body-or-summary
   becomes the sole `loading_messages` entry; an event whose body and summary
   are both empty clears the status instead.
+- `config/channels/stream.toml` — renders a `plect.message_delta` chunk
+  sequence as one live-updating Slack thread reply via the `slack-adapter`
+  service's `POST /stream`. Same `base_url`/`channel_id`/`thread_ts` inputs
+  as `slack.toml`, plus `stream_key`, `text`, `index`, and `final` — bound
+  from the emitting event's own fields, not computed here, since ordering
+  and finality are the emitter's facts, not this channel's. See
+  `src/slack-adapter/README.md`'s `POST /stream` section for the
+  chat.startStream/appendStream/stopStream sequencing and the
+  fallback-to-a-single-post behavior when a workspace rejects streaming.
 - `config/resources/thread.toml` — declares the `thread` resource observer:
   a `[thread.query]` face whose `subscribe` means is the workflow
   population source for an unbound Slack mention (see "Query (population

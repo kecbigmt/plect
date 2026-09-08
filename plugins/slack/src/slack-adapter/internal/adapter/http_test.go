@@ -79,6 +79,7 @@ type recordingPoster struct {
 	calls       []recordedPost
 	statusCalls []recordedStatus
 	statusErr   error
+	postErr     error
 }
 
 type recordedPost struct {
@@ -92,6 +93,9 @@ type recordedStatus struct {
 
 func (p *recordingPoster) PostToThread(channelID, threadTS, text string) (string, error) {
 	p.calls = append(p.calls, recordedPost{channelID, threadTS, text})
+	if p.postErr != nil {
+		return "", p.postErr
+	}
 	return "ts-" + threadTS, nil
 }
 
@@ -122,6 +126,7 @@ func newTestAdapter(cfg *Config) *Adapter {
 		logger: logger,
 	}
 	a.statusManager = NewStatusManager(a.poster, cfg.StatusTTLDuration(), logger)
+	a.streamManager = NewStreamManager(&recordingStreamer{}, a.poster, "T-team", cfg.StreamRecipientUserID(), logger)
 	a.socketPool = NewSocketPool(a.poster, logger, nil, a.statusManager)
 	a.mentions = newMentionStream()
 	return a
@@ -1315,6 +1320,143 @@ func TestHandleSetStatus_MethodNotAllowed(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/status", nil)
 	w := httptest.NewRecorder()
 	a.HandleSetStatus(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("got status %d, want %d", w.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestHandleStream_DeliversChunkToStreamManager(t *testing.T) {
+	a := newTestAdapter(&Config{ChannelID: "C0"})
+	streamer := a.streamManager.streamer.(*recordingStreamer)
+
+	body, _ := json.Marshal(streamRequest{
+		ChannelID: "C123",
+		ThreadTS:  "1111.000",
+		StreamKey: "msg-1",
+		Text:      "Hello",
+		Index:     "0",
+		Final:     "false",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/stream", bytes.NewBuffer(body))
+	w := httptest.NewRecorder()
+	a.HandleStream(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got status %d, want %d, body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if len(streamer.startCalls) != 1 {
+		t.Fatalf("StartStream calls = %d, want 1", len(streamer.startCalls))
+	}
+	if got := streamer.startCalls[0]; got.channelID != "C123" || got.threadTS != "1111.000" || got.text != "Hello" {
+		t.Errorf("StartStream call = %+v, want C123/1111.000/Hello", got)
+	}
+}
+
+func TestHandleStream_FallsBackToConfiguredChannel(t *testing.T) {
+	a := newTestAdapter(&Config{ChannelID: "C-default"})
+	streamer := a.streamManager.streamer.(*recordingStreamer)
+
+	body, _ := json.Marshal(streamRequest{ThreadTS: "1111.000", StreamKey: "msg-1", Text: "Hello", Index: "0", Final: "true"})
+	req := httptest.NewRequest(http.MethodPost, "/stream", bytes.NewBuffer(body))
+	w := httptest.NewRecorder()
+	a.HandleStream(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got status %d, want %d, body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if len(streamer.startCalls) != 1 || streamer.startCalls[0].channelID != "C-default" {
+		t.Errorf("StartStream calls = %+v, want one call on C-default", streamer.startCalls)
+	}
+}
+
+func TestHandleStream_EmptyFinalDefaultsToFalse(t *testing.T) {
+	a := newTestAdapter(&Config{ChannelID: "C0"})
+	streamer := a.streamManager.streamer.(*recordingStreamer)
+
+	body, _ := json.Marshal(streamRequest{ThreadTS: "1111.000", StreamKey: "msg-1", Text: "Hello", Index: "0"})
+	req := httptest.NewRequest(http.MethodPost, "/stream", bytes.NewBuffer(body))
+	w := httptest.NewRecorder()
+	a.HandleStream(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got status %d, want %d, body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if len(streamer.stopCalls) != 0 {
+		t.Errorf("StopStream calls = %d, want 0 (an omitted final must not finalize)", len(streamer.stopCalls))
+	}
+}
+
+func TestHandleStream_RejectsMissingStreamKey(t *testing.T) {
+	a := newTestAdapter(&Config{ChannelID: "C0"})
+
+	body, _ := json.Marshal(streamRequest{ThreadTS: "1111.000", Text: "Hello", Index: "0"})
+	req := httptest.NewRequest(http.MethodPost, "/stream", bytes.NewBuffer(body))
+	w := httptest.NewRecorder()
+	a.HandleStream(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("got status %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestHandleStream_RejectsMissingChannelIDWithoutDefault(t *testing.T) {
+	a := newTestAdapter(&Config{})
+
+	body, _ := json.Marshal(streamRequest{ThreadTS: "1111.000", StreamKey: "msg-1", Text: "Hello", Index: "0"})
+	req := httptest.NewRequest(http.MethodPost, "/stream", bytes.NewBuffer(body))
+	w := httptest.NewRecorder()
+	a.HandleStream(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("got status %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestHandleStream_RejectsNonIntegerIndex(t *testing.T) {
+	a := newTestAdapter(&Config{ChannelID: "C0"})
+
+	body, _ := json.Marshal(streamRequest{ThreadTS: "1111.000", StreamKey: "msg-1", Text: "Hello", Index: "not-a-number"})
+	req := httptest.NewRequest(http.MethodPost, "/stream", bytes.NewBuffer(body))
+	w := httptest.NewRecorder()
+	a.HandleStream(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("got status %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestHandleStream_RejectsNonBooleanFinal(t *testing.T) {
+	a := newTestAdapter(&Config{ChannelID: "C0"})
+
+	body, _ := json.Marshal(streamRequest{ThreadTS: "1111.000", StreamKey: "msg-1", Text: "Hello", Index: "0", Final: "not-a-bool"})
+	req := httptest.NewRequest(http.MethodPost, "/stream", bytes.NewBuffer(body))
+	w := httptest.NewRecorder()
+	a.HandleStream(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("got status %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestHandleStream_InvalidJSON(t *testing.T) {
+	a := newTestAdapter(&Config{ChannelID: "C0"})
+
+	req := httptest.NewRequest(http.MethodPost, "/stream", bytes.NewBufferString("not json"))
+	w := httptest.NewRecorder()
+	a.HandleStream(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("got status %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestHandleStream_MethodNotAllowed(t *testing.T) {
+	a := newTestAdapter(&Config{ChannelID: "C0"})
+
+	req := httptest.NewRequest(http.MethodGet, "/stream", nil)
+	w := httptest.NewRecorder()
+	a.HandleStream(w, req)
 
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("got status %d, want %d", w.Code, http.StatusMethodNotAllowed)
