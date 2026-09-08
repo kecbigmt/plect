@@ -130,5 +130,97 @@ mkdir -p "$state_dir/log"
 out="$("$activity" probe "$session" "$state_dir")"
 check "reset drops the record" "" "$out"
 
+run_report() {
+  local payload="$1"
+  : > "$tmp/calls"
+  PLECT_SESSION_NAME="$session" \
+  PLECT_CALLS="$tmp/calls" \
+  XDG_STATE_HOME="$XDG_STATE_HOME" \
+  PATH="$bin_dir:$PATH" \
+  "$activity" reply <<<"$payload"
+  cat "$tmp/calls"
+}
+
+# reply: a non-empty last_assistant_message publishes exactly one
+# plect.message event, summary truncated to its first line, message_id
+# deterministic (message_id_origin=synthetic) from turn_id, not a random one.
+got="$(run_report '{"hook_event_name":"Stop","last_assistant_message":"line one\nline two","turn_id":"turn-abc"}')"
+want='event publish selftest/session-1 --type plect.message --summary line one --body line one
+line two --meta message_id=selftest/session-1/turn-abc --meta message_id_origin=synthetic --meta role=assistant --meta source=codex --meta turn_id=turn-abc'
+check "reply publishes plect.message" "$want" "$got"
+# 2 lines, not 1: the plect stub's own `printf '%s\n' "$*"` puts the whole
+# call on one logical "line" of output but the call's own body embeds a
+# newline ("line one\nline two"), splitting the file in two — a second
+# actual call would add a third line with its own leading "event publish".
+[ "$(wc -l < "$tmp/calls")" -eq 2 ] || { echo "FAIL reply published more than once: $got" >&2; fail=1; }
+
+# reply: the same turn_id always mints the same message_id (deterministic,
+# not a fresh random one on every call).
+got2="$(run_report '{"hook_event_name":"Stop","last_assistant_message":"a different final answer","turn_id":"turn-abc"}')"
+case "$got2" in
+  *"message_id=selftest/session-1/turn-abc"*) echo "ok   reply message_id is deterministic per turn_id" ;;
+  *) echo "FAIL reply message_id should be deterministic per turn_id, got: $got2" >&2; fail=1 ;;
+esac
+
+# reply: a trailing newline in last_assistant_message survives byte for byte
+# -- command substitution silently strips trailing newlines unless guarded
+# against, which would corrupt the canonical message text.
+got="$(run_report '{"hook_event_name":"Stop","last_assistant_message":"paragraph one\n\n","turn_id":"turn-nl"}')"
+want='event publish selftest/session-1 --type plect.message --summary paragraph one --body paragraph one
+
+ --meta message_id=selftest/session-1/turn-nl --meta message_id_origin=synthetic --meta role=assistant --meta source=codex --meta turn_id=turn-nl'
+check "reply preserves a trailing newline byte for byte" "$want" "$got"
+
+# reply: an empty last_assistant_message publishes nothing.
+got="$(run_report '{"hook_event_name":"Stop","last_assistant_message":""}')"
+check "an empty reply publishes nothing" "" "$got"
+
+# reply: a missing last_assistant_message field (not just empty) also
+# publishes nothing.
+got="$(run_report '{"hook_event_name":"Stop"}')"
+check "a reply with no field publishes nothing" "" "$got"
+
+# reply: no turn_id falls back to a deterministic per-session counter (never
+# a random id), still distinct call to call.
+got="$(run_report '{"hook_event_name":"Stop","last_assistant_message":"hi"}')"
+case "$got" in
+  *"message_id=selftest/session-1/reply-0"*) echo "ok   reply with no turn_id uses the reply-seq fallback" ;;
+  *) echo "FAIL reply with no turn_id should use the reply-seq fallback, got: $got" >&2; fail=1 ;;
+esac
+case "$got" in
+  *turn_id*) echo "FAIL reply with no turn_id should carry no turn_id, got: $got" >&2; fail=1 ;;
+  *) echo "ok   reply with no turn_id carries no turn_id metadata" ;;
+esac
+got="$(run_report '{"hook_event_name":"Stop","last_assistant_message":"hi again"}')"
+case "$got" in
+  *"message_id=selftest/session-1/reply-1"*) echo "ok   reply fallback counter advances on the next call" ;;
+  *) echo "FAIL reply fallback counter should advance on the next call, got: $got" >&2; fail=1 ;;
+esac
+
+# reply: plect being unreachable never fails the turn.
+: > "$tmp/calls"
+PLECT_SESSION_NAME="$session" \
+XDG_STATE_HOME="$XDG_STATE_HOME" \
+PATH="$(dirname "$(command -v jq)")" \
+"$activity" reply <<<'{"hook_event_name":"Stop","last_assistant_message":"hi"}'
+[ $? -eq 0 ] || { echo "FAIL reply must exit 0 even when plect is unreachable" >&2; fail=1; }
+
+# reset must NOT drop the reply-seq counter: exec_runtime's setup calls
+# reset on every launch, resumes included, and its reply calls never carry
+# a turn_id to fall back from -- restarting the counter would mint an id a
+# prior turn already published, reusing reply-0 across a restart instead of
+# advancing past it.
+[ -s "$XDG_STATE_HOME/plect/codex-activity/selftest_session-1.reply-seq" ] || { echo "FAIL expected a reply-seq counter file before reset" >&2; fail=1; }
+"$activity" reset "$session"
+[ -s "$XDG_STATE_HOME/plect/codex-activity/selftest_session-1.reply-seq" ] || { echo "FAIL reset must not remove the session's reply-seq counter" >&2; fail=1; }
+got="$(run_report '{"hook_event_name":"Stop","last_assistant_message":"after a reset"}')"
+# reply-3, not reply-2: the unreachable-plect call just above still advanced
+# the counter (that logic runs before the publish attempt), consuming
+# reply-2 even though nothing was actually published for it.
+case "$got" in
+  *"message_id=selftest/session-1/reply-3"*) echo "ok   the reply-seq counter survives reset and keeps advancing" ;;
+  *) echo "FAIL a reset should not reset the reply-seq counter, got: $got" >&2; fail=1 ;;
+esac
+
 [ "$fail" -eq 0 ] || { echo "codex-agent-activity selftest failed" >&2; exit 1; }
 echo "codex-agent-activity selftest passed"

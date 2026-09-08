@@ -10,13 +10,12 @@
 # running one. The first turn has no thread_id yet; its `thread.started`
 # JSONL line seeds state_dir/thread_id for every subsequent resume.
 #
-# Usage: codex-exec-worker <queue_dir> <state_dir> <profile_name>
+# Usage: codex-exec-worker <queue_dir> <state_dir>
 
 set -u
 
 queue_dir="${1:?queue_dir required}"
 state_dir="${2:?state_dir required}"
-profile_name="${3:?profile_name required}"
 
 mkdir -p "$queue_dir" "$state_dir/log"
 
@@ -62,6 +61,24 @@ tick_session() {
     plect tick "$PLECT_SESSION_NAME" >/dev/null 2>&1 || true
 }
 
+# publish_reply hands the turn's captured text to codex-agent-activity's
+# reply verb, the same publisher a real Codex hook would call — but reached
+# by direct invocation here, not hook registration: this worker already
+# sees every turn boundary itself (see tasks/exec_runtime.toml's setup for
+# why that makes a hook unnecessary), and reply's own last_assistant_message
+# extraction and message_id/dedup logic apply the same way regardless of
+# who calls it. Takes the captured file, not its content as a shell string:
+# a caller-side `$(cat "$file")` would strip the file's own trailing
+# newlines before jq ever saw them, corrupting a message that ends in one.
+# --rawfile reads the file's exact bytes straight into the JSON value.
+publish_reply() {
+    [ -n "${PLECT_SESSION_NAME:-}" ] && [ "${CODEX_PUBLISH_MESSAGE:-false}" = "true" ] || return 0
+    local file="$1"
+    [ -s "$file" ] || return 0
+    jq -n --rawfile text "$file" '{last_assistant_message: $text}' \
+        | "${PLECT_AGENT_ACTIVITY_BIN:-codex-agent-activity}" reply >/dev/null 2>&1 || true
+}
+
 while true; do
     for f in "$queue_dir"/*.json; do
         [ -e "$f" ] || continue
@@ -79,15 +96,12 @@ while true; do
 
         agent_activity "UserPromptSubmit" "working"
         if [ -z "$thread_id" ]; then
-            codex exec --json --profile "$profile_name" \
+            codex exec --json \
                 --dangerously-bypass-approvals-and-sandbox \
                 --output-last-message "$last_message_file" \
                 "${extra_args[@]}" \
                 -- "$text" > "$log_file" 2>&1
         else
-            # `codex exec resume`, unlike `codex exec`, rejects --profile on
-            # some codex-cli releases ("unexpected argument", exit 2) — omit
-            # it here so a resumed turn still runs on those releases.
             codex exec resume --json \
                 --dangerously-bypass-approvals-and-sandbox \
                 --output-last-message "$last_message_file" \
@@ -102,20 +116,10 @@ while true; do
         fi
 
         write_health "$exit_code" "$event_type"
-        mv "$last_message_file" "$state_dir/last-message.txt"
-        # Round-trip the turn's reply onto the event bus so it reaches any
-        # subscriber (a web UI, a chat channel, ...), symmetric with the
-        # inbound enqueue channel. A dedicated `codex.reply` event type
-        # avoids a self-feedback loop with this same channel. Publish on
-        # success with a non-empty reply only; failures already surface via
-        # health.json.
-        if [ -n "${PLECT_SESSION_NAME:-}" ] && [ "$exit_code" -eq 0 ]; then
-            reply="$(cat "$state_dir/last-message.txt" 2>/dev/null || true)"
-            [ -n "$reply" ] && plect event publish "$PLECT_SESSION_NAME" \
-                --type codex.reply --summary "codex turn reply" --body "$reply" \
-                >/dev/null 2>&1 || true
-        fi
-        rm -f "$f"
+        # Publish on success only; failures already surface via health.json.
+        # publish_reply itself skips an empty (or absent) capture.
+        [ "$exit_code" -eq 0 ] && publish_reply "$last_message_file"
+        rm -f "$last_message_file" "$f"
         agent_activity "Stop" "waiting"
         tick_session
     done

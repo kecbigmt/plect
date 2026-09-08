@@ -1,19 +1,28 @@
 #!/usr/bin/env bash
 # Codex CLI turn-boundary activity: the record half is a hook, the read
 # half is this task's `[health].activity` probe, so one executable owns both
-# ends of one fingerprint format.
+# ends of one fingerprint format. It also owns reply, the publisher of an
+# agent's own text as the core plect.message event: Codex's `codex exec`/
+# `codex exec resume` expose no per-message streaming hook, so unlike the
+# Claude plugin's counterpart this has no message_display side — same
+# one-executable reason.
 #
 # Usage:
-#   codex-agent-activity working|waiting             # hook; session from $PLECT_SESSION_NAME
+#   codex-agent-activity working|waiting              # hook; session from $PLECT_SESSION_NAME
+#   codex-agent-activity reply                        # publishes plect.message from stdin JSON
 #   codex-agent-activity probe <session> [state_dir]  # activity probe; writes the envelope
-#   codex-agent-activity reset <session>              # drop the record (setup/cleanup)
+#   codex-agent-activity reset <session>               # drop the record (setup/cleanup)
 #
-# The hook path reads the hook event JSON from stdin (only hook_event_name is
-# used) and is fire-and-forget by design: a failure here must never fail the
-# agent's turn, so every hook exit path is 0. The probe path only fails loud
-# (non-zero exit, no stdout) when the session name itself is missing — an
-# unreadable or torn hook record degrades to "no hook evidence" instead,
-# since the log-file signal below can still carry the probe on its own.
+# working/waiting read a Codex hook's own event JSON from stdin; reply reads
+# whatever JSON its caller built (a Codex hook's payload has the same
+# last_assistant_message/turn_id shape, but exec_runtime's worker calls
+# reply directly with its own --output-last-message capture instead of
+# registering a hook — see that task's setup for why). All three are
+# fire-and-forget by design: a failure here must never fail the agent's
+# turn, so every exit path is 0. The probe path only fails loud (non-zero
+# exit, no stdout) when the session name itself is missing — an unreadable
+# or torn hook record degrades to "no hook evidence" instead, since the
+# log-file signal below can still carry the probe on its own.
 
 set -u
 
@@ -22,6 +31,42 @@ set -u
 record_path() {
   local dir="${XDG_STATE_HOME:-$HOME/.local/state}/plect/codex-activity"
   printf '%s/%s.json' "$dir" "$(printf '%s' "$1" | tr '/' '_')"
+}
+
+# reply_seq_path backs the fallback branch of reply's message_id: a counter
+# that keeps the synthetic id deterministic even on the one turn boundary
+# Stop exposes no turn_id for (before this process's first user input).
+reply_seq_path() {
+  local dir="${XDG_STATE_HOME:-$HOME/.local/state}/plect/codex-activity"
+  printf '%s/%s.reply-seq' "$dir" "$(printf '%s' "$1" | tr '/' '_')"
+}
+
+# publish_report fires the same event-shape rule the reporting hook follows:
+# empty text publishes nothing, and a non-empty one goes out with a
+# first-line summary. Never fails the caller — a publish failure is silently
+# swallowed, per the fire-and-forget contract this hook operates under.
+publish_report() {
+  local event_type="$1" text="$2" firstline
+  shift 2
+  [ -n "$text" ] || return 0
+  firstline="$(printf '%s' "$text" | head -n 1)"
+  plect event publish "$PLECT_SESSION_NAME" --type "$event_type" --summary "${firstline:0:120}" --body "$text" "$@" >/dev/null 2>&1
+  return 0
+}
+
+# jq_field_exact sets $REPLY to one jq filter's raw output byte-for-byte from
+# the captured $payload, including any trailing newlines: a sentinel byte
+# anchors the value's real end, since `$(...)` command substitution strips
+# every trailing newline unconditionally — silently dropping it from a
+# message that ends in one. This is why it is never called as
+# `x="$(jq_field_exact ...)"`: capturing this function's own stdout would
+# hit that exact same loss one layer further out. Follow the `read`/$REPLY
+# convention instead: call it, then read $REPLY as a plain assignment, which
+# strips nothing.
+jq_field_exact() {
+  local out
+  out="$(printf '%s' "$payload" | jq -j "($1) + \"\"" 2>/dev/null)" || out=$'\001'
+  REPLY="${out%$'\001'}"
 }
 
 # The turn-boundary hooks only fire at a turn's start and end, so a single
@@ -73,7 +118,48 @@ case "${1:-}" in
     ;;
   reset)
     session="${2:-}"
+    # The reply-seq counter is deliberately not touched here: setup calls
+    # reset on every launch, resumes included, and exec_runtime's reply has
+    # no turn_id to fall back from, ever — that counter is message_id's only
+    # source for this runtime's entire session lifetime, so restarting it
+    # would mint an id a prior turn already published.
     [ -n "$session" ] && rm -f "$(record_path "$session")"
+    exit 0
+    ;;
+  reply)
+    [ -n "${PLECT_SESSION_NAME:-}" ] || exit 0
+    payload="$(cat)"
+
+    # Extracted via jq_field_exact, not a plain `$(...)` read: a real
+    # assistant message routinely contains newlines, which `$(...)` would
+    # strip if they were trailing.
+    jq_field_exact '.last_assistant_message // empty'
+    message="$REPLY"
+    [ -n "$message" ] || exit 0
+
+    turn_id="$(printf '%s' "$payload" | jq -r '.turn_id // empty' 2>/dev/null)" || turn_id=""
+
+    # message_id is a deterministic synthetic id, per the core contract, not
+    # a random one: a caller with its own per-turn id (a real Codex hook)
+    # doubles it as the id. exec_runtime's worker has no such id to give —
+    # every turn is its own `codex exec` call, and Codex's own turn_id lives
+    # only inside its Stop hook payload, which this call path never receives
+    # — so the counter fallback is that caller's every call, not an edge
+    # case.
+    if [ -n "$turn_id" ]; then
+      message_id="$PLECT_SESSION_NAME/$turn_id"
+    else
+      seq_file="$(reply_seq_path "$PLECT_SESSION_NAME")"
+      n="$(cat "$seq_file" 2>/dev/null)"
+      case "$n" in ''|*[!0-9]*) n=0 ;; esac
+      mkdir -p "$(dirname "$seq_file")" 2>/dev/null
+      printf '%s' "$((n + 1))" > "$seq_file" 2>/dev/null
+      message_id="$PLECT_SESSION_NAME/reply-$n"
+    fi
+
+    meta=(--meta "message_id=$message_id" --meta "message_id_origin=synthetic" --meta "role=assistant" --meta "source=codex")
+    [ -n "$turn_id" ] && meta+=(--meta "turn_id=$turn_id")
+    publish_report plect.message "$message" "${meta[@]}"
     exit 0
     ;;
 esac
