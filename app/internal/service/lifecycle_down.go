@@ -65,15 +65,7 @@ func Down(cfg *config.Config, store *state.Store, params DownParams) (result *Do
 	if teardownErr != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: teardownErr.Error()}
 	}
-	// The digest always hashes the session-wide outstanding scope (see
-	// noticeAndAdvanceBaseline), not just Down's own run-scoped teardown
-	// above, since the baseline is one session-wide value shared with
-	// up/destroy.
-	outstanding, outstandingErr := unifiedTeardownList(cfg, session, false)
-	if outstandingErr != nil {
-		return nil, &Error{Code: ErrExecutionFailed, Message: outstandingErr.Error()}
-	}
-	warning, err = noticeAndAdvanceBaseline(cfg, store, sessionName, session, plan, teardown, outstanding)
+	warning, err = noticeAndAdvanceBaseline(cfg, store, sessionName, session, plan, teardown)
 	if err != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: err.Error()}
 	}

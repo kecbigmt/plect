@@ -13,6 +13,7 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/lang"
+	"github.com/kecbigmt/plecture/app/internal/task"
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
@@ -485,6 +486,43 @@ func TestUp_ForceRecreateProviderInputPreconditionBlocksBaselineAdvance(t *testi
 	}
 	if got := store.Get("sess-1").LifecycleConfigurationDigest; got != "" {
 		t.Errorf("baseline = %q, want it left unrecorded when the workspace-provider-inputs precondition fails", got)
+	}
+}
+
+// Up resolves a stale workflow node's cleanup once and must feed that same
+// resolved list to the actual cleanup call rather than re-resolving it from
+// current config a second time. A Resolved entry whose declaration exists
+// nowhere on disk still runs successfully here, which only holds if the
+// call uses the value handed to it instead of looking its TaskID back up.
+func TestCleanupStaleWorkflowNodes_UsesProvidedResolvedListWithoutReResolving(t *testing.T) {
+	requireBash(t)
+	cleanupLog := filepath.Join(t.TempDir(), "cleanup.log")
+	cfg := writeWorkflowFixture(t, t.TempDir(), "coding",
+		[]taskFixture{{id: "kept", scope: "run", setup: `echo '{}'`, cleanup: "true"}},
+		[]nodeFixture{{id: "kept"}},
+	)
+	store := testStore(t)
+	seedSessionWithNodes(t, store, "sess-1", "acme", 1, "coding", map[string]*contract.TaskState{
+		"ghost": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, TaskID: "ghost_def_not_on_disk", Seq: 1},
+	})
+	session := store.Get("sess-1")
+	plan, err := buildPlanForSession(cfg, "", session)
+	if err != nil {
+		t.Fatalf("buildPlanForSession: %v", err)
+	}
+	stale := []task.Resolved{{
+		NodeID:  "ghost",
+		TaskID:  "ghost_def_not_on_disk",
+		Scope:   contract.TaskScopeRun,
+		Cleanup: &lang.Action{Type: lang.ActionShell, Script: "printf 'ghost-cleaned\\n' >> " + cleanupLog},
+	}}
+
+	if err := cleanupStaleWorkflowNodes(cfg, store, "sess-1", session, plan, stale, nil); err != nil {
+		t.Fatalf("cleanupStaleWorkflowNodes: %v", err)
+	}
+	data, err := os.ReadFile(cleanupLog)
+	if err != nil || string(data) != "ghost-cleaned\n" {
+		t.Fatalf("cleanup log = %q, %v, want the provided resolved cleanup to have run without re-resolving %q from disk", data, err, stale[0].TaskID)
 	}
 }
 

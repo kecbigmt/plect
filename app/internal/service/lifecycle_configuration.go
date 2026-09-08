@@ -18,8 +18,9 @@ import (
 // lifecycleConfigurationDigest hashes the canonical JSON projection of
 // parsed declarations and unresolved binding expressions, never resolved
 // values or credentials. outstanding is the caller's own already-resolved
-// session-wide teardown list, taken as a parameter rather than re-resolved
-// here, so comparison and execution always read one shared snapshot.
+// teardown list -- the same one it goes on to execute -- taken as a
+// parameter rather than re-resolved here, so comparison and execution
+// always read one shared snapshot.
 func lifecycleConfigurationDigest(cfg *config.Config, session *domain.Session, plan *task.Plan, outstanding []task.Resolved) (string, error) {
 	upOrder := plan.UpOrder()
 	nodes := make(map[string]any, len(upOrder))
@@ -380,17 +381,17 @@ func recordLifecycleConfigurationDigest(store *state.Store, sessionName, digest 
 	})
 }
 
-// noticeAndAdvanceBaseline is Up/Down/Destroy's shared call-site logic. An
-// unresolved definition in gateTeardown (the caller's own operation-scoped
-// list) blocks the notice and baseline entirely, as a precondition failure
-// rather than a configuration change. digestOutstanding is the
-// session-wide list the digest always hashes; it equals gateTeardown for
-// destroy but not down, which only executes the run-scoped subset.
-func noticeAndAdvanceBaseline(cfg *config.Config, store *state.Store, sessionName string, session *domain.Session, plan *task.Plan, gateTeardown, digestOutstanding []task.Resolved) (string, error) {
-	if hasUnresolvedCleanup(gateTeardown) {
+// noticeAndAdvanceBaseline is Up/Down/Destroy's shared call-site logic.
+// teardown is the caller's own already-resolved, operation-scoped list --
+// the same one it goes on to execute, never re-resolved here -- so
+// comparison and execution always share one snapshot. An unresolved
+// definition in it blocks the notice and baseline entirely, as a
+// precondition failure rather than a configuration change.
+func noticeAndAdvanceBaseline(cfg *config.Config, store *state.Store, sessionName string, session *domain.Session, plan *task.Plan, teardown []task.Resolved) (string, error) {
+	if hasUnresolvedCleanup(teardown) {
 		return "", nil
 	}
-	digest, warning, err := lifecycleConfigurationNotice(cfg, session, plan, digestOutstanding)
+	digest, warning, err := lifecycleConfigurationNotice(cfg, session, plan, teardown)
 	if err != nil {
 		return "", err
 	}

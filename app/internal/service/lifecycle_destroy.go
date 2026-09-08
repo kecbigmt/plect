@@ -126,7 +126,7 @@ func Destroy(cfg *config.Config, store *state.Store, params DestroyParams) (resu
 		if precondErr := workspaceProviderInputsPrecondition(cfg, session); precondErr != nil {
 			return nil, &Error{Code: ErrExecutionFailed, Message: precondErr.Error()}
 		}
-		warning, err = noticeAndAdvanceBaseline(cfg, store, sessionName, session, plan, teardown, teardown)
+		warning, err = noticeAndAdvanceBaseline(cfg, store, sessionName, session, plan, teardown)
 		if err != nil {
 			return nil, &Error{Code: ErrExecutionFailed, Message: err.Error()}
 		}
