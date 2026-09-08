@@ -466,12 +466,9 @@ func TestDispatcher_ChannelErrorNotRedelivered(t *testing.T) {
 	}
 }
 
-// TestDispatcher_ChannelErrorRelayedToOtherChannelNotOrigin is a regression
-// test for issue #542: a channel's own failure must reach a second,
-// independent channel declared on the same workflow (github#542's proposed
-// fix), while still never looping back to the failing channel itself
-// (the pre-existing structural guard, generalized from a blanket drop to a
-// per-channel one).
+// TestDispatcher_ChannelErrorRelayedToOtherChannelNotOrigin: a channel's own
+// failure must reach a second, independent channel declared on the same
+// workflow, while still never looping back to the failing channel itself.
 func TestDispatcher_ChannelErrorRelayedToOtherChannelNotOrigin(t *testing.T) {
 	log := eventlog.NewStore(t.TempDir())
 	dead := filepath.Join(t.TempDir(), "absent.sock") // origin: never listened
@@ -518,11 +515,10 @@ func TestDispatcher_ChannelErrorRelayedToOtherChannelNotOrigin(t *testing.T) {
 	}
 }
 
-// TestDispatcher_MutualChannelErrorBoundedNotInfinite is a regression test
-// for the dispatcher note on issue #542: when relaying a channel.error to a
-// second channel itself fails, the resulting channel.error (about a
-// channel.error's own delivery failure) must not be relayed anywhere, or
-// the two channels would ping-pong forever.
+// TestDispatcher_MutualChannelErrorBoundedNotInfinite: when relaying a
+// channel.error to a second channel itself fails, the resulting
+// channel.error (about a channel.error's own delivery failure) must not be
+// relayed anywhere, or the two channels would ping-pong forever.
 func TestDispatcher_MutualChannelErrorBoundedNotInfinite(t *testing.T) {
 	log := eventlog.NewStore(t.TempDir())
 	deadA := filepath.Join(t.TempDir(), "a.sock")
