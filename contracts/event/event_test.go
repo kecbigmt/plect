@@ -54,57 +54,20 @@ func TestFilterMatch(t *testing.T) {
 
 func TestPlectEventNamespaceConstants(t *testing.T) {
 	cases := map[string]string{
-		"source":                      SourcePlect,
-		"tick source":                 SourceTick,
-		"instruction":                 TypeInstruction,
-		"channel error":               TypeChannelError,
-		"status message":              TypeStatusMessage,
-		"terminal prefix":             TypeTerminalPrefix,
-		"terminal done":               TypeTerminalDone,
-		"terminal dead":               TypeTerminalDead,
-		"tick review":                 TypeTickReviewRequired,
-		"tick escalated":              TypeTickEscalated,
-		"judge recorded":              TypeJudgeRecorded,
-		"chain attempt":               TypeChainAttempt,
-		"message":                     TypeMessage,
-		"message chunk":               TypeMessageChunk,
-		"meta message id":             MetaMessageID,
-		"meta message id origin":      MetaMessageIDOrigin,
-		"meta role":                   MetaRole,
-		"meta source":                 MetaSource,
-		"meta kind":                   MetaKind,
-		"meta index":                  MetaIndex,
-		"meta final":                  MetaFinal,
-		"meta turn id":                MetaTurnID,
-		"meta turn index":             MetaTurnIndex,
-		"meta step index":             MetaStepIndex,
-		"meta run id":                 MetaRunID,
-		"meta source seq":             MetaSourceSeq,
-		"meta raw":                    MetaRaw,
-		"meta interim":                MetaInterim,
-		"meta stop reason":            MetaStopReason,
-		"meta truncated":              MetaTruncated,
-		"meta model":                  MetaModel,
-		"meta provider":               MetaProvider,
-		"meta surface":                MetaSurface,
-		"meta agent id":               MetaAgentID,
-		"meta parent agent id":        MetaParentAgentID,
-		"meta depth":                  MetaDepth,
-		"meta agent role":             MetaAgentRole,
-		"meta ordering":               MetaOrdering,
-		"meta block index":            MetaBlockIndex,
-		"role assistant":              RoleAssistant,
-		"message id origin native":    MessageIDOriginNative,
-		"message id origin synthetic": MessageIDOriginSynthetic,
-		"chunk kind text":             ChunkKindText,
-		"chunk kind reasoning":        ChunkKindReasoning,
-		"stop reason completed":       StopReasonCompleted,
-		"stop reason max tokens":      StopReasonMaxTokens,
-		"stop reason aborted":         StopReasonAborted,
-		"stop reason error":           StopReasonError,
-		"stop reason interrupted":     StopReasonInterrupted,
-		"ordering strict":             OrderingStrict,
-		"ordering best effort":        OrderingBestEffort,
+		"source":          SourcePlect,
+		"tick source":     SourceTick,
+		"instruction":     TypeInstruction,
+		"channel error":   TypeChannelError,
+		"status message":  TypeStatusMessage,
+		"terminal prefix": TypeTerminalPrefix,
+		"terminal done":   TypeTerminalDone,
+		"terminal dead":   TypeTerminalDead,
+		"tick review":     TypeTickReviewRequired,
+		"tick escalated":  TypeTickEscalated,
+		"judge recorded":  TypeJudgeRecorded,
+		"chain attempt":   TypeChainAttempt,
+		"message":         TypeMessage,
+		"message delta":   TypeMessageDelta,
 	}
 	for name, got := range cases {
 		if got == "" {
@@ -123,8 +86,8 @@ func TestPlectEventNamespaceConstants(t *testing.T) {
 	if TypeMessage != "plect.message" {
 		t.Fatalf("TypeMessage = %q, want plect.message", TypeMessage)
 	}
-	if TypeMessageChunk != "plect.message_chunk" {
-		t.Fatalf("TypeMessageChunk = %q, want plect.message_chunk", TypeMessageChunk)
+	if TypeMessageDelta != "plect.message_delta" {
+		t.Fatalf("TypeMessageDelta = %q, want plect.message_delta", TypeMessageDelta)
 	}
 }
 

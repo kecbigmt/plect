@@ -124,60 +124,41 @@ const (
 	// log's ordinary append identity: a repeated attempt is a separate fact,
 	// not a dedup collision.
 	TypeNodeResult = "plect.node.result"
-	// TypeMessage and TypeMessageChunk are the runtime-neutral agent-message
-	// contract documented at docs/language/events.md#agent-messages.
-	// TypeMessage is canonical: an emitter always sends exactly one per
-	// MetaMessageID once the message's visible text is non-empty.
-	// TypeMessageChunk is an optional live preview; a TypeMessage for the
-	// same MetaMessageID always follows it.
+	// TypeMessage and TypeMessageDelta: docs/language/events.md#agent-messages.
 	TypeMessage      = "plect.message"
-	TypeMessageChunk = "plect.message_chunk"
+	TypeMessageDelta = "plect.message_delta"
 )
 
-// Metadata keys stamped on TypeMessage / TypeMessageChunk events; see
-// docs/language/events.md#agent-messages for the full contract and which
-// harness can fill which optional key.
+// Metadata keys for TypeMessage / TypeMessageDelta: docs/language/events.md#agent-messages.
 const (
-	// Required on both types.
 	MetaMessageID       = "message_id"
-	MetaMessageIDOrigin = "message_id_origin" // MessageIDOriginNative | MessageIDOriginSynthetic
-	MetaSource          = "source"            // harness id; informational, never branched on
-
-	// Required on TypeMessage only.
-	MetaRole = "role" // RoleAssistant, today's only value
-
-	// Required on TypeMessageChunk only.
-	MetaKind  = "kind"  // ChunkKindText | ChunkKindReasoning
-	MetaIndex = "index" // emitter-assigned, 0-based, monotonic per (message_id, kind)
-	MetaFinal = "final" // "true" on the sequence's last chunk (Metadata is map[string]string)
-
-	// Optional on both types.
-	MetaTurnID    = "turn_id"
-	MetaTurnIndex = "turn_index"
-	MetaStepIndex = "step_index"
-	MetaRunID     = "run_id"
-	MetaSourceSeq = "source_seq"
-	MetaRaw       = "raw" // JSON-encoded object; Metadata values are strings
-
-	// Optional, TypeMessage only.
-	MetaInterim       = "interim" // "true" | "false", default "false"
-	MetaStopReason    = "stop_reason"
-	MetaTruncated     = "truncated" // "true" | "false", default "false"
-	MetaModel         = "model"
-	MetaProvider      = "provider"
-	MetaSurface       = "surface"
-	MetaAgentID       = "agent_id"
-	MetaParentAgentID = "parent_agent_id"
-	MetaDepth         = "depth"
-	MetaAgentRole     = "agent_role"
-
-	// Optional, TypeMessageChunk only.
-	MetaOrdering   = "ordering" // OrderingStrict | OrderingBestEffort
-	MetaBlockIndex = "block_index"
+	MetaMessageIDOrigin = "message_id_origin"
+	MetaSource          = "source"
+	MetaRole            = "role"
+	MetaKind            = "kind"
+	MetaIndex           = "index"
+	MetaFinal           = "final"
+	MetaTurnID          = "turn_id"
+	MetaTurnIndex       = "turn_index"
+	MetaStepIndex       = "step_index"
+	MetaRunID           = "run_id"
+	MetaSourceSeq       = "source_seq"
+	MetaRaw             = "raw"
+	MetaInterim         = "interim"
+	MetaStopReason      = "stop_reason"
+	MetaTruncated       = "truncated"
+	MetaModel           = "model"
+	MetaProvider        = "provider"
+	MetaSurface         = "surface"
+	MetaAgentID         = "agent_id"
+	MetaParentAgentID   = "parent_agent_id"
+	MetaDepth           = "depth"
+	MetaAgentRole       = "agent_role"
+	MetaOrdering        = "ordering"
+	MetaBlockIndex      = "block_index"
 )
 
-// MessageIDOrigin is MetaMessageIDOrigin's closed set: whether MetaMessageID
-// is the harness's own id or one the emitter synthesized.
+// MessageIDOrigin is MetaMessageIDOrigin's closed set.
 const (
 	MessageIDOriginNative    = "native"
 	MessageIDOriginSynthetic = "synthetic"
@@ -192,8 +173,7 @@ const (
 	ChunkKindReasoning = "reasoning"
 )
 
-// StopReason is MetaStopReason's closed set: why the model stopped, when the
-// emitter knows.
+// StopReason is MetaStopReason's closed set.
 const (
 	StopReasonCompleted   = "completed"
 	StopReasonMaxTokens   = "max_tokens"
@@ -202,7 +182,7 @@ const (
 	StopReasonInterrupted = "interrupted"
 )
 
-// Ordering is MetaOrdering's closed set: whether MetaIndex is gap-free.
+// Ordering is MetaOrdering's closed set.
 const (
 	OrderingStrict     = "strict"
 	OrderingBestEffort = "best_effort"
