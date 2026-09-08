@@ -118,14 +118,14 @@ func (s *Store) Append(ev event.Event) (stored event.Event, seq, next int64, err
 }
 
 // SwapChainAttempt atomically compares-and-sets a plect.chain.attempt
-// cap-refusal streak marker (see service.chainAttemptFingerprint), scoped by
-// a caller-supplied identity token (service.chainAttemptStreamID) so two incarnations never share a key even if a destroy races a leftover tick; previous is the value from just before this call, for RevertChainAttempt.
-func (s *Store) SwapChainAttempt(session, instance, chainID, generation, newFingerprint string) (previous string, won bool, err error) {
+// cap-refusal streak marker (see service.chainAttemptFingerprint). Previous
+// is the value from just before this call, for RevertChainAttempt.
+func (s *Store) SwapChainAttempt(session, instance, chainID, newFingerprint string) (previous string, won bool, err error) {
 	db, err := s.dbHandle()
 	if err != nil {
 		return "", false, err
 	}
-	return db.SwapChainAttempt(context.Background(), session, instance, chainID, generation, newFingerprint)
+	return db.SwapChainAttempt(context.Background(), session, instance, chainID, newFingerprint)
 }
 
 // RevertChainAttempt compensates a SwapChainAttempt win whose side effect
@@ -134,18 +134,15 @@ func (s *Store) SwapChainAttempt(session, instance, chainID, generation, newFing
 // transition (a concurrent tick's own, newer streak) if one has since won;
 // finding the marker already past claimed means that already happened, so
 // there is nothing here for this caller to compensate.
-func (s *Store) RevertChainAttempt(session, instance, chainID, generation, claimed, previous string) (reverted bool, err error) {
+func (s *Store) RevertChainAttempt(session, instance, chainID, claimed, previous string) (reverted bool, err error) {
 	db, err := s.dbHandle()
 	if err != nil {
 		return false, err
 	}
-	return db.RevertChainAttempt(context.Background(), session, instance, chainID, generation, claimed, previous)
+	return db.RevertChainAttempt(context.Background(), session, instance, chainID, claimed, previous)
 }
 
-// ClearChainAttempts removes every chain-attempt marker for sessionID,
-// including any left by earlier generations — a hygiene sweep, not a
-// correctness requirement now that SwapChainAttempt/RevertChainAttempt scope
-// each generation to its own key.
+// ClearChainAttempts removes every chain-attempt marker for sessionID.
 func (s *Store) ClearChainAttempts(sessionID string) error {
 	db, err := s.dbHandle()
 	if err != nil {

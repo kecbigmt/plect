@@ -21,14 +21,13 @@ type sidecarChainAttempt struct {
 	session     string
 	instance    string
 	chainID     string
-	generation  string
 	fingerprint string
 }
 
 type sidecarRetry struct {
-	session  string
-	action   string
-	resource string
+	session    string
+	action     string
+	resourceID string
 }
 
 type sidecarFiles struct {
@@ -97,13 +96,13 @@ func readSidecars(dir string) ([]sidecarChainAttempt, []sidecarRetry, sidecarFil
 			return nil, nil, files, fmt.Errorf("read subscription retries from %s: %w", pendingPath, err)
 		}
 		for session, resources := range pending.Subscribe {
-			for _, resource := range resources {
-				retries = append(retries, sidecarRetry{session: session, action: subscriptionRetrySubscribe, resource: resource})
+			for _, resourceID := range resources {
+				retries = append(retries, sidecarRetry{session: session, action: subscriptionRetrySubscribe, resourceID: resourceID})
 			}
 		}
 		for session, resources := range pending.Unsubscribe {
-			for _, resource := range resources {
-				retries = append(retries, sidecarRetry{session: session, action: subscriptionRetryUnsubscribe, resource: resource})
+			for _, resourceID := range resources {
+				retries = append(retries, sidecarRetry{session: session, action: subscriptionRetryUnsubscribe, resourceID: resourceID})
 			}
 		}
 		files.paths = append(files.paths, pendingPath)
@@ -154,12 +153,21 @@ func readSidecars(dir string) ([]sidecarChainAttempt, []sidecarRetry, sidecarFil
 				if err := json.Unmarshal(data, &attempts); err != nil {
 					return nil, nil, files, fmt.Errorf("read chain attempts from %s: %w", path, err)
 				}
+				seen := make(map[string]string, len(attempts))
 				for key, fingerprint := range attempts {
 					parts := strings.Split(key, "\x00")
 					if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" || fingerprint == "" {
 						return nil, nil, files, fmt.Errorf("read chain attempts from %s: invalid key", path)
 					}
-					chains = append(chains, sidecarChainAttempt{session: session, instance: parts[0], chainID: parts[1], generation: parts[2], fingerprint: fingerprint})
+					attemptKey := parts[0] + "\x00" + parts[1]
+					if previous, ok := seen[attemptKey]; ok {
+						if previous != fingerprint {
+							return nil, nil, files, fmt.Errorf("read chain attempts from %s: conflicting fingerprints", path)
+						}
+						continue
+					}
+					seen[attemptKey] = fingerprint
+					chains = append(chains, sidecarChainAttempt{session: session, instance: parts[0], chainID: parts[1], fingerprint: fingerprint})
 				}
 				files.paths = append(files.paths, path)
 			default:
@@ -201,7 +209,7 @@ func importSidecarsTx(ctx context.Context, tx *sql.Tx, chains []sidecarChainAtte
 		if err != nil {
 			return err
 		}
-		if err := queueSubscriptionRetryTx(ctx, tx, id, retry.action, retry.resource); err != nil {
+		if err := queueSubscriptionRetryTx(ctx, tx, id, retry.action, retry.resourceID); err != nil {
 			return fmt.Errorf("import subscription retry: %w", err)
 		}
 	}
@@ -210,15 +218,7 @@ func importSidecarsTx(ctx context.Context, tx *sql.Tx, chains []sidecarChainAtte
 		if err != nil {
 			return err
 		}
-		var generationID string
-		err = tx.QueryRowContext(ctx, `SELECT id FROM sessions WHERE id = ?`, attempt.generation).Scan(&generationID)
-		if err == nil && generationID != id {
-			return fmt.Errorf("sidecar import: chain attempt for %q names generation %q from another session", attempt.session, attempt.generation)
-		}
-		if err != nil && !errorsIsNoRows(err) {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO chain_attempts (session_id, instance, chain_id, generation, fingerprint) VALUES (?, ?, ?, ?, ?) ON CONFLICT(session_id, instance, chain_id, generation) DO UPDATE SET fingerprint = excluded.fingerprint`, id, attempt.instance, attempt.chainID, attempt.generation, attempt.fingerprint); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO chain_attempts (session_id, instance, chain_id, fingerprint) VALUES (?, ?, ?, ?) ON CONFLICT(session_id, instance, chain_id) DO UPDATE SET fingerprint = excluded.fingerprint`, id, attempt.instance, attempt.chainID, attempt.fingerprint); err != nil {
 			return fmt.Errorf("import chain attempt: %w", err)
 		}
 	}

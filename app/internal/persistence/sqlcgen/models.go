@@ -12,7 +12,6 @@ type ChainAttempt struct {
 	SessionID   string
 	Instance    string
 	ChainID     string
-	Generation  string
 	Fingerprint string
 }
 
@@ -155,9 +154,9 @@ type SessionChannelHealth struct {
 }
 
 type SubscriptionRetry struct {
-	SessionID string
-	Action    string
-	Resource  string
+	SessionID  string
+	Action     string
+	ResourceID string
 }
 
 type TaskDoneWhenJudge struct {

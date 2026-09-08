@@ -20,28 +20,28 @@ func retryStore(store *state.Store) (*persistence.DB, error) {
 	return persistence.EnsureCurrentShared(context.Background(), persistence.PathIn(store.Dir()))
 }
 
-func queuePendingSubscribe(store *state.Store, sessionName, resource string) error {
+func queuePendingSubscribe(store *state.Store, sessionName, resourceID string) error {
 	db, err := retryStore(store)
 	if err != nil {
 		return err
 	}
-	return db.QueueSubscriptionRetry(context.Background(), sessionName, retrySubscribe, resource)
+	return db.QueueSubscriptionRetry(context.Background(), sessionName, retrySubscribe, resourceID)
 }
 
-func queuePendingUnsubscribe(store *state.Store, sessionName, resource string) error {
+func queuePendingUnsubscribe(store *state.Store, sessionName, resourceID string) error {
 	db, err := retryStore(store)
 	if err != nil {
 		return err
 	}
-	return db.QueueSubscriptionRetry(context.Background(), sessionName, retryUnsubscribe, resource)
+	return db.QueueSubscriptionRetry(context.Background(), sessionName, retryUnsubscribe, resourceID)
 }
 
-func queuePendingUnsubscribeForSessionID(store *state.Store, sessionID, resource string) error {
+func queuePendingUnsubscribeForSessionID(store *state.Store, sessionID, resourceID string) error {
 	db, err := retryStore(store)
 	if err != nil {
 		return err
 	}
-	return db.QueueSubscriptionRetryByID(context.Background(), sessionID, retryUnsubscribe, resource)
+	return db.QueueSubscriptionRetryByID(context.Background(), sessionID, retryUnsubscribe, resourceID)
 }
 
 func dequeuePendingDelivery(store *state.Store, retry persistence.SubscriptionRetry) error {
@@ -49,7 +49,7 @@ func dequeuePendingDelivery(store *state.Store, retry persistence.SubscriptionRe
 	if err != nil {
 		return err
 	}
-	return db.DeleteSubscriptionRetry(context.Background(), retry.SessionID, retry.Action, retry.Resource)
+	return db.DeleteSubscriptionRetry(context.Background(), retry.SessionID, retry.Action, retry.ResourceID)
 }
 
 // flushPendingDeliveryLogged is TaskSetup's/TaskCleanup's/Destroy's own call
@@ -90,11 +90,11 @@ func sweepOrphanedPendingDeliveries(cfg *config.Config, store *state.Store) {
 				sweepErr = fmt.Errorf("read replacement session: %w", err)
 				return
 			}
-			if fresh != nil && resourceStillNeededBySession(fresh, retry.Resource) {
+			if fresh != nil && resourceStillNeededBySession(fresh, retry.ResourceID) {
 				sweepErr = dequeuePendingDelivery(store, retry)
 				return
 			}
-			unsubscribed, err := unsubscribeIfWired(cfg, retry.Session, retry.Resource)
+			unsubscribed, err := unsubscribeIfWired(cfg, retry.Session, retry.ResourceID)
 			if err != nil || !unsubscribed {
 				sweepErr = err
 				return
@@ -144,19 +144,19 @@ func flushOnePendingDelivery(cfg *config.Config, store *state.Store, retry persi
 	}
 	switch retry.Action {
 	case retrySubscribe:
-		if fresh == nil || !resourceStillNeededBySession(fresh, retry.Resource) {
+		if fresh == nil || !resourceStillNeededBySession(fresh, retry.ResourceID) {
 			return dequeuePendingDelivery(store, retry)
 		}
-		subscribed, err := subscribeIfWired(cfg, retry.Session, retry.Resource, domain.SessionBranch(fresh))
+		subscribed, err := subscribeIfWired(cfg, retry.Session, retry.ResourceID, domain.SessionBranch(fresh))
 		if err != nil || !subscribed {
 			return err
 		}
 		return dequeuePendingDelivery(store, retry)
 	case retryUnsubscribe:
-		if fresh != nil && resourceStillNeededBySession(fresh, retry.Resource) {
+		if fresh != nil && resourceStillNeededBySession(fresh, retry.ResourceID) {
 			return dequeuePendingDelivery(store, retry)
 		}
-		unsubscribed, err := unsubscribeIfWired(cfg, retry.Session, retry.Resource)
+		unsubscribed, err := unsubscribeIfWired(cfg, retry.Session, retry.ResourceID)
 		if err != nil || !unsubscribed {
 			return err
 		}

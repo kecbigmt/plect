@@ -85,7 +85,7 @@ func TestSwapChainAttempt_ReportsPreviousAndWon(t *testing.T) {
 	s := NewStore(t.TempDir())
 	newSessionForTest(t, s, "work1")
 
-	previous, won, err := s.SwapChainAttempt("work1", "work", "review", "gen1", "cap|target")
+	previous, won, err := s.SwapChainAttempt("work1", "work", "review", "cap|target")
 	if err != nil {
 		t.Fatalf("SwapChainAttempt (first): %v", err)
 	}
@@ -93,7 +93,7 @@ func TestSwapChainAttempt_ReportsPreviousAndWon(t *testing.T) {
 		t.Fatalf("first swap: previous=%q won=%v, want \"\"/true", previous, won)
 	}
 
-	previous, won, err = s.SwapChainAttempt("work1", "work", "review", "gen1", "cap|target")
+	previous, won, err = s.SwapChainAttempt("work1", "work", "review", "cap|target")
 	if err != nil {
 		t.Fatalf("SwapChainAttempt (unchanged): %v", err)
 	}
@@ -101,7 +101,7 @@ func TestSwapChainAttempt_ReportsPreviousAndWon(t *testing.T) {
 		t.Fatalf("unchanged swap: previous=%q won=%v, want \"cap|target\"/false", previous, won)
 	}
 
-	previous, won, err = s.SwapChainAttempt("work1", "work", "review", "gen1", "")
+	previous, won, err = s.SwapChainAttempt("work1", "work", "review", "")
 	if err != nil {
 		t.Fatalf("SwapChainAttempt (clear): %v", err)
 	}
@@ -114,14 +114,14 @@ func TestRevertChainAttempt_DoesNotOverwriteANewerTransition(t *testing.T) {
 	s := NewStore(t.TempDir())
 	newSessionForTest(t, s, "work1")
 
-	if _, won, err := s.SwapChainAttempt("work1", "work", "review", "gen1", "cap|A"); err != nil || !won {
+	if _, won, err := s.SwapChainAttempt("work1", "work", "review", "cap|A"); err != nil || !won {
 		t.Fatalf("claim A: won=%v err=%v", won, err)
 	}
-	if previous, won, err := s.SwapChainAttempt("work1", "work", "review", "gen1", "cap|B"); err != nil || !won || previous != "cap|A" {
+	if previous, won, err := s.SwapChainAttempt("work1", "work", "review", "cap|B"); err != nil || !won || previous != "cap|A" {
 		t.Fatalf("claim B: previous=%q won=%v err=%v", previous, won, err)
 	}
 
-	reverted, err := s.RevertChainAttempt("work1", "work", "review", "gen1", "cap|A", "")
+	reverted, err := s.RevertChainAttempt("work1", "work", "review", "cap|A", "")
 	if err != nil {
 		t.Fatalf("RevertChainAttempt: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestRevertChainAttempt_DoesNotOverwriteANewerTransition(t *testing.T) {
 		t.Fatal("reverted = true, want false: the marker had already moved past what this caller claimed")
 	}
 
-	if previous, won, err := s.SwapChainAttempt("work1", "work", "review", "gen1", "cap|B"); err != nil || won || previous != "cap|B" {
+	if previous, won, err := s.SwapChainAttempt("work1", "work", "review", "cap|B"); err != nil || won || previous != "cap|B" {
 		t.Fatalf("marker after the stale revert: previous=%q won=%v err=%v, want \"cap|B\"/false/nil", previous, won, err)
 	}
 }
@@ -138,13 +138,13 @@ func TestClearChainAttempts_RemovesEveryMarkerForTheSession(t *testing.T) {
 	s := NewStore(t.TempDir())
 	id := newSessionForTest(t, s, "work1")
 
-	if _, _, err := s.SwapChainAttempt("work1", "work", "review", "gen1", "cap|A"); err != nil {
+	if _, _, err := s.SwapChainAttempt("work1", "work", "review", "cap|A"); err != nil {
 		t.Fatalf("SwapChainAttempt: %v", err)
 	}
 	if err := s.ClearChainAttempts(id); err != nil {
 		t.Fatalf("ClearChainAttempts: %v", err)
 	}
-	if previous, won, err := s.SwapChainAttempt("work1", "work", "review", "gen1", "cap|A"); err != nil || !won || previous != "" {
+	if previous, won, err := s.SwapChainAttempt("work1", "work", "review", "cap|A"); err != nil || !won || previous != "" {
 		t.Fatalf("after clear: previous=%q won=%v err=%v, want \"\"/true/nil", previous, won, err)
 	}
 
@@ -156,42 +156,42 @@ func TestClearChainAttempts_RemovesEveryMarkerForTheSession(t *testing.T) {
 func TestClearChainAttempts_DoesNotClearAReplacementIncarnation(t *testing.T) {
 	s := NewStore(t.TempDir())
 	oldID := newSessionForTest(t, s, "work1")
-	if _, won, err := s.SwapChainAttempt("work1", "work", "review", oldID, "cap|old"); err != nil || !won {
+	if _, won, err := s.SwapChainAttempt("work1", "work", "review", "cap|old"); err != nil || !won {
 		t.Fatalf("old claim: won=%v err=%v", won, err)
 	}
-	newID := destroyAndRecreateForTest(t, s, "work1")
-	if _, won, err := s.SwapChainAttempt("work1", "work", "review", newID, "cap|new"); err != nil || !won {
+	destroyAndRecreateForTest(t, s, "work1")
+	if _, won, err := s.SwapChainAttempt("work1", "work", "review", "cap|new"); err != nil || !won {
 		t.Fatalf("new claim: won=%v err=%v", won, err)
 	}
 	if err := s.ClearChainAttempts(oldID); err != nil {
 		t.Fatal(err)
 	}
-	previous, won, err := s.SwapChainAttempt("work1", "work", "review", newID, "cap|new")
+	previous, won, err := s.SwapChainAttempt("work1", "work", "review", "cap|new")
 	if err != nil || won || previous != "cap|new" {
 		t.Fatalf("replacement marker after old cleanup = previous %q won %v err %v", previous, won, err)
 	}
 }
 
-func TestSwapChainAttempt_StaleGenerationWriteAfterClearDoesNotSuppressANewGeneration(t *testing.T) {
+func TestSwapChainAttempt_ReusesTheChainKeyAfterClear(t *testing.T) {
 	s := NewStore(t.TempDir())
 	id := newSessionForTest(t, s, "work1")
 
-	if _, won, err := s.SwapChainAttempt("work1", "work", "review", "gen1", "cap|A"); err != nil || !won {
-		t.Fatalf("gen1 claim: won=%v err=%v", won, err)
+	if _, won, err := s.SwapChainAttempt("work1", "work", "review", "cap|A"); err != nil || !won {
+		t.Fatalf("claim: won=%v err=%v", won, err)
 	}
 	if err := s.ClearChainAttempts(id); err != nil {
 		t.Fatalf("ClearChainAttempts: %v", err)
 	}
-	if _, won, err := s.SwapChainAttempt("work1", "work", "review", "gen1", "cap|A"); err != nil || !won {
-		t.Fatalf("stale gen1 rewrite: won=%v err=%v", won, err)
+	if _, won, err := s.SwapChainAttempt("work1", "work", "review", "cap|A"); err != nil || !won {
+		t.Fatalf("rewrite after clear: won=%v err=%v", won, err)
 	}
 
-	previous, won, err := s.SwapChainAttempt("work1", "work", "review", "gen2", "cap|A")
+	previous, won, err := s.SwapChainAttempt("work1", "work", "review", "cap|A")
 	if err != nil {
-		t.Fatalf("gen2 claim: %v", err)
+		t.Fatalf("unchanged claim: %v", err)
 	}
-	if previous != "" || !won {
-		t.Fatalf("gen2 claim: previous=%q won=%v, want \"\"/true — the stale gen1 write must not suppress it", previous, won)
+	if previous != "cap|A" || won {
+		t.Fatalf("unchanged claim: previous=%q won=%v, want \"cap|A\"/false", previous, won)
 	}
 }
 
@@ -207,7 +207,7 @@ func TestSwapChainAttempt_ConcurrentIdenticalSwapsExactlyOneWins(t *testing.T) {
 	for i := range n {
 		go func(i int) {
 			defer wg.Done()
-			_, w, err := s.SwapChainAttempt("work1", "work", "review", "gen1", "cap|target")
+			_, w, err := s.SwapChainAttempt("work1", "work", "review", "cap|target")
 			won[i], errs[i] = w, err
 		}(i)
 	}

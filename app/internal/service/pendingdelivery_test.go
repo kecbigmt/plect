@@ -24,7 +24,7 @@ func subscriptionRetryCount(t *testing.T, store *state.Store, sessionName, actio
 		}
 		count := 0
 		for _, retry := range all {
-			if retry.Session == sessionName && retry.Action == action && retry.Resource == resource {
+			if retry.Session == sessionName && retry.Action == action && retry.ResourceID == resource {
 				count++
 			}
 		}
@@ -36,7 +36,7 @@ func subscriptionRetryCount(t *testing.T, store *state.Store, sessionName, actio
 	}
 	count := 0
 	for _, retry := range all {
-		if retry.Action == action && retry.Resource == resource {
+		if retry.Action == action && retry.ResourceID == resource {
 			count++
 		}
 	}

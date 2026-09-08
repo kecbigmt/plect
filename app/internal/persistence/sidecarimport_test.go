@@ -59,7 +59,7 @@ func TestImportSidecars_MovesRowsByIncarnationAndRetiresEventsTree(t *testing.T)
 	if err := db.ImportSidecars(ctx, dir); err != nil {
 		t.Fatalf("import sidecars: %v", err)
 	}
-	previous, won, err := db.SwapChainAttempt(ctx, "live", "work", "review", liveID, "cap|target")
+	previous, won, err := db.SwapChainAttempt(ctx, "live", "work", "review", "cap|target")
 	if err != nil || won || previous != "cap|target" {
 		t.Fatalf("imported chain attempt = previous %q won %v err %v", previous, won, err)
 	}
@@ -102,6 +102,34 @@ func TestImportSidecars_RejectsUnmappedSessionWithoutRemovingSource(t *testing.T
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("unmapped source was removed: %v", err)
+	}
+}
+
+func TestImportSidecars_RejectsConflictingLegacyChainGenerations(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	db, err := ensureCurrent(ctx, PathIn(dir), migrationsSourceFS(), false, false)
+	if err != nil {
+		t.Fatalf("ensure current: %v", err)
+	}
+	defer db.Close()
+	now := time.Now().UTC()
+	if err := db.PutSession(ctx, &domain.Session{Name: "live", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "events", "live", "chain_attempts.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"work\u0000review\u0000old":"cap|old","work\u0000review\u0000new":"cap|new"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.ImportSidecars(ctx, dir); err == nil {
+		t.Fatal("import sidecars unexpectedly accepted conflicting chain attempts")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("conflicting source was removed: %v", err)
 	}
 }
 
