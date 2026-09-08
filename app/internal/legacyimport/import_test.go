@@ -475,21 +475,34 @@ func TestRun_DryRunNeverLeavesAScratchDirectoryBehind(t *testing.T) {
 	}
 }
 
-func TestNewScratchDir_DefaultBaseNeverNestsUnderAGivenDestDir(t *testing.T) {
+// TestRun_BuildPhaseNeverWritesToAReadOnlyDestDir makes DestDir read-only
+// after Run's initial MkdirAll, so every write the build (migrations,
+// session/event inserts, cursor writes, both validation passes) performs
+// would fail loudly if any of it landed there. Run instead runs the whole
+// build against its scratch directory and fails only at the final copy,
+// proving the build itself never touches DestDir.
+func TestRun_BuildPhaseNeverWritesToAReadOnlyDestDir(t *testing.T) {
+	sourceDir, _, _ := legacyFixture(t)
 	destDir := t.TempDir()
+	ctx := context.Background()
 
-	dir, err := newScratchDir("")
-	if err != nil {
-		t.Fatalf("newScratchDir: %v", err)
+	if err := os.Chmod(destDir, 0o500); err != nil {
+		t.Fatal(err)
 	}
-	defer os.RemoveAll(dir)
+	t.Cleanup(func() { os.Chmod(destDir, 0o700) })
 
-	if rel, err := filepath.Rel(destDir, dir); err == nil && !strings.HasPrefix(rel, "..") {
-		t.Errorf("newScratchDir(\"\") = %q, want a path outside destDir %q (relative path was %q)", dir, destDir, rel)
+	report, err := Run(ctx, Options{SourceDir: sourceDir, DestDir: destDir})
+	if err == nil {
+		t.Fatal("Run must fail once it reaches the final copy into a read-only DestDir")
 	}
-	wantBase := os.TempDir()
-	if got, err := filepath.Rel(wantBase, dir); err != nil || strings.HasPrefix(got, "..") {
-		t.Errorf("newScratchDir(\"\") = %q, want it under os.TempDir() %q", dir, wantBase)
+	if !strings.Contains(err.Error(), "copy built database") {
+		t.Errorf("Run failed at an unexpected step (want the final copy): %v", err)
+	}
+	if report.Sessions != 2 || report.Events != 3 {
+		t.Errorf("report = %+v, want the build to have completed (sessions=2 events=3) before the copy failed", report)
+	}
+	if report.Promoted {
+		t.Error("report.Promoted = true, want false")
 	}
 }
 
