@@ -60,15 +60,23 @@ root revokes use of its project definitions for future desired operations.
 A session records its selected project root, participating layer revisions,
 and effective digest at creation. Later operations use that root rather than
 their caller's cwd, but load the latest valid definitions at the recorded root.
-They compare and report a changed digest; a digest mismatch neither fails an
-operation nor destroys or rebuilds nodes. The current workflow is the desired
-state used for reconciliation. Nodes already set up retain execution records
-used for their cleanup. If a desired revision requires a node to be rebuilt,
-the diagnostic directs the caller to `--force-recreate`. If the recorded root
-cannot be read, desired operations fail with an actionable error and do not
-select another root; record-based cleanup and release remain available. Chains
-inherit their triggering session's root. A resident population inherits the
-root captured when the resident started, not its process cwd.
+The session has one lifecycle-configuration baseline shared by `up`, `down`,
+and `destroy`. Before lifecycle execution, plect compares the current parsed
+lifecycle configuration with that baseline, warns when it changed, then begins
+the operation using that current trusted configuration and advances the
+baseline. A first execution records the baseline without warning; read-only
+operations do not change it. The baseline is a notification, not a cleanup
+authorization boundary.
+
+The current workflow is the desired state used for reconciliation. Nodes
+already set up retain their operational cleanup facts, while executable cleanup
+code always comes from the current trusted tree. If a desired revision requires
+a node to be rebuilt, the diagnostic directs the caller to `--force-recreate`.
+If the recorded root cannot be read, desired operations fail with an actionable
+error and do not select another root; cleanup is unavailable because trusted
+configuration is an execution precondition, not because a digest changed.
+Chains inherit their triggering session's root. A resident population inherits
+the root captured when the resident started, not its process cwd.
 
 `max_up_children` applies one machine-wide capacity key to every session with
 no real parent, including sessions placed in an explicit `root:*` sibling

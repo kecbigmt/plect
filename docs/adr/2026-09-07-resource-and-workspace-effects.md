@@ -1,5 +1,6 @@
 ---
 supersedes: 2026-08-17-workspace-provider-vocabulary
+superseded_by: 2026-09-08-minimum-cleanup-contract
 ---
 
 # Resource entry points and ordinary environment effects

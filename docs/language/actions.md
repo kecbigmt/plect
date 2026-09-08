@@ -184,6 +184,20 @@ message_envelope = { type = "string", default = "[{type}] {body_or_summary}{url_
 
 An exec action names its executable exactly once, through `bin` or `command`.
 
+## Lifecycle-configuration change notification
+
+Lifecycle actions contribute their parsed declarations to the session-wide
+lifecycle-configuration change notification. The projection includes an
+action's declared type, literal shell source or executable reference, declared
+argument vector, and input/environment binding expressions. It never resolves
+`PATH`, reads a referenced file, hashes a binary or plugin tree, or inspects a
+script's transitive dependencies.
+
+A changed action declaration warns before the next `up`, `down`, or `destroy`
+execution, then plect executes the current trusted configuration. It does not
+make cleanup unavailable. The complete baseline and projection rules are
+defined in [the lifecycle-configuration ADR](../adr/2026-09-08-minimum-cleanup-contract.md).
+
 ## Validation rules
 
 - An action's `type` is `exec` or `shell`, or, under `[health.alive]` only,

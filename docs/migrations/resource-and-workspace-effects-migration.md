@@ -64,43 +64,62 @@ project layer's dialect. Add the root's canonical path to
 `trusted_project_roots` in the machine configuration. Do not preserve ancestor
 fragments or copy configuration from a generated checkout.
 
+Before upgrading, release every unreleased allocation with the pre-upgrade
+binary where that is possible. Do not copy cleanup code or plugin files into
+durable state to make the later release run.
+
 Migrate existing sessions to their recorded project root, initial layer
-revisions and digest, and node execution records before running lifecycle
-operations. An execution record retains cleanup definitions, setup inputs and
-outputs, the execution directory, and resolved plugin version and reference,
-including partial or failed setup. Preserve every executable and instruction
-sidecar referenced by an unreleased record. An old session whose context cannot
-be reconstructed is stopped and requires an operator-selected context after
-backup; it must not fall back to a caller cwd.
+revisions, and node execution records before running lifecycle operations. A
+legacy session starts with no lifecycle-configuration baseline. Its first `up`,
+`down`, or `destroy` execution records the current trusted lifecycle
+configuration without a change warning; no historical digest or plugin hash is
+required for cleanup.
+
+Preserve every concrete execution fact already recorded. Do not manufacture a
+missing declaration identity, cwd, setup input, output, nested-layer fact,
+trust decision, or allocation identity from today's workflow. An old session
+whose context cannot be reconstructed remains stopped without caller-cwd
+fallback. A retained declaration that uses a retired spelling and no longer
+resolves has the named precondition failure `legacy declaration spelling is
+unresolved`; migration does not rewrite it from current workflow declarations.
 
 ## Verify and recover
 
 Run the release's configuration validation and inspect every workflow that has
 agent actions, every population, each resource action input contract, and both
-normal and forced cleanup paths. Test a vanished work directory: cleanup must
-fail without changing directory. Keep the timestamped copies until sessions
-have been recreated and the migrated state has been observed in normal use.
+normal cleanup and explicit force-discard paths. Test a lifecycle-configuration
+edit: it warns before the next execution and uses the current trusted
+configuration. Test a vanished work directory: cleanup must fail its
+precondition without changing directory. Keep the timestamped copies until
+sessions have been recreated and the migrated state has been observed in normal
+use.
 
 ## Recover a residual allocation
 
-When recorded cleanup cannot run because its directory is gone, automatic
-reconstruction stops and reports operator recovery required. Do not create an
-empty directory as evidence of release: it does not prove that a process or
-external allocation is gone.
+When a required definition, trusted configuration, recorded directory, cleanup
+input, credential, environment, or reliable target identity is unavailable,
+automatic reconstruction stops and reports operator recovery required. A
+lifecycle-configuration warning alone does not have this outcome. Do not create
+an empty directory or infer release from current configuration: neither proves
+that a process or external allocation is gone.
 
-1. Inspect the retained execution record, its cleanup information, and failure
-   reason.
+1. Inspect the retained execution record, its unavailable reason, and the
+   dependency-blocked executions.
 2. Release the residual allocation through its external owner, following the
    retained plan's release order.
-3. Use the implementation's explicit operator-confirmation operation to record
-   that assertion for that execution, including who confirmed it, what was
-   released, when, and its audit event. This is not a successful cleanup and
-   does not release any other allocation.
+3. After the owner-approved acknowledgement operation is available, use
+   `plect execution acknowledge-release --session <name> --execution <ulid>
+   --reason <text>` for that exact execution. It records an auditable operator
+   assertion, not successful cleanup, and does not release any other
+   allocation. Until then, preserve the unresolved record or use the explicit
+   discard in the next step.
 4. Retry ordinary `up` after every applicable retained obligation is resolved;
    it reconstructs in the latest desired workflow's setup dependency order.
 
-`--force-recreate` never substitutes for confirmation, and recovery never
-runs cleanup in another directory.
+`--force-recreate` never substitutes for confirmation or discard, and recovery
+never runs cleanup in another directory. `plect destroy --force` is the only
+explicit discard: it records that release was not verified and removes the
+session's remaining execution records.
 
 To recover, stop the new release, restore the configuration and state copies,
 and restart the previous release. Do not mix old configuration with migrated
