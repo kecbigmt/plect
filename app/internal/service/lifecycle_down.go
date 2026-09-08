@@ -26,7 +26,9 @@ type DownResult struct {
 }
 
 // Down runs run-scoped cleanup (in reverse order) for the given session.
-func Down(cfg *config.Config, store *state.Store, params DownParams) (*DownResult, error) {
+func Down(cfg *config.Config, store *state.Store, params DownParams) (result *DownResult, err error) {
+	var warning string
+	defer func() { err = attachWarning(err, warning) }()
 	sessionName, session, err := resolveSession(cfg, store, params.Identifier)
 	if err != nil {
 		return nil, err
@@ -63,7 +65,15 @@ func Down(cfg *config.Config, store *state.Store, params DownParams) (*DownResul
 	if teardownErr != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: teardownErr.Error()}
 	}
-	warning, err := noticeAndAdvanceBaseline(cfg, store, sessionName, session, plan, teardown)
+	// The digest always hashes the session-wide outstanding scope (see
+	// noticeAndAdvanceBaseline), not just Down's own run-scoped teardown
+	// above, since the baseline is one session-wide value shared with
+	// up/destroy.
+	outstanding, outstandingErr := unifiedTeardownList(cfg, session, false)
+	if outstandingErr != nil {
+		return nil, &Error{Code: ErrExecutionFailed, Message: outstandingErr.Error()}
+	}
+	warning, err = noticeAndAdvanceBaseline(cfg, store, sessionName, session, plan, teardown, outstanding)
 	if err != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: err.Error()}
 	}

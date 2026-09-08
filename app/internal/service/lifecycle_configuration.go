@@ -16,30 +16,37 @@ import (
 )
 
 // lifecycleConfigurationDigest hashes the canonical JSON projection of
-// parsed declarations and unresolved binding expressions -- never resolved
-// values, outputs, or credentials -- so it can run before either exists.
-// encoding/json's own key-sorting and whitespace-free output already give
-// a canonical encoding. An outstanding execution whose node has left the
-// desired workflow is still projected, via its own retained declaration
-// identity, so a later repair to its cleanup definition still changes the
-// digest.
-func lifecycleConfigurationDigest(cfg *config.Config, session *domain.Session, plan *task.Plan) (string, error) {
+// parsed declarations and unresolved binding expressions, never resolved
+// values or credentials. outstanding is the caller's own already-resolved
+// session-wide teardown list, taken as a parameter rather than re-resolved
+// here, so comparison and execution always read one shared snapshot.
+func lifecycleConfigurationDigest(cfg *config.Config, session *domain.Session, plan *task.Plan, outstanding []task.Resolved) (string, error) {
 	upOrder := plan.UpOrder()
 	nodes := make(map[string]any, len(upOrder))
-	inPlan := make(map[string]bool, len(upOrder))
+	planTaskID := make(map[string]string, len(upOrder))
 	for _, r := range upOrder {
 		nodes[r.NodeID] = projectResolved(r)
-		inPlan[r.NodeID] = true
+		planTaskID[r.NodeID] = r.TaskID
 	}
 
-	teardown, err := unifiedTeardownList(cfg, session, false)
-	if err != nil {
-		return "", fmt.Errorf("resolve outstanding cleanup for lifecycle configuration digest: %w", err)
-	}
-	for _, r := range teardown {
+	for _, r := range outstanding {
 		// An unresolved definition contributes nothing; its later repair
 		// is what changes the digest, not its current absence.
-		if inPlan[r.NodeID] || r.Unresolved {
+		if r.Unresolved {
+			continue
+		}
+		if taskID, inPlan := planTaskID[r.NodeID]; inPlan {
+			if taskID == r.TaskID {
+				// Same node, same retained declaration: projectResolved
+				// above already covers it in full.
+				continue
+			}
+			// The desired workflow reused this node id for a different
+			// declaration; the outstanding execution still retains the
+			// old one by its own identity, so its cleanup is folded in
+			// alongside rather than lost to the node-id collision.
+			node, _ := nodes[r.NodeID].(map[string]any)
+			node["retained_cleanup"] = projectCleanupOnly(r)
 			continue
 		}
 		nodes[r.NodeID] = projectCleanupOnly(r)
@@ -62,10 +69,12 @@ func lifecycleConfigurationDigest(cfg *config.Config, session *domain.Session, p
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// projectWorkspaceProvider renders the workflow's own workspace-acquisition
-// setup/cleanup, which task.Resolved never carries: it runs once per
-// session via the @workflow pseudo-node, outside the plan's ordinary node
-// list. nil, nil when the session's workflow declares none.
+// projectWorkspaceProvider renders the workflow's own reference to its
+// workspace provider, and that provider's declared inputs and
+// setup/cleanup actions -- none of which task.Resolved carries, since the
+// provider runs once per session via the @workflow pseudo-node, outside
+// the plan's ordinary node list. nil, nil when the session's workflow
+// declares none.
 func projectWorkspaceProvider(cfg *config.Config, session *domain.Session) (map[string]any, error) {
 	wf, err := loadSessionWorkflow(cfg, session.WorkspaceDirPath, session)
 	if err != nil {
@@ -85,7 +94,10 @@ func projectWorkspaceProvider(cfg *config.Config, session *domain.Session) (map[
 	if !ok {
 		return nil, nil
 	}
-	m := map[string]any{}
+	m := map[string]any{"reference": wf.WorkspaceProvider, "provider_id": prov.ID}
+	if len(wf.WorkspaceProviderInputs) > 0 {
+		m["inputs"] = projectLiteral(wf.WorkspaceProviderInputs)
+	}
 	if prov.Setup != nil {
 		m["setup"] = projectAction(prov.Setup)
 	}
@@ -168,22 +180,37 @@ func projectLayer(l effect.Layer) map[string]any {
 	if l.Terminal != nil {
 		m["terminal"] = projectTerminal(l.Terminal)
 	}
-	if len(l.BindOutputs) > 0 {
-		binds := make([]map[string]any, len(l.BindOutputs))
-		for i, b := range l.BindOutputs {
-			binds[i] = map[string]any{"key": b.Key, "value": projectValue(b.Value)}
-		}
+	if binds := projectOutputBinds(l.BindOutputs); binds != nil {
 		m["output_binds"] = binds
 	}
 	return m
 }
 
+// projectLayerCleanupOnly still includes output_binds even though the
+// layer's own setup no longer runs: a dependent already bound to this
+// layer's public output reads it through the binding, so a change to the
+// binding changes what that dependent's cleanup observes just as much as a
+// change to the cleanup action itself would.
 func projectLayerCleanupOnly(l effect.Layer) map[string]any {
 	m := map[string]any{"effect_id": l.EffectID}
 	if l.Cleanup != nil {
 		m["cleanup"] = projectAction(l.Cleanup)
 	}
+	if binds := projectOutputBinds(l.BindOutputs); binds != nil {
+		m["output_binds"] = binds
+	}
 	return m
+}
+
+func projectOutputBinds(bindings []config.OutputBinding) []map[string]any {
+	if len(bindings) == 0 {
+		return nil
+	}
+	binds := make([]map[string]any, len(bindings))
+	for i, b := range bindings {
+		binds[i] = map[string]any{"key": b.Key, "value": projectValue(b.Value)}
+	}
+	return binds
 }
 
 func projectHealth(h *config.HealthConfig) map[string]any {
@@ -283,11 +310,27 @@ func projectValue(v *lang.Value) any {
 	}
 }
 
-// projectLiteral tags a literal with its Go type so two literals that
-// render identically as text but hold different values (or types) never
-// collide in the projection.
-func projectLiteral(v any) map[string]any {
-	return map[string]any{"type": fmt.Sprintf("%T", v), "value": v}
+// projectLiteral tags a literal leaf with its Go type -- recursing through
+// a map or slice without tagging the container itself -- so two literals
+// that render identically as text but hold different values (or types)
+// never collide in the projection.
+func projectLiteral(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, val := range t {
+			out[k] = projectLiteral(val)
+		}
+		return out
+	case []any:
+		out := make([]any, len(t))
+		for i, val := range t {
+			out[i] = projectLiteral(val)
+		}
+		return out
+	default:
+		return map[string]any{"type": fmt.Sprintf("%T", v), "value": v}
+	}
 }
 
 func projectJSONOperand(op *lang.JSONOperand) any {
@@ -317,8 +360,8 @@ func projectJSONOperand(op *lang.JSONOperand) any {
 // lifecycleConfigurationNotice only decides whether to warn; the current
 // trusted configuration executes regardless. An empty baseline (first or
 // legacy execution) never warns.
-func lifecycleConfigurationNotice(cfg *config.Config, session *domain.Session, plan *task.Plan) (digest, warning string, err error) {
-	digest, err = lifecycleConfigurationDigest(cfg, session, plan)
+func lifecycleConfigurationNotice(cfg *config.Config, session *domain.Session, plan *task.Plan, outstanding []task.Resolved) (digest, warning string, err error) {
+	digest, err = lifecycleConfigurationDigest(cfg, session, plan, outstanding)
 	if err != nil {
 		return "", "", err
 	}
@@ -337,19 +380,17 @@ func recordLifecycleConfigurationDigest(store *state.Store, sessionName, digest 
 	})
 }
 
-// noticeAndAdvanceBaseline is the shared call-site logic for Up/Down/Destroy.
-// It refuses to notice or advance the baseline when operationTeardown holds
-// an unresolved definition: that is an execution-precondition failure, not
-// a configuration change, and the caller's own cleanup call surfaces it the
-// same way regardless of this function ever having run. A produced warning
-// is logged immediately (not only returned) because the caller's own
-// execution can still fail afterward, and its result is not the only place
-// this warning needs to reach an operator.
-func noticeAndAdvanceBaseline(cfg *config.Config, store *state.Store, sessionName string, session *domain.Session, plan *task.Plan, operationTeardown []task.Resolved) (string, error) {
-	if hasUnresolvedCleanup(operationTeardown) {
+// noticeAndAdvanceBaseline is Up/Down/Destroy's shared call-site logic. An
+// unresolved definition in gateTeardown (the caller's own operation-scoped
+// list) blocks the notice and baseline entirely, as a precondition failure
+// rather than a configuration change. digestOutstanding is the
+// session-wide list the digest always hashes; it equals gateTeardown for
+// destroy but not down, which only executes the run-scoped subset.
+func noticeAndAdvanceBaseline(cfg *config.Config, store *state.Store, sessionName string, session *domain.Session, plan *task.Plan, gateTeardown, digestOutstanding []task.Resolved) (string, error) {
+	if hasUnresolvedCleanup(gateTeardown) {
 		return "", nil
 	}
-	digest, warning, err := lifecycleConfigurationNotice(cfg, session, plan)
+	digest, warning, err := lifecycleConfigurationNotice(cfg, session, plan, digestOutstanding)
 	if err != nil {
 		return "", err
 	}
@@ -361,6 +402,45 @@ func noticeAndAdvanceBaseline(cfg *config.Config, store *state.Store, sessionNam
 	}
 	session.LifecycleConfigurationDigest = digest
 	return warning, nil
+}
+
+// workspaceProviderInputsPrecondition reports whether the workflow's
+// declared workspace_provider_inputs validate against that provider's own
+// inputs schema, without running any hook. A workflow with no workspace
+// provider, or a reference this trusted configuration cannot resolve at
+// all, has nothing to precheck here: that absence is reported later, by
+// whichever step actually needs the provider to exist.
+func workspaceProviderInputsPrecondition(cfg *config.Config, session *domain.Session) error {
+	wf, err := loadSessionWorkflow(cfg, session.WorkspaceDirPath, session)
+	if err != nil || wf.WorkspaceProvider == "" {
+		return nil
+	}
+	workspaceProviders, err := cfg.LoadWorkspaceProviders()
+	if err != nil {
+		return nil
+	}
+	prov, ok, err := workspaceProviderFor(wf, workspaceProviders)
+	if err != nil || !ok {
+		return nil
+	}
+	_, err = resolveWorkspaceProviderInputs(prov, wf)
+	return err
+}
+
+// attachWarning threads warning onto err so a caller that only sees an
+// error from Up/Down/Destroy still learns of a lifecycle-configuration
+// change noticed before that error occurred. A no-op when warning is
+// empty; call it from a deferred function keyed to the named error return,
+// so it covers every return point in the caller uniformly.
+func attachWarning(err error, warning string) error {
+	if err == nil || warning == "" {
+		return err
+	}
+	if svcErr, ok := err.(*Error); ok {
+		svcErr.LifecycleConfigurationWarning = warning
+		return svcErr
+	}
+	return &Error{Code: ErrExecutionFailed, Message: err.Error(), LifecycleConfigurationWarning: warning}
 }
 
 func hasUnresolvedCleanup(items []task.Resolved) bool {

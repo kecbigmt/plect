@@ -386,11 +386,15 @@ func getObjectArg(request mcp.CallToolRequest, name string) map[string]any {
 // errorResult creates an MCP error result from a service error.
 func errorResult(err error) *mcp.CallToolResult {
 	if svcErr, ok := err.(*service.Error); ok {
-		b, _ := json.Marshal(map[string]any{
+		resp := map[string]any{
 			"ok":      false,
 			"code":    svcErr.Code,
 			"message": svcErr.Message,
-		})
+		}
+		if svcErr.LifecycleConfigurationWarning != "" {
+			resp["lifecycle_configuration_warning"] = svcErr.LifecycleConfigurationWarning
+		}
+		b, _ := json.Marshal(resp)
 		return mcp.NewToolResultError(string(b))
 	}
 	return mcp.NewToolResultError(err.Error())

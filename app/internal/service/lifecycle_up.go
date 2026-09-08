@@ -50,7 +50,9 @@ type UpResult struct {
 // the user having to remember a separate command. A bare session name
 // without a state entry still errors out — Create needs URL information
 // to resolve session/branch, so the asymmetry is intentional.
-func Up(cfg *config.Config, store *state.Store, params UpParams) (*UpResult, error) {
+func Up(cfg *config.Config, store *state.Store, params UpParams) (result *UpResult, err error) {
+	var warning string
+	defer func() { err = attachWarning(err, warning) }()
 	identifier := params.Identifier
 	forceRecreateExisting := false
 	disp, matched, dispErr := dispatchResource(cfg, params.Workflow, params.Identifier)
@@ -186,20 +188,27 @@ func Up(cfg *config.Config, store *state.Store, params UpParams) (*UpResult, err
 	if wfErr != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: wfErr.Error()}
 	}
-	// The notice/baseline advance is gated on resolving whatever cleanup
-	// this call is about to run: an unresolvable definition is an
-	// execution-precondition failure, and returning here (before the
-	// notice) leaves the baseline untouched exactly as it already does.
-	var precheckTeardown []task.Resolved
+	// An unresolvable definition here returns before the notice, leaving
+	// the baseline untouched -- see noticeAndAdvanceBaseline.
+	var gateTeardown []task.Resolved
 	if params.ForceRecreate && forceRecreateExisting {
-		precheckTeardown, err = unifiedTeardownList(cfg, session, false)
+		gateTeardown, err = unifiedTeardownList(cfg, session, false)
 	} else {
-		precheckTeardown, err = staleProducedWorkflowNodes(cfg, session, plan)
+		gateTeardown, err = staleProducedWorkflowNodes(cfg, session, plan)
 	}
 	if err != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: err.Error()}
 	}
-	warning, err := noticeAndAdvanceBaseline(cfg, store, sessionName, session, plan, precheckTeardown)
+	// gateTeardown already is the session-wide scope when force-recreate
+	// set it; the ordinary path's is narrower, so resolve it separately.
+	digestOutstanding := gateTeardown
+	if !(params.ForceRecreate && forceRecreateExisting) {
+		digestOutstanding, err = unifiedTeardownList(cfg, session, false)
+		if err != nil {
+			return nil, &Error{Code: ErrExecutionFailed, Message: err.Error()}
+		}
+	}
+	warning, err = noticeAndAdvanceBaseline(cfg, store, sessionName, session, plan, gateTeardown, digestOutstanding)
 	if err != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: err.Error()}
 	}

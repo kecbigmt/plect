@@ -23,9 +23,6 @@ func requireBash(t *testing.T) {
 	}
 }
 
-// Given identical parsed configuration, computing the digest twice must
-// produce the same value: the projection is a pure function of parsed
-// declarations, not of iteration order or wall-clock state.
 func TestLifecycleConfigurationDigest_DeterministicForIdenticalConfig(t *testing.T) {
 	cfg := writeWorkflowFixture(t, t.TempDir(), "coding",
 		[]taskFixture{{id: "build", scope: "run", setup: `echo '{}'`, cleanup: "true"}},
@@ -37,11 +34,11 @@ func TestLifecycleConfigurationDigest_DeterministicForIdenticalConfig(t *testing
 		t.Fatalf("buildPlanForSession: %v", err)
 	}
 
-	first, err := lifecycleConfigurationDigest(cfg, session, plan)
+	first, err := lifecycleConfigurationDigest(cfg, session, plan, nil)
 	if err != nil {
 		t.Fatalf("lifecycleConfigurationDigest: %v", err)
 	}
-	second, err := lifecycleConfigurationDigest(cfg, session, plan)
+	second, err := lifecycleConfigurationDigest(cfg, session, plan, nil)
 	if err != nil {
 		t.Fatalf("lifecycleConfigurationDigest: %v", err)
 	}
@@ -50,8 +47,6 @@ func TestLifecycleConfigurationDigest_DeterministicForIdenticalConfig(t *testing
 	}
 }
 
-// A changed setup action must change the digest: it is one of the ADR's
-// enumerated projection fields.
 func TestLifecycleConfigurationDigest_ChangesWhenSetupActionChanges(t *testing.T) {
 	before := writeWorkflowFixture(t, t.TempDir(), "coding",
 		[]taskFixture{{id: "build", scope: "run", setup: `echo '{}'`, cleanup: "true"}},
@@ -67,7 +62,7 @@ func TestLifecycleConfigurationDigest_ChangesWhenSetupActionChanges(t *testing.T
 	if err != nil {
 		t.Fatalf("buildPlanForSession (before): %v", err)
 	}
-	beforeDigest, err := lifecycleConfigurationDigest(before, session, beforePlan)
+	beforeDigest, err := lifecycleConfigurationDigest(before, session, beforePlan, nil)
 	if err != nil {
 		t.Fatalf("lifecycleConfigurationDigest (before): %v", err)
 	}
@@ -76,7 +71,7 @@ func TestLifecycleConfigurationDigest_ChangesWhenSetupActionChanges(t *testing.T
 	if err != nil {
 		t.Fatalf("buildPlanForSession (after): %v", err)
 	}
-	afterDigest, err := lifecycleConfigurationDigest(after, session, afterPlan)
+	afterDigest, err := lifecycleConfigurationDigest(after, session, afterPlan, nil)
 	if err != nil {
 		t.Fatalf("lifecycleConfigurationDigest (after): %v", err)
 	}
@@ -86,8 +81,55 @@ func TestLifecycleConfigurationDigest_ChangesWhenSetupActionChanges(t *testing.T
 	}
 }
 
-// Acceptance: "Given first or legacy execution without a baseline, then it
-// records one without warning."
+// The desired workflow can reuse a node id for a different declaration
+// than the one an outstanding execution under that same id still retains
+// (an in-flight `uses` edit). Both must be projected: the desired one by
+// the ordinary plan walk, and the retained one by its own identity,
+// keyed apart so neither overwrites the other.
+func TestLifecycleConfigurationDigest_RetainsOutstandingCleanupOnNodeIDReuse(t *testing.T) {
+	cfg := writeWorkflowFixture(t, t.TempDir(), "coding",
+		[]taskFixture{
+			{id: "old_def", scope: "run", cleanup: "true"},
+			{id: "new_def", scope: "run", setup: `echo '{}'`, cleanup: "true"},
+		},
+		[]nodeFixture{{id: "shared", uses: "new_def"}},
+	)
+	session := &domain.Session{
+		Workflow: "coding",
+		Nodes: map[string]*contract.TaskState{
+			"shared": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, TaskID: "old_def", Seq: 1, Outputs: map[string]any{}},
+		},
+	}
+	plan, err := buildPlanForSession(cfg, "", session)
+	if err != nil {
+		t.Fatalf("buildPlanForSession: %v", err)
+	}
+
+	outstanding, err := unifiedTeardownList(cfg, session, false)
+	if err != nil {
+		t.Fatalf("unifiedTeardownList: %v", err)
+	}
+	before, err := lifecycleConfigurationDigest(cfg, session, plan, outstanding)
+	if err != nil {
+		t.Fatalf("lifecycleConfigurationDigest (before): %v", err)
+	}
+
+	rewriteTaskFixture(t, cfg, taskFixture{id: "old_def", scope: "run", cleanup: "echo changed"})
+
+	outstandingAfter, err := unifiedTeardownList(cfg, session, false)
+	if err != nil {
+		t.Fatalf("unifiedTeardownList (after): %v", err)
+	}
+	after, err := lifecycleConfigurationDigest(cfg, session, plan, outstandingAfter)
+	if err != nil {
+		t.Fatalf("lifecycleConfigurationDigest (after): %v", err)
+	}
+
+	if before == after {
+		t.Fatalf("digest unchanged (%q) after the node-id-colliding outstanding execution's retained cleanup changed", before)
+	}
+}
+
 func TestUp_FirstExecutionRecordsBaselineWithoutWarning(t *testing.T) {
 	requireBash(t)
 	cfg := writeWorkflowFixture(t, t.TempDir(), "coding",
@@ -110,8 +152,6 @@ func TestUp_FirstExecutionRecordsBaselineWithoutWarning(t *testing.T) {
 	}
 }
 
-// Acceptance: "the same configuration does not warn again on the next
-// lifecycle operation."
 func TestUp_UnchangedConfigurationDoesNotWarnAgain(t *testing.T) {
 	requireBash(t)
 	cfg := writeWorkflowFixture(t, t.TempDir(), "coding",
@@ -138,9 +178,6 @@ func TestUp_UnchangedConfigurationDoesNotWarnAgain(t *testing.T) {
 	}
 }
 
-// Acceptance: "when up/down/destroy begins, then it warns and executes
-// current trusted configuration; the shared baseline advances and the same
-// configuration does not warn again on the next lifecycle operation."
 func TestUp_ChangedConfigurationWarnsOnceThenCatchesUp(t *testing.T) {
 	requireBash(t)
 	cfg := writeWorkflowFixture(t, t.TempDir(), "coding",
@@ -178,9 +215,9 @@ func TestUp_ChangedConfigurationWarnsOnceThenCatchesUp(t *testing.T) {
 	}
 }
 
-// Acceptance: "Given cleanup starts and fails, then the obligation remains
-// outstanding" -- and per the ADR, "An execution failure does not erase
-// that fact" about the baseline having advanced.
+// The baseline records which configuration this attempt used; a failure
+// in the attempt itself (as opposed to a precondition failure before it
+// starts) does not make that fact untrue.
 func TestUp_ExecutionFailureStillAdvancesBaseline(t *testing.T) {
 	requireBash(t)
 	cfg := writeWorkflowFixture(t, t.TempDir(), "coding",
@@ -298,14 +335,14 @@ func TestLifecycleConfigurationDigest_ChangesWhenWorkspaceProviderCleanupChanges
 	if err != nil {
 		t.Fatalf("buildPlanForSession: %v", err)
 	}
-	before, err := lifecycleConfigurationDigest(cfg, session, plan)
+	before, err := lifecycleConfigurationDigest(cfg, session, plan, nil)
 	if err != nil {
 		t.Fatalf("lifecycleConfigurationDigest (before): %v", err)
 	}
 
 	rewriteWorkspaceProviderCleanup(t, cfg, "coding", "echo changed")
 
-	after, err := lifecycleConfigurationDigest(cfg, session, plan)
+	after, err := lifecycleConfigurationDigest(cfg, session, plan, nil)
 	if err != nil {
 		t.Fatalf("lifecycleConfigurationDigest (after): %v", err)
 	}
@@ -326,7 +363,7 @@ func TestLifecycleConfigurationDigest_ChangesWhenNestedOutputBindChanges(t *test
 	if err != nil {
 		t.Fatalf("buildPlanForSession (before): %v", err)
 	}
-	beforeDigest, err := lifecycleConfigurationDigest(before, session, beforePlan)
+	beforeDigest, err := lifecycleConfigurationDigest(before, session, beforePlan, nil)
 	if err != nil {
 		t.Fatalf("lifecycleConfigurationDigest (before): %v", err)
 	}
@@ -335,7 +372,7 @@ func TestLifecycleConfigurationDigest_ChangesWhenNestedOutputBindChanges(t *test
 	if err != nil {
 		t.Fatalf("buildPlanForSession (after): %v", err)
 	}
-	afterDigest, err := lifecycleConfigurationDigest(after, session, afterPlan)
+	afterDigest, err := lifecycleConfigurationDigest(after, session, afterPlan, nil)
 	if err != nil {
 		t.Fatalf("lifecycleConfigurationDigest (after): %v", err)
 	}
@@ -345,12 +382,10 @@ func TestLifecycleConfigurationDigest_ChangesWhenNestedOutputBindChanges(t *test
 	}
 }
 
-// Acceptance: "Given a missing definition ... cleanup does not fall back or
-// infer release" -- and, as a precondition failure rather than a
-// configuration change, it must not advance the notification baseline
-// either: an operator repairing the definition still deserves the warning
-// the next time it runs, not silence because a prior attempt already
-// (wrongly) recorded a baseline for configuration nothing actually used.
+// A missing definition is a precondition failure, not a configuration
+// change: an operator repairing it still deserves the warning on the next
+// run, not silence because an earlier attempt already recorded a baseline
+// for configuration nothing actually used.
 func TestDown_UnresolvedNodeDefinitionBlocksBaselineAdvance(t *testing.T) {
 	requireBash(t)
 	cfg := writeWorkflowFixture(t, t.TempDir(), "coding",
@@ -396,6 +431,146 @@ func TestDown_LogsChangedConfigurationEvenWhenExecutionFails(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "lifecycle configuration has changed") {
 		t.Fatalf("log output = %q, want the config-change warning logged even though execution failed", buf.String())
+	}
+}
+
+// A structured MCP caller only ever sees the returned error, never process
+// stderr, so the notice must also reach it through the error value itself.
+func TestDown_ErrorCarriesChangedConfigurationWarningOnFailure(t *testing.T) {
+	requireBash(t)
+	cfg := writeWorkflowFixture(t, t.TempDir(), "coding",
+		[]taskFixture{{id: "flaky", scope: "run", setup: `echo '{}'`, cleanup: "true"}},
+		[]nodeFixture{{id: "flaky"}},
+	)
+	store := testStore(t)
+	seedSessionWithNodes(t, store, "sess-1", "acme", 1, "coding", map[string]*contract.TaskState{})
+	if _, err := Up(cfg, store, UpParams{Identifier: "sess-1"}); err != nil {
+		t.Fatalf("Up (first): %v", err)
+	}
+	rewriteTaskFixture(t, cfg, taskFixture{id: "flaky", scope: "run", setup: `echo '{}'`, cleanup: "exit 1"})
+
+	_, err := Down(cfg, store, DownParams{Identifier: "sess-1"})
+	if err == nil {
+		t.Fatal("Down: want the now-failing cleanup's failure surfaced, got nil error")
+	}
+	svcErr, ok := err.(*Error)
+	if !ok {
+		t.Fatalf("err = %T, want *Error", err)
+	}
+	if svcErr.LifecycleConfigurationWarning == "" {
+		t.Fatal("Error.LifecycleConfigurationWarning is empty, want the config-change notice carried on the error itself")
+	}
+}
+
+// The workspace provider is identified by which one the workflow selects,
+// not only by that provider's own action content: two providers with
+// identical setup/cleanup would otherwise be indistinguishable.
+func TestLifecycleConfigurationDigest_ChangesWhenWorkspaceProviderReferenceChanges(t *testing.T) {
+	cfg := writeWorkflowFixture(t, t.TempDir(), "coding",
+		[]taskFixture{{id: "build", scope: "run", setup: `echo '{}'`, cleanup: "true"}},
+		[]nodeFixture{{id: "build"}},
+	)
+	writeWorkspaceProviderDoc(t, mkdirWorkspaces(t, cfg), "provider_a", "true")
+	writeWorkspaceProviderDoc(t, filepath.Join(cfg.BaseDir, "workspaces"), "provider_b", "true")
+	session := &domain.Session{Workflow: "coding"}
+
+	addWorkflowFields(t, cfg, "coding", "workspace_provider = \"provider_a\"\n")
+	planA, err := buildPlanForSession(cfg, "", session)
+	if err != nil {
+		t.Fatalf("buildPlanForSession: %v", err)
+	}
+	digestA, err := lifecycleConfigurationDigest(cfg, session, planA, nil)
+	if err != nil {
+		t.Fatalf("lifecycleConfigurationDigest (provider_a): %v", err)
+	}
+
+	rewriteWorkflowWorkspaceProvider(t, cfg, "coding", "provider_a", "provider_b")
+	planB, err := buildPlanForSession(cfg, "", session)
+	if err != nil {
+		t.Fatalf("buildPlanForSession: %v", err)
+	}
+	digestB, err := lifecycleConfigurationDigest(cfg, session, planB, nil)
+	if err != nil {
+		t.Fatalf("lifecycleConfigurationDigest (provider_b): %v", err)
+	}
+
+	if digestA == digestB {
+		t.Fatalf("digest unchanged (%q) after the workflow selected a different (identically-scripted) workspace provider", digestA)
+	}
+}
+
+// wf.WorkspaceProviderInputs are declared literal values, part of the
+// workflow's own configuration, not runtime data -- a change to one must
+// change the digest even though no action's text changed at all.
+func TestLifecycleConfigurationDigest_ChangesWhenWorkspaceProviderInputsChange(t *testing.T) {
+	cfg := writeWorkflowFixture(t, t.TempDir(), "coding",
+		[]taskFixture{{id: "build", scope: "run", setup: `echo '{}'`, cleanup: "true"}},
+		[]nodeFixture{{id: "build"}},
+	)
+	workspacesDir := mkdirWorkspaces(t, cfg)
+	doc := "[coding_provider]\n" +
+		"kind = \"workspace_provider\"\n\n" +
+		"[coding_provider.inputs_schema]\n" +
+		"type = \"object\"\n\n" +
+		"[coding_provider.setup]\n" +
+		"type = \"shell\"\n" +
+		"script = \"echo '{\\\"workspace_dir\\\":\\\".\\\"}'\"\n"
+	if err := os.WriteFile(filepath.Join(workspacesDir, "coding_provider.toml"), []byte(doc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	addWorkflowFields(t, cfg, "coding", "workspace_provider = \"coding_provider\"\n[coding.workspace_provider_inputs]\nlayout = 1\n")
+	session := &domain.Session{Workflow: "coding"}
+
+	plan, err := buildPlanForSession(cfg, "", session)
+	if err != nil {
+		t.Fatalf("buildPlanForSession: %v", err)
+	}
+	before, err := lifecycleConfigurationDigest(cfg, session, plan, nil)
+	if err != nil {
+		t.Fatalf("lifecycleConfigurationDigest (before): %v", err)
+	}
+
+	rewriteWorkflowFile(t, cfg, "coding", func(body string) string {
+		return strings.Replace(body, "layout = 1", "layout = 2", 1)
+	})
+
+	after, err := lifecycleConfigurationDigest(cfg, session, plan, nil)
+	if err != nil {
+		t.Fatalf("lifecycleConfigurationDigest (after): %v", err)
+	}
+	if before == after {
+		t.Fatalf("digest unchanged (%q) after workspace_provider_inputs changed", before)
+	}
+}
+
+func mkdirWorkspaces(t *testing.T, cfg *config.Config) string {
+	t.Helper()
+	dir := filepath.Join(cfg.BaseDir, "workspaces")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func rewriteWorkflowWorkspaceProvider(t *testing.T, cfg *config.Config, wfID, fromProviderID, toProviderID string) {
+	t.Helper()
+	rewriteWorkflowFile(t, cfg, wfID, func(body string) string {
+		return strings.Replace(body,
+			"workspace_provider = \""+fromProviderID+"\"",
+			"workspace_provider = \""+toProviderID+"\"",
+			1)
+	})
+}
+
+func rewriteWorkflowFile(t *testing.T, cfg *config.Config, wfID string, edit func(string) string) {
+	t.Helper()
+	path := filepath.Join(cfg.BaseDir, "workflows", wfID+".toml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(edit(string(data))), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

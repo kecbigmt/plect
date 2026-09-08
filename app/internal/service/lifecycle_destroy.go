@@ -43,7 +43,9 @@ type DestroyResult struct {
 // so a mid-teardown crash stays inspectable. State-delete failures error
 // even under --force — silent partial teardown would be worse than a
 // noisy one.
-func Destroy(cfg *config.Config, store *state.Store, params DestroyParams) (*DestroyResult, error) {
+func Destroy(cfg *config.Config, store *state.Store, params DestroyParams) (result *DestroyResult, err error) {
+	var warning string
+	defer func() { err = attachWarning(err, warning) }()
 	sessionName, session, err := resolveSession(cfg, store, params.Identifier)
 	if err != nil {
 		return nil, err
@@ -67,7 +69,7 @@ func Destroy(cfg *config.Config, store *state.Store, params DestroyParams) (*Des
 		session.Tasks = make(map[string]*contract.TaskState)
 	}
 
-	result := &DestroyResult{SessionName: sessionName}
+	result = &DestroyResult{SessionName: sessionName}
 
 	// Fail-closed before any teardown side effect: destroying the parent
 	// removes it from the live tree while a child's ParentSession keeps
@@ -121,7 +123,10 @@ func Destroy(cfg *config.Config, store *state.Store, params DestroyParams) (*Des
 	// workflow-less, nothing-recorded, --force case above), so there is no
 	// lifecycle-configuration notice to give and no baseline to advance.
 	if plan != nil {
-		warning, err := noticeAndAdvanceBaseline(cfg, store, sessionName, session, plan, teardown)
+		if precondErr := workspaceProviderInputsPrecondition(cfg, session); precondErr != nil {
+			return nil, &Error{Code: ErrExecutionFailed, Message: precondErr.Error()}
+		}
+		warning, err = noticeAndAdvanceBaseline(cfg, store, sessionName, session, plan, teardown, teardown)
 		if err != nil {
 			return nil, &Error{Code: ErrExecutionFailed, Message: err.Error()}
 		}
