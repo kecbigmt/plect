@@ -69,14 +69,16 @@ func NewSupervisor(cfg func() *config.Config, st *state.Store, log *eventlog.Sto
 	return &Supervisor{cfg: cfg, state: st, log: log, hub: hub, logger: slog.Default(), poll: time.Second}
 }
 
-// followerHandle's done signal is what a session's next follower awaits.
 type followerHandle struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 }
 
-// awaitPredecessor ignores ctx: a canceled follower must still confirm its
-// own predecessor is gone, or a rapid reversal could run two at once.
+// awaitPredecessor blocks until predecessorDone closes: reconcile's
+// reactor<->forwarder handoff is exclusive either way, so an outgoing
+// follower's in-flight work never overlaps the incoming one's. It ignores
+// ctx -- a canceled follower must still confirm its own predecessor is
+// gone, or a rapid reversal could run two followers one hop further down.
 func awaitPredecessor(predecessorDone <-chan struct{}) {
 	if predecessorDone != nil {
 		<-predecessorDone
@@ -184,9 +186,7 @@ func resolveTickConfig(cfg *config.Config, s *domain.Session) (config.TickConfig
 	return *wf.Tick, nil
 }
 
-// reconcile starts a sessionReactor per up session, a sessionForwarder per
-// down-but-not-destroyed one (exact complements over RunScopeUp), stopping
-// whichever no longer applies.
+// reconcile starts a reactor per up session, a forwarder per down one.
 func (sup *Supervisor) reconcile(ctx context.Context, active, forwarding map[string]followerHandle, wg *sync.WaitGroup) {
 	cfg := sup.cfg()
 	sessions, err := sup.state.AllE()

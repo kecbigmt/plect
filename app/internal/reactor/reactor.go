@@ -91,8 +91,7 @@ type sessionReactor struct {
 	// channelHealthEvery defaults to channelHealthInterval; overridable in
 	// tests, mirroring healthcheckEvery.
 	channelHealthEvery time.Duration
-	// predecessorDone: see run's own comment for why this waits.
-	predecessorDone <-chan struct{}
+	predecessorDone    <-chan struct{}
 }
 
 // effectiveLogger falls back to slog.Default() for a test-constructed
@@ -106,14 +105,11 @@ func (r *sessionReactor) effectiveLogger() *slog.Logger {
 }
 
 func (r *sessionReactor) run(ctx context.Context) {
-	// The wait below exists because an outgoing sessionForwarder could
-	// otherwise still be mid-relay when this reactor starts, forwarding an
-	// event only this reactor should handle once up. Seeded before that
-	// wait, not after: reactorConsumer's first-ever seed commits "the log's
-	// tail right now", so seeding it only once a possibly slow predecessor
-	// is confirmed gone would swallow anything arriving during that wait. A
-	// session with a prior up period already has this cursor seeded, so
-	// ordering is moot there.
+	// Seeded before awaitPredecessor, not after: reactorConsumer's first-ever
+	// seed commits "the log's tail right now", so seeding it only once a
+	// possibly slow predecessor is confirmed gone would swallow anything
+	// arriving during that wait. A session with a prior up period already
+	// has this cursor seeded, so ordering is moot there.
 	seedCursor(r.log, r.session)
 	awaitPredecessor(r.predecessorDone)
 	if ctx.Err() != nil {

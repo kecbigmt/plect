@@ -26,8 +26,7 @@ type sessionForwarder struct {
 	hub     *sessionhub.Registry
 	logger  *slog.Logger
 	// forwardFn defaults to service.ForwardDownSessionEvent; overridable in tests.
-	forwardFn func(*config.Config, *state.Store, string, event.Event) (bool, error)
-	// predecessorDone: see drain's own doc comment for why this waits.
+	forwardFn       func(*config.Config, *state.Store, string, event.Event) (bool, error)
 	predecessorDone <-chan struct{}
 }
 

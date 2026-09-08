@@ -273,8 +273,6 @@ func TestSessionForwarder_RestartAfterAFailureRetriesFromLastCommittedEvent(t *t
 	}
 }
 
-// Otherwise a stale predecessor's own in-flight drain could commit
-// reactorConsumer past an event this forwarder should still forward.
 func TestSessionForwarder_WaitsForPredecessorBeforeTouchingTheLog(t *testing.T) {
 	f, _, log := newTestForwarder(t)
 	predecessorDone := make(chan struct{})

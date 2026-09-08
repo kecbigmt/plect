@@ -214,11 +214,9 @@ func TestSessionReactor_ResourceForwardedAlwaysTriggers(t *testing.T) {
 }
 
 // Mirrors sessionForwarder's own predecessor-wait proof in forward_test.go.
-// reactorConsumer is pre-seeded (as reactor.go's own seedCursor already
-// would have done on this session's first-ever up, long before the down
-// period that produced the outgoing forwarder this reactor is now handing
-// off from) so this test exercises the realistic path, not seedCursor's own
-// separate first-ever-seed case.
+// reactorConsumer is pre-seeded here, not left at its zero value: this
+// exercises the realistic path rather than seedCursor's own separate
+// first-ever-seed case.
 func TestSessionReactor_WaitsForPredecessorBeforeTouchingTheLog(t *testing.T) {
 	r, st, log := newTestReactor(t, config.TickConfig{On: []string{"resource.*"}})
 	if err := log.CommitCursor("o/r-1", reactorConsumer, 0); err != nil {
@@ -240,11 +238,8 @@ func TestSessionReactor_WaitsForPredecessorBeforeTouchingTheLog(t *testing.T) {
 	waitLastTickAt(t, st, "o/r-1", floor)
 }
 
-// TestSessionReactor_PreservesThePredecessorChainThroughACanceledIntermediate
-// is the three-state regression: A is still running, B (waiting on A) is
-// canceled before A ever finishes, and C (waiting on B) must still not
-// proceed until A actually does -- B's own cancellation must not close its
-// done channel early and silently drop the chain one hop down.
+// Three states: A is still running, B (waiting on A) is canceled before A
+// ever finishes, and C (waiting on B) must still not proceed until A does.
 func TestSessionReactor_PreservesThePredecessorChainThroughACanceledIntermediate(t *testing.T) {
 	base, st, log := newTestReactor(t, config.TickConfig{On: []string{"resource.*"}})
 
