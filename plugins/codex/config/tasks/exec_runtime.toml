@@ -33,6 +33,8 @@ scope = "run"
 #                  over a fixed short window to start the worker even though
 #                  it did come up, so raise this rather than treat a
 #                  live-but-slow launch as a failure.
+#   publish_events — core events to publish ("message" only — see the
+#                  README's Turn Reporting section). Default ["message"].
 #
 # codex_exec starts a headless worker (codex-exec-worker) instead of the
 # interactive Codex TUI, so instruction delivery is a queued `codex exec`/
@@ -68,13 +70,33 @@ CODEX_HOME_DIR="${CODEX_HOME:-$HOME/.codex}"
 mkdir -p "$CODEX_HOME_DIR"
 PROFILE_NAME="plect-$(uuidgen)"
 PROFILE_PATH="$CODEX_HOME_DIR/$PROFILE_NAME.config.toml"
-cat > "$PROFILE_PATH" <<HOOKS_TOML
-bypass_hook_trust = true
-
-[hooks]
-UserPromptSubmit = [{type = "command", command = ["$activity_bin", "working"]}]
-Stop = [{type = "command", command = ["$activity_bin", "waiting"]}]
-HOOKS_TOML
+# Turn-boundary activity ("working"/"waiting") is reported by the worker's
+# own direct calls around each `codex exec`/`codex exec resume` invocation,
+# not by a hook: unlike the interactive `codex` task's one long-lived
+# process, each turn here is its own process, so the worker's outer wrapper
+# already sees every boundary a UserPromptSubmit/Stop hook would. The only
+# hook this effect registers is Stop's reply publish, gated on
+# publish_events including "message" — Codex has no per-message streaming
+# hook, so there is no message_delta counterpart to register.
+#
+# A hook entry is its own `[[hooks.Stop.hooks]]` table nested under one
+# `[[hooks.Stop]]` matcher group, with `command` a plain string (codex runs
+# it through a shell, never a JSON array) — the inline-table array shape an
+# earlier version of this profile used registered nothing. Registration
+# alone is also not enough to make codex actually invoke it: the worker's
+# own `codex exec` calls additionally pass `--dangerously-bypass-hook-trust`,
+# since a profile-supplied hooks table has no persisted trust of its own.
+HAS_MESSAGE=false
+printf '%s' "$publish_events" | jq -e 'any(.[]?; . == "message")' >/dev/null 2>&1 && HAS_MESSAGE=true
+HOOKS_SECTION=""
+if [ "$HAS_MESSAGE" = true ]; then
+  HOOKS_SECTION="[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+type = \"command\"
+command = \"$activity_bin reply\"
+"
+fi
+printf '%s' "$HOOKS_SECTION" > "$PROFILE_PATH"
 
 STATE_ROOT="${state_root-}"
 [ -n "$STATE_ROOT" ] || STATE_ROOT="${TMPDIR:-/tmp}/plect-codex-exec"
@@ -182,6 +204,7 @@ launch_env     = { from = "inputs.launch_env", optional = true }
 state_root     = { from = "inputs.state_root", optional = true }
 path_prepend   = { from = "inputs.path_prepend", optional = true }
 launch_timeout = { from = "inputs.launch_timeout", default = "120s" }
+publish_events = { json = { from = "inputs.publish_events", default = ["message"] } }
 prev_state_dir = { from = "prev.state_dir", optional = true }
 activity_bin   = { bin = "codex-agent-activity" }
 worker_bin     = { bin = "codex-exec-worker" }
@@ -264,6 +287,8 @@ path_prepend = { type = "string", pattern = "^[A-Za-z0-9_./:-]*$" }
 # effective default of 120s is applied by this effect's own setup.bind
 # (`default = "120s"` on the launch_timeout binding), not by this key.
 launch_timeout = { type = "string", pattern = "^[1-9][0-9]*s$", default = "120s" }
+# publish_events: "message" only, per the README's Turn Reporting section.
+publish_events = { type = "array", items = { type = "string", enum = ["message"] }, default = ["message"] }
 
 [exec_runtime.outputs_schema]
 type     = "object"

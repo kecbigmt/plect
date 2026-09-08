@@ -75,23 +75,27 @@ while true; do
 
         thread_id="$(cat "$state_dir/thread_id" 2>/dev/null || true)"
         log_file="$state_dir/log/$(date +%s%N).jsonl"
-        last_message_file="$(mktemp "$state_dir/.last-message.XXXXXX")"
 
         agent_activity "UserPromptSubmit" "working"
+        # --dangerously-bypass-hook-trust: the profile this session's setup
+        # wrote (see tasks/exec_runtime.toml) has no persisted trust of its
+        # own, so its Stop hook — this runtime's sole path to publishing
+        # plect.message, since a synthesized activity call carries no
+        # last_assistant_message — never runs without it.
         if [ -z "$thread_id" ]; then
             codex exec --json --profile "$profile_name" \
                 --dangerously-bypass-approvals-and-sandbox \
-                --output-last-message "$last_message_file" \
+                --dangerously-bypass-hook-trust \
                 "${extra_args[@]}" \
                 -- "$text" > "$log_file" 2>&1
         else
-            # `codex exec resume`, unlike `codex exec`, rejects --profile on
-            # some codex-cli releases ("unexpected argument", exit 2) — omit
-            # it here so a resumed turn still runs on those releases.
-            codex exec resume --json \
+            # --profile must precede the `resume` subcommand: codex rejects
+            # it as an unrecognized argument when placed after, unlike every
+            # other flag here, which `resume` also accepts directly.
+            codex exec --json --profile "$profile_name" \
                 --dangerously-bypass-approvals-and-sandbox \
-                --output-last-message "$last_message_file" \
-                "${extra_args[@]}" \
+                --dangerously-bypass-hook-trust \
+                resume "${extra_args[@]}" \
                 "$thread_id" -- "$text" > "$log_file" 2>&1
         fi
         exit_code=$?
@@ -102,19 +106,6 @@ while true; do
         fi
 
         write_health "$exit_code" "$event_type"
-        mv "$last_message_file" "$state_dir/last-message.txt"
-        # Round-trip the turn's reply onto the event bus so it reaches any
-        # subscriber (a web UI, a chat channel, ...), symmetric with the
-        # inbound enqueue channel. A dedicated `codex.reply` event type
-        # avoids a self-feedback loop with this same channel. Publish on
-        # success with a non-empty reply only; failures already surface via
-        # health.json.
-        if [ -n "${PLECT_SESSION_NAME:-}" ] && [ "$exit_code" -eq 0 ]; then
-            reply="$(cat "$state_dir/last-message.txt" 2>/dev/null || true)"
-            [ -n "$reply" ] && plect event publish "$PLECT_SESSION_NAME" \
-                --type codex.reply --summary "codex turn reply" --body "$reply" \
-                >/dev/null 2>&1 || true
-        fi
         rm -f "$f"
         agent_activity "Stop" "waiting"
         tick_session
