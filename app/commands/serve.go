@@ -140,7 +140,7 @@ restart, within one refresh interval.`,
 			_ = httpSrv.Close()
 		}()
 
-		fmt.Fprintf(cmd.ErrOrStderr(), "plect serve listening on %s (events: %s)\n", socket, store.Root())
+		fmt.Fprintf(cmd.ErrOrStderr(), "plect serve listening on %s (storage: %s)\n", socket, persistence.PathIn(store.Dir()))
 		serveErr := httpSrv.Serve(ln)
 		stop()         // cancel ctx so the supervisors tear down even if Serve failed without a signal
 		supWG.Wait()   // let the dispatch supervisor cancel and join its dispatchers

@@ -48,6 +48,19 @@ SELECT id, name, status, destroyed_at, parent_session_id, root_session_id,
        created_at, updated_at
 FROM sessions WHERE name = ? AND status <> 'destroyed';
 
+-- name: GetLatestDestroyedSession :one
+SELECT id, name, status, destroyed_at, parent_session_id, root_session_id,
+       resource_id, alias, workflow, workspace_dir,
+       population_workflow, population_name, inputs_json,
+       health_last_checked_at, health_last_activity_at, health_last_fingerprint,
+       health_last_state, health_last_reason, health_last_notified_at, health_notify_count,
+       tick_consecutive_unchanged, tick_last_fingerprint, last_tick_at,
+       created_at, updated_at
+FROM sessions
+WHERE name = ? AND status = 'destroyed'
+ORDER BY destroyed_at DESC
+LIMIT 1;
+
 -- name: ListLiveSessions :many
 SELECT id, name, status, destroyed_at, parent_session_id, root_session_id,
        resource_id, alias, workflow, workspace_dir,

@@ -3,7 +3,8 @@
 -- migrations from it with Atlas Community Edition; do not hand-write
 -- migration SQL against a structural change already captured here.
 --
--- Runtime and event tables; session_tombstones/pending_deliveries stay file-based.
+-- Runtime, event, and retry-state tables live here. A destroyed sessions row
+-- is the tombstone for that incarnation.
 --
 -- Nullability convention throughout: a column is NULL exactly when the
 -- domain value can be genuinely absent (never observed/resolved yet, or an
@@ -57,6 +58,25 @@ CREATE TABLE sessions (
 CREATE UNIQUE INDEX sessions_live_name ON sessions(name) WHERE status <> 'destroyed';
 CREATE INDEX sessions_alias_idx ON sessions(alias);
 CREATE INDEX sessions_parent_idx ON sessions(parent_session_id);
+
+-- A cap-refusal streak is scoped to a session incarnation, not its reusable
+-- name. An empty fingerprint is represented by no row.
+CREATE TABLE chain_attempts (
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    instance TEXT NOT NULL,
+    chain_id TEXT NOT NULL,
+    generation TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    PRIMARY KEY (session_id, instance, chain_id, generation)
+);
+
+-- Failed provider subscribe/unsubscribe intents await an opportunistic retry.
+CREATE TABLE subscription_retries (
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    action TEXT NOT NULL CHECK (action IN ('subscribe', 'unsubscribe')),
+    resource TEXT NOT NULL,
+    PRIMARY KEY (session_id, action, resource)
+);
 
 -- Static workflow-DAG nodes' identity only; see node_executions below.
 CREATE TABLE node_instances (

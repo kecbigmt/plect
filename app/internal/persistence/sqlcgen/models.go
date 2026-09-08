@@ -8,6 +8,14 @@ import (
 	"database/sql"
 )
 
+type ChainAttempt struct {
+	SessionID   string
+	Instance    string
+	ChainID     string
+	Generation  string
+	Fingerprint string
+}
+
 type Event struct {
 	ID           string
 	SessionID    string
@@ -144,6 +152,12 @@ type SessionChannelHealth struct {
 	LastChannel         sql.NullString
 	LastError           sql.NullString
 	EscalatedAt         sql.NullString
+}
+
+type SubscriptionRetry struct {
+	SessionID string
+	Action    string
+	Resource  string
 }
 
 type TaskDoneWhenJudge struct {

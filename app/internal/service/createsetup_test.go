@@ -269,7 +269,7 @@ echo '{"workspace_dir":"%s"}'
 		t.Fatal("session not persisted")
 	}
 	if _, err := os.Stat(pendingDeliveryPath(store)); !os.IsNotExist(err) {
-		t.Fatalf("pending delivery queue should stay empty (no hooked provider to fail): stat err=%v", err)
+		t.Fatalf("subscription retry sidecar should not exist without a failed hook: stat err=%v", err)
 	}
 }
 

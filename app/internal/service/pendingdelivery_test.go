@@ -1,16 +1,10 @@
 package service
 
 import (
-	"bytes"
-	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 
-	"github.com/kecbigmt/plecture/app/internal/config"
-	"github.com/kecbigmt/plecture/app/internal/flocktest"
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
@@ -219,10 +213,16 @@ func TestFlushPendingDeliveryLogged_DrainsOrphanedEntryViaAnotherSessionsActivit
 	toggledUnsubscribeProvider(t, cfg.BaseDir, toggle, rec)
 	store := testStore(t)
 
-	// "gone-1" never gets a state entry, standing in for an already-destroyed
-	// session.
 	const prURL = "resource://sess/proj/pull/9"
-	if err := queuePendingUnsubscribe(store, "gone-1", prURL); err != nil {
+	seedSession(t, store, "gone-1", "gone", 1, "coding", map[string]*contract.TaskState{})
+	gone := store.Get("gone-1")
+	if gone == nil {
+		t.Fatal("missing queued session")
+	}
+	if err := store.Destroy("gone-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := queuePendingUnsubscribeForSessionID(store, gone.ID, prURL); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(toggle, []byte("go"), 0o644); err != nil {
@@ -397,55 +397,3 @@ args    = ["-c", 'test -e "$1" || exit 3; echo done > "$2"', "provider", "` + fi
 // own errors: TaskSetup/TaskCleanup have no result field for "an unrelated
 // queued resource's retry also failed just now," so the log is the only
 // place this becomes visible.
-func TestFlushPendingDeliveryLogged_LogsFlushErrors(t *testing.T) {
-	cfg := &config.Config{BaseDir: t.TempDir()}
-	store := testStore(t)
-	seedSession(t, store, "sess-1", "sess", 1, "coding", map[string]*contract.TaskState{})
-
-	// A corrupt queue file makes loadPendingDelivery fail inside the flush.
-	if err := os.WriteFile(pendingDeliveryPath(store), []byte("{not valid json"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	var logs bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
-	defer slog.SetDefault(prev)
-
-	flushPendingDeliveryLogged(cfg, store, "sess-1")
-
-	if !bytes.Contains(logs.Bytes(), []byte("pending delivery flush failed")) {
-		t.Errorf("expected a warning about the failed flush, got log output: %q", logs.String())
-	}
-}
-
-// The Linux NFS client rejects LOCK_EX on an O_RDONLY descriptor with EBADF,
-// even though local filesystems tolerate it. This test inspects the lock
-// file descriptor's own open flags via /proc, so it catches the regression
-// even on a local (non-NFS) test filesystem.
-func TestUpdatePendingDelivery_OpensLockFileWritable(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("lock fd flags are inspected via /proc, which is Linux-specific")
-	}
-
-	path := filepath.Join(t.TempDir(), "pending_delivery.json")
-	lockPath := path + ".lock"
-
-	var accErr error
-	err := updatePendingDelivery(path, func(*pendingDeliveryFile) {
-		accMode, err := flocktest.AccessMode(lockPath)
-		if err != nil {
-			accErr = err
-			return
-		}
-		if accMode == os.O_RDONLY {
-			accErr = fmt.Errorf("lock file opened O_RDONLY; exclusive lock (LOCK_EX) requires a writable descriptor on NFS")
-		}
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if accErr != nil {
-		t.Error(accErr)
-	}
-}
