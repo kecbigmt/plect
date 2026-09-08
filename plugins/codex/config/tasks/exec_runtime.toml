@@ -33,10 +33,8 @@ scope = "run"
 #                  over a fixed short window to start the worker even though
 #                  it did come up, so raise this rather than treat a
 #                  live-but-slow launch as a failure.
-#   publish_events — core events to publish ("message" only — see the
-#                  README's Turn Reporting section for why this is a plain
-#                  worker-side capture, not a Codex hook). Default
-#                  ["message"].
+#   publish_events — core events to publish; see the README's Turn
+#                  Reporting section. Default ["message"].
 #
 # codex_exec starts a headless worker (codex-exec-worker) instead of the
 # interactive Codex TUI, so instruction delivery is a queued `codex exec`/
@@ -93,7 +91,6 @@ EXPORTS="export PLECT_SESSION_NAME=$session_name; "
 # can't resolve a bin reference itself for its own activity-hook calls;
 # hand the resolved path down as an env var instead.
 EXPORTS="${EXPORTS}export PLECT_AGENT_ACTIVITY_BIN='$activity_bin'; "
-[ "$HAS_MESSAGE" = true ] && EXPORTS="${EXPORTS}export CODEX_PUBLISH_MESSAGE=1; "
 
 # launch_env crosses one boundary the binding transport does not close: the
 # keystrokes sent to the pane. jq's @sh closes it by quoting each value, and
@@ -121,6 +118,14 @@ MODEL="${model-}"
 [ -n "$MODEL" ] && EXPORTS="${EXPORTS}export CODEX_MODEL='$MODEL'; "
 EFFORT="${effort-}"
 [ -n "$EFFORT" ] && EXPORTS="${EXPORTS}export CODEX_MODEL_REASONING_EFFORT='$EFFORT'; "
+# Exported unconditionally and after launch_env, like CODEX_MODEL/
+# CODEX_MODEL_REASONING_EFFORT above: launch_env is an arbitrary
+# author-supplied environment map, and an export placed after it in the
+# same shell command line always wins — unconditionally, so a launch_env
+# key of the same name is overridden in both directions (forced on when
+# publish_events says off, or cleared when it says on), not just the one a
+# conditional export here would have closed.
+EXPORTS="${EXPORTS}export CODEX_PUBLISH_MESSAGE=$HAS_MESSAGE; "
 
 rm -f "$STATE_DIR/ready" "$STATE_DIR/worker.pid"
 # Resolved before anything is typed: this is the identity every cleanup
@@ -225,14 +230,10 @@ jq -e ".last_exit_code == 0" "$HEALTH" >/dev/null
 pid       = { from = "self.outputs.pid" }
 state_dir = { from = "self.outputs.state_dir" }
 
-# activity reads back the record the worker's own direct calls around each
-# turn write (see codex-exec-worker), so writer and probe are two halves of
-# one fingerprint format. Unlike the interactive shape there is no pane to
-# fingerprint here, so state_dir is passed through too: a turn's own log
-# file (one per turn, growing as codex streams to it, never touching the
-# pane) is this runtime's only evidence for a turn still running long
-# enough to outlast the stall_threshold before the worker's own
-# end-of-turn call ever lands.
+# activity reads back the record the worker's own direct calls write (see
+# codex-exec-worker) and folds in the current turn's own log file — the
+# only mid-turn evidence available, since codex exec's output never
+# reaches a pane.
 [exec_runtime.health.activity]
 type = "exec"
 bin  = "codex-agent-activity"
@@ -265,7 +266,6 @@ path_prepend = { type = "string", pattern = "^[A-Za-z0-9_./:-]*$" }
 # effective default of 120s is applied by this effect's own setup.bind
 # (`default = "120s"` on the launch_timeout binding), not by this key.
 launch_timeout = { type = "string", pattern = "^[1-9][0-9]*s$", default = "120s" }
-# publish_events: "message" only, per the README's Turn Reporting section.
 publish_events = { type = "array", items = { type = "string", enum = ["message"] }, default = ["message"] }
 
 [exec_runtime.outputs_schema]

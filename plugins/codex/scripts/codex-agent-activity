@@ -118,7 +118,12 @@ case "${1:-}" in
     ;;
   reset)
     session="${2:-}"
-    [ -n "$session" ] && rm -f "$(record_path "$session")" "$(reply_seq_path "$session")"
+    # The reply-seq counter is deliberately not touched here: setup calls
+    # reset on every launch, resumes included, and exec_runtime's reply has
+    # no turn_id to fall back from, ever — that counter is message_id's only
+    # source for this runtime's entire session lifetime, so restarting it
+    # would mint an id a prior turn already published.
+    [ -n "$session" ] && rm -f "$(record_path "$session")"
     exit 0
     ;;
   reply)

@@ -205,12 +205,22 @@ PATH="$(dirname "$(command -v jq)")" \
 "$activity" reply <<<'{"hook_event_name":"Stop","last_assistant_message":"hi"}'
 [ $? -eq 0 ] || { echo "FAIL reply must exit 0 even when plect is unreachable" >&2; fail=1; }
 
-# reset also drops the reply-seq counter, so a resumed session doesn't
-# inherit a stale reply fallback count.
-run_report '{"hook_event_name":"Stop","last_assistant_message":"no turn_id here either"}' >/dev/null
+# reset must NOT drop the reply-seq counter: exec_runtime's setup calls
+# reset on every launch, resumes included, and its reply calls never carry
+# a turn_id to fall back from -- restarting the counter would mint an id a
+# prior turn already published, reusing reply-0 across a restart instead of
+# advancing past it.
 [ -s "$XDG_STATE_HOME/plect/codex-activity/selftest_session-1.reply-seq" ] || { echo "FAIL expected a reply-seq counter file before reset" >&2; fail=1; }
 "$activity" reset "$session"
-[ ! -e "$XDG_STATE_HOME/plect/codex-activity/selftest_session-1.reply-seq" ] || { echo "FAIL reset must remove the session's reply-seq counter" >&2; fail=1; }
+[ -s "$XDG_STATE_HOME/plect/codex-activity/selftest_session-1.reply-seq" ] || { echo "FAIL reset must not remove the session's reply-seq counter" >&2; fail=1; }
+got="$(run_report '{"hook_event_name":"Stop","last_assistant_message":"after a reset"}')"
+# reply-3, not reply-2: the unreachable-plect call just above still advanced
+# the counter (that logic runs before the publish attempt), consuming
+# reply-2 even though nothing was actually published for it.
+case "$got" in
+  *"message_id=selftest/session-1/reply-3"*) echo "ok   the reply-seq counter survives reset and keeps advancing" ;;
+  *) echo "FAIL a reset should not reset the reply-seq counter, got: $got" >&2; fail=1 ;;
+esac
 
 [ "$fail" -eq 0 ] || { echo "codex-agent-activity selftest failed" >&2; exit 1; }
 echo "codex-agent-activity selftest passed"

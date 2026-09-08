@@ -67,12 +67,15 @@ tick_session() {
 # sees every turn boundary itself (see tasks/exec_runtime.toml's setup for
 # why that makes a hook unnecessary), and reply's own last_assistant_message
 # extraction and message_id/dedup logic apply the same way regardless of
-# who calls it. jq builds the payload so a reply containing a quote or
-# newline round-trips as valid JSON.
+# who calls it. Takes the captured file, not its content as a shell string:
+# a caller-side `$(cat "$file")` would strip the file's own trailing
+# newlines before jq ever saw them, corrupting a message that ends in one.
+# --rawfile reads the file's exact bytes straight into the JSON value.
 publish_reply() {
-    [ -n "${PLECT_SESSION_NAME:-}" ] && [ -n "${CODEX_PUBLISH_MESSAGE:-}" ] || return 0
-    local text="$1"
-    jq -n --arg text "$text" '{last_assistant_message: $text}' \
+    [ -n "${PLECT_SESSION_NAME:-}" ] && [ "${CODEX_PUBLISH_MESSAGE:-false}" = "true" ] || return 0
+    local file="$1"
+    [ -s "$file" ] || return 0
+    jq -n --rawfile text "$file" '{last_assistant_message: $text}' \
         | "${PLECT_AGENT_ACTIVITY_BIN:-codex-agent-activity}" reply >/dev/null 2>&1 || true
 }
 
@@ -113,12 +116,9 @@ while true; do
         fi
 
         write_health "$exit_code" "$event_type"
-        # Publish on success with a non-empty reply only; failures already
-        # surface via health.json.
-        if [ "$exit_code" -eq 0 ]; then
-            reply="$(cat "$last_message_file" 2>/dev/null || true)"
-            [ -n "$reply" ] && publish_reply "$reply"
-        fi
+        # Publish on success only; failures already surface via health.json.
+        # publish_reply itself skips an empty (or absent) capture.
+        [ "$exit_code" -eq 0 ] && publish_reply "$last_message_file"
         rm -f "$last_message_file" "$f"
         agent_activity "Stop" "waiting"
         tick_session

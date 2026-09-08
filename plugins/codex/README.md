@@ -78,15 +78,29 @@ that plugin, this schema accepts only `"message"` — Codex's `codex exec`/
 - `message_id` is deterministic (`message_id_origin = synthetic`): a
   per-session counter, since `codex exec`'s own per-turn `turn_id` lives
   only inside a Stop hook's payload, which this capture path never
-  receives. Metadata otherwise: `role = assistant`, `source = codex`.
-- An empty captured reply publishes nothing. A publish failure (`plect`
-  unreachable) never blocks or delays the agent's turn.
+  receives. That counter is this runtime's only source of a unique
+  `message_id` for as long as the session lives, so it survives a
+  `codex-agent-activity reset` (setup calls that on every launch, resumes
+  included) rather than restarting from 0 and reusing an id an earlier turn
+  already published. Metadata otherwise: `role = assistant`,
+  `source = codex`.
+- The captured file's own bytes reach `plect.message` unmodified, trailing
+  newlines included: the worker hands `codex-agent-activity reply` the file
+  itself, read via jq's `--rawfile`, not a `$(cat ...)`-captured shell
+  string, which would silently strip them. An empty (or absent) capture
+  publishes nothing. A publish failure (`plect` unreachable) never blocks
+  or delays the agent's turn.
 - Turn-boundary activity (`working`/`waiting`, for the session's status
   line and the `[health].activity` probe) is reported by this same direct
   calling convention, independent of `publish_events`: unlike the
   interactive `codex` task's one long-lived process, each turn here is its
   own `codex exec` process, so the worker's outer wrapper already sees
   every boundary a hook would.
+- `publish_events` stays authoritative over `launch_env`: the worker's
+  internal `CODEX_PUBLISH_MESSAGE` switch is exported after `launch_env`'s
+  own exports on the same launch line, so an author-supplied `launch_env`
+  key of the same name can never enable or disable publication contrary to
+  `publish_events`.
 
 ## Parameters
 
