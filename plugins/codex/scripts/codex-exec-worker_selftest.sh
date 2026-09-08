@@ -21,8 +21,17 @@ tmp="$(mktemp -d)"
 fail=0
 worker_pid=""
 cleanup() {
-  [ -n "$worker_pid" ] && kill "$worker_pid" 2>/dev/null || true
-  rm -rf "$tmp"
+  if [ -n "$worker_pid" ]; then
+    kill "$worker_pid" 2>/dev/null || true
+    wait "$worker_pid" 2>/dev/null || true
+  fi
+  # The worker forks short-lived children (agent_activity, tick_session)
+  # synchronously; killing only the worker's own pid does not reach one
+  # already forked when the signal lands, so it can still be writing into
+  # $tmp for a moment after `wait` above reaps the worker itself. One retry
+  # after a brief pause absorbs that window instead of racing rm -rf's own
+  # unlink pass against it.
+  rm -rf "$tmp" 2>/dev/null || { sleep 0.3; rm -rf "$tmp"; }
 }
 trap cleanup EXIT
 
