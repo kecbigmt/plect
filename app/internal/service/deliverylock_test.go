@@ -165,12 +165,8 @@ args    = ["-c", 'printf done > "$1"', "provider", "` + rec + `"]
 		t.Error("the subscribe hook must not have run: the lock was never acquired")
 	}
 
-	f, loadErr := loadPendingDelivery(pendingDeliveryPath(store))
-	if loadErr != nil {
-		t.Fatal(loadErr)
-	}
-	if got := f.Subscribe["sess-1"]; len(got) != 1 || got[0] != prURL {
-		t.Fatalf("pending subscribe queue = %v, want [%s] for sess-1", got, prURL)
+	if got := subscriptionRetryCount(t, store, "sess-1", retrySubscribe, prURL, false); got != 1 {
+		t.Fatalf("pending subscribe count = %d, want 1", got)
 	}
 }
 
@@ -239,12 +235,8 @@ command = "true"
 		t.Error("UnsubscribeError is empty, want the lock-acquisition failure reported")
 	}
 
-	f, loadErr := loadPendingDelivery(pendingDeliveryPath(store))
-	if loadErr != nil {
-		t.Fatal(loadErr)
-	}
-	if got := f.Unsubscribe["sess-1"]; len(got) != 1 || got[0] != prURL {
-		t.Fatalf("pending unsubscribe queue = %v, want [%s] for sess-1", got, prURL)
+	if got := subscriptionRetryCount(t, store, "sess-1", retryUnsubscribe, prURL, false); got != 1 {
+		t.Fatalf("pending unsubscribe count = %d, want 1", got)
 	}
 }
 

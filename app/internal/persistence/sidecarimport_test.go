@@ -63,15 +63,19 @@ func TestImportSidecars_MovesRowsByIncarnationAndRetiresEventsTree(t *testing.T)
 	if err != nil || won || previous != "cap|target" {
 		t.Fatalf("imported chain attempt = previous %q won %v err %v", previous, won, err)
 	}
-	retries, err := db.SubscriptionRetries(ctx)
+	destroyed, err := db.DestroyedSubscriptionRetries(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(retries) != 2 {
-		t.Fatalf("subscription retries = %+v, want 2", retries)
+	if len(destroyed) != 1 || destroyed[0].SessionID != goneID || destroyed[0].Action != subscriptionRetryUnsubscribe {
+		t.Fatalf("destroyed subscription retries = %+v, want gone unsubscribe", destroyed)
 	}
-	if retries[0].SessionID != goneID || retries[0].Action != subscriptionRetryUnsubscribe || retries[1].SessionID != liveID || retries[1].Action != subscriptionRetrySubscribe {
-		t.Fatalf("subscription retries = %+v, want destroyed unsubscribe and live subscribe", retries)
+	live, err := db.SubscriptionRetriesForLiveSession(ctx, "live")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(live) != 1 || live[0].SessionID != liveID || live[0].Action != subscriptionRetrySubscribe {
+		t.Fatalf("live subscription retries = %+v, want live subscribe", live)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "pending_delivery.json")); !os.IsNotExist(err) {
 		t.Fatalf("pending sidecar still exists: %v", err)
@@ -126,11 +130,50 @@ func TestEnsureCurrentImportsPostCutoverSidecars(t *testing.T) {
 		t.Fatalf("ensure current with sidecar: %v", err)
 	}
 	defer db.Close()
-	retries, err := db.SubscriptionRetries(ctx)
+	retries, err := db.SubscriptionRetriesForLiveSession(ctx, "live")
 	if err != nil || len(retries) != 1 || retries[0].Action != subscriptionRetrySubscribe {
 		t.Fatalf("subscription retries = %+v, err=%v", retries, err)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("sidecar still exists: %v", err)
+	}
+}
+
+func TestEnsureCurrentRetiresEventsLeftByDurableStorageCutover(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	db, err := ensureCurrent(ctx, PathIn(dir), migrationsSourceFS(), false, false)
+	if err != nil {
+		t.Fatalf("initial ensure current: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := db.PutSession(ctx, &domain.Session{Name: "live", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, path := range []string{
+		filepath.Join(dir, "events", "live", "log.jsonl"),
+		filepath.Join(dir, "events", "live", ".gen"),
+		filepath.Join(dir, "events", "live", ".cursor.dispatcher"),
+		filepath.Join(dir, "events", "gone", "tombstone.json"),
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("legacy"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	db, err = ensureCurrent(ctx, PathIn(dir), migrationsSourceFS(), false, false)
+	if err != nil {
+		t.Fatalf("ensure current after durable storage cutover: %v", err)
+	}
+	defer db.Close()
+	if _, err := os.Stat(filepath.Join(dir, "events")); !os.IsNotExist(err) {
+		t.Fatalf("retired events tree still exists: %v", err)
 	}
 }

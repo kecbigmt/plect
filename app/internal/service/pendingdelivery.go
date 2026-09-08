@@ -83,15 +83,29 @@ func sweepOrphanedPendingDeliveries(cfg *config.Config, store *state.Store) {
 			}
 			continue
 		}
-		unsubscribed, err := unsubscribeIfWired(cfg, retry.Session, retry.Resource)
-		if err != nil {
-			slog.Default().Warn("subscription retry flush failed", "session", retry.Session, "error", err)
+		var sweepErr error
+		if lockErr := withDeliveryLock(store, retry.Session, func() {
+			fresh, err := store.GetE(retry.Session)
+			if err != nil {
+				sweepErr = fmt.Errorf("read replacement session: %w", err)
+				return
+			}
+			if fresh != nil && resourceStillNeededBySession(fresh, retry.Resource) {
+				sweepErr = dequeuePendingDelivery(store, retry)
+				return
+			}
+			unsubscribed, err := unsubscribeIfWired(cfg, retry.Session, retry.Resource)
+			if err != nil || !unsubscribed {
+				sweepErr = err
+				return
+			}
+			sweepErr = dequeuePendingDelivery(store, retry)
+		}); lockErr != nil {
+			slog.Default().Warn("subscription retry sweep: acquire delivery lock", "session", retry.Session, "error", lockErr)
 			continue
 		}
-		if unsubscribed {
-			if err := dequeuePendingDelivery(store, retry); err != nil {
-				slog.Default().Warn("subscription retry sweep: dequeue unsubscribe", "session", retry.Session, "error", err)
-			}
+		if sweepErr != nil {
+			slog.Default().Warn("subscription retry sweep: flush unsubscribe", "session", retry.Session, "error", sweepErr)
 		}
 	}
 }

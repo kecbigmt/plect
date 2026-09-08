@@ -158,11 +158,6 @@ func (db *DB) DestroyedSubscriptionRetries(ctx context.Context) ([]SubscriptionR
 	return db.subscriptionRetries(ctx, `SELECT r.session_id, s.name, r.action, r.resource FROM subscription_retries r JOIN sessions s ON s.id = r.session_id WHERE s.status = 'destroyed' ORDER BY s.name, r.action, r.resource`)
 }
 
-// SubscriptionRetries returns every queued retry, ordered for diagnostics.
-func (db *DB) SubscriptionRetries(ctx context.Context) ([]SubscriptionRetry, error) {
-	return db.subscriptionRetries(ctx, `SELECT r.session_id, s.name, r.action, r.resource FROM subscription_retries r JOIN sessions s ON s.id = r.session_id ORDER BY s.name, r.action, r.resource`)
-}
-
 func (db *DB) subscriptionRetries(ctx context.Context, query string, args ...any) ([]SubscriptionRetry, error) {
 	var retries []SubscriptionRetry
 	err := db.WithReadTx(ctx, func(tx *sql.Tx) error {

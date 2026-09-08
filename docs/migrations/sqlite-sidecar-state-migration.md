@@ -1,9 +1,9 @@
 # SQLite sidecar-state migration
 
-This procedure moves post-cutover `tombstone.json`, `chain_attempts.json`,
-and `pending_delivery.json` sidecars into `storage.db`. The updated binary
-applies the append-only schema migration and performs the import when it first
-opens the database.
+This procedure removes post-cutover `tombstone.json`, moves
+`chain_attempts.json` and `pending_delivery.json` sidecars into `storage.db`,
+and retires the `events/` tree. The updated binary applies the append-only
+schema migration and performs the import when it first opens the database.
 
 ## Before upgrading
 
@@ -16,12 +16,17 @@ STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 cp -a "$DATA_DIR" "$DATA_DIR.sidecar-state-backup.$STAMP"
 ```
 
-The importer maps each sidecar session name to its live `sessions.id`, or to
-the most recently destroyed row of that name. A name with neither row, a
-malformed sidecar, an unexpected path in `events/`, or a chain-attempt
-generation that identifies another session stops the import and leaves every
-source sidecar in place. Correct the source or restore the backup before
-retrying.
+The importer maps each chain-attempt or subscription-retry session name to
+its live `sessions.id`, or to the most recently destroyed row of that name.
+`tombstone.json` carries no fact absent from a retained destroyed row, so the
+importer removes it without mapping it. It also accepts and removes the
+`log.jsonl`, `.gen`, and `.cursor.<consumer>` files that the
+[durable-storage cutover](sqlite-durable-storage-cutover.md) already imported,
+including an events-only tombstone that the earlier import intentionally
+skipped. A name with neither row in a sidecar that requires import, a malformed
+sidecar, an unexpected path in `events/`, or a chain-attempt generation that
+identifies another session stops the import and leaves every source sidecar in
+place. Correct the source or restore the backup before retrying.
 
 ## Upgrade and verify
 

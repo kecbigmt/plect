@@ -32,9 +32,8 @@ type sidecarRetry struct {
 }
 
 type sidecarFiles struct {
-	paths    []string
-	dirs     []string
-	sessions []string
+	paths []string
+	dirs  []string
 }
 
 // ImportSidecars moves post-cutover JSON sidecars into their tables. It is
@@ -144,11 +143,8 @@ func readSidecars(dir string) ([]sidecarChainAttempt, []sidecarRetry, sidecarFil
 			}
 			path := filepath.Join(sessionDir, file.Name())
 			switch file.Name() {
-			case "tombstone.json", ".lock":
+			case "tombstone.json", ".lock", "log.jsonl", ".gen":
 				files.paths = append(files.paths, path)
-				if file.Name() == "tombstone.json" {
-					files.sessions = append(files.sessions, session)
-				}
 			case "chain_attempts.json":
 				data, err := os.ReadFile(path)
 				if err != nil {
@@ -167,6 +163,10 @@ func readSidecars(dir string) ([]sidecarChainAttempt, []sidecarRetry, sidecarFil
 				}
 				files.paths = append(files.paths, path)
 			default:
+				if strings.HasPrefix(file.Name(), ".cursor.") {
+					files.paths = append(files.paths, path)
+					continue
+				}
 				return nil, nil, files, fmt.Errorf("retired event directory contains unexpected path %s", path)
 			}
 		}
@@ -203,11 +203,6 @@ func importSidecarsTx(ctx context.Context, tx *sql.Tx, chains []sidecarChainAtte
 		}
 		if err := queueSubscriptionRetryTx(ctx, tx, id, retry.action, retry.resource); err != nil {
 			return fmt.Errorf("import subscription retry: %w", err)
-		}
-	}
-	for _, session := range files.sessions {
-		if _, err := resolve(session); err != nil {
-			return err
 		}
 	}
 	for _, attempt := range chains {

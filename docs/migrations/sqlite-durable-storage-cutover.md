@@ -113,9 +113,9 @@ backup finishes the job (the marker overwrite is idempotent, and the
 missing `storage.db` never trips the "already exists" refusal).
 
 `tombstone.json`, `chain_attempts.json`, `pending_delivery.json`,
-`delivery-locks/`, and their lock files are **not** imported into SQLite —
-they stay exactly where they are in `$DATA_DIR` and remain file-based after
-cutover (see `app/internal/persistence/schema.sql`'s own comment). Only
+`delivery-locks/`, and their lock files are **not** imported by this cutover;
+they stay in `$DATA_DIR` until the follow-on
+[SQLite sidecar-state migration](sqlite-sidecar-state-migration.md). Only
 `state.json` and the `events/` tree feed the database.
 
 ## Cutover verification
