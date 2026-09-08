@@ -244,6 +244,44 @@ caller of this endpoint, not built into the plugin.
 {"thread_ts": "1234567890.123456", "channel_id": "C...", "status": ""}
 ```
 
+### POST /stream
+
+One chunk of a `plect.message_delta` sequence, rendered as a single
+live-updating Slack thread reply via `chat.startStream` /
+`chat.appendStream` / `chat.stopStream`, keyed by `stream_key`. `index`
+orders chunks within a `stream_key`; a chunk arriving out of order is
+buffered until the gap closes or a small bound is reached, at which point
+the buffered chunks flush in index order regardless of the gap. `final`
+finalizes the message; a later chunk under the same `stream_key` starts a
+new one.
+
+`recipient_user_id` (required by `chat.startStream` when streaming to a
+channel — confirmed empirically against a live workspace, and required for
+any thread with more than the sender in it, not documented) is resolved
+from `allowed_user_ids` when it names exactly one user; any other count of
+allowed users has no single answer, so streaming falls back the same way a
+rejected `chat.startStream` call does — see below.
+
+If `chat.startStream` itself fails (the workspace/app doesn't support
+streaming, or nothing resolves `recipient_user_id`), every chunk under that
+`stream_key` is accumulated instead, and the full text is posted once — via
+`POST /messages`'s own mechanics — on `final`. A failure after
+`chat.startStream` already succeeded (an `appendStream`/`stopStream` call
+rejected) is returned to the caller rather than triggering this fallback:
+a native message already exists by then, and posting a second one would
+violate "exactly one Slack thread message appears".
+
+```json
+// Request
+{"thread_ts": "1234567890.123456", "channel_id": "C...", "stream_key": "msg-1", "text": "Hello", "index": "0", "final": "false"}
+```
+
+`index` and `final` are strings, not a JSON number/bool: they originate as
+`plect.message_delta` event metadata, which is always a string (see
+`contracts/event`), and the `stream` channel passes its inputs through
+verbatim rather than requiring every composing workflow to convert them
+first.
+
 ### GET /unbound-mentions
 
 Streams one JSON item per line, one per unbound app mention as it occurs

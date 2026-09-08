@@ -120,6 +120,22 @@ func (c *Config) IsUserAllowed(userID string) bool {
 	return false
 }
 
+// StreamRecipientUserID returns who chat.startStream should name as
+// recipient_user_id, required when streaming to a channel. There is no
+// dedicated config key for it: allowed_user_ids already gates who this
+// thread's conversation is with, so its first entry is reused rather than
+// notify_user_ids, which can list people who are only pinged, not
+// conversing. Empty (no allowlist configured, or several entries with no
+// way to pick one) means native streaming can't start; StreamManager's
+// fallback-on-start-failure path covers that the same way it covers any
+// other chat.startStream rejection.
+func (c *Config) StreamRecipientUserID() string {
+	if len(c.AllowedUserIDs) != 1 {
+		return ""
+	}
+	return c.AllowedUserIDs[0]
+}
+
 func (c *Config) IsMentionUserAllowed(userID string) bool {
 	if len(c.AllowedUserIDs) == 0 {
 		return true

@@ -3,6 +3,7 @@ package adapter
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -59,6 +60,20 @@ type postMessageRequest struct {
 	ThreadTS  string `json:"thread_ts"`
 	Text      string `json:"text"`
 	Mention   bool   `json:"mention,omitempty"`
+}
+
+// streamRequest's index/final arrive as strings, not a JSON number/bool:
+// they originate as plect.message_delta event metadata, which is always
+// map[string]string (see contracts/event), and the channel passes inputs
+// through verbatim rather than requiring every composing workflow to
+// convert them first.
+type streamRequest struct {
+	ChannelID string `json:"channel_id"`
+	ThreadTS  string `json:"thread_ts"`
+	StreamKey string `json:"stream_key"`
+	Text      string `json:"text"`
+	Index     string `json:"index"`
+	Final     string `json:"final"`
 }
 
 type setStatusRequest struct {
@@ -158,6 +173,51 @@ func (a *Adapter) HandlePostMessage(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	w.WriteHeader(http.StatusOK)
+}
+
+// HandleStream handles POST /stream: one plect.message_delta chunk of a
+// live-updating Slack thread reply, keyed by stream_key. See StreamManager
+// for the per-key ordering and fallback-on-start-failure behavior.
+func (a *Adapter) HandleStream(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var body streamRequest
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+
+	if body.ThreadTS == "" || body.StreamKey == "" {
+		http.Error(w, "thread_ts and stream_key are required", http.StatusBadRequest)
+		return
+	}
+	channelID := body.ChannelID
+	if channelID == "" {
+		channelID = a.cfg.ChannelID
+	}
+	if channelID == "" {
+		http.Error(w, "channel_id is required", http.StatusBadRequest)
+		return
+	}
+	index, err := strconv.ParseInt(body.Index, 10, 64)
+	if err != nil {
+		http.Error(w, "index must be an integer", http.StatusBadRequest)
+		return
+	}
+	final, err := strconv.ParseBool(body.Final)
+	if body.Final != "" && err != nil {
+		http.Error(w, "final must be a boolean", http.StatusBadRequest)
+		return
+	}
+
+	if err := a.streamManager.Deliver(channelID, body.ThreadTS, body.StreamKey, index, body.Text, final); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 }
 
