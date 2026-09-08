@@ -124,12 +124,12 @@ const (
 	// log's ordinary append identity: a repeated attempt is a separate fact,
 	// not a dedup collision.
 	TypeNodeResult = "plect.node.result"
-	// TypeMessage and TypeMessageDelta: docs/language/events.md#agent-messages.
-	TypeMessage      = "plect.message"
+	TypeMessage    = "plect.message"
+	// TypeMessageDelta, not message_chunk: DeepSeek's own protocol already
+	// uses "chunk" for block-start/usage/finish units that would collide.
 	TypeMessageDelta = "plect.message_delta"
 )
 
-// Metadata keys for TypeMessage / TypeMessageDelta: docs/language/events.md#agent-messages.
 const (
 	MetaMessageID       = "message_id"
 	MetaMessageIDOrigin = "message_id_origin"
@@ -158,22 +158,18 @@ const (
 	MetaBlockIndex      = "block_index"
 )
 
-// MessageIDOrigin is MetaMessageIDOrigin's closed set.
 const (
 	MessageIDOriginNative    = "native"
 	MessageIDOriginSynthetic = "synthetic"
 )
 
-// RoleAssistant is TypeMessage's MetaRole value.
 const RoleAssistant = "assistant"
 
-// ChunkKind is MetaKind's closed set.
 const (
-	ChunkKindText      = "text"
-	ChunkKindReasoning = "reasoning"
+	DeltaKindText      = "text"
+	DeltaKindReasoning = "reasoning"
 )
 
-// StopReason is MetaStopReason's closed set.
 const (
 	StopReasonCompleted   = "completed"
 	StopReasonMaxTokens   = "max_tokens"
@@ -182,7 +178,6 @@ const (
 	StopReasonInterrupted = "interrupted"
 )
 
-// Ordering is MetaOrdering's closed set.
 const (
 	OrderingStrict     = "strict"
 	OrderingBestEffort = "best_effort"

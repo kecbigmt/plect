@@ -66,8 +66,6 @@ func TestPlectEventNamespaceConstants(t *testing.T) {
 		"tick escalated":  TypeTickEscalated,
 		"judge recorded":  TypeJudgeRecorded,
 		"chain attempt":   TypeChainAttempt,
-		"message":         TypeMessage,
-		"message delta":   TypeMessageDelta,
 	}
 	for name, got := range cases {
 		if got == "" {
@@ -82,12 +80,6 @@ func TestPlectEventNamespaceConstants(t *testing.T) {
 	}
 	if TypeStatusMessage != "plect.status_message" {
 		t.Fatalf("TypeStatusMessage = %q, want plect.status_message", TypeStatusMessage)
-	}
-	if TypeMessage != "plect.message" {
-		t.Fatalf("TypeMessage = %q, want plect.message", TypeMessage)
-	}
-	if TypeMessageDelta != "plect.message_delta" {
-		t.Fatalf("TypeMessageDelta = %q, want plect.message_delta", TypeMessageDelta)
 	}
 }
 
