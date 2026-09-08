@@ -157,6 +157,42 @@ func TestImportSidecars_RejectsConflictingLegacyChainGenerations(t *testing.T) {
 	}
 }
 
+func TestImportSidecars_RejectsLegacyGenerationFromAnotherSession(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	db, err := ensureCurrent(ctx, PathIn(dir), migrationsSourceFS(), false, false)
+	if err != nil {
+		t.Fatalf("ensure current: %v", err)
+	}
+	defer db.Close()
+	now := time.Now().UTC()
+	if err := db.PutSession(ctx, &domain.Session{Name: "live", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.PutSession(ctx, &domain.Session{Name: "other", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	otherID, err := db.EventStreamID(ctx, "other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "events", "live", "chain_attempts.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	chain := `{"work\u0000review\u0000` + otherID + `":"cap|target"}`
+	if err := os.WriteFile(path, []byte(chain), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.ImportSidecars(ctx, dir); err == nil {
+		t.Fatal("import sidecars unexpectedly accepted another session's generation")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("mismatched source was removed: %v", err)
+	}
+}
+
 func TestEnsureCurrentImportsPostCutoverSidecars(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

@@ -21,6 +21,7 @@ type sidecarChainAttempt struct {
 	session     string
 	instance    string
 	chainID     string
+	generation  string
 	fingerprint string
 }
 
@@ -189,7 +190,7 @@ func readSidecars(dir string) ([]sidecarChainAttempt, []sidecarRetry, sidecarFil
 						continue
 					}
 					seen[attemptKey] = fingerprint
-					chains = append(chains, sidecarChainAttempt{session: session, instance: parts[0], chainID: parts[1], fingerprint: fingerprint})
+					chains = append(chains, sidecarChainAttempt{session: session, instance: parts[0], chainID: parts[1], generation: parts[2], fingerprint: fingerprint})
 				}
 				files.paths = append(files.paths, path)
 			default:
@@ -238,6 +239,14 @@ func importSidecarsTx(ctx context.Context, tx *sql.Tx, chains []sidecarChainAtte
 	for _, attempt := range chains {
 		id, err := resolve(attempt.session)
 		if err != nil {
+			return err
+		}
+		var generationID string
+		err = tx.QueryRowContext(ctx, `SELECT id FROM sessions WHERE id = ?`, attempt.generation).Scan(&generationID)
+		if err == nil && generationID != id {
+			return fmt.Errorf("sidecar import: chain attempt for %q names generation %q from another session", attempt.session, attempt.generation)
+		}
+		if err != nil && !errorsIsNoRows(err) {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO chain_attempts (session_id, instance, chain_id, fingerprint) VALUES (?, ?, ?, ?) ON CONFLICT(session_id, instance, chain_id) DO UPDATE SET fingerprint = excluded.fingerprint`, id, attempt.instance, attempt.chainID, attempt.fingerprint); err != nil {
