@@ -147,14 +147,23 @@ func TestPutSession_NodeExecutionMintsFreshIdentityAfterRelease(t *testing.T) {
 
 // TestPutSession_NewExecutionRefusesAConcurrentWritersUnreleasedRow proves a
 // write claiming NewExecution is refused rather than silently overwriting a
-// different writer's unreleased row for the same node.
+// different writer's unreleased row for the same node -- including that
+// row's own layers and dependency edge, which the refusal must leave
+// untouched rather than clear-then-reinsert against the loser's data.
 func TestPutSession_NewExecutionRefusesAConcurrentWritersUnreleasedRow(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
 
 	winner := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Nodes: map[string]*contract.TaskState{
-		"a": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "work", Outputs: map[string]any{"from": "writer-a"}, NewExecution: true},
+		"dep": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "producer"},
+		"a": {
+			Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "work",
+			Outputs:      map[string]any{"from": "writer-a"},
+			Layers:       []contract.LayerState{{EffectID: "outer", Status: contract.TaskStatusProduced}},
+			DependsOn:    []string{"dep"},
+			NewExecution: true,
+		},
 	}}
 	if err := db.PutSession(ctx, winner); err != nil {
 		t.Fatalf("PutSession (writer A): %v", err)
@@ -162,7 +171,12 @@ func TestPutSession_NewExecutionRefusesAConcurrentWritersUnreleasedRow(t *testin
 	winnerID := nodeExecutionIDForTest(t, db, "s1", "a")
 
 	loser := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Nodes: map[string]*contract.TaskState{
-		"a": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "work", Outputs: map[string]any{"from": "writer-b"}, NewExecution: true},
+		"a": {
+			Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "work",
+			Outputs:      map[string]any{"from": "writer-b"},
+			Layers:       []contract.LayerState{{EffectID: "different", Status: contract.TaskStatusProduced}},
+			NewExecution: true,
+		},
 	}}
 	if err := db.PutSession(ctx, loser); err == nil {
 		t.Fatal("PutSession (writer B, concurrent new setup): want a conflict error, got nil")
@@ -178,6 +192,12 @@ func TestPutSession_NewExecutionRefusesAConcurrentWritersUnreleasedRow(t *testin
 	node := got.Nodes["a"]
 	if node == nil || node.Outputs["from"] != "writer-a" || node.ExecutionID != winnerID {
 		t.Fatalf("node after the refused race = %+v, want writer A's execution left untouched", node)
+	}
+	if len(node.Layers) != 1 || node.Layers[0].EffectID != "outer" {
+		t.Fatalf("node layers after the refused race = %+v, want writer A's own layer left untouched", node.Layers)
+	}
+	if len(node.DependsOn) != 1 || node.DependsOn[0] != "dep" {
+		t.Fatalf("node depends_on after the refused race = %v, want writer A's own dependency edge left untouched", node.DependsOn)
 	}
 }
 

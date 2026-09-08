@@ -530,12 +530,8 @@ func upsertNodeExecutionTx(ctx context.Context, q *sqlcgen.Queries, sessionID, n
 		}
 	} else {
 		// No claimed identity: insert if nothing unreleased exists, else
-		// update the one that does -- unless ts claims to be a genuinely new
-		// execution (NewExecution), in which case an unreleased row already
-		// existing can only mean a concurrent writer got there first, and the
-		// write is refused rather than silently adopting it; see
-		// docs/design/sqlite-persistence.md's "Node execution identity"
-		// section.
+		// ts.NewExecution (see its own doc comment) decides whether this
+		// updates that row or is refused.
 		current, err := q.CurrentNodeExecution(ctx, sqlcgen.CurrentNodeExecutionParams{SessionID: sessionID, NodeID: nodeID})
 		switch {
 		case errors.Is(err, sql.ErrNoRows):

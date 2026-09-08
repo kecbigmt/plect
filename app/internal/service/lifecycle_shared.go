@@ -83,8 +83,7 @@ func mergeTasks(store *state.Store, sessionName string, session *domain.Session)
 	}); err != nil {
 		return err
 	}
-	clearNewExecutionClaims(session.Nodes)
-	return nil
+	return refreshNodeIdentities(store, sessionName, session)
 }
 
 func replaceRuntimeState(store *state.Store, sessionName string, session *domain.Session) error {
@@ -100,21 +99,33 @@ func replaceRuntimeState(store *state.Store, sessionName string, session *domain
 	}); err != nil {
 		return err
 	}
-	clearNewExecutionClaims(session.Nodes)
-	return nil
+	return refreshNodeIdentities(store, sessionName, session)
 }
 
-// clearNewExecutionClaims marks nodes as no longer freshly-claimed once
-// their write lands, since Up's UpOrder() re-walk (task.Plan.UpOrder) would
-// otherwise persist the same object again and read its own prior insert as
-// a concurrent writer's row. Scoped to the caller's own objects, so a
-// genuinely different writer's own claim is still refused.
-func clearNewExecutionClaims(nodes map[string]*contract.TaskState) {
-	for _, st := range nodes {
-		if st != nil {
-			st.NewExecution = false
+// refreshNodeIdentities re-reads session.Nodes' keys from store and copies
+// each row's confirmed ExecutionID back onto them: Up's UpOrder() re-walk
+// (task.Plan.UpOrder) persists the same in-memory objects again later in
+// one call, and without their real id a later write can't target its own
+// row by exact id -- it would fall back to "whatever unreleased row exists
+// now" instead, open to overwriting or resurrecting a generation an
+// intervening writer already changed.
+func refreshNodeIdentities(store *state.Store, sessionName string, session *domain.Session) error {
+	if len(session.Nodes) == 0 {
+		return nil
+	}
+	refreshed, err := store.GetE(sessionName)
+	if err != nil {
+		return err
+	}
+	if refreshed == nil {
+		return nil
+	}
+	for id := range session.Nodes {
+		if st, ok := refreshed.Nodes[id]; ok {
+			session.Nodes[id] = st
 		}
 	}
+	return nil
 }
 
 // setSessionStatus durably records a lifecycle-status transition on its

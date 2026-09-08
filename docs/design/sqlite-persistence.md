@@ -424,20 +424,6 @@ force-flag-gated reconstruction that discards an old unreleased execution was
 also considered. It loses because reconstruction requires a confirmed release
 boundary; force-discard is intentionally limited to `destroy --force`.
 
-A database-level idempotency token (a client-generated attempt id compared
-against a stored value) was considered for the concurrent-setup race instead
-of `NewExecution` plus the partial unique index the schema already carries.
-It loses because it needs a new column and a new comparison rule for a
-guarantee the existing "at most one unreleased row" index already gives for
-free once the write path stops silently adopting whatever unreleased row it
-finds. A callback-free alternative to `task.ReleaseObserver` — having
-`task.RunSetup` return the released states for its caller to persist after
-the whole pass completes — was also considered; it loses because the
-rebuild's own write already needs to run inside the same pass, so the
-release would still have to be flushed as an explicit, separate step before
-that write, and threading it back out through `RunSetup`'s return value
-would only move that step to the caller for no benefit.
-
 ### Release ordering
 
 `node_execution_dependencies` snapshots, at a node's own setup time, which

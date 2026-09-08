@@ -43,13 +43,8 @@ func (o *nodeResultObserver) OnFailure(scope, id string, elapsed time.Duration, 
 	o.inner.OnFailure(scope, id, elapsed, err, stderr)
 }
 
-// OnRelease durably flushes a same-pass liveness-invalidate cleanup's
-// released node states on their own, before RunSetup's caller goes on to
-// persist any rebuild of those same nodes -- see task.ReleaseObserver.
-// Unlike OnResult's event-log append, this failure is NOT swallowed: without
-// this checkpoint landing, a follow-up rebuild would collapse onto the
-// released row instead of minting its own fresh generation, so the caller
-// must abort rather than proceed on an unflushed release.
+// OnRelease implements task.ReleaseObserver. Unlike OnResult's swallowed
+// event-log append, a failure here is returned rather than absorbed.
 func (o *nodeResultObserver) OnRelease(released map[string]*contract.TaskState) error {
 	return o.store.Update(o.sessionName, func(s *domain.Session) error {
 		if s.Nodes == nil {
