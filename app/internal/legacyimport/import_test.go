@@ -475,12 +475,6 @@ func TestRun_DryRunNeverLeavesAScratchDirectoryBehind(t *testing.T) {
 	}
 }
 
-// TestRun_BuildPhaseNeverWritesToAReadOnlyDestDir makes DestDir read-only
-// after Run's initial MkdirAll, so every write the build (migrations,
-// session/event inserts, cursor writes, both validation passes) performs
-// would fail loudly if any of it landed there. Run instead runs the whole
-// build against its scratch directory and fails only at the final copy,
-// proving the build itself never touches DestDir.
 func TestRun_BuildPhaseNeverWritesToAReadOnlyDestDir(t *testing.T) {
 	sourceDir, _, _ := legacyFixture(t)
 	destDir := t.TempDir()

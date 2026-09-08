@@ -408,11 +408,6 @@ func TestReadSessionNames_RejectsUnknownJournalMode(t *testing.T) {
 	}
 }
 
-// TestReadSessionNames_ReadsAWALDatabaseRegardlessOfConfiguredJournalMode
-// regresses a bug where ReadSessionNames requested a journal-mode change on
-// its read-only connection: go-sqlite3's _journal_mode DSN parameter fails
-// outright on a read-only connection whenever the requested mode differs
-// from the database's actual on-disk mode, rather than a silent no-op.
 func TestReadSessionNames_ReadsAWALDatabaseRegardlessOfConfiguredJournalMode(t *testing.T) {
 	path := PathIn(t.TempDir())
 	t.Setenv(JournalModeEnvVar, "")
