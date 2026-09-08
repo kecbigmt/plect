@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -82,6 +83,29 @@ func TestImportSidecars_MovesRowsByIncarnationAndRetiresEventsTree(t *testing.T)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "events")); !os.IsNotExist(err) {
 		t.Fatalf("events tree still exists: %v", err)
+	}
+}
+
+func TestImportSidecars_CleanDirectoryDoesNotWaitForExclusiveGate(t *testing.T) {
+	dir := t.TempDir()
+	db, err := ensureCurrent(context.Background(), PathIn(dir), migrationsSourceFS(), false, false)
+	if err != nil {
+		t.Fatalf("ensure current: %v", err)
+	}
+	defer db.Close()
+	unlock, ok, err := tryFlockPath(db.gate.coordinationLockPath, syscall.LOCK_EX)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("acquire coordination lock")
+	}
+	defer unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := db.ImportSidecars(ctx, dir); err != nil {
+		t.Fatalf("clean import waited for the exclusive gate: %v", err)
 	}
 }
 

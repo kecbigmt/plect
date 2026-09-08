@@ -39,6 +39,13 @@ type sidecarFiles struct {
 // safe to rerun after an interruption: rows are upserted before source files
 // are removed, so a second run only repeats idempotent inserts and cleanup.
 func (db *DB) ImportSidecars(ctx context.Context, dir string) error {
+	present, err := sidecarsPresent(dir)
+	if err != nil {
+		return err
+	}
+	if !present {
+		return nil
+	}
 	unlockCoord, err := db.gate.acquireCoordinationExclusive(ctx)
 	if err != nil {
 		return err
@@ -83,6 +90,21 @@ func (db *DB) ImportSidecars(ctx context.Context, dir string) error {
 		}
 	}
 	return nil
+}
+
+func sidecarsPresent(dir string) (bool, error) {
+	for _, path := range []string{
+		filepath.Join(dir, "pending_delivery.json"),
+		filepath.Join(dir, "pending_delivery.json.lock"),
+		filepath.Join(dir, "events"),
+	} {
+		if _, err := os.Stat(path); err == nil {
+			return true, nil
+		} else if !os.IsNotExist(err) {
+			return false, fmt.Errorf("stat sidecar path %s: %w", path, err)
+		}
+	}
+	return false, nil
 }
 
 func readSidecars(dir string) ([]sidecarChainAttempt, []sidecarRetry, sidecarFiles, error) {
