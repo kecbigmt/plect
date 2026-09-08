@@ -21,7 +21,7 @@ import (
 // teardown list -- the same one it goes on to execute -- taken as a
 // parameter rather than re-resolved here, so comparison and execution
 // always read one shared snapshot.
-func lifecycleConfigurationDigest(cfg *config.Config, session *domain.Session, plan *task.Plan, outstanding []task.Resolved) (string, error) {
+func lifecycleConfigurationDigest(plan *task.Plan, outstanding []task.Resolved, wsp resolvedWorkspaceProvider) (string, error) {
 	upOrder := plan.UpOrder()
 	nodes := make(map[string]any, len(upOrder))
 	planTaskID := make(map[string]string, len(upOrder))
@@ -54,11 +54,7 @@ func lifecycleConfigurationDigest(cfg *config.Config, session *domain.Session, p
 	}
 
 	projection := map[string]any{"nodes": nodes}
-	workspaceProvider, err := projectWorkspaceProvider(cfg, session)
-	if err != nil {
-		return "", err
-	}
-	if workspaceProvider != nil {
+	if workspaceProvider := projectWorkspaceProvider(wsp); workspaceProvider != nil {
 		projection["workspace_provider"] = workspaceProvider
 	}
 
@@ -70,42 +66,55 @@ func lifecycleConfigurationDigest(cfg *config.Config, session *domain.Session, p
 	return hex.EncodeToString(sum[:]), nil
 }
 
+// resolvedWorkspaceProvider is the one resolution of a session's workflow
+// and (if any) its workspace provider, shared by the precondition check and
+// the digest projection so neither can disagree with the other about which
+// provider declaration is current.
+type resolvedWorkspaceProvider struct {
+	found bool
+	wf    config.WorkflowFile
+	prov  config.WorkspaceProviderConfig
+}
+
+func resolveSessionWorkspaceProvider(cfg *config.Config, session *domain.Session) (resolvedWorkspaceProvider, error) {
+	wf, err := loadSessionWorkflow(cfg, session.WorkspaceDirPath, session)
+	if err != nil {
+		return resolvedWorkspaceProvider{}, fmt.Errorf("load session workflow: %w", err)
+	}
+	if wf.WorkspaceProvider == "" {
+		return resolvedWorkspaceProvider{wf: wf}, nil
+	}
+	workspaceProviders, err := cfg.LoadWorkspaceProviders()
+	if err != nil {
+		return resolvedWorkspaceProvider{}, fmt.Errorf("load workspace providers: %w", err)
+	}
+	prov, ok, err := workspaceProviderFor(wf, workspaceProviders)
+	if err != nil {
+		return resolvedWorkspaceProvider{}, err
+	}
+	return resolvedWorkspaceProvider{found: ok, wf: wf, prov: prov}, nil
+}
+
 // projectWorkspaceProvider renders the workflow's own reference to its
 // workspace provider, and that provider's declared inputs and
 // setup/cleanup actions -- none of which task.Resolved carries, since the
 // provider runs once per session via the @workflow pseudo-node, outside
-// the plan's ordinary node list. nil, nil when the session's workflow
-// declares none.
-func projectWorkspaceProvider(cfg *config.Config, session *domain.Session) (map[string]any, error) {
-	wf, err := loadSessionWorkflow(cfg, session.WorkspaceDirPath, session)
-	if err != nil {
-		return nil, fmt.Errorf("load session workflow for lifecycle configuration digest: %w", err)
+// the plan's ordinary node list. nil when wsp names none.
+func projectWorkspaceProvider(wsp resolvedWorkspaceProvider) map[string]any {
+	if !wsp.found {
+		return nil
 	}
-	if wf.WorkspaceProvider == "" {
-		return nil, nil
+	m := map[string]any{"reference": wsp.wf.WorkspaceProvider, "provider_id": wsp.prov.ID}
+	if len(wsp.wf.WorkspaceProviderInputs) > 0 {
+		m["inputs"] = projectLiteral(wsp.wf.WorkspaceProviderInputs)
 	}
-	workspaceProviders, err := cfg.LoadWorkspaceProviders()
-	if err != nil {
-		return nil, fmt.Errorf("load workspace providers for lifecycle configuration digest: %w", err)
+	if wsp.prov.Setup != nil {
+		m["setup"] = projectAction(wsp.prov.Setup)
 	}
-	prov, ok, err := workspaceProviderFor(wf, workspaceProviders)
-	if err != nil {
-		return nil, err
+	if wsp.prov.Cleanup != nil {
+		m["cleanup"] = projectAction(wsp.prov.Cleanup)
 	}
-	if !ok {
-		return nil, nil
-	}
-	m := map[string]any{"reference": wf.WorkspaceProvider, "provider_id": prov.ID}
-	if len(wf.WorkspaceProviderInputs) > 0 {
-		m["inputs"] = projectLiteral(wf.WorkspaceProviderInputs)
-	}
-	if prov.Setup != nil {
-		m["setup"] = projectAction(prov.Setup)
-	}
-	if prov.Cleanup != nil {
-		m["cleanup"] = projectAction(prov.Cleanup)
-	}
-	return m, nil
+	return m
 }
 
 // projectResolved deliberately has no working-directory field: every
@@ -361,8 +370,8 @@ func projectJSONOperand(op *lang.JSONOperand) any {
 // lifecycleConfigurationNotice only decides whether to warn; the current
 // trusted configuration executes regardless. An empty baseline (first or
 // legacy execution) never warns.
-func lifecycleConfigurationNotice(cfg *config.Config, session *domain.Session, plan *task.Plan, outstanding []task.Resolved) (digest, warning string, err error) {
-	digest, err = lifecycleConfigurationDigest(cfg, session, plan, outstanding)
+func lifecycleConfigurationNotice(session *domain.Session, plan *task.Plan, outstanding []task.Resolved, wsp resolvedWorkspaceProvider) (digest, warning string, err error) {
+	digest, err = lifecycleConfigurationDigest(plan, outstanding, wsp)
 	if err != nil {
 		return "", "", err
 	}
@@ -381,17 +390,17 @@ func recordLifecycleConfigurationDigest(store *state.Store, sessionName, digest 
 	})
 }
 
-// noticeAndAdvanceBaseline is Up/Down/Destroy's shared call-site logic.
-// teardown is the caller's own already-resolved, operation-scoped list --
-// the same one it goes on to execute, never re-resolved here -- so
-// comparison and execution always share one snapshot. An unresolved
-// definition in it blocks the notice and baseline entirely, as a
-// precondition failure rather than a configuration change.
-func noticeAndAdvanceBaseline(cfg *config.Config, store *state.Store, sessionName string, session *domain.Session, plan *task.Plan, teardown []task.Resolved) (string, error) {
-	if hasUnresolvedCleanup(teardown) {
+// noticeAndAdvanceBaseline is Up/Down/Destroy's shared call-site logic. An
+// unresolved definition in gateTeardown (the caller's own already-resolved
+// executable list) blocks the notice and baseline, as a precondition
+// failure rather than a configuration change. digestOutstanding is the
+// session-wide view the digest always hashes, since the baseline is one
+// value shared regardless of which of the three is asking.
+func noticeAndAdvanceBaseline(store *state.Store, sessionName string, session *domain.Session, plan *task.Plan, gateTeardown, digestOutstanding []task.Resolved, wsp resolvedWorkspaceProvider) (string, error) {
+	if hasUnresolvedCleanup(gateTeardown) {
 		return "", nil
 	}
-	digest, warning, err := lifecycleConfigurationNotice(cfg, session, plan, teardown)
+	digest, warning, err := lifecycleConfigurationNotice(session, plan, digestOutstanding, wsp)
 	if err != nil {
 		return "", err
 	}
@@ -405,26 +414,16 @@ func noticeAndAdvanceBaseline(cfg *config.Config, store *state.Store, sessionNam
 	return warning, nil
 }
 
-// workspaceProviderInputsPrecondition reports whether the workflow's
-// declared workspace_provider_inputs validate against that provider's own
-// inputs schema, without running any hook. A workflow with no workspace
-// provider, or a reference this trusted configuration cannot resolve at
-// all, has nothing to precheck here: that absence is reported later, by
-// whichever step actually needs the provider to exist.
-func workspaceProviderInputsPrecondition(cfg *config.Config, session *domain.Session) error {
-	wf, err := loadSessionWorkflow(cfg, session.WorkspaceDirPath, session)
-	if err != nil || wf.WorkspaceProvider == "" {
+// workspaceProviderInputsPrecondition reports whether wsp's declared
+// workspace_provider_inputs validate against its provider's own inputs
+// schema, without running any hook. wsp naming no provider has nothing to
+// precheck here: that absence is reported later, by whichever step
+// actually needs the provider to exist.
+func workspaceProviderInputsPrecondition(wsp resolvedWorkspaceProvider) error {
+	if !wsp.found {
 		return nil
 	}
-	workspaceProviders, err := cfg.LoadWorkspaceProviders()
-	if err != nil {
-		return nil
-	}
-	prov, ok, err := workspaceProviderFor(wf, workspaceProviders)
-	if err != nil || !ok {
-		return nil
-	}
-	_, err = resolveWorkspaceProviderInputs(prov, wf)
+	_, err := resolveWorkspaceProviderInputs(wsp.prov, wsp.wf)
 	return err
 }
 

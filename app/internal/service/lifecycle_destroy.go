@@ -123,10 +123,14 @@ func Destroy(cfg *config.Config, store *state.Store, params DestroyParams) (resu
 	// workflow-less, nothing-recorded, --force case above), so there is no
 	// lifecycle-configuration notice to give and no baseline to advance.
 	if plan != nil {
-		if precondErr := workspaceProviderInputsPrecondition(cfg, session); precondErr != nil {
+		wsp, wspErr := resolveSessionWorkspaceProvider(cfg, session)
+		if wspErr != nil {
+			return nil, &Error{Code: ErrExecutionFailed, Message: wspErr.Error()}
+		}
+		if precondErr := workspaceProviderInputsPrecondition(wsp); precondErr != nil {
 			return nil, &Error{Code: ErrExecutionFailed, Message: precondErr.Error()}
 		}
-		warning, err = noticeAndAdvanceBaseline(cfg, store, sessionName, session, plan, teardown)
+		warning, err = noticeAndAdvanceBaseline(store, sessionName, session, plan, teardown, teardown, wsp)
 		if err != nil {
 			return nil, &Error{Code: ErrExecutionFailed, Message: err.Error()}
 		}

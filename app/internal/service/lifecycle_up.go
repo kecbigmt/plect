@@ -188,20 +188,30 @@ func Up(cfg *config.Config, store *state.Store, params UpParams) (result *UpResu
 	if wfErr != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: wfErr.Error()}
 	}
-	var teardown []task.Resolved
+	wsp, wspErr := resolveSessionWorkspaceProvider(cfg, session)
+	if wspErr != nil {
+		return nil, &Error{Code: ErrExecutionFailed, Message: wspErr.Error()}
+	}
+	var teardown, digestOutstanding []task.Resolved
 	if params.ForceRecreate && forceRecreateExisting {
 		teardown, err = unifiedTeardownList(cfg, session, false)
 		if err == nil {
 			// Force-recreate re-runs workspace-provider setup too.
-			err = workspaceProviderInputsPrecondition(cfg, session)
+			err = workspaceProviderInputsPrecondition(wsp)
 		}
+		digestOutstanding = teardown
 	} else {
 		teardown, err = staleProducedWorkflowNodes(cfg, session, plan)
+		if err == nil {
+			// The digest hashes the session-wide outstanding scope (see
+			// noticeAndAdvanceBaseline), not just the stale nodes above.
+			digestOutstanding, err = unifiedTeardownList(cfg, session, false)
+		}
 	}
 	if err != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: err.Error()}
 	}
-	warning, err = noticeAndAdvanceBaseline(cfg, store, sessionName, session, plan, teardown)
+	warning, err = noticeAndAdvanceBaseline(store, sessionName, session, plan, teardown, digestOutstanding, wsp)
 	if err != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: err.Error()}
 	}

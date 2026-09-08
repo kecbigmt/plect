@@ -35,11 +35,11 @@ func TestLifecycleConfigurationDigest_DeterministicForIdenticalConfig(t *testing
 		t.Fatalf("buildPlanForSession: %v", err)
 	}
 
-	first, err := lifecycleConfigurationDigest(cfg, session, plan, nil)
+	first, err := lifecycleConfigurationDigest(plan, nil, resolvedWorkspaceProvider{})
 	if err != nil {
 		t.Fatalf("lifecycleConfigurationDigest: %v", err)
 	}
-	second, err := lifecycleConfigurationDigest(cfg, session, plan, nil)
+	second, err := lifecycleConfigurationDigest(plan, nil, resolvedWorkspaceProvider{})
 	if err != nil {
 		t.Fatalf("lifecycleConfigurationDigest: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestLifecycleConfigurationDigest_ChangesWhenSetupActionChanges(t *testing.T
 	if err != nil {
 		t.Fatalf("buildPlanForSession (before): %v", err)
 	}
-	beforeDigest, err := lifecycleConfigurationDigest(before, session, beforePlan, nil)
+	beforeDigest, err := lifecycleConfigurationDigest(beforePlan, nil, resolvedWorkspaceProvider{})
 	if err != nil {
 		t.Fatalf("lifecycleConfigurationDigest (before): %v", err)
 	}
@@ -72,7 +72,7 @@ func TestLifecycleConfigurationDigest_ChangesWhenSetupActionChanges(t *testing.T
 	if err != nil {
 		t.Fatalf("buildPlanForSession (after): %v", err)
 	}
-	afterDigest, err := lifecycleConfigurationDigest(after, session, afterPlan, nil)
+	afterDigest, err := lifecycleConfigurationDigest(afterPlan, nil, resolvedWorkspaceProvider{})
 	if err != nil {
 		t.Fatalf("lifecycleConfigurationDigest (after): %v", err)
 	}
@@ -110,7 +110,7 @@ func TestLifecycleConfigurationDigest_RetainsOutstandingCleanupOnNodeIDReuse(t *
 	if err != nil {
 		t.Fatalf("unifiedTeardownList: %v", err)
 	}
-	before, err := lifecycleConfigurationDigest(cfg, session, plan, outstanding)
+	before, err := lifecycleConfigurationDigest(plan, outstanding, resolvedWorkspaceProvider{})
 	if err != nil {
 		t.Fatalf("lifecycleConfigurationDigest (before): %v", err)
 	}
@@ -121,7 +121,7 @@ func TestLifecycleConfigurationDigest_RetainsOutstandingCleanupOnNodeIDReuse(t *
 	if err != nil {
 		t.Fatalf("unifiedTeardownList (after): %v", err)
 	}
-	after, err := lifecycleConfigurationDigest(cfg, session, plan, outstandingAfter)
+	after, err := lifecycleConfigurationDigest(plan, outstandingAfter, resolvedWorkspaceProvider{})
 	if err != nil {
 		t.Fatalf("lifecycleConfigurationDigest (after): %v", err)
 	}
@@ -213,6 +213,82 @@ func TestUp_ChangedConfigurationWarnsOnceThenCatchesUp(t *testing.T) {
 	}
 	if caughtUp.LifecycleConfigurationWarning != "" {
 		t.Errorf("LifecycleConfigurationWarning = %q, want no warning once the baseline has caught up", caughtUp.LifecycleConfigurationWarning)
+	}
+}
+
+// The baseline is one session-wide value shared by up/down/destroy: an
+// ordinary Up's own execution never touches a dynamic task instance, but
+// the digest it records must still cover one, or a later Down repairing
+// that instance's cleanup would find nothing changed.
+func TestUp_BaselineAccountsForDynamicOutstandingExecution(t *testing.T) {
+	requireBash(t)
+	cfg := writeWorkflowFixture(t, t.TempDir(), "coding",
+		[]taskFixture{
+			{id: "build", scope: "run", setup: `echo '{}'`, cleanup: "true"},
+			{id: "adhoc", scope: "run", cleanup: "true"},
+		},
+		[]nodeFixture{{id: "build"}},
+	)
+	store := testStore(t)
+	seedSessionSplit(t, store, "sess-1", "acme", 1, "coding",
+		map[string]*contract.TaskState{},
+		map[string]*contract.TaskState{
+			"adhoc#1": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, TaskID: "adhoc", Seq: 1, Outputs: map[string]any{}},
+		},
+	)
+
+	if _, err := Up(cfg, store, UpParams{Identifier: "sess-1"}); err != nil {
+		t.Fatalf("Up (first): %v", err)
+	}
+	baseline := store.Get("sess-1").LifecycleConfigurationDigest
+
+	rewriteTaskFixture(t, cfg, taskFixture{id: "adhoc", scope: "run", cleanup: "echo changed"})
+
+	changed, err := Up(cfg, store, UpParams{Identifier: "sess-1"})
+	if err != nil {
+		t.Fatalf("Up (second): %v", err)
+	}
+	if changed.LifecycleConfigurationWarning == "" {
+		t.Fatal("Up: want a warning after the dynamic instance's cleanup changed")
+	}
+	if store.Get("sess-1").LifecycleConfigurationDigest == baseline {
+		t.Fatal("baseline did not advance")
+	}
+}
+
+// Down only ever tears down run-scoped nodes, but the digest it records
+// must still cover an outstanding session-scoped one, or a later operation
+// repairing that node's cleanup would find nothing changed.
+func TestDown_BaselineAccountsForSessionScopedOutstandingExecution(t *testing.T) {
+	requireBash(t)
+	cfg := writeWorkflowFixture(t, t.TempDir(), "coding",
+		[]taskFixture{
+			{id: "build", scope: "run", setup: `echo '{}'`, cleanup: "true"},
+			{id: "review", scope: "session", cleanup: "true"},
+		},
+		[]nodeFixture{{id: "build"}},
+	)
+	store := testStore(t)
+	seedSessionWithNodes(t, store, "sess-1", "acme", 1, "coding", map[string]*contract.TaskState{
+		"review": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "review", Seq: 1, Outputs: map[string]any{}},
+	})
+
+	if _, err := Down(cfg, store, DownParams{Identifier: "sess-1"}); err != nil {
+		t.Fatalf("Down (first): %v", err)
+	}
+	baseline := store.Get("sess-1").LifecycleConfigurationDigest
+
+	rewriteTaskFixture(t, cfg, taskFixture{id: "review", scope: "session", cleanup: "echo changed"})
+
+	changed, err := Down(cfg, store, DownParams{Identifier: "sess-1"})
+	if err != nil {
+		t.Fatalf("Down (second): %v", err)
+	}
+	if changed.LifecycleConfigurationWarning == "" {
+		t.Fatal("Down: want a warning after the session-scoped node's cleanup changed")
+	}
+	if store.Get("sess-1").LifecycleConfigurationDigest == baseline {
+		t.Fatal("baseline did not advance")
 	}
 }
 
@@ -336,14 +412,22 @@ func TestLifecycleConfigurationDigest_ChangesWhenWorkspaceProviderCleanupChanges
 	if err != nil {
 		t.Fatalf("buildPlanForSession: %v", err)
 	}
-	before, err := lifecycleConfigurationDigest(cfg, session, plan, nil)
+	wsp, err := resolveSessionWorkspaceProvider(cfg, session)
+	if err != nil {
+		t.Fatalf("resolveSessionWorkspaceProvider: %v", err)
+	}
+	before, err := lifecycleConfigurationDigest(plan, nil, wsp)
 	if err != nil {
 		t.Fatalf("lifecycleConfigurationDigest (before): %v", err)
 	}
 
 	rewriteWorkspaceProviderCleanup(t, cfg, "coding", "echo changed")
 
-	after, err := lifecycleConfigurationDigest(cfg, session, plan, nil)
+	wsp, err = resolveSessionWorkspaceProvider(cfg, session)
+	if err != nil {
+		t.Fatalf("resolveSessionWorkspaceProvider: %v", err)
+	}
+	after, err := lifecycleConfigurationDigest(plan, nil, wsp)
 	if err != nil {
 		t.Fatalf("lifecycleConfigurationDigest (after): %v", err)
 	}
@@ -364,7 +448,7 @@ func TestLifecycleConfigurationDigest_ChangesWhenNestedOutputBindChanges(t *test
 	if err != nil {
 		t.Fatalf("buildPlanForSession (before): %v", err)
 	}
-	beforeDigest, err := lifecycleConfigurationDigest(before, session, beforePlan, nil)
+	beforeDigest, err := lifecycleConfigurationDigest(beforePlan, nil, resolvedWorkspaceProvider{})
 	if err != nil {
 		t.Fatalf("lifecycleConfigurationDigest (before): %v", err)
 	}
@@ -373,7 +457,7 @@ func TestLifecycleConfigurationDigest_ChangesWhenNestedOutputBindChanges(t *test
 	if err != nil {
 		t.Fatalf("buildPlanForSession (after): %v", err)
 	}
-	afterDigest, err := lifecycleConfigurationDigest(after, session, afterPlan, nil)
+	afterDigest, err := lifecycleConfigurationDigest(afterPlan, nil, resolvedWorkspaceProvider{})
 	if err != nil {
 		t.Fatalf("lifecycleConfigurationDigest (after): %v", err)
 	}
@@ -415,7 +499,7 @@ func TestLifecycleConfigurationDigest_ChangesWhenCleanupOnlyOutputBindChanges(t 
 	if err != nil {
 		t.Fatalf("unifiedTeardownList (before): %v", err)
 	}
-	beforeDigest, err := lifecycleConfigurationDigest(before, session, plan, beforeOutstanding)
+	beforeDigest, err := lifecycleConfigurationDigest(plan, beforeOutstanding, resolvedWorkspaceProvider{})
 	if err != nil {
 		t.Fatalf("lifecycleConfigurationDigest (before): %v", err)
 	}
@@ -424,7 +508,7 @@ func TestLifecycleConfigurationDigest_ChangesWhenCleanupOnlyOutputBindChanges(t 
 	if err != nil {
 		t.Fatalf("unifiedTeardownList (after): %v", err)
 	}
-	afterDigest, err := lifecycleConfigurationDigest(after, session, plan, afterOutstanding)
+	afterDigest, err := lifecycleConfigurationDigest(plan, afterOutstanding, resolvedWorkspaceProvider{})
 	if err != nil {
 		t.Fatalf("lifecycleConfigurationDigest (after): %v", err)
 	}
@@ -600,7 +684,11 @@ func TestLifecycleConfigurationDigest_ChangesWhenWorkspaceProviderReferenceChang
 	if err != nil {
 		t.Fatalf("buildPlanForSession: %v", err)
 	}
-	digestA, err := lifecycleConfigurationDigest(cfg, session, planA, nil)
+	wspA, err := resolveSessionWorkspaceProvider(cfg, session)
+	if err != nil {
+		t.Fatalf("resolveSessionWorkspaceProvider: %v", err)
+	}
+	digestA, err := lifecycleConfigurationDigest(planA, nil, wspA)
 	if err != nil {
 		t.Fatalf("lifecycleConfigurationDigest (provider_a): %v", err)
 	}
@@ -610,7 +698,11 @@ func TestLifecycleConfigurationDigest_ChangesWhenWorkspaceProviderReferenceChang
 	if err != nil {
 		t.Fatalf("buildPlanForSession: %v", err)
 	}
-	digestB, err := lifecycleConfigurationDigest(cfg, session, planB, nil)
+	wspB, err := resolveSessionWorkspaceProvider(cfg, session)
+	if err != nil {
+		t.Fatalf("resolveSessionWorkspaceProvider: %v", err)
+	}
+	digestB, err := lifecycleConfigurationDigest(planB, nil, wspB)
 	if err != nil {
 		t.Fatalf("lifecycleConfigurationDigest (provider_b): %v", err)
 	}
@@ -646,7 +738,11 @@ func TestLifecycleConfigurationDigest_ChangesWhenWorkspaceProviderInputsChange(t
 	if err != nil {
 		t.Fatalf("buildPlanForSession: %v", err)
 	}
-	before, err := lifecycleConfigurationDigest(cfg, session, plan, nil)
+	wsp, err := resolveSessionWorkspaceProvider(cfg, session)
+	if err != nil {
+		t.Fatalf("resolveSessionWorkspaceProvider: %v", err)
+	}
+	before, err := lifecycleConfigurationDigest(plan, nil, wsp)
 	if err != nil {
 		t.Fatalf("lifecycleConfigurationDigest (before): %v", err)
 	}
@@ -655,7 +751,11 @@ func TestLifecycleConfigurationDigest_ChangesWhenWorkspaceProviderInputsChange(t
 		return strings.Replace(body, "layout = 1", "layout = 2", 1)
 	})
 
-	after, err := lifecycleConfigurationDigest(cfg, session, plan, nil)
+	wsp, err = resolveSessionWorkspaceProvider(cfg, session)
+	if err != nil {
+		t.Fatalf("resolveSessionWorkspaceProvider: %v", err)
+	}
+	after, err := lifecycleConfigurationDigest(plan, nil, wsp)
 	if err != nil {
 		t.Fatalf("lifecycleConfigurationDigest (after): %v", err)
 	}
