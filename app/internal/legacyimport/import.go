@@ -25,10 +25,8 @@ type Options struct {
 	// DryRun builds and validates the temporary database and reports on it,
 	// but never promotes it and never writes the legacy rejection marker.
 	DryRun bool
-	// TmpDir is the directory Run builds its scratch database under, before
-	// copying the finished file into DestDir (empty defaults to
-	// os.TempDir()). A DestDir on a network filesystem never sees Run's
-	// intermediate writes this way, only the single final copy.
+	// TmpDir is the directory Run builds its scratch database under before
+	// copying it into DestDir (empty defaults to os.TempDir()).
 	TmpDir string
 }
 
@@ -316,9 +314,8 @@ func sortedKeys(m map[string]int64) []string {
 	return keys
 }
 
-// copyFileWithFsync copies src to dst, fsyncing dst before close. dst must
-// not already exist: O_EXCL rejects a stale leftover instead of silently
-// overwriting it.
+// copyFileWithFsync copies src to dst, fsyncing dst before close. O_EXCL
+// rejects an already-existing dst rather than silently overwriting it.
 func copyFileWithFsync(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {

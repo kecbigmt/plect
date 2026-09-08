@@ -73,11 +73,11 @@ type DB struct {
 	migrations fs.FS
 }
 
-// Open sets its journal mode (see JournalModeEnvVar), a bounded busy
-// timeout, and foreign-key enforcement as DSN parameters rather than leaving
-// them to each caller, so every connection this package ever opens carries
-// them, with no path through Open that could construct a connection missing
-// one. It does not apply migrations; call Migrate for that.
+// Open sets its journal mode (JournalModeEnvVar), a bounded busy timeout, and foreign-key
+// enforcement as DSN parameters rather than leaving them to each caller,
+// so every connection this package ever opens carries them, with no path
+// through Open that could construct a connection missing one. It does not
+// apply migrations; call Migrate for that.
 func Open(path string) (*DB, error) {
 	mode, err := journalMode()
 	if err != nil {
