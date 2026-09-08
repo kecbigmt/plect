@@ -178,7 +178,7 @@ func TestMigrate_DownRestoresPreDissolutionSchemaWithoutError(t *testing.T) {
 		t.Fatalf("NewProvider: %v", err)
 	}
 	if _, err := provider.Down(ctx); err != nil {
-		t.Fatalf("Down (resource-forward-cursor-kind): %v", err)
+		t.Fatalf("Down (forward-cursor-kind): %v", err)
 	}
 	if _, err := provider.Down(ctx); err != nil {
 		t.Fatalf("Down (node-execution-identity): %v", err)
@@ -301,7 +301,7 @@ func TestMigrate_DownRestoresNodeInstancesColumnsWithoutError(t *testing.T) {
 		t.Fatalf("NewProvider: %v", err)
 	}
 	if _, err := provider.Down(ctx); err != nil {
-		t.Fatalf("Down (resource-forward-cursor-kind): %v", err)
+		t.Fatalf("Down (forward-cursor-kind): %v", err)
 	}
 	if _, err := provider.Down(ctx); err != nil {
 		t.Fatalf("Down (node-execution-identity): %v", err)
@@ -318,10 +318,10 @@ func TestMigrate_DownRestoresNodeInstancesColumnsWithoutError(t *testing.T) {
 	}
 }
 
-// TestMigrate_DownDropsResourceForwardCursorRowsWithoutError: Down's
-// restored CHECK rejects kind='resourceforward', so copying every row
-// verbatim would error instead of restoring.
-func TestMigrate_DownDropsResourceForwardCursorRowsWithoutError(t *testing.T) {
+// TestMigrate_DownDropsForwardCursorRowsWithoutError: Down's restored CHECK
+// rejects kind='forward', so copying every row verbatim would error
+// instead of restoring.
+func TestMigrate_DownDropsForwardCursorRowsWithoutError(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
@@ -334,7 +334,7 @@ func TestMigrate_DownDropsResourceForwardCursorRowsWithoutError(t *testing.T) {
 		t.Fatalf("resolve session id: %v", err)
 	}
 	if _, err := db.write.ExecContext(ctx,
-		`INSERT INTO event_cursors (session_id, kind, next_sequence) VALUES (?, 'resourceforward', 1), (?, 'tick', 2)`,
+		`INSERT INTO event_cursors (session_id, kind, next_sequence) VALUES (?, 'forward', 1), (?, 'tick', 2)`,
 		sessionID, sessionID,
 	); err != nil {
 		t.Fatalf("seed event_cursors rows: %v", err)
@@ -345,17 +345,17 @@ func TestMigrate_DownDropsResourceForwardCursorRowsWithoutError(t *testing.T) {
 		t.Fatalf("NewProvider: %v", err)
 	}
 	if _, err := provider.Down(ctx); err != nil {
-		t.Fatalf("Down (resource-forward-cursor-kind): %v", err)
+		t.Fatalf("Down (forward-cursor-kind): %v", err)
 	}
 
 	var kindCount int
 	if err := db.write.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM event_cursors WHERE session_id = ? AND kind = 'resourceforward'`, sessionID,
+		`SELECT COUNT(*) FROM event_cursors WHERE session_id = ? AND kind = 'forward'`, sessionID,
 	).Scan(&kindCount); err != nil {
-		t.Fatalf("check resourceforward rows: %v", err)
+		t.Fatalf("check forward rows: %v", err)
 	}
 	if kindCount != 0 {
-		t.Fatalf("resourceforward cursor rows survived Down = %d, want 0 (dropped, not erroring)", kindCount)
+		t.Fatalf("forward cursor rows survived Down = %d, want 0 (dropped, not erroring)", kindCount)
 	}
 	var tickSeq int
 	if err := db.write.QueryRowContext(ctx,

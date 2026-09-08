@@ -13,7 +13,7 @@ import (
 	"github.com/kecbigmt/plecture/contracts/event"
 )
 
-const forwardConsumer = "resourceforward"
+const forwardConsumer = "forward"
 
 // sessionForwarder relays a down-but-not-destroyed session's new Inbound
 // events to its nearest live ancestor, since no sessionReactor drains that
