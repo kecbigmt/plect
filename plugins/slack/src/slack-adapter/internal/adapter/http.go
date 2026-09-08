@@ -176,9 +176,6 @@ func (a *Adapter) HandlePostMessage(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// HandleStream handles POST /stream: one plect.message_delta chunk of a
-// live-updating Slack thread reply, keyed by stream_key. See StreamManager
-// for the per-key ordering and fallback-on-start-failure behavior.
 func (a *Adapter) HandleStream(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
