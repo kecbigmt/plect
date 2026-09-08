@@ -42,6 +42,16 @@ the referenced effect declarations needed to form that lifecycle configuration,
 including nested effects. Action declarations include their declared type,
 literal shell source or executable reference, and declared argument vector.
 
+The projection also includes the current trusted cleanup definitions needed by
+outstanding executions, including their required nested cleanup definitions.
+It resolves those definitions through each execution's retained declaration
+identity, rather than through the desired workflow alone. Thus, when a node is
+removed from the desired workflow, its cleanup fails, and a later configuration
+edit repairs that cleanup, the next teardown warns and runs the repaired
+definition. Resolving this additional scope neither hashes nor replays retained
+code, and it does not add runtime inputs, outputs, or credentials to the
+projection.
+
 The projection excludes display and description prose, instruction bodies as
 such, external-file contents, plugin content hashes, executable binaries,
 `PATH` resolution, and transitive executable dependencies. A changed reference
