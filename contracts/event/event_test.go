@@ -66,6 +66,15 @@ func TestPlectEventNamespaceConstants(t *testing.T) {
 		"tick escalated":  TypeTickEscalated,
 		"judge recorded":  TypeJudgeRecorded,
 		"chain attempt":   TypeChainAttempt,
+		"message":         TypeMessage,
+		"message chunk":   TypeMessageChunk,
+		"meta message id": MetaMessageID,
+		"meta turn id":    MetaTurnID,
+		"meta role":       MetaRole,
+		"meta source":     MetaSource,
+		"meta index":      MetaIndex,
+		"meta final":      MetaFinal,
+		"role assistant":  RoleAssistant,
 	}
 	for name, got := range cases {
 		if got == "" {
@@ -80,6 +89,12 @@ func TestPlectEventNamespaceConstants(t *testing.T) {
 	}
 	if TypeStatusMessage != "plect.status_message" {
 		t.Fatalf("TypeStatusMessage = %q, want plect.status_message", TypeStatusMessage)
+	}
+	if TypeMessage != "plect.message" {
+		t.Fatalf("TypeMessage = %q, want plect.message", TypeMessage)
+	}
+	if TypeMessageChunk != "plect.message_chunk" {
+		t.Fatalf("TypeMessageChunk = %q, want plect.message_chunk", TypeMessageChunk)
 	}
 }
 

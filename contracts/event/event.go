@@ -124,7 +124,29 @@ const (
 	// log's ordinary append identity: a repeated attempt is a separate fact,
 	// not a dedup collision.
 	TypeNodeResult = "plect.node.result"
+	// TypeMessage and TypeMessageChunk are the runtime-neutral agent-message
+	// contract documented at docs/language/events.md#agent-messages: for one
+	// MetaMessageID, an emitter produces either exactly one TypeMessage or a
+	// TypeMessageChunk sequence ending with MetaFinal = "true", never both.
+	TypeMessage      = "plect.message"
+	TypeMessageChunk = "plect.message_chunk"
 )
+
+// Metadata keys stamped on TypeMessage / TypeMessageChunk events; see
+// docs/language/events.md#agent-messages for the full contract.
+const (
+	MetaMessageID = "message_id"
+	MetaTurnID    = "turn_id"
+	MetaRole      = "role"
+	MetaSource    = "source"
+	MetaIndex     = "index"
+	// MetaFinal is the literal string "true" or "false" (Metadata is
+	// map[string]string).
+	MetaFinal = "final"
+)
+
+// RoleAssistant is TypeMessage's MetaRole value.
+const RoleAssistant = "assistant"
 
 // NodeResultAction is TypeNodeResult's closed set of "action" metadata
 // values: which lifecycle action the event reports on.
