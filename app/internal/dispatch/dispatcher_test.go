@@ -466,6 +466,96 @@ func TestDispatcher_ChannelErrorNotRedelivered(t *testing.T) {
 	}
 }
 
+// TestDispatcher_ChannelErrorRelayedToOtherChannelNotOrigin: a channel's own
+// failure reaches a second, independent channel, but never loops back to it.
+func TestDispatcher_ChannelErrorRelayedToOtherChannelNotOrigin(t *testing.T) {
+	log := eventlog.NewStore(t.TempDir())
+	dead := filepath.Join(t.TempDir(), "absent.sock") // origin: never listened
+	sock, recv := startFakeSocket(t)                  // relay: live
+	def := socketChannel()
+	s := &domain.Session{Name: "o/r-1", Tasks: map[string]*contract.TaskState{}}
+	st := state.NewStore(t.TempDir())
+	if err := st.Put(s); err != nil {
+		t.Fatal(err)
+	}
+	d := &sessionDispatcher{
+		session: "o/r-1",
+		channels: []config.EventChannel{
+			{Name: "origin", Uses: "sock", Inputs: map[string]*lang.Value{"path": literalValue(dead)}, Include: []string{"*"}},
+			{Name: "relay", Uses: "sock", Inputs: map[string]*lang.Value{"path": literalValue(sock)}, Include: []string{"*"}},
+		},
+		defs:   map[string]config.ChannelDefinition{"sock": def},
+		log:    log,
+		state:  st,
+		policy: channel.RetryPolicy{MaxAttempts: 1, BaseBackoff: time.Millisecond, MaxBackoff: time.Millisecond, Timeout: 200 * time.Millisecond},
+	}
+
+	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Direction: event.Internal})
+	drainOnce(d, s)
+
+	if typ := recvType(t, recv); typ != event.TypeInstruction {
+		t.Fatalf("relay's delivery of the original event = %q", typ)
+	}
+	errs, _, _, _ := log.List("o/r-1", 0, event.Filter{Types: []string{event.TypeChannelError}})
+	if len(errs) != 1 || errs[0].Metadata["channel"] != "origin" {
+		t.Fatalf("want one channel.error for origin, got %+v", errs)
+	}
+
+	drainOnce(d, s)
+
+	if typ := recvType(t, recv); typ != event.TypeChannelError {
+		t.Errorf("relay must receive origin's channel.error, got %q", typ)
+	}
+	// A second attempt at origin would fail too, so this count also proves origin was skipped.
+	errs, _, _, _ = log.List("o/r-1", 0, event.Filter{Types: []string{event.TypeChannelError}})
+	if len(errs) != 1 {
+		t.Fatalf("origin must not error again by receiving its own channel.error: got %d", len(errs))
+	}
+}
+
+// TestDispatcher_MutualChannelErrorBoundedNotInfinite: two channels relaying
+// each other's channel.error stays bounded instead of ping-ponging forever.
+func TestDispatcher_MutualChannelErrorBoundedNotInfinite(t *testing.T) {
+	log := eventlog.NewStore(t.TempDir())
+	deadA := filepath.Join(t.TempDir(), "a.sock")
+	deadB := filepath.Join(t.TempDir(), "b.sock")
+	def := socketChannel()
+	s := &domain.Session{Name: "o/r-1", Tasks: map[string]*contract.TaskState{}}
+	st := state.NewStore(t.TempDir())
+	if err := st.Put(s); err != nil {
+		t.Fatal(err)
+	}
+	d := &sessionDispatcher{
+		session: "o/r-1",
+		channels: []config.EventChannel{
+			// Both relay plect.channel.error, or a would never be offered b's error and the guard under test would go unexercised.
+			{Name: "a", Uses: "sock", Inputs: map[string]*lang.Value{"path": literalValue(deadA)}, Include: []string{"plect.instruction", "plect.channel.error"}},
+			{Name: "b", Uses: "sock", Inputs: map[string]*lang.Value{"path": literalValue(deadB)}, Include: []string{"plect.channel.error"}},
+		},
+		defs:   map[string]config.ChannelDefinition{"sock": def},
+		log:    log,
+		state:  st,
+		policy: channel.RetryPolicy{MaxAttempts: 1, BaseBackoff: time.Millisecond, MaxBackoff: time.Millisecond, Timeout: 200 * time.Millisecond},
+	}
+
+	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Direction: event.Internal})
+	// Draining well past the two hops convergence takes is what would catch an unbounded ping-pong.
+	for range 10 {
+		drainOnce(d, s)
+	}
+
+	errs, _, _, _ := log.List("o/r-1", 0, event.Filter{Types: []string{event.TypeChannelError}})
+	if len(errs) != 2 {
+		t.Fatalf("mutual channel failure must stay bounded at 2 events, got %d: %+v", len(errs), errs)
+	}
+	if errs[0].Metadata["channel"] != "a" || errs[0].Metadata["event_type"] != event.TypeInstruction {
+		t.Errorf("first channel.error = %+v", errs[0].Metadata)
+	}
+	if errs[1].Metadata["channel"] != "b" || errs[1].Metadata["event_type"] != event.TypeChannelError {
+		t.Errorf("second channel.error = %+v", errs[1].Metadata)
+	}
+}
+
 func TestDispatcher_MultiChannelFanOut(t *testing.T) {
 	log := eventlog.NewStore(t.TempDir())
 	sock, recv := startFakeSocket(t)

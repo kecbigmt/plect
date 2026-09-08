@@ -111,8 +111,20 @@ func TestChannelErrorEvent(t *testing.T) {
 	if ce.SessionName != "widget-1" {
 		t.Errorf("session not carried: %+v", ce)
 	}
-	if ce.Metadata["channel"] != "runtime" || ce.Metadata["event_id"] != "01ABC" || ce.Metadata["attempts"] != "3" {
+	if ce.Metadata["channel"] != "runtime" || ce.Metadata["event_id"] != "01ABC" || ce.Metadata["attempts"] != "3" || ce.Metadata["event_type"] != event.TypeInstruction {
 		t.Errorf("metadata = %+v", ce.Metadata)
+	}
+}
+
+// TestChannelErrorEvent_OrigChannelErrorCarriesEventType pins the data the
+// dispatcher's mutual-failure guard reads: a channel.error about a failed
+// relay of another channel.error must itself be marked as such, so it can be
+// told apart from a channel.error about an ordinary event.
+func TestChannelErrorEvent_OrigChannelErrorCarriesEventType(t *testing.T) {
+	orig := event.Event{ID: "01DEF", SessionName: "widget-1", Type: event.TypeChannelError}
+	ce := ChannelErrorEvent(orig, "b", 1, errors.New("delivery exited 1"))
+	if ce.Metadata["event_type"] != event.TypeChannelError {
+		t.Errorf("event_type = %q, want %q", ce.Metadata["event_type"], event.TypeChannelError)
 	}
 }
 

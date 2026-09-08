@@ -58,9 +58,12 @@ const (
 	// TypeInstruction is a task instruction appended to a session's stream for
 	// delivery to its runtime via a workflow channel (not sent from TaskSetup).
 	TypeInstruction = "plect.instruction"
-	// TypeChannelError records a channel worker exhausting its retries. It rides
-	// the log for observability but is never itself a channel `include` target,
-	// so a failed delivery cannot loop.
+	// TypeChannelError records a channel worker exhausting its retries. It can
+	// be a channel `include` target — relayed to any channel other than the
+	// one whose failure it records, so a channel never loops on its own
+	// failure, and never relayed at all when it records the failure of
+	// delivering another TypeChannelError, so two channels cannot ping-pong
+	// on each other's errors.
 	TypeChannelError = "plect.channel.error"
 	// TypeStatusMessage records a session's self-reported status line whenever
 	// it changes.
