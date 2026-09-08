@@ -21,9 +21,10 @@ export interface ConversationMessage {
   readonly source?: string;
   readonly turnId?: string;
   readonly text: string;
-  // True only once the canonical plect.message has replaced any
-  // delta-built preview — a delta sequence's own final=true just closes
-  // that stream, it never substitutes for the message that follows it.
+  // True once the delta stream itself reports done (metadata final=true)
+  // or the canonical plect.message has arrived — either closes the
+  // streaming indicator, but only the canonical message's body is
+  // authoritative: it still replaces delta-built text whenever it arrives.
   readonly final: boolean;
   readonly legacy: boolean;
 }
@@ -42,6 +43,7 @@ interface MessageBuild {
   turnId?: string;
   deltas: Map<number, string>;
   finalText?: string;
+  deltaClosed: boolean;
 }
 
 function deltaText(build: MessageBuild): string {
@@ -60,7 +62,7 @@ export function buildConversationTimeline(events: readonly SessionEvent[]): Conv
   function upsert(messageId: string, time: string): MessageBuild {
     let build = messages.get(messageId);
     if (build === undefined) {
-      build = { index: entries.length, time, deltas: new Map() };
+      build = { index: entries.length, time, deltas: new Map(), deltaClosed: false };
       messages.set(messageId, build);
       entries.push({ kind: "message", id: messageId, time, text: "", final: false, legacy: false });
     }
@@ -75,7 +77,7 @@ export function buildConversationTimeline(events: readonly SessionEvent[]): Conv
       source: build.source,
       turnId: build.turnId,
       text: build.finalText ?? deltaText(build),
-      final: build.finalText !== undefined,
+      final: build.finalText !== undefined || build.deltaClosed,
       legacy: false,
     };
   }
@@ -92,8 +94,13 @@ export function buildConversationTimeline(events: readonly SessionEvent[]): Conv
       build.turnId ??= event.metadata?.turn_id;
       if (event.type === MESSAGE_EVENT_TYPE) {
         build.finalText = event.body ?? "";
-      } else if ((event.metadata?.kind ?? DELTA_KIND_TEXT) === DELTA_KIND_TEXT && event.body) {
-        build.deltas.set(Number(event.metadata?.index ?? "0"), event.body);
+      } else {
+        if ((event.metadata?.kind ?? DELTA_KIND_TEXT) === DELTA_KIND_TEXT && event.body) {
+          build.deltas.set(Number(event.metadata?.index ?? "0"), event.body);
+        }
+        if (event.metadata?.final === "true") {
+          build.deltaClosed = true;
+        }
       }
       commit(messageId, build);
       continue;

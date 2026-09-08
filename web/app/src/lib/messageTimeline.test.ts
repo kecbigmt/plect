@@ -77,6 +77,26 @@ describe("buildConversationTimeline", () => {
     expect(entry.final).toBe(true);
   });
 
+  it("closes a delta-only stream at its terminal final=true, ahead of any canonical plect.message", () => {
+    const timeline = buildConversationTimeline([deltaEvent("d0", 0, "Hel", false), deltaEvent("d1", 1, "lo", true)]);
+    const [entry] = timeline;
+    if (entry.kind !== "message") throw new Error("expected a message entry");
+    expect(entry.text).toBe("Hello");
+    expect(entry.final).toBe(true);
+  });
+
+  it("still lets a later canonical plect.message override a delta stream already closed by final=true", () => {
+    const timeline = buildConversationTimeline([
+      deltaEvent("d0", 0, "Hel", false),
+      deltaEvent("d1", 1, "lo", true),
+      messageEvent("m0", "Hello there"),
+    ]);
+    const [entry] = timeline;
+    if (entry.kind !== "message") throw new Error("expected a message entry");
+    expect(entry.text).toBe("Hello there");
+    expect(entry.final).toBe(true);
+  });
+
   it("keeps a message at its first-seen position when later chunks for the same message_id arrive", () => {
     const other: SessionEvent = {
       id: "other",
