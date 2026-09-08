@@ -46,10 +46,6 @@ func TestEventPublishListShow(t *testing.T) {
 	}
 }
 
-// Given no session named X, when `plect event publish X …` runs, then it
-// must fail with ErrSessionNotFound and leave no trace: no state row and no
-// event stream. Sessions are created only by `plect up` / population
-// dispatch, never as a side effect of publishing.
 func TestEventPublishUnknownSessionErrorsAndCreatesNothing(t *testing.T) {
 	store := state.NewStore(t.TempDir())
 	const name = "owner/never-created"
@@ -77,8 +73,6 @@ func TestEventPublishUnknownSessionErrorsAndCreatesNothing(t *testing.T) {
 	}
 }
 
-// Given an existing session, publishing behaves as before the existence check
-// was added.
 func TestEventPublishExistingSessionUnaffected(t *testing.T) {
 	store := state.NewStore(t.TempDir())
 	const name = "owner/repo-42"
