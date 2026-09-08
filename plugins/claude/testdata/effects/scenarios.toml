@@ -52,6 +52,35 @@ path   = ""
 output = "mcp_config"
 path   = ""
 
+# Proves the declaration's own inputs_schema enum rejects an out-of-set
+# permission_mode before the shell script ever runs, not merely that a
+# schema engine can reject enums in the abstract.
+[[runtime]]
+name   = "permission-mode-rejected"
+inputs = { permission_mode = "not-a-real-mode" }
+# A rejected setup never reaches health probes in real orchestration.
+hooks  = ["setup"]
+
+# Proves permission_mode = "" opts out of both the --permission-mode flag
+# and the bypassPermissions-only skipDangerousModePermissionPrompt key,
+# distinct from an omitted input (which falls through to the bypassPermissions
+# default, seen in every other scenario above).
+[[runtime]]
+name   = "permission-mode-empty-opt-out"
+inputs = { permission_mode = "" }
+
+[[runtime.files]]
+path    = ".claude/sessions/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.json"
+content = '{"sessionId":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","pid":PID}'
+
+[[runtime.artifacts]]
+output = "hooks_settings"
+path   = ""
+
+[[runtime.artifacts]]
+output = "mcp_config"
+path   = ""
+
 # This proves the timed-out launch's child is killed, the pane survives,
 # and a retry against that same pane succeeds.
 [[runtime]]

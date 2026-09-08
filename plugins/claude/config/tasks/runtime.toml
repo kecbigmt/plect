@@ -11,11 +11,8 @@ scope = "run"
 #   effort       — when set, appended as `--effort <value>` the same way.
 #                  Empty = no flag (CLI default).
 #   permission_mode — appended as `--permission-mode <value>`, defaulting to
-#                  `bypassPermissions`. A dispatched session runs unattended,
-#                  so this resolves the CLI's first-run "Set up auto mode?"
-#                  wizard upfront instead of leaving it to hang on a pane with
-#                  nobody to answer it — the same class of hang
-#                  DISALLOWED_FLAG closes for AskUserQuestion.
+#                  `bypassPermissions` to skip the CLI's first-run auto-mode
+#                  wizard on an unattended launch (see the setup script).
 #   launch_env   — when set, a JSON object of environment variables exported
 #                  on the launch line, so the agent process inherits them.
 #                  Data only: keys must be valid environment variable names
@@ -44,9 +41,9 @@ scope = "run"
 #
 # Every value the script needs arrives through the binding transport, so
 # nothing below is spliced into this source and no value can become part of
-# a command: model/effort/permission_mode/launch_env/mcp_servers/path_prepend
-# all cross one further boundary of the script's own — the keystrokes typed
-# into the pane — and the script owns the quoting at that boundary.
+# a command: model/effort/launch_env/mcp_servers/path_prepend all cross one
+# further boundary of the script's own — the keystrokes typed into the
+# pane — and the script owns the quoting at that boundary.
 [runtime.setup]
 type   = "shell"
 script = '''
@@ -82,6 +79,10 @@ else
   SID=$(uuidgen)
   CLAUDE_ARG="--session-id $SID"
 fi
+
+# permission_mode is resolved here, ahead of model/effort below, because the
+# hooks settings file built next also needs its value.
+PERMISSION_MODE="${permission_mode-}"
 
 SOCKET_DIR="${XDG_RUNTIME_DIR:-/tmp}/claude-channel"
 mkdir -p "$SOCKET_DIR"
@@ -127,15 +128,20 @@ printf '%s' "$MCP_JSON" > "$MCP"
 # boundary rather than inheriting a stale fingerprint.
 "$activity_bin" reset "$session_name"
 
+SKIP_BYPASS_WARNING=false
+[ "$PERMISSION_MODE" = "bypassPermissions" ] && SKIP_BYPASS_WARNING=true
+
 HOOKS=$(mktemp "${TMPDIR:-/tmp}/plect-hooks.XXXXXX")
 mv "$HOOKS" "$HOOKS.json" && HOOKS="$HOOKS.json"
-jq -nc --arg activity "$activity_bin" '{
-  hooks: {
-    UserPromptSubmit: [{hooks: [{type: "command", command: ($activity + " working")}]}],
-    PreToolUse:       [{hooks: [{type: "command", command: ($activity + " working")}]}],
-    Stop:             [{hooks: [{type: "command", command: ($activity + " waiting")}]}]
-  }
-}' > "$HOOKS"
+jq -nc --arg activity "$activity_bin" --argjson skip_bypass_warning "$SKIP_BYPASS_WARNING" '
+  {
+    hooks: {
+      UserPromptSubmit: [{hooks: [{type: "command", command: ($activity + " working")}]}],
+      PreToolUse:       [{hooks: [{type: "command", command: ($activity + " working")}]}],
+      Stop:             [{hooks: [{type: "command", command: ($activity + " waiting")}]}]
+    }
+  } + (if $skip_bypass_warning then {skipDangerousModePermissionPrompt: true} else {} end)
+' > "$HOOKS"
 
 # PLECT_SESSION_NAME scopes runtime commands to this session: subscribe uses
 # it as the subscriber, and create/up use it as the default parent for
@@ -174,10 +180,10 @@ EFFORT="${effort-}"
 EFFORT_FLAG=""
 [ -n "$EFFORT" ] && EFFORT_FLAG="--effort $EFFORT"
 
-# permission_mode crosses the same keystroke boundary as model/effort, but its
-# defense is the inputs_schema enum below rather than a pattern: the value set
-# is closed to claude's own mode names, none of which can carry a quote.
-PERMISSION_MODE="${permission_mode-}"
+# permission_mode (resolved earlier, above the hooks settings file) crosses
+# the same keystroke boundary as model/effort, but its defense is the
+# inputs_schema enum below rather than a pattern: the value set is closed to
+# claude's own mode names, none of which can carry a quote.
 PERMISSION_MODE_FLAG=""
 [ -n "$PERMISSION_MODE" ] && PERMISSION_MODE_FLAG="--permission-mode $PERMISSION_MODE"
 
@@ -388,9 +394,7 @@ additionalProperties = false
 [runtime.inputs_schema.properties]
 model        = { type = "string", pattern = "^[A-Za-z0-9_.:-]*$" }
 effort       = { type = "string", pattern = "^[A-Za-z0-9_.:-]*$" }
-# permission_mode: closed to the CLI's own choices (plus "" to opt out of the
-# flag entirely, the same escape hatch model/effort leave), so a typo is
-# rejected at load time rather than reaching claude's own argument parser.
+# permission_mode is closed to the CLI's own choices; a value outside that set is rejected at load time.
 permission_mode = { type = "string", enum = ["", "acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"], default = "bypassPermissions" }
 # launch_env: a JSON object. jq rejects anything that is not an object of
 # scalars at launch time and quotes each value on its way into the

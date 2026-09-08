@@ -19,7 +19,7 @@ call[6]: "terminal-send_keys" "Enter"
 call[7]: "terminal-send_keys" "Enter"
 outputs: {"hooks_settings":"<state>/plect-hooks.json","mcp_config":"<state>/plect-mcp.json","pid":<pid>,"session_id":"11111111-2222-3333-4444-555555555555","socket_path":"<state>/claude-channel/11111111-2222-3333-4444-555555555555.sock"}
 artifact hooks_settings/:
-{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"<plugin>/scripts/claude-agent-activity working"}]}],"PreToolUse":[{"hooks":[{"type":"command","command":"<plugin>/scripts/claude-agent-activity working"}]}],"Stop":[{"hooks":[{"type":"command","command":"<plugin>/scripts/claude-agent-activity waiting"}]}]}}
+{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"<plugin>/scripts/claude-agent-activity working"}]}],"PreToolUse":[{"hooks":[{"type":"command","command":"<plugin>/scripts/claude-agent-activity working"}]}],"Stop":[{"hooks":[{"type":"command","command":"<plugin>/scripts/claude-agent-activity waiting"}]}]},"skipDangerousModePermissionPrompt":true}
 artifact mcp_config/:
 {
   "mcpServers": {
@@ -92,7 +92,7 @@ call[6]: "terminal-send_text" "export PLECT_SESSION_NAME=acme/widget-1; claude -
 call[7]: "terminal-send_keys" "Enter"
 outputs: {"hooks_settings":"<state>/plect-hooks.json","mcp_config":"<state>/plect-mcp.json","pid":<pid>,"session_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","socket_path":"<state>/claude-channel/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.sock"}
 artifact hooks_settings/:
-{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"<plugin>/scripts/claude-agent-activity working"}]}],"PreToolUse":[{"hooks":[{"type":"command","command":"<plugin>/scripts/claude-agent-activity working"}]}],"Stop":[{"hooks":[{"type":"command","command":"<plugin>/scripts/claude-agent-activity waiting"}]}]}}
+{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"<plugin>/scripts/claude-agent-activity working"}]}],"PreToolUse":[{"hooks":[{"type":"command","command":"<plugin>/scripts/claude-agent-activity working"}]}],"Stop":[{"hooks":[{"type":"command","command":"<plugin>/scripts/claude-agent-activity waiting"}]}]},"skipDangerousModePermissionPrompt":true}
 artifact mcp_config/:
 {"mcpServers":{}}
 
@@ -104,6 +104,36 @@ call[0]: "claude-agent-activity" "probe" "acme/widget-1"
 activity: fingerprint="spy-turn-1" silence_expected=false
 
 == runtime:channel-server-absent / cleanup
+call[0]: "claude-agent-activity" "reset" "acme/widget-1"
+cleaned
+
+== runtime:permission-mode-rejected / setup
+declined: node "runtime" input schema: jsonschema validation failed with 'plect:task:runtime:inputs#'
+- at '/permission_mode': value must be one of '', 'acceptEdits', 'auto', 'bypassPermissions', 'manual', 'dontAsk', 'plan'
+
+== runtime:permission-mode-empty-opt-out / setup
+call[0]: "uuidgen"
+call[1]: "mktemp" "<state>/plect-mcp.XXXXXX"
+call[2]: "claude-mcp-servers"
+call[3]: "claude-agent-activity" "reset" "acme/widget-1"
+call[4]: "mktemp" "<state>/plect-hooks.XXXXXX"
+call[5]: "terminal-pid"
+call[6]: "terminal-send_text" "export PLECT_SESSION_NAME=acme/widget-1; claude --session-id aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee --mcp-config <state>/plect-mcp.json --settings <state>/plect-hooks.json     --disallowedTools AskUserQuestion"
+call[7]: "terminal-send_keys" "Enter"
+outputs: {"hooks_settings":"<state>/plect-hooks.json","mcp_config":"<state>/plect-mcp.json","pid":<pid>,"session_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","socket_path":"<state>/claude-channel/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.sock"}
+artifact hooks_settings/:
+{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"<plugin>/scripts/claude-agent-activity working"}]}],"PreToolUse":[{"hooks":[{"type":"command","command":"<plugin>/scripts/claude-agent-activity working"}]}],"Stop":[{"hooks":[{"type":"command","command":"<plugin>/scripts/claude-agent-activity waiting"}]}]}}
+artifact mcp_config/:
+{"mcpServers":{}}
+
+== runtime:permission-mode-empty-opt-out / health.alive
+alive
+
+== runtime:permission-mode-empty-opt-out / health.activity
+call[0]: "claude-agent-activity" "probe" "acme/widget-1"
+activity: fingerprint="spy-turn-1" silence_expected=false
+
+== runtime:permission-mode-empty-opt-out / cleanup
 call[0]: "claude-agent-activity" "reset" "acme/widget-1"
 cleaned
 
