@@ -393,6 +393,14 @@ from that baseline, then records the current digest as execution starts. The
 baseline advances even if execution later fails. It stores no configuration
 snapshot or history and does not rewrite execution-owned facts.
 
+The workflow and its workspace provider are read fresh at each resolution
+point within one lifecycle call — the comparison digest, its own precondition
+check, and the later setup/cleanup call each resolve independently rather than
+sharing one passed-through value. Each read is expected to agree because
+configuration does not change mid-operation; closing that as a guaranteed
+single read is tracked separately from the comparison-baseline mechanism this
+section describes.
+
 `service.unifiedTeardownList` enumerates every execution with an outstanding
 release obligation directly from `session.Nodes` — not from the *current* plan,
 which has nothing to say about a node it no longer declares. It resolves each
