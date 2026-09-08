@@ -7,6 +7,7 @@ import (
 
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/domain"
+	"github.com/kecbigmt/plecture/app/internal/eventlog"
 	"github.com/kecbigmt/plecture/app/internal/state"
 	"github.com/kecbigmt/plecture/contracts/event"
 )
@@ -14,6 +15,9 @@ import (
 func TestEventPublishListShow(t *testing.T) {
 	store := state.NewStore(t.TempDir())
 	const session = "owner/repo-7"
+	if err := store.Put(&domain.Session{Name: session}); err != nil {
+		t.Fatal(err)
+	}
 
 	ev, err := EventPublish(nil, store, session, EventPublishParams{
 		Type:    event.TypeUserNote,
@@ -42,6 +46,55 @@ func TestEventPublishListShow(t *testing.T) {
 	}
 }
 
+// Given no session named X, when `plect event publish X …` runs, then it
+// must fail with ErrSessionNotFound and leave no trace: no state row and no
+// event stream. Sessions are created only by `plect up` / population
+// dispatch, never as a side effect of publishing.
+func TestEventPublishUnknownSessionErrorsAndCreatesNothing(t *testing.T) {
+	store := state.NewStore(t.TempDir())
+	const name = "owner/never-created"
+
+	_, err := EventPublish(nil, store, name, EventPublishParams{Type: event.TypeUserNote, Summary: "hello"})
+	var svcErr *Error
+	if !errors.As(err, &svcErr) || svcErr.Code != ErrSessionNotFound {
+		t.Fatalf("want ErrSessionNotFound, got %v", err)
+	}
+
+	session, gerr := store.GetE(name)
+	if gerr != nil {
+		t.Fatalf("GetE: %v", gerr)
+	}
+	if session != nil {
+		t.Fatalf("publish to an unknown session created a state row: %+v", session)
+	}
+
+	gen, serr := eventlog.NewStore(store.Dir()).StreamID(name)
+	if serr != nil {
+		t.Fatalf("StreamID: %v", serr)
+	}
+	if gen != "" {
+		t.Fatalf("publish to an unknown session created an event stream: generation %q", gen)
+	}
+}
+
+// Given an existing session, publishing behaves as before the existence check
+// was added.
+func TestEventPublishExistingSessionUnaffected(t *testing.T) {
+	store := state.NewStore(t.TempDir())
+	const name = "owner/repo-42"
+	if err := store.Put(&domain.Session{Name: name}); err != nil {
+		t.Fatal(err)
+	}
+
+	ev, err := EventPublish(nil, store, name, EventPublishParams{Type: event.TypeUserNote, Summary: "hello"})
+	if err != nil {
+		t.Fatalf("publish to an existing session: %v", err)
+	}
+	if ev.ID == "" {
+		t.Fatal("published event has no id")
+	}
+}
+
 // TestEventPublishDirectionNormalization covers the direction normalization rule:
 // direction is forced to Inbound whenever PLECT_SESSION_NAME names a session
 // other than the publish target, and origin_session is stamped so a later
@@ -50,6 +103,11 @@ func TestEventPublishListShow(t *testing.T) {
 // whatever direction the caller asked for.
 func TestEventPublishDirectionNormalization(t *testing.T) {
 	store := state.NewStore(t.TempDir())
+	for _, name := range []string{"owner/target", "owner/self"} {
+		if err := store.Put(&domain.Session{Name: name}); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	t.Run("cross-session publish forces inbound", func(t *testing.T) {
 		t.Setenv("PLECT_SESSION_NAME", "owner/other")
@@ -128,6 +186,9 @@ func TestEventPublishSessionGuardBlocksCrossOwner(t *testing.T) {
 func TestEventPublishSessionGuardAllowsMatching(t *testing.T) {
 	store := state.NewStore(t.TempDir())
 	cfg := &config.Config{SessionGuard: "^acme/"}
+	if err := store.Put(&domain.Session{Name: "acme/repo-1"}); err != nil {
+		t.Fatal(err)
+	}
 
 	if _, err := EventPublish(cfg, store, "acme/repo-1", EventPublishParams{
 		Type: event.TypeUserNote, Summary: "ok",
@@ -141,6 +202,9 @@ func TestEventPublishSessionGuardAllowsMatching(t *testing.T) {
 func TestEventPublishNoGuardAllowsCrossOwner(t *testing.T) {
 	store := state.NewStore(t.TempDir())
 	cfg := &config.Config{} // SessionGuard == ""
+	if err := store.Put(&domain.Session{Name: "exampleorg/repo-26"}); err != nil {
+		t.Fatal(err)
+	}
 
 	if _, err := EventPublish(cfg, store, "exampleorg/repo-26", EventPublishParams{
 		Type: event.TypeUserNote, Summary: "ok",
@@ -151,6 +215,9 @@ func TestEventPublishNoGuardAllowsCrossOwner(t *testing.T) {
 
 func TestEventPublishRequiresType(t *testing.T) {
 	store := state.NewStore(t.TempDir())
+	if err := store.Put(&domain.Session{Name: "o/r-1"}); err != nil {
+		t.Fatal(err)
+	}
 	_, err := EventPublish(nil, store, "o/r-1", EventPublishParams{Summary: "no type"})
 	var svcErr *Error
 	if !errors.As(err, &svcErr) || svcErr.Code != ErrInvalidInput {
@@ -161,6 +228,9 @@ func TestEventPublishRequiresType(t *testing.T) {
 func TestEventPageDescReturnsNewestN(t *testing.T) {
 	store := state.NewStore(t.TempDir())
 	const session = "owner/repo-7"
+	if err := store.Put(&domain.Session{Name: session}); err != nil {
+		t.Fatal(err)
+	}
 	for i := range 5 {
 		if _, err := EventPublish(nil, store, session, EventPublishParams{
 			Type: event.TypeUserNote, Summary: string(rune('A' + i)),
@@ -188,6 +258,9 @@ func TestEventPageDescReturnsNewestN(t *testing.T) {
 func TestEventPageAscPaginatesWithCursor(t *testing.T) {
 	store := state.NewStore(t.TempDir())
 	const session = "owner/repo-7"
+	if err := store.Put(&domain.Session{Name: session}); err != nil {
+		t.Fatal(err)
+	}
 	for i := range 5 {
 		if _, err := EventPublish(nil, store, session, EventPublishParams{
 			Type: event.TypeUserNote, Summary: string(rune('A' + i)),
@@ -219,6 +292,9 @@ func TestEventPageAscPaginatesWithCursor(t *testing.T) {
 func TestEventPageRejectsOrderMismatchCursor(t *testing.T) {
 	store := state.NewStore(t.TempDir())
 	const session = "owner/repo-7"
+	if err := store.Put(&domain.Session{Name: session}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote}); err != nil {
 		t.Fatal(err)
 	}
@@ -239,6 +315,9 @@ func TestEventPageRejectsOrderMismatchCursor(t *testing.T) {
 func TestEventPageRejectsStaleGenerationCursor(t *testing.T) {
 	store := state.NewStore(t.TempDir())
 	const session = "owner/repo-7"
+	if err := store.Put(&domain.Session{Name: session}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote}); err != nil {
 		t.Fatal(err)
 	}
@@ -254,6 +333,9 @@ func TestEventPageRejectsStaleGenerationCursor(t *testing.T) {
 func TestEventPageRejectsCursorAcrossSessionDeleteAndRecreateUnderSameName(t *testing.T) {
 	store := state.NewStore(t.TempDir())
 	const session = "owner/repo-7"
+	if err := store.Put(&domain.Session{Name: session}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote}); err != nil {
 		t.Fatal(err)
 	}
@@ -288,6 +370,9 @@ func TestEventPageRejectsCursorAcrossSessionDeleteAndRecreateUnderSameName(t *te
 func TestEventPageRejectsOldVersionCursor(t *testing.T) {
 	store := state.NewStore(t.TempDir())
 	const session = "owner/repo-7"
+	if err := store.Put(&domain.Session{Name: session}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote}); err != nil {
 		t.Fatal(err)
 	}
@@ -302,6 +387,9 @@ func TestEventPageRejectsOldVersionCursor(t *testing.T) {
 func TestEventStreamResumeDecodesEventPageCursor(t *testing.T) {
 	store := state.NewStore(t.TempDir())
 	const session = "owner/repo-9"
+	if err := store.Put(&domain.Session{Name: session}); err != nil {
+		t.Fatal(err)
+	}
 	for range 3 {
 		if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote}); err != nil {
 			t.Fatal(err)
@@ -336,6 +424,9 @@ func TestEventStreamResumeDecodesEventPageCursor(t *testing.T) {
 func TestEventStreamResumeEmptyCursorIsFreshConnect(t *testing.T) {
 	store := state.NewStore(t.TempDir())
 	const session = "owner/repo-9"
+	if err := store.Put(&domain.Session{Name: session}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote}); err != nil {
 		t.Fatal(err)
 	}
@@ -354,6 +445,9 @@ func TestEventStreamResumeEmptyCursorIsFreshConnect(t *testing.T) {
 func TestEventStreamResumeRejectsStaleGenerationCursor(t *testing.T) {
 	store := state.NewStore(t.TempDir())
 	const session = "owner/repo-9"
+	if err := store.Put(&domain.Session{Name: session}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote}); err != nil {
 		t.Fatal(err)
 	}
@@ -368,6 +462,9 @@ func TestEventStreamResumeRejectsStaleGenerationCursor(t *testing.T) {
 func TestEventStreamResumeRejectsOldVersionCursor(t *testing.T) {
 	store := state.NewStore(t.TempDir())
 	const session = "owner/repo-9"
+	if err := store.Put(&domain.Session{Name: session}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote}); err != nil {
 		t.Fatal(err)
 	}
@@ -382,6 +479,9 @@ func TestEventStreamResumeRejectsOldVersionCursor(t *testing.T) {
 func TestEventStreamResumeRejectsOrderMismatchCursor(t *testing.T) {
 	store := state.NewStore(t.TempDir())
 	const session = "owner/repo-9"
+	if err := store.Put(&domain.Session{Name: session}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := EventPublish(nil, store, session, EventPublishParams{Type: event.TypeUserNote}); err != nil {
 		t.Fatal(err)
 	}

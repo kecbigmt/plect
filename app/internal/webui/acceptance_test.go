@@ -381,6 +381,9 @@ func TestAcceptance_ApiV1EventsServesSeededEvents(t *testing.T) {
 	isolateMachineConfig(cfg)
 	svc := newLiveService(cfg, store)
 	const session = "acceptance/events-1"
+	if err := store.Put(&domain.Session{Name: session}); err != nil {
+		t.Fatal(err)
+	}
 	for _, summary := range []string{"first", "second"} {
 		if _, err := svc.PublishEvent(session, service.EventPublishParams{Type: event.TypeUserNote, Summary: summary}); err != nil {
 			t.Fatalf("seed event %q: %v", summary, err)
@@ -448,6 +451,9 @@ func TestAcceptance_ApiV1EventsOmittedLimitIsBoundedNotTheWholeLog(t *testing.T)
 	isolateMachineConfig(cfg)
 	svc := newLiveService(cfg, store)
 	const session = "acceptance/events-bounded"
+	if err := store.Put(&domain.Session{Name: session}); err != nil {
+		t.Fatal(err)
+	}
 	// One more than app/internal/webapi's own defaultEventPageLimit (100): a
 	// page bounded at 100 must leave at least one event unread.
 	const seeded = 101
@@ -501,6 +507,9 @@ func TestAcceptance_ApiV1EventsCursorClosesTheHistoryLiveHandoffGap(t *testing.T
 	isolateMachineConfig(cfg)
 	svc := newLiveService(cfg, store)
 	const session = "acceptance/events-race"
+	if err := store.Put(&domain.Session{Name: session}); err != nil {
+		t.Fatal(err)
+	}
 
 	publish := func(summary string) {
 		t.Helper()
@@ -554,6 +563,9 @@ func TestAcceptance_ApiV1EventsStreamResumesFromTheHistoryEndpointsOwnCursor(t *
 	isolateMachineConfig(cfg)
 	svc := newLiveService(cfg, store)
 	const session = "acceptance/events-stream-handoff"
+	if err := store.Put(&domain.Session{Name: session}); err != nil {
+		t.Fatal(err)
+	}
 
 	publish := func(summary string) {
 		t.Helper()

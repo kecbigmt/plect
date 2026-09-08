@@ -144,6 +144,53 @@ func TestUp_FailedSetupCanStillBeDestroyedAfterARestart(t *testing.T) {
 	}
 }
 
+// Nothing recorded means nothing to tear down, so --force is enough without
+// a --workflow recreate.
+func TestDestroy_ForceRemovesStubSessionWithNoWorkflowAndNoExecutions(t *testing.T) {
+	cfg := writeWorkflowFixture(t, t.TempDir(), "wf", nil, nil)
+	store := testStore(t)
+	if err := store.Put(&domain.Session{Name: "stub-1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Destroy(cfg, store, DestroyParams{Identifier: "stub-1", Force: true}); err != nil {
+		t.Fatalf("Destroy: %v", err)
+	}
+	if s := store.Get("stub-1"); s != nil {
+		t.Fatalf("stub session still present after Destroy: %+v", s)
+	}
+}
+
+// Same opt-in requirement as every other Destroy guard.
+func TestDestroy_WithoutForceStubSessionStillErrors(t *testing.T) {
+	cfg := writeWorkflowFixture(t, t.TempDir(), "wf", nil, nil)
+	store := testStore(t)
+	if err := store.Put(&domain.Session{Name: "stub-1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Destroy(cfg, store, DestroyParams{Identifier: "stub-1"}); err == nil {
+		t.Fatal("Destroy without --force: want an error, got nil")
+	}
+	if s := store.Get("stub-1"); s == nil {
+		t.Fatal("stub session removed despite the error")
+	}
+}
+
+// Real executions make this a broken state, not the nothing-to-tear-down
+// case above.
+func TestDestroy_WorkflowlessSessionWithExecutionsStillErrorsEvenUnderForce(t *testing.T) {
+	cfg := writeWorkflowFixture(t, t.TempDir(), "wf", nil, nil)
+	store := testStore(t)
+	seedSessionWithNodes(t, store, "broken-1", "acme", 1, "", map[string]*contract.TaskState{
+		"orphaned": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, TaskID: "orphaned", Seq: 1, Outputs: map[string]any{}},
+	})
+
+	if _, err := Destroy(cfg, store, DestroyParams{Identifier: "broken-1", Force: true}); err == nil {
+		t.Fatal("Destroy: want the missing-workflow error even under --force when there are executions to tear down")
+	}
+}
+
 func TestUnifiedTeardownList_ReleasesNodeRemovedFromCurrentWorkflow(t *testing.T) {
 	cfg := writeWorkflowFixture(t, t.TempDir(), "wf",
 		[]taskFixture{{id: "kept", scope: "session", setup: "echo '{}'", cleanup: "true"}},
