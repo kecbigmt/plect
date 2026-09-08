@@ -23,6 +23,11 @@ classic rollback journal instead, at the cost of coarser locking across
 multiple writers -- acceptable for a deployment running a single `plect
 serve` process against the database. There is no `config.toml` key for this:
 the deployment environment owns it, the same way it owns `PLECT_DATA_HOME`.
+Changing it against an already-created database converts the on-disk mode
+only when the connection requesting the change has exclusive access to the
+file, so every other process holding it open must be stopped first; a
+read-only connection (`ReadSessionNames`) never requests a mode change at
+all, since SQLite refuses that outright rather than treating it as a no-op.
 
 `schema.sql` is the desired-structure authority. Reviewed goose migration SQL
 is the historical transition authority, and the goose ledger in the same

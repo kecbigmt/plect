@@ -44,6 +44,15 @@ starting `plect serve` against such a directory. This is an environment
 variable, not a `config.toml` key — see
 [the SQLite persistence design](../design/sqlite-persistence.md).
 
+Changing `PLECT_SQLITE_JOURNAL_MODE` against an existing `storage.db` (one a
+prior boot already created in WAL mode) requires every other process holding
+that file open to be stopped first: SQLite converts a database's on-disk
+journal mode only when the connection requesting the change has exclusive
+access, and silently keeps the prior mode otherwise. Stop every `plect
+serve`/`plect-web`/CLI process against `$DATA_DIR` before the boot that first
+sets the new value, the same prerequisite the import procedure below already
+has.
+
 `plect storage import` also builds its temporary database under `--tmp-dir`
 (default: the OS temporary directory) rather than under `$DATA_DIR`, so the
 import itself stays fast regardless of `$DATA_DIR`'s filesystem — pass

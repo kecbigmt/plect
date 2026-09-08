@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -471,6 +472,24 @@ func TestRun_DryRunNeverLeavesAScratchDirectoryBehind(t *testing.T) {
 	}
 	if len(leftover) != 0 {
 		t.Errorf("tmpRoot contents = %v, want none (a dry run must not leave its scratch directory behind)", leftover)
+	}
+}
+
+func TestNewScratchDir_DefaultBaseNeverNestsUnderAGivenDestDir(t *testing.T) {
+	destDir := t.TempDir()
+
+	dir, err := newScratchDir("")
+	if err != nil {
+		t.Fatalf("newScratchDir: %v", err)
+	}
+	defer os.RemoveAll(dir)
+
+	if rel, err := filepath.Rel(destDir, dir); err == nil && !strings.HasPrefix(rel, "..") {
+		t.Errorf("newScratchDir(\"\") = %q, want a path outside destDir %q (relative path was %q)", dir, destDir, rel)
+	}
+	wantBase := os.TempDir()
+	if got, err := filepath.Rel(wantBase, dir); err != nil || strings.HasPrefix(got, "..") {
+		t.Errorf("newScratchDir(\"\") = %q, want it under os.TempDir() %q", dir, wantBase)
 	}
 }
 

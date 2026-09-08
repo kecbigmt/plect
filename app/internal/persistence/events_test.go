@@ -407,3 +407,33 @@ func TestReadSessionNames_RejectsUnknownJournalMode(t *testing.T) {
 		t.Fatal("ReadSessionNames must refuse an unsupported PLECT_SQLITE_JOURNAL_MODE rather than silently ignoring it")
 	}
 }
+
+// TestReadSessionNames_ReadsAWALDatabaseRegardlessOfConfiguredJournalMode
+// regresses a bug where ReadSessionNames requested a journal-mode change on
+// its read-only connection: go-sqlite3's _journal_mode DSN parameter fails
+// outright on a read-only connection whenever the requested mode differs
+// from the database's actual on-disk mode, rather than a silent no-op.
+func TestReadSessionNames_ReadsAWALDatabaseRegardlessOfConfiguredJournalMode(t *testing.T) {
+	path := PathIn(t.TempDir())
+	t.Setenv(JournalModeEnvVar, "")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := db.Migrate(context.Background()); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	createSessionForTest(t, db, "s1")
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	t.Setenv(JournalModeEnvVar, "DELETE")
+	names, err := ReadSessionNames(context.Background(), path)
+	if err != nil {
+		t.Fatalf("ReadSessionNames against a WAL database with %s=DELETE: %v", JournalModeEnvVar, err)
+	}
+	if len(names) != 1 || names[0] != "s1" {
+		t.Errorf("ReadSessionNames = %v, want [s1]", names)
+	}
+}

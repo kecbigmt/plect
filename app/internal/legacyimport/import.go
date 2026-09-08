@@ -110,13 +110,9 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 		return report, fmt.Errorf("legacyimport: create %s: %w", opts.DestDir, err)
 	}
 
-	scratchBase := opts.TmpDir
-	if scratchBase == "" {
-		scratchBase = os.TempDir()
-	}
-	scratchDir, err := os.MkdirTemp(scratchBase, "plect-storage-import-*")
+	scratchDir, err := newScratchDir(opts.TmpDir)
 	if err != nil {
-		return report, fmt.Errorf("legacyimport: create scratch directory under %s: %w", scratchBase, err)
+		return report, fmt.Errorf("legacyimport: %w", err)
 	}
 	defer os.RemoveAll(scratchDir)
 	scratchDBPath := filepath.Join(scratchDir, "storage.db")
@@ -312,6 +308,21 @@ func sortedKeys(m map[string]int64) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// newScratchDir creates a fresh directory to build the scratch database
+// under: tmpDirOverride if non-empty, else os.TempDir() -- never a path
+// derived from DestDir, so DestDir stays untouched until the final copy.
+func newScratchDir(tmpDirOverride string) (string, error) {
+	base := tmpDirOverride
+	if base == "" {
+		base = os.TempDir()
+	}
+	dir, err := os.MkdirTemp(base, "plect-storage-import-*")
+	if err != nil {
+		return "", fmt.Errorf("create scratch directory under %s: %w", base, err)
+	}
+	return dir, nil
 }
 
 // copyFileWithFsync copies src to dst, fsyncing dst before close. O_EXCL
