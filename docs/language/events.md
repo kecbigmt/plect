@@ -1,6 +1,6 @@
 # Events
 
-plect's event bus is the append-only, per-session log every runtime,
+Plecture's event bus is the append-only, per-session log every runtime,
 provider, and consumer shares. A channel's `include` (`channels.md#selecting-events`)
 and a workflow's `[tick].on` (`workflows.md#clocks`) select events by
 type glob; this chapter documents the core, provider-neutral vocabulary those
@@ -20,17 +20,17 @@ optional live preview of a message still being produced; a `plect.message`
 for the same `message_id` always follows it.
 
 Event metadata is a flat string map, so every field below travels as a
-string regardless of its logical type: `turn_index`, `step_index`, and
-`depth` are decimal digits; `interim` and `truncated` are the literal
-strings `true`/`false`; `raw` is a JSON-encoded object rather than a nested
-value.
+string regardless of its logical type: `turn_index`, `step_index`, `depth`,
+`index`, and `block_index` are decimal digits; `interim`, `truncated`, and
+`final` are the literal strings `true`/`false`; `raw` is a JSON-encoded
+object rather than a nested value.
 
 | Field | Required | Meaning |
 |---|---|---|
 | `message_id` | yes | Identifies one message within its session: the harness's own id when it has one, else a deterministic synthetic id the emitter mints (e.g. `<session>/<turn>/<step>`). Unique within the session. |
 | `message_id_origin` | yes | `native` or `synthetic`. |
 | `role` | yes | `assistant` — today's only value; emitters filter every other role before publishing. |
-| `source` | yes | The harness id (`claude`, `codex`, `hermes`, `pi`, `deepseek`, ...). Informational only — a consumer never branches on it. Distinct from the event's own top-level `source` (`plect`/`web`/`cli`/`mcp`/`<provider>`, which plect surface emitted the event): one top-level `source` can front any of the surveyed harnesses. |
+| `source` | yes | The harness id (`claude`, `codex`, `hermes`, `pi`, `deepseek`, ...). Informational only — a consumer never branches on it. Distinct from the event's own top-level `source` (`plect`/`web`/`cli`/`mcp`/`<provider>`, which Plecture surface emitted the event): one top-level `source` can front any of the surveyed harnesses. |
 | `turn_id` | no | The harness's own opaque id for the enclosing prompt cycle, when it has one. |
 | `turn_index` | no | Integer ordinal of the prompt cycle, when the harness numbers it. |
 | `step_index` | no | Integer ordinal of the model call inside the prompt cycle, when the harness distinguishes turn from step. |

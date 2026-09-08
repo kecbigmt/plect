@@ -125,8 +125,8 @@ const (
 	// not a dedup collision.
 	TypeNodeResult = "plect.node.result"
 	TypeMessage    = "plect.message"
-	// TypeMessageDelta, not message_chunk: DeepSeek's own protocol already
-	// uses "chunk" for block-start/usage/finish units that would collide.
+	// The name avoids a term one surveyed runtime's own event vocabulary
+	// already assigns to a different kind of streamed unit.
 	TypeMessageDelta = "plect.message_delta"
 )
 
