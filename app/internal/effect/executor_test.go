@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -219,6 +220,11 @@ func TestExecutor_HostExecutorRetriesPastATextFileBusyRace(t *testing.T) {
 }
 
 func TestExecutor_HostExecutorGivesUpAfterBoundedTextFileBusyAttempts(t *testing.T) {
+	// Only Linux enforces ETXTBSY against an open writer fd; on other
+	// kernels the exec below just succeeds, so there is no retry to bound.
+	if runtime.GOOS != "linux" {
+		t.Skip("ETXTBSY is Linux-specific")
+	}
 	path := writeExecutableScript(t, t.TempDir())
 	defer startBusyHolder(t, path)()
 
@@ -256,6 +262,12 @@ func TestWaitBackoff_WaitsOutABackoffThatIsNotCancelled(t *testing.T) {
 // land inside the backoff wait, never race the first exec attempt the way a
 // deadline sized against the production backoff would.
 func TestExecutor_RunWithTextBusyRetryReturnsContextErrorWhenCancelledDuringBackoff(t *testing.T) {
+	// Only Linux enforces ETXTBSY against an open writer fd; on other
+	// kernels the exec below just succeeds, so the backoff wait this test
+	// cancels never happens.
+	if runtime.GOOS != "linux" {
+		t.Skip("ETXTBSY is Linux-specific")
+	}
 	path := writeExecutableScript(t, t.TempDir())
 	defer startBusyHolder(t, path)()
 
