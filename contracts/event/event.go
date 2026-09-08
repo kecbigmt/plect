@@ -74,6 +74,15 @@ const (
 	TypeTerminalDone     = "plect.terminal.done"
 	TypeTerminalEscalate = "plect.terminal.escalate"
 	TypeTerminalDead     = "plect.terminal.dead"
+	// TypeResourceForwarded is pushed one hop into the nearest live ancestor's
+	// log (SessionName is the receiver, MetaOriginSession the emitter, like the
+	// terminal signals above) when an inbound event lands on a session that is
+	// down (not destroyed): no per-session reactor drains a down session's own
+	// log, so without this push such an event would sit unreacted until the
+	// session is brought back up. It is not itself a terminal signal — the
+	// origin session is not finished, and its own tick resumes handling its
+	// log the moment it comes back up.
+	TypeResourceForwarded = "plect.resource.forwarded"
 	// TypeTickReviewRequired and TypeTickEscalated are plect tick's own
 	// same-session progress markers (internal/service/tick.go). Neither is a
 	// terminal event nor an external-resource signal; both are excluded from

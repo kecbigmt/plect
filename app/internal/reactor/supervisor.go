@@ -69,14 +69,34 @@ func NewSupervisor(cfg func() *config.Config, st *state.Store, log *eventlog.Sto
 	return &Supervisor{cfg: cfg, state: st, log: log, hub: hub, logger: slog.Default(), poll: time.Second}
 }
 
-// Run polls session state and reconciles the running reactors until ctx ends,
-// then cancels and joins all of them.
+type followerHandle struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+// awaitPredecessor blocks until predecessorDone closes: reconcile's
+// reactor<->forwarder handoff is exclusive either way, so an outgoing
+// follower's in-flight work never overlaps the incoming one's. It ignores
+// ctx -- a canceled follower must still confirm its own predecessor is
+// gone, or a rapid reversal could run two followers one hop further down.
+func awaitPredecessor(predecessorDone <-chan struct{}) {
+	if predecessorDone != nil {
+		<-predecessorDone
+	}
+}
+
+// Run polls session state and reconciles the running reactors and
+// down-forwarders until ctx ends, then cancels and joins all of them.
 func (sup *Supervisor) Run(ctx context.Context) {
-	active := map[string]context.CancelFunc{}
+	active := map[string]followerHandle{}
+	forwarding := map[string]followerHandle{}
 	var wg sync.WaitGroup
 	defer func() {
-		for _, cancel := range active {
-			cancel()
+		for _, h := range active {
+			h.cancel()
+		}
+		for _, h := range forwarding {
+			h.cancel()
 		}
 		wg.Wait()
 	}()
@@ -95,7 +115,7 @@ func (sup *Supervisor) Run(ctx context.Context) {
 	// rationale as reactor.go's own immediate checkHeartbeat call.
 	sup.checkDeadman(ctx)
 	for {
-		sup.reconcile(ctx, active, &wg)
+		sup.reconcile(ctx, active, forwarding, &wg)
 		select {
 		case <-ctx.Done():
 			return
@@ -166,7 +186,8 @@ func resolveTickConfig(cfg *config.Config, s *domain.Session) (config.TickConfig
 	return *wf.Tick, nil
 }
 
-func (sup *Supervisor) reconcile(ctx context.Context, active map[string]context.CancelFunc, wg *sync.WaitGroup) {
+// reconcile starts a reactor per up session, a forwarder per down one.
+func (sup *Supervisor) reconcile(ctx context.Context, active, forwarding map[string]followerHandle, wg *sync.WaitGroup) {
 	cfg := sup.cfg()
 	sessions, err := sup.state.AllE()
 	if err != nil {
@@ -177,18 +198,38 @@ func (sup *Supervisor) reconcile(ctx context.Context, active map[string]context.
 		return
 	}
 	for name, s := range sessions {
-		if _, running := active[name]; running || !cfg.RunScopeUp(s) {
-			continue
+		up := cfg.RunScopeUp(s)
+		if _, running := active[name]; !running && up {
+			r := sup.buildReactor(name, s)
+			if h, ok := forwarding[name]; ok {
+				r.predecessorDone = h.done
+			}
+			rctx, cancel := context.WithCancel(ctx)
+			done := make(chan struct{})
+			active[name] = followerHandle{cancel: cancel, done: done}
+			wg.Go(func() { r.run(rctx); close(done) })
 		}
-		r := sup.buildReactor(name, s)
-		rctx, cancel := context.WithCancel(ctx)
-		active[name] = cancel
-		wg.Go(func() { r.run(rctx) })
+		if _, running := forwarding[name]; !running && !up {
+			f := sup.buildForwarder(name)
+			if h, ok := active[name]; ok {
+				f.predecessorDone = h.done
+			}
+			fctx, cancel := context.WithCancel(ctx)
+			done := make(chan struct{})
+			forwarding[name] = followerHandle{cancel: cancel, done: done}
+			wg.Go(func() { f.run(fctx); close(done) })
+		}
 	}
-	for name, cancel := range active {
+	for name, h := range active {
 		if s, ok := sessions[name]; !ok || !cfg.RunScopeUp(s) {
-			cancel()
+			h.cancel()
 			delete(active, name)
+		}
+	}
+	for name, h := range forwarding {
+		if s, ok := sessions[name]; !ok || cfg.RunScopeUp(s) {
+			h.cancel()
+			delete(forwarding, name)
 		}
 	}
 }
@@ -226,5 +267,17 @@ func (sup *Supervisor) buildReactor(name string, s *domain.Session) *sessionReac
 		healthcheck: hc,
 		observer:    sup.observer,
 		logger:      sup.logger,
+	}
+}
+
+// buildForwarder is reconcile's buildReactor counterpart for a down session.
+func (sup *Supervisor) buildForwarder(name string) *sessionForwarder {
+	return &sessionForwarder{
+		session: name,
+		cfg:     sup.cfg(),
+		state:   sup.state,
+		log:     sup.log,
+		hub:     sup.hub,
+		logger:  sup.logger,
 	}
 }

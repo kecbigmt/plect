@@ -246,6 +246,82 @@ func TestSessionReactor_JudgeRecordedAlwaysTriggers(t *testing.T) {
 	waitLastTickAt(t, st, "o/r-1", floor)
 }
 
+// TestSessionReactor_ResourceForwardedAlwaysTriggers mirrors the judge
+// builtin above for the down-child resource-forward signal.
+func TestSessionReactor_ResourceForwardedAlwaysTriggers(t *testing.T) {
+	r, st, log := newTestReactor(t, config.TickConfig{})
+	stop := startReactor(t, r)
+	defer stop()
+
+	floor := time.Now()
+	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeResourceForwarded, Direction: event.Inbound})
+	waitLastTickAt(t, st, "o/r-1", floor)
+}
+
+// Mirrors sessionForwarder's own predecessor-wait proof in forward_test.go.
+// reactorConsumer is pre-seeded here, not left at its zero value: this
+// exercises the realistic path rather than seedCursor's own separate
+// first-ever-seed case.
+func TestSessionReactor_WaitsForPredecessorBeforeTouchingTheLog(t *testing.T) {
+	r, st, log := newTestReactor(t, config.TickConfig{On: []string{"resource.*"}})
+	if err := log.CommitCursor("o/r-1", reactorConsumer, 0); err != nil {
+		t.Fatal(err)
+	}
+	predecessorDone := make(chan struct{})
+	r.predecessorDone = predecessorDone
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { r.run(ctx); close(done) }()
+	defer func() { cancel(); <-done }()
+
+	floor := time.Now()
+	log.Append(event.Event{SessionName: "o/r-1", Type: "resource.updated", Direction: event.Inbound})
+	assertNeverTicked(t, st, "o/r-1", floor)
+
+	close(predecessorDone)
+	waitLastTickAt(t, st, "o/r-1", floor)
+}
+
+// Three states: A is still running, B (waiting on A) is canceled before A
+// ever finishes, and C (waiting on B) must still not proceed until A does.
+func TestSessionReactor_PreservesThePredecessorChainThroughACanceledIntermediate(t *testing.T) {
+	base, st, log := newTestReactor(t, config.TickConfig{On: []string{"resource.*"}})
+
+	aDone := make(chan struct{})
+	b := &sessionForwarder{session: "o/r-1", cfg: base.cfg, state: st, log: log, hub: base.hub, predecessorDone: aDone}
+	bctx, bcancel := context.WithCancel(context.Background())
+	bdone := make(chan struct{})
+	go func() { b.run(bctx); close(bdone) }()
+	bcancel()
+
+	select {
+	case <-bdone:
+		t.Fatal("B closed its done channel before confirming its own predecessor (A) was done")
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	c := &sessionReactor{
+		session: "o/r-1", cfg: base.cfg, state: st, log: log, hub: base.hub,
+		tick: config.TickConfig{On: []string{"resource.*"}}, predecessorDone: bdone,
+	}
+	cctx, ccancel := context.WithCancel(context.Background())
+	cdone := make(chan struct{})
+	go func() { c.run(cctx); close(cdone) }()
+	defer func() { ccancel(); <-cdone }()
+	// C's own seedCursor runs before it ever waits on B (reactor.go), so wait
+	// for it here too -- otherwise the append below could race it and be
+	// swallowed into the seed, same as startReactor's own helper avoids.
+	waitForCursorSeed(t, log, "o/r-1")
+
+	floor := time.Now()
+	log.Append(event.Event{SessionName: "o/r-1", Type: "resource.updated", Direction: event.Inbound})
+	assertNeverTicked(t, st, "o/r-1", floor)
+
+	close(aDone)
+	waitLastTickAt(t, st, "o/r-1", floor)
+}
+
 // TestSessionReactor_HeartbeatSweepTicksAfterElapsed proves a session with no
 // `on` declared still ticks once `heartbeat` has elapsed since its last
 // tick, using a shortened heartbeatInterval so the test doesn't wait a full
@@ -532,34 +608,45 @@ func TestSupervisor_StartsAndStopsWithRunScope(t *testing.T) {
 	defer hub.Close()
 	sup := NewSupervisor(func() *config.Config { return cfg }, st, log, hub)
 	ctx := t.Context()
-	active := map[string]context.CancelFunc{}
+	active := map[string]followerHandle{}
+	forwarding := map[string]followerHandle{}
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	defer func() {
-		for _, c := range active {
-			c()
+		for _, h := range active {
+			h.cancel()
+		}
+		for _, h := range forwarding {
+			h.cancel()
 		}
 	}()
 
-	sup.reconcile(ctx, active, &wg)
+	sup.reconcile(ctx, active, forwarding, &wg)
 	if _, ok := active["o/r-1"]; !ok {
 		t.Fatal("reactor not started for an up session")
 	}
-	sup.reconcile(ctx, active, &wg) // idempotent: no duplicate
+	if len(forwarding) != 0 {
+		t.Fatalf("forwarder started for an up session: %+v", forwarding)
+	}
+	sup.reconcile(ctx, active, forwarding, &wg) // idempotent: no duplicate
 	if len(active) != 1 {
 		t.Fatalf("expected exactly one reactor, got %d", len(active))
 	}
 
-	// Run scope goes down → supervisor cancels (suspend, not teardown).
+	// Run scope goes down → supervisor cancels the reactor (suspend, not
+	// teardown) and starts a down-forwarder in its place.
 	if err := st.Update("o/r-1", func(s *domain.Session) error {
 		s.Nodes["claude"].Status = contract.TaskStatusCleaned
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	sup.reconcile(ctx, active, &wg)
+	sup.reconcile(ctx, active, forwarding, &wg)
 	if len(active) != 0 {
 		t.Fatalf("reactor not stopped after run scope down: %d active", len(active))
+	}
+	if _, ok := forwarding["o/r-1"]; !ok {
+		t.Fatal("forwarder not started for a down (not destroyed) session")
 	}
 }
 
@@ -585,16 +672,20 @@ func TestSupervisor_ReconcileDoesNotCancelActiveReactorsWhenStoreUnreadable(t *t
 	defer hub.Close()
 	sup := NewSupervisor(func() *config.Config { return cfg }, st, log, hub)
 	ctx := t.Context()
-	active := map[string]context.CancelFunc{}
+	active := map[string]followerHandle{}
+	forwarding := map[string]followerHandle{}
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	defer func() {
-		for _, c := range active {
-			c()
+		for _, h := range active {
+			h.cancel()
+		}
+		for _, h := range forwarding {
+			h.cancel()
 		}
 	}()
 
-	sup.reconcile(ctx, active, &wg)
+	sup.reconcile(ctx, active, forwarding, &wg)
 	if _, ok := active["o/r-1"]; !ok {
 		t.Fatal("reactor not started for an up session")
 	}
@@ -605,7 +696,7 @@ func TestSupervisor_ReconcileDoesNotCancelActiveReactorsWhenStoreUnreadable(t *t
 	writeFile(t, persistence.PathIn(brokenDir), "not a database")
 	sup.state = state.NewStore(brokenDir)
 
-	sup.reconcile(ctx, active, &wg)
+	sup.reconcile(ctx, active, forwarding, &wg)
 	if _, ok := active["o/r-1"]; !ok {
 		t.Fatal("reconcile cancelled an active reactor when the store became unreadable, treating an error as \"destroyed\"")
 	}
@@ -654,6 +745,171 @@ on = ["github.*"]
 	if len(r.tick.On) != 1 || r.tick.On[0] != "github.*" {
 		t.Fatalf("tick config = %+v, want on=[\"github.*\"] resolved from the plugin-only workflow", r.tick)
 	}
+}
+
+// Proves reconcile's own predecessorDone wiring end to end, not just the
+// isolated wait mechanism TestSessionForwarder_WaitsForPredecessorBeforeTouchingTheLog covers.
+func TestSupervisor_ForwarderWaitsWhileTheOutgoingReactorIsStillMidTick(t *testing.T) {
+	pluginDir := t.TempDir()
+	writeClaudeRunTask(t, filepath.Join(pluginDir, "config"))
+	writeFile(t, filepath.Join(pluginDir, "config", "workflows", "reactive.toml"), `
+[reactive]
+kind = "workflow"
+[[reactive.nodes]]
+id   = "claude"
+uses = "claude"
+[reactive.tick]
+on = ["resource.*"]
+`)
+	cfg := &config.Config{PluginDirs: []string{pluginDir}}
+	st := state.NewStore(t.TempDir())
+	if err := st.Put(&domain.Session{
+		Name: "o/r-1", Workflow: "reactive",
+		Nodes: map[string]*contract.TaskState{"claude": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	log := eventlog.NewStore(st.Dir())
+	hub := sessionhub.NewRegistry(log, sessionhub.WithPollInterval(2*time.Millisecond))
+	defer hub.Close()
+	sup := NewSupervisor(func() *config.Config { return cfg }, st, log, hub)
+
+	r := sup.buildReactor("o/r-1", st.Get("o/r-1"))
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	var enterOnce sync.Once
+	r.tickFn = func(*config.Config, *state.Store, service.TickParams) (*service.CheckResult, error) {
+		enterOnce.Do(func() { close(entered) })
+		<-release
+		return &service.CheckResult{}, nil
+	}
+	rctx, rcancel := context.WithCancel(context.Background())
+	rdone := make(chan struct{})
+	go func() { r.run(rctx); close(rdone) }()
+	waitForCursorSeed(t, log, "o/r-1")
+
+	log.Append(event.Event{SessionName: "o/r-1", Type: "resource.updated", Direction: event.Inbound})
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("reactor's tick never entered")
+	}
+
+	if err := st.Update("o/r-1", func(s *domain.Session) error {
+		s.Nodes["claude"].Status = contract.TaskStatusCleaned
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Pre-seeds reconcile's own bookkeeping with this manually-started
+	// reactor, exactly as an earlier real reconcile pass would have
+	// recorded it, so the transition below exercises reconcile's actual
+	// wiring rather than a hand-rolled substitute.
+	active := map[string]followerHandle{"o/r-1": {cancel: rcancel, done: rdone}}
+	forwarding := map[string]followerHandle{}
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	defer func() {
+		for _, h := range forwarding {
+			h.cancel()
+		}
+	}()
+
+	sup.reconcile(context.Background(), active, forwarding, &wg)
+	if _, ok := forwarding["o/r-1"]; !ok {
+		t.Fatal("forwarder not started for the down session")
+	}
+
+	log.Append(event.Event{SessionName: "o/r-1", ID: "during-handoff", Type: "resource.updated", Direction: event.Inbound})
+	time.Sleep(150 * time.Millisecond)
+	if log.HasCursor("o/r-1", forwardConsumer) {
+		t.Fatal("forwarder touched the log before its predecessor's stuck tick finished")
+	}
+
+	close(release)
+	<-rdone
+	waitForFirstDrain(t, log, "o/r-1")
+}
+
+// The reverse direction: an in-flight forwarder plus a rapid down-up
+// reversal, mirroring the stuck-reactor test above.
+func TestSupervisor_ReactorWaitsWhileTheOutgoingForwarderIsStillMidRelay(t *testing.T) {
+	pluginDir := t.TempDir()
+	writeClaudeRunTask(t, filepath.Join(pluginDir, "config"))
+	writeFile(t, filepath.Join(pluginDir, "config", "workflows", "reactive.toml"), `
+[reactive]
+kind = "workflow"
+[[reactive.nodes]]
+id   = "claude"
+uses = "claude"
+[reactive.tick]
+on = ["resource.*"]
+`)
+	cfg := &config.Config{PluginDirs: []string{pluginDir}}
+	st := state.NewStore(t.TempDir())
+	if err := st.Put(&domain.Session{Name: "o/r-1", Workflow: "reactive"}); err != nil {
+		t.Fatal(err)
+	}
+	log := eventlog.NewStore(st.Dir())
+	hub := sessionhub.NewRegistry(log, sessionhub.WithPollInterval(2*time.Millisecond))
+	defer hub.Close()
+	sup := NewSupervisor(func() *config.Config { return cfg }, st, log, hub)
+
+	f := sup.buildForwarder("o/r-1")
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	var enterOnce sync.Once
+	f.forwardFn = func(*config.Config, *state.Store, string, event.Event) (bool, error) {
+		enterOnce.Do(func() { close(entered) })
+		<-release
+		return true, nil
+	}
+	fctx, fcancel := context.WithCancel(context.Background())
+	fdone := make(chan struct{})
+	go func() { f.run(fctx); close(fdone) }()
+
+	log.Append(event.Event{SessionName: "o/r-1", ID: "ev-1", Type: "resource.updated", Direction: event.Inbound})
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("forwarder's relay never entered")
+	}
+
+	if err := st.Update("o/r-1", func(s *domain.Session) error {
+		if s.Nodes == nil {
+			s.Nodes = map[string]*contract.TaskState{}
+		}
+		s.Nodes["claude"] = &contract.TaskState{Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	forwarding := map[string]followerHandle{"o/r-1": {cancel: fcancel, done: fdone}}
+	active := map[string]followerHandle{}
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	defer func() {
+		for _, h := range active {
+			h.cancel()
+		}
+	}()
+
+	sup.reconcile(context.Background(), active, forwarding, &wg)
+	if _, ok := active["o/r-1"]; !ok {
+		t.Fatal("reactor not started for the up session")
+	}
+	// reactorConsumer's own first-ever seed runs before the predecessor wait
+	// (reactor.go); wait for it to land before appending below, so that
+	// event lands after the seed rather than racing it.
+	waitForCursorSeed(t, log, "o/r-1")
+
+	floor := time.Now()
+	log.Append(event.Event{SessionName: "o/r-1", ID: "during-handoff", Type: "resource.updated", Direction: event.Inbound})
+	assertNeverTicked(t, st, "o/r-1", floor)
+
+	close(release)
+	<-fdone
+	waitLastTickAt(t, st, "o/r-1", floor)
 }
 
 // TestBackoffInterval covers the pure doubling/cap arithmetic the quiet-tick

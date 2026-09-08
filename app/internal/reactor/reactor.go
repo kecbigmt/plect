@@ -91,6 +91,7 @@ type sessionReactor struct {
 	// channelHealthEvery defaults to channelHealthInterval; overridable in
 	// tests, mirroring healthcheckEvery.
 	channelHealthEvery time.Duration
+	predecessorDone    <-chan struct{}
 }
 
 // effectiveLogger falls back to slog.Default() for a test-constructed
@@ -104,7 +105,16 @@ func (r *sessionReactor) effectiveLogger() *slog.Logger {
 }
 
 func (r *sessionReactor) run(ctx context.Context) {
+	// Seeded before awaitPredecessor, not after: reactorConsumer's first-ever
+	// seed commits "the log's tail right now", so seeding it only once a
+	// possibly slow predecessor is confirmed gone would swallow anything
+	// arriving during that wait. A session with a prior up period already
+	// has this cursor seeded, so ordering is moot there.
 	seedCursor(r.log, r.session)
+	awaitPredecessor(r.predecessorDone)
+	if ctx.Err() != nil {
+		return
+	}
 	startGen, _ := r.log.StreamID(r.session)
 	wake := r.hub.Watch(r.session)
 	defer wake.Close()
@@ -248,6 +258,13 @@ func (r *sessionReactor) shouldTrigger(ev event.Event) bool {
 		return false
 	}
 	if ev.Type == event.TypeJudgeRecorded {
+		return true
+	}
+	if ev.Type == event.TypeResourceForwarded {
+		// A down child's relayed resource event is a builtin core signal,
+		// like the judge verdict above — a workflow has no
+		// `[tick].on` pattern of its own to declare for it, so it must
+		// trigger regardless of what is declared.
 		return true
 	}
 	if isSelfEmitted(ev) {
