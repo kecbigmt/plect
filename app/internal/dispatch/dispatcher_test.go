@@ -492,7 +492,7 @@ func TestDispatcher_ChannelErrorRelayedToOtherChannelNotOrigin(t *testing.T) {
 	}
 
 	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Direction: event.Internal})
-	drainOnce(d, s) // origin fails delivering the instruction; relay delivers it
+	drainOnce(d, s)
 
 	if typ := recvType(t, recv); typ != event.TypeInstruction {
 		t.Fatalf("relay's delivery of the original event = %q", typ)
@@ -502,13 +502,14 @@ func TestDispatcher_ChannelErrorRelayedToOtherChannelNotOrigin(t *testing.T) {
 		t.Fatalf("want one channel.error for origin, got %+v", errs)
 	}
 
-	drainOnce(d, s) // processes that channel.error: origin skips itself, relay delivers it
+	drainOnce(d, s)
 
 	if typ := recvType(t, recv); typ != event.TypeChannelError {
 		t.Errorf("relay must receive origin's channel.error, got %q", typ)
 	}
-	// If origin had also been attempted (a failure to loop back to it), the
-	// dead socket would fail again and append a second channel.error.
+	// A second attempt at origin would fail again (still the same dead
+	// socket) and append a second channel.error, so this count also proves
+	// origin was skipped rather than merely proving relay succeeded.
 	errs, _, _, _ = log.List("o/r-1", 0, event.Filter{Types: []string{event.TypeChannelError}})
 	if len(errs) != 1 {
 		t.Fatalf("origin must not error again by receiving its own channel.error: got %d", len(errs))
@@ -532,7 +533,12 @@ func TestDispatcher_MutualChannelErrorBoundedNotInfinite(t *testing.T) {
 	d := &sessionDispatcher{
 		session: "o/r-1",
 		channels: []config.EventChannel{
-			{Name: "a", Uses: "sock", Inputs: map[string]*lang.Value{"path": literalValue(deadA)}, Include: []string{"plect.instruction"}},
+			// Both channels relay plect.channel.error (not just the one that
+			// fails second): dropping the guard under test would otherwise
+			// still pass, since channel a would never be offered b's error to
+			// begin with, and the per-channel origin-skip alone would then
+			// look sufficient.
+			{Name: "a", Uses: "sock", Inputs: map[string]*lang.Value{"path": literalValue(deadA)}, Include: []string{"plect.instruction", "plect.channel.error"}},
 			{Name: "b", Uses: "sock", Inputs: map[string]*lang.Value{"path": literalValue(deadB)}, Include: []string{"plect.channel.error"}},
 		},
 		defs:   map[string]config.ChannelDefinition{"sock": def},
@@ -542,9 +548,13 @@ func TestDispatcher_MutualChannelErrorBoundedNotInfinite(t *testing.T) {
 	}
 
 	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Direction: event.Internal})
-	drainOnce(d, s) // a fails delivering the instruction → one channel.error (channel=a)
-	drainOnce(d, s) // b fails relaying a's channel.error → one more (channel=b, event_type=plect.channel.error)
-	drainOnce(d, s) // b's error records a channel.error's own failure: must not be relayed at all
+	// Without the guard, a's error would relay to b, b's failure relaying it
+	// would relay back to a, and so on: draining many more times than the
+	// two hops this takes to converge is what catches an unbounded ping-pong
+	// instead of just the first bounce.
+	for range 10 {
+		drainOnce(d, s)
+	}
 
 	errs, _, _, _ := log.List("o/r-1", 0, event.Filter{Types: []string{event.TypeChannelError}})
 	if len(errs) != 2 {

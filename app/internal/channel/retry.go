@@ -146,13 +146,9 @@ func ChannelValidationErrorEvent(session, workflowID string, cause error) event.
 	}
 }
 
-// ChannelErrorEvent builds the plect.channel.error event a worker appends after
-// exhausting retries. Metadata (channel/event_id/attempts) lets a reader trace
-// the failure and lets the dispatcher scope relay: `channel` names the
-// channel whose own delivery this records, so a relay can exclude it without
-// excluding every other channel; `event_type` carries orig's type so a
-// relay can tell a channel.error about an ordinary event apart from one
-// about another channel.error (the mutual-failure case).
+// ChannelErrorEvent builds the plect.channel.error event a worker appends
+// after exhausting retries. Metadata carries channel, event_id, attempts,
+// and event_type (orig's type) for tracing.
 func ChannelErrorEvent(orig event.Event, channelName string, attempts int, cause error) event.Event {
 	reason := ""
 	if cause != nil {
