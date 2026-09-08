@@ -122,9 +122,6 @@ func TestPutSession_NodeExecutionMintsFreshIdentityAfterRelease(t *testing.T) {
 	}
 
 	recreated := &domain.Session{Name: "s1", CreatedAt: now, UpdatedAt: now, Nodes: map[string]*contract.TaskState{
-		// NewExecution mirrors what task.RunSetup now sets on this write in
-		// production: the release above already landed on its own, so no
-		// unreleased row remains and this insert proceeds normally.
 		"a": {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced, TaskID: "other-work", NewExecution: true},
 	}}
 	if err := db.PutSession(ctx, recreated); err != nil {

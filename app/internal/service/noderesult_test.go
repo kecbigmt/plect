@@ -22,10 +22,8 @@ func nodeResultEvents(t *testing.T, store interface{ Dir() string }, sessionName
 	return evs
 }
 
-// TestNodeResultObserver_OnReleasePersistsGivenNodesOnly proves the
-// checkpoint task.RunSetup relies on to flush a same-pass release durably
-// actually writes through the real store, touching only the nodes it was
-// given.
+// TestNodeResultObserver_OnReleasePersistsGivenNodesOnly proves OnRelease
+// writes through the real store, touching only the nodes it was given.
 func TestNodeResultObserver_OnReleasePersistsGivenNodesOnly(t *testing.T) {
 	store := testStore(t)
 	sessionName := "session1"
@@ -60,9 +58,7 @@ func TestNodeResultObserver_OnReleasePersistsGivenNodesOnly(t *testing.T) {
 }
 
 // TestNodeResultObserver_OnReleaseFailurePropagates proves a failed flush
-// surfaces as a real error rather than being swallowed the way OnResult's
-// event-log append is -- task.RunSetup relies on this to abort instead of
-// rebuilding on an unpersisted release.
+// surfaces as a real error, unlike OnResult's swallowed event-log append.
 func TestNodeResultObserver_OnReleaseFailurePropagates(t *testing.T) {
 	store := testStore(t)
 	obs := withNodeResultRecording(store, "does-not-exist", nil).(*nodeResultObserver)

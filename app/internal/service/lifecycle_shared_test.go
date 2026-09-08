@@ -9,13 +9,9 @@ import (
 )
 
 // TestMergeTasks_ClearsNewExecutionAfterASuccessfulWrite proves a node
-// persisted via mergeTasks is no longer treated as an unclaimed identity
-// afterward: Up's own UpOrder() deliberately re-walks every node (see
-// task.Plan.UpOrder's doc comment), so a second, redundant persistence of
-// the very same in-memory object -- exactly what recreateSessionRuntime's
-// own mergeTasks followed by Up's outer runNodeSetup/mergeTasks produces --
-// must read as an ordinary update, not collide with the row this same call
-// already inserted.
+// persisted via mergeTasks is no longer an unclaimed identity afterward, so
+// Up's UpOrder() re-walk (task.Plan.UpOrder) can redundantly persist the
+// same object again without colliding with its own prior insert.
 func TestMergeTasks_ClearsNewExecutionAfterASuccessfulWrite(t *testing.T) {
 	store := testStore(t)
 	sessionName := "session1"
@@ -38,9 +34,6 @@ func TestMergeTasks_ClearsNewExecutionAfterASuccessfulWrite(t *testing.T) {
 		t.Fatal("NewExecution still true after a successful write; a redundant re-persist of this same object would misread as a concurrent writer's row")
 	}
 
-	// A second, redundant write of the exact same in-memory object (mirroring
-	// Up's own UpOrder() re-walk after recreateSessionRuntime) must succeed as
-	// an ordinary update rather than a refused conflict.
 	if err := mergeTasks(store, sessionName, session); err != nil {
 		t.Fatalf("mergeTasks (redundant re-write of the same object): %v", err)
 	}

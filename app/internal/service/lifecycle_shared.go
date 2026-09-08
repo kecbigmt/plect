@@ -104,15 +104,11 @@ func replaceRuntimeState(store *state.Store, sessionName string, session *domain
 	return nil
 }
 
-// clearNewExecutionClaims marks every given node as no longer a fresh,
-// unclaimed identity once its own write has actually landed: a caller like
-// Up, whose UpOrder() deliberately re-walks every node so a prior pass's
-// idempotent skip covers a workflow-definition upgrade (see Plan.UpOrder),
-// would otherwise persist the very same in-memory object a second time and
-// have persistence mistake its own already-committed insert for a
-// concurrent writer's row. This only touches the caller's own in-memory
-// objects, so it never weakens the refusal a genuinely different writer's
-// write hits.
+// clearNewExecutionClaims marks nodes as no longer freshly-claimed once
+// their write lands, since Up's UpOrder() re-walk (task.Plan.UpOrder) would
+// otherwise persist the same object again and read its own prior insert as
+// a concurrent writer's row. Scoped to the caller's own objects, so a
+// genuinely different writer's own claim is still refused.
 func clearNewExecutionClaims(nodes map[string]*contract.TaskState) {
 	for _, st := range nodes {
 		if st != nil {
