@@ -387,3 +387,23 @@ func TestLatestSessionEventByType_ReturnsMostRecentOfThatType(t *testing.T) {
 		t.Fatalf("latest = %+v, want the most recent status_message event (e3)", got)
 	}
 }
+
+func TestReadSessionNames_RejectsUnknownJournalMode(t *testing.T) {
+	path := PathIn(t.TempDir())
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := db.Migrate(context.Background()); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	createSessionForTest(t, db, "s1")
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	t.Setenv(JournalModeEnvVar, "MEMORY")
+	if _, err := ReadSessionNames(context.Background(), path); err == nil {
+		t.Fatal("ReadSessionNames must refuse an unsupported PLECT_SQLITE_JOURNAL_MODE rather than silently ignoring it")
+	}
+}

@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"io/fs"
+	"os"
+	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -14,6 +16,41 @@ import (
 // package opens; a caller waiting longer than this on lock contention gets
 // an actionable error instead of blocking indefinitely.
 const busyTimeoutMillis = 5000
+
+// JournalModeEnvVar overrides the SQLite journal mode every connection this
+// package opens uses. Left unset, the default is WAL. WAL depends on
+// mmap'd shared memory between connections and fsyncs every commit's WAL
+// frame individually, neither of which works well against a network
+// filesystem (NFS, and EFS as an NFS implementation): the shared-memory
+// assumption is unreliable there per SQLite's own documentation, and
+// per-frame fsync latency is amplified by the network round trip. DELETE and
+// TRUNCATE fall back to the classic rollback journal, which has neither
+// problem, at the cost of coarser locking -- acceptable for a deployment
+// running a single plect serve process against the database.
+const JournalModeEnvVar = "PLECT_SQLITE_JOURNAL_MODE"
+
+// validJournalModes is the closed set JournalModeEnvVar accepts.
+var validJournalModes = map[string]bool{
+	"WAL":      true,
+	"DELETE":   true,
+	"TRUNCATE": true,
+}
+
+// journalMode reads JournalModeEnvVar, defaulting to "WAL", and validates it
+// against validJournalModes so an unsupported value fails loudly with the
+// valid set named, at open time, rather than reaching go-sqlite3 as an
+// opaque DSN parameter.
+func journalMode() (string, error) {
+	v := os.Getenv(JournalModeEnvVar)
+	if v == "" {
+		return "WAL", nil
+	}
+	mode := strings.ToUpper(v)
+	if !validJournalModes[mode] {
+		return "", fmt.Errorf("persistence: %s=%q is not one of WAL, DELETE, TRUNCATE", JournalModeEnvVar, v)
+	}
+	return mode, nil
+}
 
 // DB is one SQLite database opened per this package's connection
 // configuration. It holds two connection pools against the same file: read
@@ -39,13 +76,24 @@ type DB struct {
 	migrations fs.FS
 }
 
-// Open sets WAL journaling, a bounded busy timeout, and foreign-key
-// enforcement as DSN parameters rather than leaving them to each caller,
-// so every connection this package ever opens carries them, with no path
-// through Open that could construct a connection missing one. It does not
-// apply migrations; call Migrate for that.
+// Open sets its journal mode (see JournalModeEnvVar), a bounded busy
+// timeout, and foreign-key enforcement as DSN parameters rather than leaving
+// them to each caller, so every connection this package ever opens carries
+// them, with no path through Open that could construct a connection missing
+// one. It does not apply migrations; call Migrate for that.
+//
+// go-sqlite3 applies _journal_mode by running `PRAGMA journal_mode=<mode>`
+// on every connection it opens (see its own documentation), so switching
+// JournalModeEnvVar away from WAL against a database file still in WAL mode
+// converts it in place the next time nothing else holds it open in WAL --
+// SQLite refuses the mode switch, silently keeping the prior mode, while any
+// other connection still does.
 func Open(path string) (*DB, error) {
-	readDSN := fmt.Sprintf("%s?_journal_mode=WAL&_busy_timeout=%d&_foreign_keys=on", path, busyTimeoutMillis)
+	mode, err := journalMode()
+	if err != nil {
+		return nil, err
+	}
+	readDSN := fmt.Sprintf("%s?_journal_mode=%s&_busy_timeout=%d&_foreign_keys=on", path, mode, busyTimeoutMillis)
 	writeDSN := readDSN + "&_txlock=immediate"
 
 	read, err := sql.Open("sqlite3", readDSN)

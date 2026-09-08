@@ -32,6 +32,24 @@ files.
   import` itself refuses if any of these is still held, but it does not stop
   a writer on your behalf.
 
+## Network-filesystem data directories
+
+Do not use `PLECT_SQLITE_JOURNAL_MODE`'s default (WAL) when `$DATA_DIR` is a
+network filesystem (NFS, or EFS as an NFS implementation): WAL depends on
+mmap'd shared memory between connections and fsyncs every commit's WAL frame
+individually, both unreliable or ruinously slow there per SQLite's own
+documentation. Set `PLECT_SQLITE_JOURNAL_MODE=DELETE` (or `TRUNCATE`) in the
+deployment environment (the task definition, the container's env) before
+starting `plect serve` against such a directory. This is an environment
+variable, not a `config.toml` key — see
+[the SQLite persistence design](../design/sqlite-persistence.md).
+
+`plect storage import` also builds its temporary database under `--tmp-dir`
+(default: the OS temporary directory) rather than under `$DATA_DIR`, so the
+import itself stays fast regardless of `$DATA_DIR`'s filesystem — pass
+`--tmp-dir` explicitly if the OS default temporary directory is not local
+disk either.
+
 ## Backup
 
 Copy the complete runtime data directory to a separate durable location
