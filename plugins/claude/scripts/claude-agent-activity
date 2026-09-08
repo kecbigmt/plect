@@ -182,15 +182,21 @@ case "${1:-}" in
     buf_file="$buf_dir/$message_id"
     idx_file="$buf_dir/$message_id.index"
 
+    [ -n "$delta" ] && printf '%s' "$delta" >> "$buf_file" 2>/dev/null
+
     # index is an emitter-owned counter per (message_id, kind), not
     # Claude's own .index forwarded from the payload: the core contract
     # reserves the harness's own index for a different, harness-specific
-    # axis (e.g. a block index), so this hook keeps its own.
-    index="$(cat "$idx_file" 2>/dev/null)"
-    case "$index" in ''|*[!0-9]*) index=0 ;; esac
-    printf '%s' "$((index + 1))" > "$idx_file" 2>/dev/null
-
-    [ -n "$delta" ] && printf '%s' "$delta" >> "$buf_file" 2>/dev/null
+    # axis (e.g. a block index), so this hook keeps its own. It advances
+    # only for a delta actually published below: an empty delta that
+    # never reaches a consumer must not still consume a number, or the
+    # next real delta starts at 1 and reads as a dropped index 0.
+    index=0
+    if [ -n "$delta" ]; then
+      index="$(cat "$idx_file" 2>/dev/null)"
+      case "$index" in ''|*[!0-9]*) index=0 ;; esac
+      printf '%s' "$((index + 1))" > "$idx_file" 2>/dev/null
+    fi
 
     meta=(--meta "message_id=$message_id" --meta "message_id_origin=native" --meta "kind=text" --meta "index=$index" --meta "final=$final" --meta "source=claude")
     [ -n "$turn_id" ] && meta+=(--meta "turn_id=$turn_id")

@@ -193,6 +193,16 @@ case "$got" in
   *) printf 'a fresh message_id should start its index counter at 0, got: %s\n' "$got" >&2; exit 1 ;;
 esac
 
+# message_display: an empty delta that publishes nothing must not still
+# consume an index -- otherwise the next (first visible) delta starts at 1
+# and a consumer reads that gap as a dropped index 0.
+run_report message_display '{"hook_event_name":"MessageDisplay","message_id":"msg-gap","index":0,"final":false,"delta":""}' >/dev/null
+got="$(run_report message_display '{"hook_event_name":"MessageDisplay","message_id":"msg-gap","index":1,"final":false,"delta":"first visible delta"}')"
+case "$got" in
+  *"index=0"*) ;;
+  *) printf 'the first published delta after a swallowed empty one should still be index 0, got: %s\n' "$got" >&2; exit 1 ;;
+esac
+
 # message_display: an empty delta publishes no plect.message_delta (empty
 # text), and a final flush whose buffered text is still empty publishes no
 # plect.message either.
