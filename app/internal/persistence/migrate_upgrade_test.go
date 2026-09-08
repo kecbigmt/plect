@@ -158,9 +158,12 @@ func TestMigrate_DownRestoresDeliveryModeColumnWithoutError(t *testing.T) {
 	}
 }
 
-// TestMigrate_DownRestoresPreDissolutionSchemaWithoutError proves Down
-// leaves an identifiable event row reachable (not lossless -- see the
-// migration's own header).
+// TestMigrate_DownRestoresPreDissolutionSchemaWithoutError proves the
+// dissolution migration's Down runs without error and leaves an
+// identifiable event row reachable under the restored pre-dissolution
+// schema. It does not assert losslessness -- see that migration's own
+// header comment. It steps down through newer additive migrations before the
+// node-execution-identity and dissolution migrations it exercises.
 func TestMigrate_DownRestoresPreDissolutionSchemaWithoutError(t *testing.T) {
 	db := migratedTestDB(t)
 	ctx := context.Background()
@@ -176,6 +179,9 @@ func TestMigrate_DownRestoresPreDissolutionSchemaWithoutError(t *testing.T) {
 	provider, err := goose.NewProvider(goose.DialectSQLite3, db.write, db.migrations)
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
+	}
+	if _, err := provider.Down(ctx); err != nil {
+		t.Fatalf("Down (sidecar state): %v", err)
 	}
 	if _, err := provider.Down(ctx); err != nil {
 		t.Fatalf("Down (forward-cursor-kind): %v", err)
@@ -301,6 +307,9 @@ func TestMigrate_DownRestoresNodeInstancesColumnsWithoutError(t *testing.T) {
 		t.Fatalf("NewProvider: %v", err)
 	}
 	if _, err := provider.Down(ctx); err != nil {
+		t.Fatalf("Down (sidecar state): %v", err)
+	}
+	if _, err := provider.Down(ctx); err != nil {
 		t.Fatalf("Down (forward-cursor-kind): %v", err)
 	}
 	if _, err := provider.Down(ctx); err != nil {
@@ -343,6 +352,9 @@ func TestMigrate_DownDropsForwardCursorRowsWithoutError(t *testing.T) {
 	provider, err := goose.NewProvider(goose.DialectSQLite3, db.write, db.migrations)
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
+	}
+	if _, err := provider.Down(ctx); err != nil {
+		t.Fatalf("Down (sidecar state): %v", err)
 	}
 	if _, err := provider.Down(ctx); err != nil {
 		t.Fatalf("Down (forward-cursor-kind): %v", err)

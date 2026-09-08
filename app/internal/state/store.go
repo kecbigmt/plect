@@ -15,6 +15,7 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/datahome"
 	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/persistence"
+	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
 // UpReservation is an alias for the shared domain type: it must live
@@ -220,6 +221,19 @@ func (s *Store) Destroy(name string) error {
 		return fmt.Errorf("state: destroy %q: %w", name, err)
 	}
 	return nil
+}
+
+// Tombstone returns the most recently destroyed incarnation of name.
+func (s *Store) Tombstone(name string) (*contract.Tombstone, error) {
+	db, err := s.dbHandle()
+	if err != nil {
+		return nil, fmt.Errorf("state: tombstone %q: %w", name, err)
+	}
+	tombstone, err := db.Tombstone(context.Background(), name)
+	if err != nil {
+		return nil, fmt.Errorf("state: tombstone %q: %w", name, err)
+	}
+	return tombstone, nil
 }
 
 // FindByAlias returns all sessions whose create-time alias equals the given

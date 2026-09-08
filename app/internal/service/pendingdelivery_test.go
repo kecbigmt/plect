@@ -1,18 +1,47 @@
 package service
 
 import (
-	"bytes"
-	"fmt"
-	"log/slog"
+	"context"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 
-	"github.com/kecbigmt/plecture/app/internal/config"
-	"github.com/kecbigmt/plecture/app/internal/flocktest"
+	"github.com/kecbigmt/plecture/app/internal/domain"
+	"github.com/kecbigmt/plecture/app/internal/state"
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
+
+func subscriptionRetryCount(t *testing.T, store *state.Store, sessionName, action, resource string, destroyed bool) int {
+	t.Helper()
+	db, err := retryStore(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if destroyed {
+		all, err := db.DestroyedSubscriptionRetries(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		count := 0
+		for _, retry := range all {
+			if retry.Session == sessionName && retry.Action == action && retry.ResourceID == resource {
+				count++
+			}
+		}
+		return count
+	}
+	all, err := db.SubscriptionRetriesForLiveSession(context.Background(), sessionName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, retry := range all {
+		if retry.Action == action && retry.ResourceID == resource {
+			count++
+		}
+	}
+	return count
+}
 
 // A TaskCleanup whose unsubscribe hook fails queues the resource durably —
 // the instance record that would otherwise be the retry handle is already
@@ -39,12 +68,8 @@ func TestTaskCleanup_UnsubscribeFailureIsDurablyQueued(t *testing.T) {
 		t.Fatalf("result = %+v, want a failed-but-non-fatal unsubscribe", result)
 	}
 
-	f, loadErr := loadPendingDelivery(pendingDeliveryPath(store))
-	if loadErr != nil {
-		t.Fatal(loadErr)
-	}
-	if got := f.Unsubscribe["sess-1"]; len(got) != 1 || got[0] != prURL {
-		t.Fatalf("pending unsubscribe queue = %v, want [%s] for sess-1", got, prURL)
+	if got := subscriptionRetryCount(t, store, "sess-1", retryUnsubscribe, prURL, false); got != 1 {
+		t.Fatalf("pending unsubscribe count = %d, want 1", got)
 	}
 }
 
@@ -89,12 +114,8 @@ args    = ["-c", "exit 3"]
 		t.Fatalf("result = %+v, want a failed-but-non-fatal subscribe", result)
 	}
 
-	f, loadErr := loadPendingDelivery(pendingDeliveryPath(store))
-	if loadErr != nil {
-		t.Fatal(loadErr)
-	}
-	if got := f.Subscribe["sess-1"]; len(got) != 1 || got[0] != prURL {
-		t.Fatalf("pending subscribe queue = %v, want [%s] for sess-1", got, prURL)
+	if got := subscriptionRetryCount(t, store, "sess-1", retrySubscribe, prURL, false); got != 1 {
+		t.Fatalf("pending subscribe count = %d, want 1", got)
 	}
 }
 
@@ -186,9 +207,8 @@ func TestFlushPendingDelivery_RetriesUnsubscribeAndDrainsOnSuccess(t *testing.T)
 	if _, err := TaskCleanup(cfg, store, TaskCleanupParams{Instance: "pr", SessionName: "sess-1"}); err != nil {
 		t.Fatalf("cleanup: %v", err)
 	}
-	f, loadErr := loadPendingDelivery(pendingDeliveryPath(store))
-	if loadErr != nil || len(f.Unsubscribe["sess-1"]) != 1 {
-		t.Fatalf("precondition: expected %s queued, got %v (err=%v)", prURL, f.Unsubscribe, loadErr)
+	if got := subscriptionRetryCount(t, store, "sess-1", retryUnsubscribe, prURL, false); got != 1 {
+		t.Fatalf("precondition: pending unsubscribe count = %d, want 1", got)
 	}
 
 	if err := os.WriteFile(toggle, []byte("go"), 0o644); err != nil {
@@ -201,9 +221,8 @@ func TestFlushPendingDelivery_RetriesUnsubscribeAndDrainsOnSuccess(t *testing.T)
 	if _, err := os.Stat(rec); err != nil {
 		t.Errorf("the retried unsubscribe hook did not run: %v", err)
 	}
-	f, loadErr = loadPendingDelivery(pendingDeliveryPath(store))
-	if loadErr != nil || len(f.Unsubscribe["sess-1"]) != 0 {
-		t.Errorf("pending unsubscribe queue = %v (err=%v), want empty after a successful retry", f.Unsubscribe, loadErr)
+	if got := subscriptionRetryCount(t, store, "sess-1", retryUnsubscribe, prURL, false); got != 0 {
+		t.Errorf("pending unsubscribe count = %d, want 0 after a successful retry", got)
 	}
 }
 
@@ -219,10 +238,16 @@ func TestFlushPendingDeliveryLogged_DrainsOrphanedEntryViaAnotherSessionsActivit
 	toggledUnsubscribeProvider(t, cfg.BaseDir, toggle, rec)
 	store := testStore(t)
 
-	// "gone-1" never gets a state entry, standing in for an already-destroyed
-	// session.
 	const prURL = "resource://sess/proj/pull/9"
-	if err := queuePendingUnsubscribe(store, "gone-1", prURL); err != nil {
+	seedSession(t, store, "gone-1", "gone", 1, "coding", map[string]*contract.TaskState{})
+	gone := store.Get("gone-1")
+	if gone == nil {
+		t.Fatal("missing queued session")
+	}
+	if err := store.Destroy("gone-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := queuePendingUnsubscribeForSessionID(store, gone.ID, prURL); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(toggle, []byte("go"), 0o644); err != nil {
@@ -237,9 +262,60 @@ func TestFlushPendingDeliveryLogged_DrainsOrphanedEntryViaAnotherSessionsActivit
 	if _, err := os.Stat(rec); err != nil {
 		t.Errorf("gone-1's orphaned unsubscribe hook did not run via other-1's activity: %v", err)
 	}
-	f, loadErr := loadPendingDelivery(pendingDeliveryPath(store))
-	if loadErr != nil || len(f.Unsubscribe["gone-1"]) != 0 {
-		t.Errorf("pending unsubscribe queue for gone-1 = %v (err=%v), want drained", f.Unsubscribe, loadErr)
+	if got := subscriptionRetryCount(t, store, "gone-1", retryUnsubscribe, prURL, true); got != 0 {
+		t.Errorf("pending unsubscribe count for gone-1 = %d, want drained", got)
+	}
+}
+
+func TestSweepOrphanedPendingDeliveriesDoesNotUnsubscribeLiveNameReplacement(t *testing.T) {
+	toggle := filepath.Join(t.TempDir(), "toggle")
+	rec := filepath.Join(t.TempDir(), "rec")
+	cfg := writeWorkflowFixture(t, t.TempDir(), "coding",
+		[]taskFixture{{id: "work", scope: "session", setup: `echo '{}'`}},
+		[]nodeFixture{{id: "work"}},
+	)
+	toggledUnsubscribeProvider(t, cfg.BaseDir, toggle, rec)
+	store := testStore(t)
+	seedSession(t, store, "same-name", "same", 1, "coding", map[string]*contract.TaskState{})
+	old := store.Get("same-name")
+	if old == nil {
+		t.Fatal("missing original session")
+	}
+	if err := store.Destroy("same-name"); err != nil {
+		t.Fatal(err)
+	}
+	const resource = "resource://same/proj/pull/1"
+	if err := queuePendingUnsubscribeForSessionID(store, old.ID, resource); err != nil {
+		t.Fatal(err)
+	}
+	seedSession(t, store, "same-name", "same", 1, "coding", map[string]*contract.TaskState{})
+	if err := store.Update("same-name", func(session *domain.Session) error {
+		session.ResourceID = resource
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(toggle, []byte("go"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sweepOrphanedPendingDeliveries(cfg, store)
+
+	if _, err := os.Stat(rec); err == nil {
+		t.Fatal("stale retry unsubscribed the replacement's live registration")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("check unsubscribe record: %v", err)
+	}
+	db, err := retryStore(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	destroyed, err := db.DestroyedSubscriptionRetries(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(destroyed) != 0 {
+		t.Fatalf("destroyed retries = %+v, want stale retry removed", destroyed)
 	}
 }
 
@@ -276,9 +352,8 @@ func TestFlushPendingDelivery_DropsUnsubscribeEntryOnceResourceIsNeededAgain(t *
 	if _, err := os.Stat(rec); err == nil {
 		t.Error("a resource needed again must not have its unsubscribe hook run")
 	}
-	f, loadErr := loadPendingDelivery(pendingDeliveryPath(store))
-	if loadErr != nil || len(f.Unsubscribe["sess-1"]) != 0 {
-		t.Errorf("pending unsubscribe queue = %v (err=%v), want the now-needed entry dropped", f.Unsubscribe, loadErr)
+	if got := subscriptionRetryCount(t, store, "sess-1", retryUnsubscribe, prURL, false); got != 0 {
+		t.Errorf("pending unsubscribe count = %d, want the now-needed entry dropped", got)
 	}
 }
 
@@ -335,9 +410,8 @@ args    = ["-c", 'test -e "$1" || exit 3; echo done > "$2"', "provider", "` + to
 	if _, err := os.Stat(rec); err != nil {
 		t.Errorf("the retried subscribe hook did not run: %v", err)
 	}
-	f, loadErr := loadPendingDelivery(pendingDeliveryPath(store))
-	if loadErr != nil || len(f.Subscribe["sess-1"]) != 0 {
-		t.Errorf("pending subscribe queue = %v (err=%v), want empty after a successful retry", f.Subscribe, loadErr)
+	if got := subscriptionRetryCount(t, store, "sess-1", retrySubscribe, prURL, false); got != 0 {
+		t.Errorf("pending subscribe count = %d, want 0 after a successful retry", got)
 	}
 }
 
@@ -387,9 +461,8 @@ args    = ["-c", 'test -e "$1" || exit 3; echo done > "$2"', "provider", "` + fi
 	if _, err := os.Stat(rec); err == nil {
 		t.Error("a resource nothing needs must not have its subscribe hook run")
 	}
-	f, loadErr := loadPendingDelivery(pendingDeliveryPath(store))
-	if loadErr != nil || len(f.Subscribe["sess-1"]) != 0 {
-		t.Errorf("pending subscribe queue = %v (err=%v), want the now-moot entry dropped", f.Subscribe, loadErr)
+	if got := subscriptionRetryCount(t, store, "sess-1", retrySubscribe, prURL, false); got != 0 {
+		t.Errorf("pending subscribe count = %d, want the now-moot entry dropped", got)
 	}
 }
 
@@ -397,55 +470,3 @@ args    = ["-c", 'test -e "$1" || exit 3; echo done > "$2"', "provider", "` + fi
 // own errors: TaskSetup/TaskCleanup have no result field for "an unrelated
 // queued resource's retry also failed just now," so the log is the only
 // place this becomes visible.
-func TestFlushPendingDeliveryLogged_LogsFlushErrors(t *testing.T) {
-	cfg := &config.Config{BaseDir: t.TempDir()}
-	store := testStore(t)
-	seedSession(t, store, "sess-1", "sess", 1, "coding", map[string]*contract.TaskState{})
-
-	// A corrupt queue file makes loadPendingDelivery fail inside the flush.
-	if err := os.WriteFile(pendingDeliveryPath(store), []byte("{not valid json"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	var logs bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
-	defer slog.SetDefault(prev)
-
-	flushPendingDeliveryLogged(cfg, store, "sess-1")
-
-	if !bytes.Contains(logs.Bytes(), []byte("pending delivery flush failed")) {
-		t.Errorf("expected a warning about the failed flush, got log output: %q", logs.String())
-	}
-}
-
-// The Linux NFS client rejects LOCK_EX on an O_RDONLY descriptor with EBADF,
-// even though local filesystems tolerate it. This test inspects the lock
-// file descriptor's own open flags via /proc, so it catches the regression
-// even on a local (non-NFS) test filesystem.
-func TestUpdatePendingDelivery_OpensLockFileWritable(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("lock fd flags are inspected via /proc, which is Linux-specific")
-	}
-
-	path := filepath.Join(t.TempDir(), "pending_delivery.json")
-	lockPath := path + ".lock"
-
-	var accErr error
-	err := updatePendingDelivery(path, func(*pendingDeliveryFile) {
-		accMode, err := flocktest.AccessMode(lockPath)
-		if err != nil {
-			accErr = err
-			return
-		}
-		if accMode == os.O_RDONLY {
-			accErr = fmt.Errorf("lock file opened O_RDONLY; exclusive lock (LOCK_EX) requires a writable descriptor on NFS")
-		}
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if accErr != nil {
-		t.Error(accErr)
-	}
-}

@@ -80,6 +80,10 @@ func ensureCurrent(ctx context.Context, path string, migrations fs.FS, isDevBuil
 		return nil, err
 	}
 	if current == target {
+		if err := db.ImportSidecars(ctx, filepath.Dir(path)); err != nil {
+			db.Close()
+			return nil, err
+		}
 		return db, nil
 	}
 
@@ -92,6 +96,10 @@ func ensureCurrent(ctx context.Context, path string, migrations fs.FS, isDevBuil
 	}
 
 	if err := db.Migrate(ctx); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := db.ImportSidecars(ctx, filepath.Dir(path)); err != nil {
 		db.Close()
 		return nil, err
 	}

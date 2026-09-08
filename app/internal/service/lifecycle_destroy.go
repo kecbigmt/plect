@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -144,35 +143,21 @@ func Destroy(cfg *config.Config, store *state.Store, params DestroyParams) (*Des
 		result.RemovedWorkspaceDir = session.WorkspaceDirPath != "" && !fileExists(session.WorkspaceDirPath)
 	}
 
-	// Snapshot the state entry as a tombstone in the event log directory
-	// before it's deleted, so resource mapping / judge records / final
-	// outputs survive destroy. Fail-closed and unconditional on --force:
-	// a lost tombstone is exactly the silent context loss this exists to prevent.
-	destroyedAt := time.Now()
-	tombstone := contract.Tombstone{Session: *session, DestroyedAt: destroyedAt}
-	tombstoneData, merr := json.Marshal(tombstone)
-	if merr != nil {
-		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to marshal tombstone: %v", merr)}
-	}
-	if werr := eventlog.NewStore(store.Dir()).WriteTombstone(sessionName, tombstoneData); werr != nil {
-		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to write tombstone: %v", werr)}
-	}
-
-	// Record after the tombstone succeeds; otherwise a failed destroy would
-	// leave a lifecycle event claiming the session was destroyed.
+	// The retained destroyed session row is the tombstone. Record its lifecycle
+	// transition before making the row non-live so the event shares its id.
 	recordLifecycle(store, sessionName, "destroyed", "session destroyed")
 
 	if err := store.Destroy(sessionName); err != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to destroy state entry: %v", err)}
 	}
 
-	if err := eventlog.NewStore(store.Dir()).ClearChainAttempts(sessionName); err != nil {
+	if err := eventlog.NewStore(store.Dir()).ClearChainAttempts(session.ID); err != nil {
 		result.CleanupWarnings = append(result.CleanupWarnings, fmt.Sprintf("chain-attempt bookkeeping cleanup: %v", err))
 	}
 
 	// After the delete, so unwireDeliveryOnTeardown's fresh read sees the
 	// session as gone rather than skipping the unsubscribe as still needed.
-	if _, errMsg := unwireDeliveryOnTeardown(cfg, store, sessionName, session.ResourceID); errMsg != "" {
+	if _, errMsg := unwireDeliveryOnTeardown(cfg, store, sessionName, session.ResourceID, session.ID); errMsg != "" {
 		result.CleanupWarnings = append(result.CleanupWarnings, fmt.Sprintf("resource delivery unsubscribe: %s", errMsg))
 	}
 

@@ -5,23 +5,17 @@ package eventlog
 import (
 	"context"
 	"crypto/rand"
-	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/url"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/oklog/ulid/v2"
 
 	"github.com/kecbigmt/plecture/app/internal/datahome"
 	"github.com/kecbigmt/plecture/app/internal/persistence"
-	"github.com/kecbigmt/plecture/contracts/atomicfile"
 	"github.com/kecbigmt/plecture/contracts/event"
 )
 
@@ -30,16 +24,11 @@ import (
 // handful of sessions does not need sub-second latency.
 const pollInterval = 500 * time.Millisecond
 
-// Store manages per-session event logs rooted at <dir>/events.
+// Store manages per-session event logs in storage.db.
 type Store struct {
 	dir    string
-	root   string // <dir>/events: tombstone + chain-attempt sidecars only
 	logger *slog.Logger
 }
-
-// Root returns the events directory this store reads/writes (for diagnostics —
-// e.g. confirming the resident process and writers resolve the same log tree).
-func (s *Store) Root() string { return s.root }
 
 // Dir returns the data directory this store's database lives in, matching
 // state.Store.Dir() — a caller that needs to open a second handle over the
@@ -53,7 +42,7 @@ func NewStore(dir string) *Store {
 	if dir == "" {
 		dir = datahome.Resolve()
 	}
-	return &Store{dir: dir, root: filepath.Join(dir, "events"), logger: slog.Default()}
+	return &Store{dir: dir, logger: slog.Default()}
 }
 
 // dbHandle opens (or reuses) the database via persistence.EnsureCurrentShared,
@@ -93,27 +82,6 @@ func takeInjectedAppendFailure(path string) error {
 	return err
 }
 
-// sessionDir returns the directory holding a session's log, encoding the opaque
-// session name to a single filesystem-safe path segment.
-func (s *Store) sessionDir(session string) string {
-	return filepath.Join(s.root, encodeSession(session))
-}
-
-// encodeSession maps the opaque session name to one filesystem-safe path
-// segment (e.g. a session name containing "/" is percent-escaped). Each
-// log record also carries session_name, so this need not be reversed.
-func encodeSession(session string) string {
-	return url.PathEscape(session)
-}
-
-func (s *Store) tombstonePath(session string) string {
-	return filepath.Join(s.sessionDir(session), "tombstone.json")
-}
-func (s *Store) chainAttemptsPath(session string) string {
-	return filepath.Join(s.sessionDir(session), "chain_attempts.json")
-}
-func (s *Store) lockPath(session string) string { return filepath.Join(s.sessionDir(session), ".lock") }
-
 // Append writes ev to its session's log and returns the stored event (with
 // ID and Time filled in if absent), its sequence (the replay cursor), and
 // next. A session with no live row gets a minimal placeholder row started
@@ -149,46 +117,15 @@ func (s *Store) Append(ev event.Event) (stored event.Event, seq, next int64, err
 	return ev, seq, seq + 1, nil
 }
 
-// WriteTombstone durably persists a session's tombstone snapshot (atomic
-// write + fsync) into its event log directory, so the snapshot survives
-// `plect destroy` deleting the session's runtime state entry. data is an opaque
-// blob (the caller owns its schema — this package stays provider-agnostic);
-// a pre-existing tombstone is overwritten.
-func (s *Store) WriteTombstone(session string, data []byte) error {
-	dir := s.sessionDir(session)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("eventlog: mkdir: %w", err)
-	}
-	return atomicfile.Write(s.tombstonePath(session), data)
-}
-
-// ReadTombstone returns a session's tombstone blob and whether one exists.
-func (s *Store) ReadTombstone(session string) (data []byte, ok bool, err error) {
-	data, err = os.ReadFile(s.tombstonePath(session))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, false, nil
-		}
-		return nil, false, err
-	}
-	return data, true, nil
-}
-
 // SwapChainAttempt atomically compares-and-sets a plect.chain.attempt
-// cap-refusal streak marker (see service.chainAttemptFingerprint), scoped by
-// a caller-supplied identity token (service.chainAttemptStreamID) so two incarnations never share a key even if a destroy races a leftover tick; previous is the value from just before this call, for RevertChainAttempt.
-func (s *Store) SwapChainAttempt(session, instance, chainID, generation, newFingerprint string) (previous string, won bool, err error) {
-	key := chainAttemptKey(instance, chainID, generation)
-	err = s.withChainAttemptsLocked(session, func(attempts map[string]string) bool {
-		previous = attempts[key]
-		if previous == newFingerprint {
-			return false
-		}
-		won = true
-		setChainAttempt(attempts, key, newFingerprint)
-		return true
-	})
-	return previous, won, err
+// cap-refusal streak marker (see service.chainAttemptFingerprint). Previous
+// is the value from just before this call, for RevertChainAttempt.
+func (s *Store) SwapChainAttempt(session, instance, chainID, newFingerprint string) (previous string, won bool, err error) {
+	db, err := s.dbHandle()
+	if err != nil {
+		return "", false, err
+	}
+	return db.SwapChainAttempt(context.Background(), session, instance, chainID, newFingerprint)
 }
 
 // RevertChainAttempt compensates a SwapChainAttempt win whose side effect
@@ -197,85 +134,21 @@ func (s *Store) SwapChainAttempt(session, instance, chainID, generation, newFing
 // transition (a concurrent tick's own, newer streak) if one has since won;
 // finding the marker already past claimed means that already happened, so
 // there is nothing here for this caller to compensate.
-func (s *Store) RevertChainAttempt(session, instance, chainID, generation, claimed, previous string) (reverted bool, err error) {
-	key := chainAttemptKey(instance, chainID, generation)
-	err = s.withChainAttemptsLocked(session, func(attempts map[string]string) bool {
-		if attempts[key] != claimed {
-			return false
-		}
-		reverted = true
-		setChainAttempt(attempts, key, previous)
-		return true
-	})
-	return reverted, err
-}
-
-// ClearChainAttempts removes every chain-attempt marker for session,
-// including any left by earlier generations — a hygiene sweep, not a
-// correctness requirement now that SwapChainAttempt/RevertChainAttempt scope
-// each generation to its own key.
-func (s *Store) ClearChainAttempts(session string) error {
-	if err := os.Remove(s.chainAttemptsPath(session)); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("eventlog: chain attempts: remove: %w", err)
+func (s *Store) RevertChainAttempt(session, instance, chainID, claimed, previous string) (reverted bool, err error) {
+	db, err := s.dbHandle()
+	if err != nil {
+		return false, err
 	}
-	return nil
+	return db.RevertChainAttempt(context.Background(), session, instance, chainID, claimed, previous)
 }
 
-func chainAttemptKey(instance, chainID, generation string) string {
-	return instance + "\x00" + chainID + "\x00" + generation
-}
-
-func setChainAttempt(attempts map[string]string, key, value string) {
-	if value == "" {
-		delete(attempts, key)
-		return
-	}
-	attempts[key] = value
-}
-
-// withChainAttemptsLocked runs fn against session's chain-attempt markers
-// under its exclusive per-session lock (unrelated to Append's own), writing
-// the result back only when fn reports a change — the shared plumbing
-// SwapChainAttempt and RevertChainAttempt each apply their own compare
-// logic through.
-func (s *Store) withChainAttemptsLocked(session string, fn func(attempts map[string]string) (changed bool)) error {
-	dir := s.sessionDir(session)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("eventlog: mkdir: %w", err)
-	}
-	unlock, err := flock(s.lockPath(session), syscall.LOCK_EX)
+// ClearChainAttempts removes every chain-attempt marker for sessionID.
+func (s *Store) ClearChainAttempts(sessionID string) error {
+	db, err := s.dbHandle()
 	if err != nil {
 		return err
 	}
-	defer unlock()
-
-	attempts, err := s.readChainAttemptsLocked(session)
-	if err != nil {
-		return err
-	}
-	if !fn(attempts) {
-		return nil
-	}
-	data, merr := json.Marshal(attempts)
-	if merr != nil {
-		return fmt.Errorf("eventlog: chain attempts: marshal: %w", merr)
-	}
-	return atomicfile.Write(s.chainAttemptsPath(session), data)
-}
-
-func (s *Store) readChainAttemptsLocked(session string) (map[string]string, error) {
-	data, err := os.ReadFile(s.chainAttemptsPath(session))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return map[string]string{}, nil
-		}
-		return nil, fmt.Errorf("eventlog: chain attempts: read: %w", err)
-	}
-	out := map[string]string{}
-	if err := json.Unmarshal(data, &out); err != nil {
-		return nil, fmt.Errorf("eventlog: chain attempts: unmarshal: %w", err)
-	}
-	return out, nil
+	return db.ClearChainAttempts(context.Background(), sessionID)
 }
 
 // List returns events from sequence `since` (inclusive) matching f, ascending, plus each event's sequence and the next read cursor.
@@ -629,29 +502,6 @@ func (s *Store) CommitCursor(session, consumer string, seq int64) error {
 		return fmt.Errorf("eventlog: commit cursor: %w", err)
 	}
 	return nil
-}
-
-// flock opens (creating) the lock file and takes the given flock mode, returning
-// an unlock func. The session dir must already exist for LOCK_EX callers.
-//
-// The descriptor is opened O_RDWR even for a LOCK_SH caller: this one helper
-// is shared with LOCK_EX, and the Linux NFS client enforces that LOCK_EX
-// requires a writable descriptor, returning EBADF for an O_RDONLY one, even
-// though local filesystems tolerate it. The descriptor is never read or
-// written to; only its lock is used.
-func flock(path string, how int) (func(), error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
-	if err != nil {
-		return nil, err
-	}
-	if err := syscall.Flock(int(f.Fd()), how); err != nil {
-		f.Close()
-		return nil, fmt.Errorf("eventlog: flock: %w", err)
-	}
-	return func() {
-		syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		f.Close()
-	}, nil
 }
 
 // entropy is a monotonic ULID source: for two ids minted in the same

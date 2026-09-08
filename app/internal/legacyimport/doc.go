@@ -13,9 +13,7 @@
 // cutover), so this package owns re-deriving them from history rather than
 // reusing any current code path.
 //
-// tombstone.json, chain_attempts.json, pending_delivery.json, and their
-// lock files stay file-based after cutover — see that design doc's "Stays
-// file-based after cutover" section — so this package validates but never
-// copies or reads them for data: only state.json and the events/ tree feed
-// the database.
+// This pre-cutover importer validates sidecars but does not copy their data:
+// the post-cutover sidecar importer runs against the active database directory
+// after its schema migration, not against this stopped legacy backup.
 package legacyimport

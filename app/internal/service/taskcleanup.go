@@ -135,7 +135,7 @@ func TaskCleanup(cfg *config.Config, store *state.Store, params TaskCleanupParam
 	recordLifecycle(store, resolvedName, "task_cleanup", fmt.Sprintf("reclaimed %s", params.Instance))
 
 	result := &TaskCleanupResult{SessionName: resolvedName, Instance: params.Instance, Found: true, Resource: st.Resource}
-	result.Unsubscribed, result.UnsubscribeError = unwireDeliveryOnTeardown(cfg, store, resolvedName, st.Resource)
+	result.Unsubscribed, result.UnsubscribeError = unwireDeliveryOnTeardown(cfg, store, resolvedName, st.Resource, "")
 	return result, nil
 }
 

@@ -268,8 +268,11 @@ echo '{"workspace_dir":"%s"}'
 	if s := store.Get("org/repo-10+wf"); s == nil {
 		t.Fatal("session not persisted")
 	}
-	if _, err := os.Stat(pendingDeliveryPath(store)); !os.IsNotExist(err) {
-		t.Fatalf("pending delivery queue should stay empty (no hooked provider to fail): stat err=%v", err)
+	if got := subscriptionRetryCount(t, store, "org/repo-10+wf", retrySubscribe, url, false); got != 0 {
+		t.Fatalf("pending subscribe count = %d, want 0 without a failed hook", got)
+	}
+	if got := subscriptionRetryCount(t, store, "org/repo-10+wf", retryUnsubscribe, url, false); got != 0 {
+		t.Fatalf("pending unsubscribe count = %d, want 0 without a failed hook", got)
 	}
 }
 
@@ -454,9 +457,8 @@ args    = ["-c", 'test -e "$1" || exit 3; echo done > "$2"', "provider", "` + to
 	if store.Get(deadSession) != nil {
 		t.Fatal("state entry should be deleted despite the unsubscribe failure")
 	}
-	f, loadErr := loadPendingDelivery(pendingDeliveryPath(store))
-	if loadErr != nil || len(f.Unsubscribe[deadSession]) != 1 || f.Unsubscribe[deadSession][0] != url {
-		t.Fatalf("pending unsubscribe queue after Destroy = %v (err=%v), want [%s] for %s", f.Unsubscribe, loadErr, url, deadSession)
+	if got := subscriptionRetryCount(t, store, deadSession, retryUnsubscribe, url, true); got != 1 {
+		t.Fatalf("pending unsubscribe count after Destroy = %d, want 1", got)
 	}
 
 	// deadSession has no state entry left to retry itself, so only an
@@ -474,9 +476,8 @@ args    = ["-c", 'test -e "$1" || exit 3; echo done > "$2"', "provider", "` + to
 	if _, err := os.Stat(rec); err != nil {
 		t.Errorf("deadSession's orphaned unsubscribe hook did not run via the unrelated session's activity: %v", err)
 	}
-	f, loadErr = loadPendingDelivery(pendingDeliveryPath(store))
-	if loadErr != nil || len(f.Unsubscribe[deadSession]) != 0 {
-		t.Errorf("pending unsubscribe queue for %s = %v (err=%v), want drained", deadSession, f.Unsubscribe, loadErr)
+	if got := subscriptionRetryCount(t, store, deadSession, retryUnsubscribe, url, true); got != 0 {
+		t.Errorf("pending unsubscribe count for %s = %d, want drained", deadSession, got)
 	}
 }
 

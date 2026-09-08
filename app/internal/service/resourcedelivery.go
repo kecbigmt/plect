@@ -140,7 +140,7 @@ func unsubscribeIfWired(cfg *config.Config, sessionName, resourceID string) (boo
 // as a failure inside it. Never returns an error: both callers treat a
 // wiring failure as non-fatal to the teardown that already succeeded,
 // reporting it via the returned message instead.
-func unwireDeliveryOnTeardown(cfg *config.Config, store *state.Store, sessionName, resource string) (bool, string) {
+func unwireDeliveryOnTeardown(cfg *config.Config, store *state.Store, sessionName, resource, sessionID string) (bool, string) {
 	if strings.TrimSpace(resource) == "" {
 		return false, ""
 	}
@@ -162,7 +162,13 @@ func unwireDeliveryOnTeardown(cfg *config.Config, store *state.Store, sessionNam
 		errMsg = fmt.Sprintf("could not acquire the delivery lock: %v", lockErr)
 	}
 	if errMsg != "" {
-		if queueErr := queuePendingUnsubscribe(store, sessionName, resource); queueErr != nil {
+		queueErr := error(nil)
+		if sessionID == "" {
+			queueErr = queuePendingUnsubscribe(store, sessionName, resource)
+		} else {
+			queueErr = queuePendingUnsubscribeForSessionID(store, sessionID, resource)
+		}
+		if queueErr != nil {
 			errMsg = fmt.Sprintf("%s (and failed to durably queue a retry: %v)", errMsg, queueErr)
 		}
 	}

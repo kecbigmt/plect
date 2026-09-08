@@ -1,7 +1,6 @@
 package service
 
 import (
-	"encoding/json"
 	"fmt"
 	"maps"
 	"os"
@@ -284,15 +283,7 @@ func lookupTombstone(cfg *config.Config, store *state.Store, identifier string) 
 	if err != nil {
 		return nil, err
 	}
-	data, ok, err := eventlog.NewStore(store.Dir()).ReadTombstone(sessionName)
-	if err != nil || !ok {
-		return nil, err
-	}
-	var tomb contract.Tombstone
-	if err := json.Unmarshal(data, &tomb); err != nil {
-		return nil, fmt.Errorf("tombstone: unmarshal: %w", err)
-	}
-	return &tomb, nil
+	return store.Tombstone(sessionName)
 }
 
 // childNames lists the sessions whose ParentSession is name, sorted. Derived

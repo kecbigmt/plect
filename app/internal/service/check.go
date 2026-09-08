@@ -155,12 +155,6 @@ type computedAction struct {
 // fired, not-already-active chain. observe is false for every CheckSession
 // call: check reads persisted state only, so that repeated calls cannot
 // themselves change what a session reports.
-// The returned *domain.Session is the exact snapshot chainPlan was computed
-// against — a caller that later acts on chainPlan (TickSession, deriving a
-// chain-attempt marker's generation from it) must key that action off this
-// same snapshot, not a fresh re-read: the session can be destroyed and
-// recreated under the same name in between, and a fresh read would then
-// silently pair a stale plan with the new lifecycle's identity.
 func evaluateSessionActions(cfg *config.Config, store *state.Store, sessionName string, observe bool, trigger TickTrigger) (string, *domain.Session, []computedAction, []ChainSpawn, error) {
 	if sessionName == "" {
 		sessionName = os.Getenv("PLECT_SESSION_NAME")

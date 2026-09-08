@@ -2,7 +2,6 @@ package service
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -1638,16 +1637,12 @@ func TestDestroy_WritesTombstone(t *testing.T) {
 		t.Fatal("expected state entry deleted after destroy")
 	}
 
-	data, ok, err := eventlog.NewStore(store.Dir()).ReadTombstone(sessionName)
+	tomb, err := store.Tombstone(sessionName)
 	if err != nil {
-		t.Fatalf("ReadTombstone: %v", err)
+		t.Fatalf("Tombstone: %v", err)
 	}
-	if !ok {
+	if tomb == nil {
 		t.Fatal("expected a tombstone to exist after destroy")
-	}
-	var tomb contract.Tombstone
-	if err := json.Unmarshal(data, &tomb); err != nil {
-		t.Fatalf("unmarshal tombstone: %v", err)
 	}
 	if tomb.Name != sessionName {
 		t.Errorf("tombstone.Name = %q, want %q", tomb.Name, sessionName)

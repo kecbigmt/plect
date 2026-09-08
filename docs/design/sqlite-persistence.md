@@ -161,22 +161,29 @@ classifies every `_json` column by its owning declaration:
 | `events` | `id` primary key; `(session_id, sequence)` unique and references `sessions(id)`; `direction` CHECK IN `inbound`/`outbound`/`internal`; `metadata_json` CHECK `json_valid` | type, source, direction, summary, body, metadata, and recorded time | each `log.jsonl` record |
 | `event_cursors` | `(session_id, kind)` primary key and session foreign key (`ON DELETE CASCADE`); `kind` CHECK IN `delivery`/`tick`/`heartbeat`/`forward`; `next_sequence` | none | `.cursor.<consumer>` |
 
-### Stays file-based after cutover
+### Remaining data-directory files
 
-Not every pre-cutover artifact moves into `storage.db`. Each of the
-following remains exactly where it already lives, unmigrated by the
-importer and untouched by cutover:
+`storage.db` is the durable authority. Its SQLite sidecars and persistence
+gate files remain beside it because SQLite and the gate own their lifecycle.
+The only per-session file is a delivery-decision flock; it serializes a
+provider hook and carries no durable fact.
 
-| File | Why it stays file-based |
+| File | Reason |
 | --- | --- |
-| `events/<session>/tombstone.json` | A per-session snapshot written once, at destroy, and read rarely (post-teardown diagnostics); it needs no index, no relational query, and no transactional coupling with the tables it survives independently of. `eventlog.Store.WriteTombstone`/`ReadTombstone` read and write it directly. |
-| `events/<session>/chain_attempts.json` | A best-effort, per-session cap-refusal dedup streak, not a durable historical fact — routinely swept and replaced wholesale, never queried across sessions. `eventlog.Store`'s `SwapChainAttempt`/`RevertChainAttempt`/`ClearChainAttempts` own it. |
-| `pending_delivery.json` | One shared file recording every session's outstanding subscribe/unsubscribe intents, read and rewritten directly by `service/pendingdelivery.go`; it has no per-row identity that benefits from relational storage. |
-| `delivery-locks/<session>.lock` | Pure OS-level mutual exclusion for a delivery decision (`service/deliverylock.go`), not data — a `flock`, not a fact worth persisting. |
+| `storage.db`, `storage.db-wal`, `storage.db-shm` | SQLite's database and journal sidecars. |
+| `storage.db.access.lock`, `storage.db.coordination.lock`, `storage.db.migration.json` | The persistence migration access gate's lock and diagnostic state. |
+| `delivery-locks/<escaped-session>.lock` | OS-level mutual exclusion for one provider delivery decision; it is a `flock`, not durable state. |
 
-The importer validates that none of these (or their own lock files) is
-still held by a live writer, but never reads them for data or copies them:
-see "One-time importer inventory" below.
+The retained `sessions` row with `status = 'destroyed'` and `destroyed_at`
+is a session tombstone. Its child rows reconstruct `contract.Tombstone`; no
+second tombstone marker exists. `chain_attempts` stores one non-empty cap
+refusal fingerprint per `(session_id, instance, chain_id)`, so
+compare-and-set and conditional revert run in an immediate transaction.
+`subscription_retries` stores deduplicated failed `subscribe` and
+`unsubscribe` intents by `(session_id, action, resource_id)`. A teardown retry
+uses the destroyed incarnation id, and a sweep drops its stale subscribe
+intent or retries its unsubscribe intent without involving a same-name live
+replacement.
 
 `Session.Message` is not a stored field on any table: a session's
 self-reported status line is derived from the most recent
@@ -614,9 +621,6 @@ upgrade.
 | `eventlog.Store.Append` | Resolves the target's live session row, minting a minimal placeholder one first if none exists yet (a plain event target, not necessarily one created through Create), then in one write transaction reads `NextEventSequence` from `MAX(sequence)` against that row and inserts the event. | Preserves the "publish needs no prior create" contract while keeping each append's own sequence assignment atomic. |
 | `CommitCursor` | Upsert one consumer’s next sequence in one write transaction. | Preserves at-least-once dispatch and reactor restart behavior. |
 
-`WriteTombstone` is not in this table: it stays a direct file write (see
-"Stays file-based after cutover" above), not a database transaction.
-
 A session's status line is not part of this table: it is derived entirely
 from its `plect.status_message` event stream (see "Status message" above),
 so `service.SetMessage` is a single append, not a session write plus an
@@ -627,12 +631,9 @@ independent best-effort appends where their existing callers ignore append
 failures. This design does not introduce event sourcing or claim that every
 state transition produces an event.
 
-Destroy preserves its existing checkpoint order until its service contract is
-changed: external cleanup, session checkpoint, tombstone write, lifecycle
-append, then the session's `Destroy` status transition
-(`app/internal/service/lifecycle_destroy.go`). The SQLite implementation keeps
-each database callback atomic but does not collapse those independently
-observable milestones into a new all-or-nothing lifecycle transaction.
+Destroy preserves its checkpoint order: external cleanup, session checkpoint,
+lifecycle append, then the session's `Destroy` status transition. The retained
+destroyed row remains available to post-teardown status and retry handling.
 
 ## Migration access gate
 
@@ -795,12 +796,8 @@ following runtime paths.
 | `events/<escaped-session>/log.jsonl` | Decode complete lines in byte order; reject invalid event identity, session mismatch, duplicate ID, and a malformed complete line; discard only a trailing partial line, matching the live reader; import stream and events. A record with no `direction` imports as `internal`, counted in the import summary. |
 | `events/<escaped-session>/.gen` | Read one trimmed non-empty stream identifier when present and reuse it as the imported session row's `id`; otherwise mint a fresh id after recording that no old page cursor survives cutover. |
 | `events/<escaped-session>/.cursor.<consumer>` | Parse a non-negative decimal boundary, validate it against the log boundary index, map `<consumer>` to its `event_cursors.kind` (`dispatcher` imports as `delivery`, `tick-reactor` imports as `tick`), and import the translated position. |
-| `events/<escaped-session>/tombstone.json` | Stays file-based (see "Stays file-based after cutover" above); the importer never reads or copies it. |
-| `events/<escaped-session>/chain_attempts.json` | Stays file-based; never read or copied. |
-| `events/<escaped-session>/.lock` | Confirm it is not held before import; do not copy it. The database transaction and access gate replace it. |
-| `pending_delivery.json` | Stays file-based; never read or copied. |
-| `pending_delivery.json.lock` | Confirm it is not held before import; do not copy it. |
-| `delivery-locks/<escaped-session>.lock` | Confirm no lock is held; do not copy it. The delivery decision keeps its service-level serialization through a database-backed lock/transaction. |
+| `events/<escaped-session>/tombstone.json`, `events/<escaped-session>/chain_attempts.json`, `events/<escaped-session>/.lock`, `pending_delivery.json`, `pending_delivery.json.lock` | The legacy importer does not copy these post-cutover sidecars. The storage opener imports the sidecars from the active database directory in one idempotent pass, then removes them and the retired `events/` tree. A source name resolves to its live incarnation or its latest destroyed incarnation; no match aborts without removing a source file. A chain-attempt generation that identifies another existing session also aborts. |
+| `delivery-locks/<escaped-session>.lock` | Confirm no lock is held; do not copy it. The delivery decision keeps its service-level `flock`. |
 
 The importer inserts every `populations` row before any `sessions` row that
 references it: `sessions.population_workflow`/`population_name` is a
