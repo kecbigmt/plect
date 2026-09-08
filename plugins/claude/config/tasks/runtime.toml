@@ -10,6 +10,12 @@ scope = "run"
 #                  updates automatically.
 #   effort       — when set, appended as `--effort <value>` the same way.
 #                  Empty = no flag (CLI default).
+#   permission_mode — appended as `--permission-mode <value>`, defaulting to
+#                  `bypassPermissions`. A dispatched session runs unattended,
+#                  so this resolves the CLI's first-run "Set up auto mode?"
+#                  wizard upfront instead of leaving it to hang on a pane with
+#                  nobody to answer it — the same class of hang
+#                  DISALLOWED_FLAG closes for AskUserQuestion.
 #   launch_env   — when set, a JSON object of environment variables exported
 #                  on the launch line, so the agent process inherits them.
 #                  Data only: keys must be valid environment variable names
@@ -38,9 +44,9 @@ scope = "run"
 #
 # Every value the script needs arrives through the binding transport, so
 # nothing below is spliced into this source and no value can become part of
-# a command: model/effort/launch_env/mcp_servers/path_prepend all cross one
-# further boundary of the script's own — the keystrokes typed into the
-# pane — and the script owns the quoting at that boundary.
+# a command: model/effort/permission_mode/launch_env/mcp_servers/path_prepend
+# all cross one further boundary of the script's own — the keystrokes typed
+# into the pane — and the script owns the quoting at that boundary.
 [runtime.setup]
 type   = "shell"
 script = '''
@@ -168,19 +174,26 @@ EFFORT="${effort-}"
 EFFORT_FLAG=""
 [ -n "$EFFORT" ] && EFFORT_FLAG="--effort $EFFORT"
 
+# permission_mode crosses the same keystroke boundary as model/effort, but its
+# defense is the inputs_schema enum below rather than a pattern: the value set
+# is closed to claude's own mode names, none of which can carry a quote.
+PERMISSION_MODE="${permission_mode-}"
+PERMISSION_MODE_FLAG=""
+[ -n "$PERMISSION_MODE" ] && PERMISSION_MODE_FLAG="--permission-mode $PERMISSION_MODE"
+
 # Dispatched sessions run unattended: nothing is present to answer an
 # interactive question, so a turn that hits one would hang until an external
 # timeout kills it instead of failing fast.
 DISALLOWED_FLAG="--disallowedTools AskUserQuestion"
 
-CLAUDE_CMD="claude $CLAUDE_ARG --mcp-config $MCP --settings $HOOKS $CHANNELS_FLAG $MODEL_FLAG $EFFORT_FLAG $DISALLOWED_FLAG"
+CLAUDE_CMD="claude $CLAUDE_ARG --mcp-config $MCP --settings $HOOKS $CHANNELS_FLAG $MODEL_FLAG $EFFORT_FLAG $PERMISSION_MODE_FLAG $DISALLOWED_FLAG"
 if [ -n "$PREV_SID" ]; then
   # --resume fails immediately with "No conversation found" if the previous
   # conversation was never persisted (e.g. the session was torn down before
   # its first turn ever landed). Fall back to a fresh launch under the same
   # session id — the socket path is already derived from SID, so keeping the
   # id lets the MCP config stay valid across the fallback.
-  CLAUDE_CMD="$CLAUDE_CMD || claude --session-id $SID --mcp-config $MCP --settings $HOOKS $CHANNELS_FLAG $MODEL_FLAG $EFFORT_FLAG $DISALLOWED_FLAG"
+  CLAUDE_CMD="$CLAUDE_CMD || claude --session-id $SID --mcp-config $MCP --settings $HOOKS $CHANNELS_FLAG $MODEL_FLAG $EFFORT_FLAG $PERMISSION_MODE_FLAG $DISALLOWED_FLAG"
 fi
 
 # Resolved before anything is typed: this is the identity terminate_claude_
@@ -266,6 +279,7 @@ prev_session_id     = { from = "prev.session_id", optional = true }
 prev_pid            = { from = "prev.pid", optional = true }
 model               = { from = "inputs.model", optional = true }
 effort              = { from = "inputs.effort", optional = true }
+permission_mode     = { from = "inputs.permission_mode", default = "bypassPermissions" }
 launch_env          = { from = "inputs.launch_env", optional = true }
 mcp_servers         = { from = "inputs.mcp_servers", optional = true }
 path_prepend        = { from = "inputs.path_prepend", optional = true }
@@ -374,6 +388,10 @@ additionalProperties = false
 [runtime.inputs_schema.properties]
 model        = { type = "string", pattern = "^[A-Za-z0-9_.:-]*$" }
 effort       = { type = "string", pattern = "^[A-Za-z0-9_.:-]*$" }
+# permission_mode: closed to the CLI's own choices (plus "" to opt out of the
+# flag entirely, the same escape hatch model/effort leave), so a typo is
+# rejected at load time rather than reaching claude's own argument parser.
+permission_mode = { type = "string", enum = ["", "acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"], default = "bypassPermissions" }
 # launch_env: a JSON object. jq rejects anything that is not an object of
 # scalars at launch time and quotes each value on its way into the
 # keystrokes; the quote-free charset is the defense in depth behind that,
