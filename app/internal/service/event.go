@@ -27,7 +27,13 @@ type EventPublishParams struct {
 }
 
 // EventPublish appends an event to the resolved session's log and returns the
-// stored event (with id/time assigned). The session need not exist in state.
+// stored event (with id/time assigned). Unlike the other Event* functions,
+// which also read a destroyed session's surviving log, this is a write path:
+// the target session must already have a live state row, so a name that
+// never went through `plect up` errors here rather than reaching the log
+// store's lazy row-create — that exists to tolerate a race between an
+// append and its own session's row creation, not to mint a session that no
+// create ever started.
 func EventPublish(cfg *config.Config, store *state.Store, identifier string, p EventPublishParams) (event.Event, error) {
 	name, err := resolveSessionName(cfg, store, identifier)
 	if err != nil {
@@ -36,9 +42,16 @@ func EventPublish(cfg *config.Config, store *state.Store, identifier string, p E
 	// Writing into a session's log (and, with --relay, injecting a message into
 	// its agent) is a per-session write: clamp it to the active session guard so
 	// a guarded orchestrator can't publish into another owner's session it can
-	// merely see via `plect ls`.
+	// merely see via `plect ls`. Checked before existence so an out-of-scope
+	// name is rejected on scope alone, without confirming to the caller
+	// whether it exists.
 	if guardErr := checkSessionGuard(cfg, name); guardErr != nil {
 		return event.Event{}, guardErr
+	}
+	if session, err := store.GetE(name); err != nil {
+		return event.Event{}, err
+	} else if session == nil {
+		return event.Event{}, &Error{Code: ErrSessionNotFound, Message: fmt.Sprintf("unknown session %q", name)}
 	}
 	if p.Type == "" {
 		return event.Event{}, &Error{Code: ErrInvalidInput, Message: "event type is required"}

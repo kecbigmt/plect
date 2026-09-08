@@ -110,6 +110,7 @@ var eventShowCmd = &cobra.Command{
 var eventPublishCmd = &cobra.Command{
 	Use:   "publish <url|session>",
 	Short: "Publish an event to a session",
+	Long:  "Publish an event to a session. The target session must already exist; publishing to an unknown name errors rather than creating one.",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.Load()

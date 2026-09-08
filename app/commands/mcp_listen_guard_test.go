@@ -14,9 +14,11 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/kecbigmt/plecture/app/internal/confighome"
+	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/mcpserver"
 	"github.com/kecbigmt/plecture/app/internal/service"
 	"github.com/kecbigmt/plecture/app/internal/sockettest"
+	"github.com/kecbigmt/plecture/app/internal/state"
 )
 
 // helperProcessEnv is the sentinel that makes this test binary double as the
@@ -137,6 +139,17 @@ func TestMCPListen_ScopesSessionGuardToOwnSession(t *testing.T) {
 	guard, err := service.SessionGuardForOwnSession("ownerA/session-a")
 	if err != nil {
 		t.Fatalf("SessionGuardForOwnSession: %v", err)
+	}
+
+	// Publish requires a live session row; seed the two in-scope targets the
+	// subtests below publish to. The "self" subprocess mcpserver.Listen
+	// spawns inherits this process's env, so it resolves the same
+	// XDG_DATA_HOME-rooted store.
+	store := state.NewStore("")
+	for _, name := range []string{"ownerA/session-a", "ownerA/session-a/child"} {
+		if err := store.Put(&domain.Session{Name: name}); err != nil {
+			t.Fatalf("seed session %q: %v", name, err)
+		}
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

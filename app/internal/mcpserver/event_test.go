@@ -9,6 +9,7 @@ import (
 
 func TestHandleEventShow_ReturnsPublishedEvent(t *testing.T) {
 	setUpConfigHome(t)
+	createPlainSession(t, "owner/repo-1")
 
 	pub, err := handleEventPublish(context.Background(), reqWith(map[string]any{
 		"session": "owner/repo-1",
@@ -69,6 +70,7 @@ func TestHandleEventPublish_RejectsDeliveryModeArgument(t *testing.T) {
 
 func TestHandleEventShow_UnknownIDReturnsError(t *testing.T) {
 	setUpConfigHome(t)
+	createPlainSession(t, "owner/repo-1")
 
 	if _, err := handleEventPublish(context.Background(), reqWith(map[string]any{
 		"session": "owner/repo-1",
@@ -94,6 +96,7 @@ func TestHandleEventShow_UnknownIDReturnsError(t *testing.T) {
 // the shared implementation for both).
 func TestHandleEventList_FiltersTypesAndSourceWithCommaAndWhitespace(t *testing.T) {
 	setUpConfigHome(t)
+	createPlainSession(t, "owner/repo-1")
 
 	publish := func(typ, source string) {
 		t.Helper()

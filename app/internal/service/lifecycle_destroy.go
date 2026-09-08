@@ -92,9 +92,17 @@ func Destroy(cfg *config.Config, store *state.Store, params DestroyParams) (*Des
 		result.CleanupWarnings = append(result.CleanupWarnings, fmt.Sprintf("orphaned %d child session(s): %s", len(children), strings.Join(children, ", ")))
 	}
 
-	plan, err := buildPlanForSession(cfg, session.WorkspaceDirPath, session)
-	if err != nil {
-		return nil, &Error{Code: ErrExecutionFailed, Message: err.Error()}
+	// buildPlanForSession hard-requires a frozen workflow. Skip that
+	// requirement under --force for a session with nothing recorded to tear
+	// down; a workflow-less session with real executions is a genuinely
+	// broken state and still hits the error below.
+	var plan *task.Plan
+	if session.Workflow != "" || len(session.Nodes) > 0 || len(session.Tasks) > 0 || !params.Force {
+		var planErr error
+		plan, planErr = buildPlanForSession(cfg, session.WorkspaceDirPath, session)
+		if planErr != nil {
+			return nil, &Error{Code: ErrExecutionFailed, Message: planErr.Error()}
+		}
 	}
 
 	// A single reverse-instantiation teardown over every non-@workflow task —
