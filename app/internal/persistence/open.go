@@ -17,26 +17,17 @@ import (
 // an actionable error instead of blocking indefinitely.
 const busyTimeoutMillis = 5000
 
-// JournalModeEnvVar overrides the SQLite journal mode every connection this
-// package opens uses (default WAL). WAL depends on mmap'd shared memory and
-// per-frame fsync, both unreliable or ruinously slow against a network
-// filesystem (NFS, and EFS as an NFS implementation); DELETE and TRUNCATE
-// fall back to the rollback journal instead. go-sqlite3 applies this as
-// `PRAGMA journal_mode=<mode>` on every connection, so switching away from
-// WAL converts an existing database once nothing else holds it open in WAL.
+// JournalModeEnvVar selects the SQLite journal mode (default WAL); DELETE
+// or TRUNCATE avoid WAL's shared-memory and per-frame fsync assumptions,
+// which do not hold on a network filesystem (NFS, EFS).
 const JournalModeEnvVar = "PLECT_SQLITE_JOURNAL_MODE"
 
-// validJournalModes is the closed set JournalModeEnvVar accepts.
 var validJournalModes = map[string]bool{
 	"WAL":      true,
 	"DELETE":   true,
 	"TRUNCATE": true,
 }
 
-// journalMode reads JournalModeEnvVar, defaulting to "WAL", and validates it
-// against validJournalModes so an unsupported value fails loudly with the
-// valid set named, at open time, rather than reaching go-sqlite3 as an
-// opaque DSN parameter.
 func journalMode() (string, error) {
 	v := os.Getenv(JournalModeEnvVar)
 	if v == "" {
