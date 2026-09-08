@@ -186,14 +186,23 @@ func Up(cfg *config.Config, store *state.Store, params UpParams) (*UpResult, err
 	if wfErr != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: wfErr.Error()}
 	}
-	digest, warning, noticeErr := lifecycleConfigurationNotice(cfg, session, plan)
-	if noticeErr != nil {
-		return nil, &Error{Code: ErrExecutionFailed, Message: noticeErr.Error()}
+	// The notice/baseline advance is gated on resolving whatever cleanup
+	// this call is about to run: an unresolvable definition is an
+	// execution-precondition failure, and returning here (before the
+	// notice) leaves the baseline untouched exactly as it already does.
+	var precheckTeardown []task.Resolved
+	if params.ForceRecreate && forceRecreateExisting {
+		precheckTeardown, err = unifiedTeardownList(cfg, session, false)
+	} else {
+		precheckTeardown, err = staleProducedWorkflowNodes(cfg, session, plan)
 	}
-	if err := recordLifecycleConfigurationDigest(store, sessionName, digest); err != nil {
-		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to record lifecycle configuration baseline: %v", err)}
+	if err != nil {
+		return nil, &Error{Code: ErrExecutionFailed, Message: err.Error()}
 	}
-	session.LifecycleConfigurationDigest = digest
+	warning, err := noticeAndAdvanceBaseline(cfg, store, sessionName, session, plan, precheckTeardown)
+	if err != nil {
+		return nil, &Error{Code: ErrExecutionFailed, Message: err.Error()}
+	}
 	if params.ForceRecreate && forceRecreateExisting {
 		var recreateErr error
 		plan, recreateErr = recreateSessionRuntime(cfg, store, sessionName, session, wf, plan, params.Observer)

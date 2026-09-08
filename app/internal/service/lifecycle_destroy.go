@@ -106,21 +106,6 @@ func Destroy(cfg *config.Config, store *state.Store, params DestroyParams) (*Des
 		}
 	}
 
-	// Nothing is configured to compare against when plan is nil (the
-	// workflow-less, nothing-recorded, --force case above), so there is no
-	// lifecycle-configuration notice to give and no baseline to advance.
-	if plan != nil {
-		digest, warning, noticeErr := lifecycleConfigurationNotice(cfg, session, plan)
-		if noticeErr != nil {
-			return nil, &Error{Code: ErrExecutionFailed, Message: noticeErr.Error()}
-		}
-		if err := recordLifecycleConfigurationDigest(store, sessionName, digest); err != nil {
-			return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to record lifecycle configuration baseline: %v", err)}
-		}
-		session.LifecycleConfigurationDigest = digest
-		result.LifecycleConfigurationWarning = warning
-	}
-
 	// A single reverse-instantiation teardown over every non-@workflow task —
 	// static plan nodes (run + session) and dynamic instances merged into one
 	// seq-descending pass. This is strictly the reverse of the instantiation
@@ -131,6 +116,18 @@ func Destroy(cfg *config.Config, store *state.Store, params DestroyParams) (*Des
 	if teardownErr != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: teardownErr.Error()}
 	}
+
+	// Nothing is configured to compare against when plan is nil (the
+	// workflow-less, nothing-recorded, --force case above), so there is no
+	// lifecycle-configuration notice to give and no baseline to advance.
+	if plan != nil {
+		warning, err := noticeAndAdvanceBaseline(cfg, store, sessionName, session, plan, teardown)
+		if err != nil {
+			return nil, &Error{Code: ErrExecutionFailed, Message: err.Error()}
+		}
+		result.LifecycleConfigurationWarning = warning
+	}
+
 	if cleanupErr := runTaskCleanup(context.Background(), teardown, sessionVars(cfg, session, plan), session, params.Observer); cleanupErr != nil {
 		session.UpdatedAt = time.Now()
 		putBestEffort(store, session, "run cleanup failure")

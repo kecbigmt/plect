@@ -1,13 +1,18 @@
 package service
 
 import (
+	"bytes"
+	"encoding/json"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/domain"
+	"github.com/kecbigmt/plecture/app/internal/lang"
 	contract "github.com/kecbigmt/plecture/contracts/state"
 )
 
@@ -259,5 +264,174 @@ func rewriteTaskFixture(t *testing.T, cfg *config.Config, d taskFixture) {
 	path := filepath.Join(cfg.BaseDir, "tasks", d.id+".toml")
 	if err := os.WriteFile(path, []byte(effectFixtureDoc(d)), 0o644); err != nil {
 		t.Fatalf("rewrite task fixture %q: %v", d.id, err)
+	}
+}
+
+// A literal's Go type is part of its identity: TOML parses an integer and a
+// float literal into int64 and float64 respectively, and fmt's %v renders
+// both as "1", so projectValue must not go through that formatting.
+func TestProjectValue_LiteralsOfDifferentTypesDoNotCollide(t *testing.T) {
+	intJSON, err := json.Marshal(projectValue(&lang.Value{Form: lang.FormLiteral, Literal: int64(1)}))
+	if err != nil {
+		t.Fatalf("marshal int projection: %v", err)
+	}
+	floatJSON, err := json.Marshal(projectValue(&lang.Value{Form: lang.FormLiteral, Literal: float64(1)}))
+	if err != nil {
+		t.Fatalf("marshal float projection: %v", err)
+	}
+	if string(intJSON) == string(floatJSON) {
+		t.Fatalf("int64(1) and float64(1) projected identically: %s", intJSON)
+	}
+}
+
+// The workspace provider's own setup/cleanup runs once per session via the
+// @workflow pseudo-node, outside plan.UpOrder()'s ordinary nodes, so the
+// digest must resolve it separately.
+func TestLifecycleConfigurationDigest_ChangesWhenWorkspaceProviderCleanupChanges(t *testing.T) {
+	cfg := writeWorkflowFixture(t, t.TempDir(), "coding",
+		[]taskFixture{{id: "build", scope: "run", setup: `echo '{}'`, cleanup: "true"}},
+		[]nodeFixture{{id: "build"}},
+	)
+	writeMinimalWorkspaceProvider(t, cfg, "coding", "true")
+	session := &domain.Session{Workflow: "coding"}
+	plan, err := buildPlanForSession(cfg, "", session)
+	if err != nil {
+		t.Fatalf("buildPlanForSession: %v", err)
+	}
+	before, err := lifecycleConfigurationDigest(cfg, session, plan)
+	if err != nil {
+		t.Fatalf("lifecycleConfigurationDigest (before): %v", err)
+	}
+
+	rewriteWorkspaceProviderCleanup(t, cfg, "coding", "echo changed")
+
+	after, err := lifecycleConfigurationDigest(cfg, session, plan)
+	if err != nil {
+		t.Fatalf("lifecycleConfigurationDigest (after): %v", err)
+	}
+	if before == after {
+		t.Fatalf("digest unchanged (%q) after the workspace provider's cleanup action changed", before)
+	}
+}
+
+// A nested task's `[outputs.bind]` entry decides what a dependent (or a
+// later cleanup) reads as this task's public output, so it must be part of
+// the projection even though it is not itself a setup/cleanup action.
+func TestLifecycleConfigurationDigest_ChangesWhenNestedOutputBindChanges(t *testing.T) {
+	before := nestedConfig(t, taskFixture{}, bindPid)
+	after := nestedConfig(t, taskFixture{}, strings.ReplaceAll(bindPid, `"inner.outputs.pid"`, `"inner.outputs.pid2"`))
+	session := &domain.Session{Workflow: "default"}
+
+	beforePlan, err := buildPlanForSession(before, "", session)
+	if err != nil {
+		t.Fatalf("buildPlanForSession (before): %v", err)
+	}
+	beforeDigest, err := lifecycleConfigurationDigest(before, session, beforePlan)
+	if err != nil {
+		t.Fatalf("lifecycleConfigurationDigest (before): %v", err)
+	}
+
+	afterPlan, err := buildPlanForSession(after, "", session)
+	if err != nil {
+		t.Fatalf("buildPlanForSession (after): %v", err)
+	}
+	afterDigest, err := lifecycleConfigurationDigest(after, session, afterPlan)
+	if err != nil {
+		t.Fatalf("lifecycleConfigurationDigest (after): %v", err)
+	}
+
+	if beforeDigest == afterDigest {
+		t.Fatalf("digest unchanged (%q) after the nested task's output bind changed", beforeDigest)
+	}
+}
+
+// Acceptance: "Given a missing definition ... cleanup does not fall back or
+// infer release" -- and, as a precondition failure rather than a
+// configuration change, it must not advance the notification baseline
+// either: an operator repairing the definition still deserves the warning
+// the next time it runs, not silence because a prior attempt already
+// (wrongly) recorded a baseline for configuration nothing actually used.
+func TestDown_UnresolvedNodeDefinitionBlocksBaselineAdvance(t *testing.T) {
+	requireBash(t)
+	cfg := writeWorkflowFixture(t, t.TempDir(), "coding",
+		[]taskFixture{{id: "kept", scope: "run", setup: `echo '{}'`, cleanup: "true"}},
+		[]nodeFixture{{id: "kept"}},
+	)
+	store := testStore(t)
+	seedSessionWithNodes(t, store, "sess-1", "acme", 1, "coding", map[string]*contract.TaskState{
+		"gone": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, TaskID: "gone", Seq: 1, Outputs: map[string]any{}},
+	})
+
+	if _, err := Down(cfg, store, DownParams{Identifier: "sess-1"}); err == nil {
+		t.Fatal("Down: want the unresolved definition surfaced, got nil error")
+	}
+	if got := store.Get("sess-1").LifecycleConfigurationDigest; got != "" {
+		t.Errorf("baseline = %q, want it left unrecorded when a precondition (missing definition) fails", got)
+	}
+}
+
+// The result's own warning field is not the only place the notice must
+// reach an operator: a run that goes on to fail after the notice would
+// otherwise carry it nowhere at all.
+func TestDown_LogsChangedConfigurationEvenWhenExecutionFails(t *testing.T) {
+	requireBash(t)
+	cfg := writeWorkflowFixture(t, t.TempDir(), "coding",
+		[]taskFixture{{id: "flaky", scope: "run", setup: `echo '{}'`, cleanup: "true"}},
+		[]nodeFixture{{id: "flaky"}},
+	)
+	store := testStore(t)
+	seedSessionWithNodes(t, store, "sess-1", "acme", 1, "coding", map[string]*contract.TaskState{})
+	if _, err := Up(cfg, store, UpParams{Identifier: "sess-1"}); err != nil {
+		t.Fatalf("Up (first): %v", err)
+	}
+	rewriteTaskFixture(t, cfg, taskFixture{id: "flaky", scope: "run", setup: `echo '{}'`, cleanup: "exit 1"})
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	defer slog.SetDefault(prev)
+
+	if _, err := Down(cfg, store, DownParams{Identifier: "sess-1"}); err == nil {
+		t.Fatal("Down: want the now-failing cleanup's failure surfaced, got nil error")
+	}
+	if !strings.Contains(buf.String(), "lifecycle configuration has changed") {
+		t.Fatalf("log output = %q, want the config-change warning logged even though execution failed", buf.String())
+	}
+}
+
+// writeMinimalWorkspaceProvider attaches a trivial workspace provider (shell
+// setup/cleanup, no match/name -- an identity-workflow provider, valid per
+// config.WorkspaceProviderConfig's own doc comment) to wfID, so a test can
+// exercise it without a real plugin-backed provider.
+func writeMinimalWorkspaceProvider(t *testing.T, cfg *config.Config, wfID, cleanupScript string) {
+	t.Helper()
+	workspacesDir := filepath.Join(cfg.BaseDir, "workspaces")
+	if err := os.MkdirAll(workspacesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	provID := wfID + "_provider"
+	writeWorkspaceProviderDoc(t, workspacesDir, provID, cleanupScript)
+	addWorkflowFields(t, cfg, wfID, "workspace_provider = \""+provID+"\"\n")
+}
+
+// rewriteWorkspaceProviderCleanup changes an already-attached minimal
+// workspace provider's cleanup script in place.
+func rewriteWorkspaceProviderCleanup(t *testing.T, cfg *config.Config, wfID, cleanupScript string) {
+	t.Helper()
+	writeWorkspaceProviderDoc(t, filepath.Join(cfg.BaseDir, "workspaces"), wfID+"_provider", cleanupScript)
+}
+
+func writeWorkspaceProviderDoc(t *testing.T, workspacesDir, provID, cleanupScript string) {
+	t.Helper()
+	doc := "[" + provID + "]\n" +
+		"kind = \"workspace_provider\"\n\n" +
+		"[" + provID + ".setup]\n" +
+		"type = \"shell\"\n" +
+		"script = \"echo '{\\\"workspace_dir\\\":\\\".\\\"}'\"\n\n" +
+		"[" + provID + ".cleanup]\n" +
+		"type = \"shell\"\n" +
+		"script = " + `"` + cleanupScript + `"` + "\n"
+	if err := os.WriteFile(filepath.Join(workspacesDir, provID+".toml"), []byte(doc), 0o644); err != nil {
+		t.Fatalf("write workspace provider fixture %q: %v", provID, err)
 	}
 }

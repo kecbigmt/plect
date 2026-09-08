@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/domain"
@@ -44,12 +45,54 @@ func lifecycleConfigurationDigest(cfg *config.Config, session *domain.Session, p
 		nodes[r.NodeID] = projectCleanupOnly(r)
 	}
 
-	encoded, err := json.Marshal(map[string]any{"nodes": nodes})
+	projection := map[string]any{"nodes": nodes}
+	workspaceProvider, err := projectWorkspaceProvider(cfg, session)
+	if err != nil {
+		return "", err
+	}
+	if workspaceProvider != nil {
+		projection["workspace_provider"] = workspaceProvider
+	}
+
+	encoded, err := json.Marshal(projection)
 	if err != nil {
 		return "", fmt.Errorf("encode lifecycle configuration projection: %w", err)
 	}
 	sum := sha256.Sum256(encoded)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// projectWorkspaceProvider renders the workflow's own workspace-acquisition
+// setup/cleanup, which task.Resolved never carries: it runs once per
+// session via the @workflow pseudo-node, outside the plan's ordinary node
+// list. nil, nil when the session's workflow declares none.
+func projectWorkspaceProvider(cfg *config.Config, session *domain.Session) (map[string]any, error) {
+	wf, err := loadSessionWorkflow(cfg, session.WorkspaceDirPath, session)
+	if err != nil {
+		return nil, fmt.Errorf("load session workflow for lifecycle configuration digest: %w", err)
+	}
+	if wf.WorkspaceProvider == "" {
+		return nil, nil
+	}
+	workspaceProviders, err := cfg.LoadWorkspaceProviders()
+	if err != nil {
+		return nil, fmt.Errorf("load workspace providers for lifecycle configuration digest: %w", err)
+	}
+	prov, ok, err := workspaceProviderFor(wf, workspaceProviders)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+	m := map[string]any{}
+	if prov.Setup != nil {
+		m["setup"] = projectAction(prov.Setup)
+	}
+	if prov.Cleanup != nil {
+		m["cleanup"] = projectAction(prov.Cleanup)
+	}
+	return m, nil
 }
 
 // projectResolved deliberately has no working-directory field: every
@@ -124,6 +167,13 @@ func projectLayer(l effect.Layer) map[string]any {
 	}
 	if l.Terminal != nil {
 		m["terminal"] = projectTerminal(l.Terminal)
+	}
+	if len(l.BindOutputs) > 0 {
+		binds := make([]map[string]any, len(l.BindOutputs))
+		for i, b := range l.BindOutputs {
+			binds[i] = map[string]any{"key": b.Key, "value": projectValue(b.Value)}
+		}
+		m["output_binds"] = binds
 	}
 	return m
 }
@@ -201,16 +251,43 @@ func projectValues(vals map[string]*lang.Value) map[string]any {
 	return out
 }
 
-// projectValue walks FormJSON structurally: its Source() collapses to a
-// constant placeholder, which would hide a literal change inside it.
+// projectValue never uses lang.Value.Source(): its %v literal formatting
+// collapses distinct literals to the same text (e.g. the int 1 and the
+// float 1.0 both render "1"), and FormJSON's Source() collapses to a
+// constant placeholder regardless of content. Each form gets its own
+// type-tagged, JSON-safe projection instead.
 func projectValue(v *lang.Value) any {
 	if v == nil {
 		return nil
 	}
-	if v.Form == lang.FormJSON {
-		return projectJSONOperand(v.JSON)
+	switch v.Form {
+	case lang.FormFrom:
+		m := map[string]any{"form": "from", "from": v.From}
+		if v.HasDefault {
+			m["default"] = projectLiteral(v.Default)
+		}
+		if v.Optional {
+			m["optional"] = true
+		}
+		return m
+	case lang.FormExpr:
+		return map[string]any{"form": "expr", "expr": v.Expr}
+	case lang.FormTerminal:
+		return map[string]any{"form": "terminal", "terminal": v.Terminal}
+	case lang.FormBin:
+		return map[string]any{"form": "bin", "bin": v.Bin}
+	case lang.FormJSON:
+		return map[string]any{"form": "json", "json": projectJSONOperand(v.JSON)}
+	default:
+		return projectLiteral(v.Literal)
 	}
-	return v.Source()
+}
+
+// projectLiteral tags a literal with its Go type so two literals that
+// render identically as text but hold different values (or types) never
+// collide in the projection.
+func projectLiteral(v any) map[string]any {
+	return map[string]any{"type": fmt.Sprintf("%T", v), "value": v}
 }
 
 func projectJSONOperand(op *lang.JSONOperand) any {
@@ -258,4 +335,39 @@ func recordLifecycleConfigurationDigest(store *state.Store, sessionName, digest 
 		s.LifecycleConfigurationDigest = digest
 		return nil
 	})
+}
+
+// noticeAndAdvanceBaseline is the shared call-site logic for Up/Down/Destroy.
+// It refuses to notice or advance the baseline when operationTeardown holds
+// an unresolved definition: that is an execution-precondition failure, not
+// a configuration change, and the caller's own cleanup call surfaces it the
+// same way regardless of this function ever having run. A produced warning
+// is logged immediately (not only returned) because the caller's own
+// execution can still fail afterward, and its result is not the only place
+// this warning needs to reach an operator.
+func noticeAndAdvanceBaseline(cfg *config.Config, store *state.Store, sessionName string, session *domain.Session, plan *task.Plan, operationTeardown []task.Resolved) (string, error) {
+	if hasUnresolvedCleanup(operationTeardown) {
+		return "", nil
+	}
+	digest, warning, err := lifecycleConfigurationNotice(cfg, session, plan)
+	if err != nil {
+		return "", err
+	}
+	if warning != "" {
+		slog.Warn(warning, "session", sessionName)
+	}
+	if err := recordLifecycleConfigurationDigest(store, sessionName, digest); err != nil {
+		return "", fmt.Errorf("failed to record lifecycle configuration baseline: %w", err)
+	}
+	session.LifecycleConfigurationDigest = digest
+	return warning, nil
+}
+
+func hasUnresolvedCleanup(items []task.Resolved) bool {
+	for _, r := range items {
+		if r.Unresolved {
+			return true
+		}
+	}
+	return false
 }

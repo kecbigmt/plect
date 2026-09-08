@@ -54,14 +54,6 @@ func Down(cfg *config.Config, store *state.Store, params DownParams) (*DownResul
 	if err != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: err.Error()}
 	}
-	digest, warning, noticeErr := lifecycleConfigurationNotice(cfg, session, plan)
-	if noticeErr != nil {
-		return nil, &Error{Code: ErrExecutionFailed, Message: noticeErr.Error()}
-	}
-	if err := recordLifecycleConfigurationDigest(store, sessionName, digest); err != nil {
-		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to record lifecycle configuration baseline: %v", err)}
-	}
-	session.LifecycleConfigurationDigest = digest
 
 	// A single reverse-instantiation teardown over the run-scoped tasks —
 	// static run nodes and run-scoped dynamic instances merged into one
@@ -70,6 +62,10 @@ func Down(cfg *config.Config, store *state.Store, params DownParams) (*DownResul
 	teardown, teardownErr := unifiedTeardownList(cfg, session, true)
 	if teardownErr != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: teardownErr.Error()}
+	}
+	warning, err := noticeAndAdvanceBaseline(cfg, store, sessionName, session, plan, teardown)
+	if err != nil {
+		return nil, &Error{Code: ErrExecutionFailed, Message: err.Error()}
 	}
 	cleanupErr := runTaskCleanup(context.Background(), teardown, sessionVars(cfg, session, plan), session, params.Observer)
 	session.UpdatedAt = time.Now()
