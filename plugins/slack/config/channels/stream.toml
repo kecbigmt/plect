@@ -1,17 +1,7 @@
 # Channel: render a plect.message_delta chunk sequence as one live-updating
-# Slack thread reply via this plugin's slack-adapter service (see this
-# plugin's src/slack-adapter and its [[services]] declaration in
-# plugin.toml) over that service's POST /stream. Mirrors channels/slack.toml's
-# exec/escaping shape; only the endpoint and payload differ. No `include`
-# default — plect.message_delta is a specific event shape (an emitter's
-# streamed reply), and the composing workflow decides whether to wire it
-# here.
-#
-# index and final are declared as strings, not integer/boolean: they
-# originate as plect.message_delta metadata, which is always a string (see
-# contracts/event), and this channel passes inputs through verbatim rather
-# than requiring every composing workflow to convert them first. The
-# adapter parses them on receipt.
+# Slack thread reply via slack-adapter's POST /stream (src/slack-adapter).
+# index/final are strings, matching plect.message_delta metadata's own type
+# (contracts/event) — the adapter parses them on receipt.
 [stream]
 kind    = "channel"
 type    = "exec"
