@@ -113,14 +113,6 @@ case "${1:-}" in
     ;;
   reply)
     [ -n "${PLECT_SESSION_NAME:-}" ] || exit 0
-    # last_assistant_message is documented on Stop/SubagentStop specifically
-    # so a hook never needs to parse the transcript file, which is written
-    # asynchronously and can lag the turn that just ended. prompt_id is
-    # Stop's name for the same per-turn correlation id MessageDisplay calls
-    # turn_id. Extracted via jq_field_exact, not a joined multi-field read:
-    # a real assistant message routinely contains newlines, which both
-    # `read` (its own line terminator) and plain `$(...)` (strips every
-    # trailing one) would corrupt.
     payload="$(cat)"
 
     # plect.message is emitted exactly once per message_id: when
