@@ -12,8 +12,9 @@ independently selectable plugin this one composes through `{ terminal = "..." }`
   (fresh or `--resume`, with a same-session-id fallback if resume finds no
   persisted conversation) via `{ terminal = "send_text" }`/`{ terminal = "send_keys" }`, waits for it to come up by polling
   `~/.claude/sessions/*.json`, wires a channel-server MCP socket when
-  `channel-server` is on `PATH`, and registers turn-boundary activity
-  hooks. `[health].alive` self-heals a stale pid by re-deriving the live
+  `channel-server` is on `PATH`, and registers turn-boundary activity and
+  turn-reporting hooks (`publish_events`, see Parameters below).
+  `[health].alive` self-heals a stale pid by re-deriving the live
   process from the pane's process tree, reached via
   `{ terminal = "pid" }` for the pane's own root process id, so a
   crash-and-relaunch or a manual `--resume` does not require a session
@@ -29,13 +30,58 @@ independently selectable plugin this one composes through `{ terminal = "..." }`
   `runtime` effect's `mcp_servers` parameter: it merges the declared registration
   records into the MCP config that task assembles, and fails the launch on a
   malformed record rather than dropping it.
-- `scripts/claude-agent-activity` — both halves of the turn-boundary activity
-  fingerprint (setting `silence_expected` once a turn ends, and withholding it
-  inside a turn): the hook the `runtime` effect registers, and the `probe` verb
-  that task declares as its `[health].activity`.
+- `scripts/claude-agent-activity` — the turn-boundary activity fingerprint
+  (setting `silence_expected` once a turn ends, and withholding it inside a
+  turn: the hook the `runtime` effect registers, and the `probe` verb that
+  task declares as its `[health].activity`), and the turn-reporting hooks
+  that publish the agent's own text as core events — see Turn Reporting
+  below. One executable, one selftest
+  (`scripts/claude-agent-activity_selftest.sh`).
 - `src/channel-server/` — generic message delivery to Claude Code, with no
-  knowledge of message sources (Slack or otherwise). See
-  `src/channel-server/CLAUDE.md`.
+  knowledge of message sources (Slack or otherwise) and no reply tool of its
+  own (see Turn Reporting below). See `src/channel-server/CLAUDE.md`.
+
+## Turn Reporting
+
+An agent's Slack thread (or any other consumer of its session events)
+reports what the agent said without the agent having to call any tool: the
+`runtime` effect's `publish_events` input (default `["message"]`) names
+which core events (`plect.message`, `plect.message_delta` — the type names
+without their `plect.` prefix) to publish; the same input name and
+semantics as every other runtime plugin in this catalog, so a workflow
+reads identically across Claude, Codex, and future harnesses. Which Claude
+Code hooks that installs is this plugin's own concern:
+
+- `"message"` installs the `Stop` hook. `"message_delta"` installs
+  `MessageDisplay`. Both may be requested together.
+- `plect.message` is canonical: it is always emitted, exactly once per
+  `message_id`. With `"message"` alone, it comes from that turn's
+  `last_assistant_message`, with a deterministic `message_id`
+  (`message_id_origin = synthetic` — Stop's `prompt_id` when present,
+  since that already identifies the turn uniquely within the session; a
+  per-session counter on the one boundary Stop exposes no `prompt_id` for
+  at all) and `turn_id` from that same `prompt_id`. With `"message_delta"`
+  also requested, it is published once a message's final delta arrives
+  (full text now known), carrying that delta's own `message_id`
+  (`message_id_origin = native`) and `turn_id`; `claude-agent-activity`
+  itself then skips the Stop-hook copy for that same message (a marker
+  file records which message_id was just covered), so a live consumer and
+  a finished-messages consumer never both see the text and never see it
+  twice. Metadata otherwise: `role = assistant`, `source = claude`.
+- `"message_delta"` also publishes `plect.message_delta` once per streamed
+  delta, as a preview: body is that delta alone, metadata carries
+  `message_id`, `message_id_origin = native`, `kind = text`, `turn_id`,
+  `index`, `final`, `source = claude`. `index` is this hook's own counter
+  per `message_id` (0-based, one per delta actually published), not
+  Claude's own `index` field from the hook payload, which a future harness
+  could give a different meaning to (e.g. a block index).
+- An empty message or delta publishes nothing. A publish failure (`plect`
+  unreachable) never blocks or delays the agent's turn — every hook exit
+  path is 0.
+- A consumer that wants only finished messages includes `plect.message`;
+  one that wants a live view includes `plect.message_delta` too and
+  replaces its running preview with the `plect.message` for the same
+  `message_id` once it arrives.
 
 ## Parameters
 
@@ -49,6 +95,7 @@ replacing them (the parameterization rung of
 | `tasks/runtime.toml` | `mcp_servers` | JSON array of MCP server registration records — `{name, command, args?, env?}` — merged into the `--mcp-config` JSON alongside this task's own registrations. A record only ever reaches the agent's config file, never a command line; a name that collides with a registration the task already made, or a record missing `name`/`command`, fails the launch. |
 | `tasks/runtime.toml` | `launch_timeout` | How long the launch poll waits for `claude`'s session file to register, as a `"<seconds>s"` token. Default `120s`. On timeout, or any other non-zero setup exit after the process was started, the pane's `claude` child is terminated before the node fails, so a retry never types into a still-live process. |
 | `tasks/runtime.toml` | `permission_mode` | `--permission-mode <value>` on the launch line, one of `claude`'s own mode names or `""` to omit the flag. Default `bypassPermissions`, so a dispatched session never blocks on the CLI's first-run "Set up auto mode?" wizard. The default also seeds `skipDangerousModePermissionPrompt` into the hooks settings file, since `bypassPermissions` itself carries a one-time interactive disclaimer on an account/host that has never accepted it. |
+| `tasks/runtime.toml` | `publish_events` | Array of core event names to publish (`"message"`, `"message_delta"`), without their `plect.` prefix. Default `["message"]`. See Turn Reporting above. |
 
 These are set on the node or channel binding that selects the declaration, as
 values over the workflow surface's own roots. A user-owned workflow names a

@@ -51,26 +51,14 @@ func NewChannelServer(sender MessageSender) *ChannelServer {
 		server.WithToolCapabilities(true),
 		server.WithInstructions(
 			"Messages from Slack arrive as <channel source=\"claude-channel-slack\" user=\"...\" thread_ts=\"...\">. "+
-				"Reply with the reply tool. "+
-				"When you finish a task, use the reply tool to report your results to the Slack thread. "+
-				"When a Slack message asks you to do something, carry out the task and reply with the results. "+
-				"Replies are posted to Slack verbatim, so write them in Slack mrkdwn, not Markdown.",
+				"When a Slack message asks you to do something, carry out the task; your turn's final "+
+				"message is posted to the Slack thread automatically.",
 		),
 		server.WithExperimental(map[string]any{
 			"claude/channel":            map[string]any{},
 			"claude/channel/permission": map[string]any{},
 		}),
 	)
-
-	// Register reply tool
-	replyTool := mcp.NewTool("reply",
-		mcp.WithDescription("Send a message to the Slack thread associated with this session. "+
-			"The text is posted verbatim, so use Slack mrkdwn: *bold*, _italic_, ~strike~, `code`, "+
-			"a ``` fenced block only for actual code or command output, `-` or `•` bullet lines, "+
-			"and <url|label> links. No Markdown headings (#), no **double asterisks**, no tables."),
-		mcp.WithString("text", mcp.Required(), mcp.Description("The message to send, in Slack mrkdwn")),
-	)
-	s.mcpServer.AddTools(server.ServerTool{Tool: replyTool, Handler: s.handleReply})
 
 	// Register permission request notification handler
 	s.mcpServer.AddNotificationHandler("notifications/claude/channel/permission_request", s.handlePermissionRequest)
@@ -167,21 +155,6 @@ func (s *ChannelServer) consumePending(requestID string) (string, bool) {
 	}
 	delete(s.pending, id)
 	return id, true
-}
-
-func (s *ChannelServer) handleReply(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	text := request.GetString("text", "")
-	if text == "" {
-		return mcp.NewToolResultError("text is required"), nil
-	}
-
-	// Sent as written: the tool description asks the agent for Slack mrkdwn,
-	// and a blanket code fence would turn every reply into a monospace block.
-	if err := s.sender.SendReply(text); err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to send reply: %v", err)), nil
-	}
-
-	return mcp.NewToolResultText("sent"), nil
 }
 
 func (s *ChannelServer) handlePermissionRequest(ctx context.Context, notification mcp.JSONRPCNotification) {
