@@ -87,9 +87,8 @@ func (db *DB) EventStreamSessions(ctx context.Context) ([]string, error) {
 // itself may still create or update path's own -wal/-shm as an ordinary
 // side effect of reading a WAL-mode database; that is the engine's doing,
 // not a write this function performs. It requests the same JournalModeEnvVar
-// mode Open does, though on a read-only connection that can only ever match
-// the database's already-persisted mode (see Open's own doc comment) or be a
-// silent no-op -- never an error.
+// mode Open does, though on a read-only connection that request can only
+// ever match the database's already-persisted mode or silently no-op.
 func ReadSessionNames(ctx context.Context, path string) ([]string, error) {
 	mode, err := journalMode()
 	if err != nil {
