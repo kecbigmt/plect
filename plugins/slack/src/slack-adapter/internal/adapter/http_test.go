@@ -79,6 +79,7 @@ type recordingPoster struct {
 	calls       []recordedPost
 	statusCalls []recordedStatus
 	statusErr   error
+	postErr     error
 }
 
 type recordedPost struct {
@@ -92,6 +93,9 @@ type recordedStatus struct {
 
 func (p *recordingPoster) PostToThread(channelID, threadTS, text string) (string, error) {
 	p.calls = append(p.calls, recordedPost{channelID, threadTS, text})
+	if p.postErr != nil {
+		return "", p.postErr
+	}
 	return "ts-" + threadTS, nil
 }
 

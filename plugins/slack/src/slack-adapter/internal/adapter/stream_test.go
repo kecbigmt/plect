@@ -8,7 +8,8 @@ import (
 )
 
 // recordingStreamer records StartStream/AppendStream/StopStream calls and
-// lets tests inject a failure for the next StartStream call.
+// lets tests inject a standing failure for each, cleared by setting the
+// field back to nil to simulate a transient error clearing on retry.
 type recordingStreamer struct {
 	mu sync.Mutex
 
@@ -16,7 +17,9 @@ type recordingStreamer struct {
 	appendCalls []appendCall
 	stopCalls   []stopCall
 
-	startErr error
+	startErr  error
+	appendErr error
+	stopErr   error
 
 	nextTS int
 }
@@ -48,14 +51,14 @@ func (f *recordingStreamer) AppendStream(channelID, ts, text string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.appendCalls = append(f.appendCalls, appendCall{channelID, ts, text})
-	return nil
+	return f.appendErr
 }
 
 func (f *recordingStreamer) StopStream(channelID, ts, text string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.stopCalls = append(f.stopCalls, stopCall{channelID, ts, text})
-	return nil
+	return f.stopErr
 }
 
 func TestStreamManager_InOrderChunks_StartsAppendsAndStops(t *testing.T) {
@@ -197,6 +200,83 @@ func TestStreamManager_StartFailure_FallsBackToOnePostOnFinal(t *testing.T) {
 	}
 	if got, want := poster.calls[0].Text, "Hello, world!"; got != want {
 		t.Errorf("fallback post text = %q, want %q (full accumulated text)", got, want)
+	}
+}
+
+// TestStreamManager_AppendFailure_PreservesChunkForRetry is the regression
+// case for a review finding: nextIndex/pending used to advance before the
+// Slack call was attempted, so a failed AppendStream silently dropped that
+// chunk and a caller's retry of the same index returned success without
+// resending it.
+func TestStreamManager_AppendFailure_PreservesChunkForRetry(t *testing.T) {
+	streamer := &recordingStreamer{}
+	poster := &recordingPoster{}
+	mgr := NewStreamManager(streamer, poster, "T1", "U1", testLogger())
+
+	if err := mgr.Deliver("C1", "111.0", "msg-1", 0, "Hello", false); err != nil {
+		t.Fatalf("chunk 0: %v", err)
+	}
+
+	streamer.appendErr = errors.New("temporary network error")
+	if err := mgr.Deliver("C1", "111.0", "msg-1", 1, ", world", false); err == nil {
+		t.Fatal("Deliver should surface the append failure, not silently succeed")
+	}
+	if len(streamer.appendCalls) != 1 {
+		t.Fatalf("AppendStream calls = %d, want 1 (the failed attempt)", len(streamer.appendCalls))
+	}
+
+	streamer.appendErr = nil
+	if err := mgr.Deliver("C1", "111.0", "msg-1", 1, ", world", false); err != nil {
+		t.Fatalf("retry of chunk 1: %v", err)
+	}
+	if len(streamer.appendCalls) != 2 {
+		t.Fatalf("AppendStream calls = %d, want 2 (the retry resent the same chunk)", len(streamer.appendCalls))
+	}
+
+	if err := mgr.Deliver("C1", "111.0", "msg-1", 2, "!", true); err != nil {
+		t.Fatalf("chunk 2 (final): %v", err)
+	}
+	if len(streamer.stopCalls) != 1 || streamer.stopCalls[0].text != "!" {
+		t.Fatalf("StopStream calls = %+v, want one call with '!'", streamer.stopCalls)
+	}
+}
+
+// TestStreamManager_FallbackPostFailure_RetriesWithoutDuplicatingText is the
+// regression case for a review finding: Deliver forgot the stream_key as
+// soon as it saw a final chunk, regardless of whether the fallback post
+// actually succeeded, so a failed PostToThread on final was never retried.
+func TestStreamManager_FallbackPostFailure_RetriesWithoutDuplicatingText(t *testing.T) {
+	streamer := &recordingStreamer{startErr: errors.New("streaming not enabled for this app")}
+	poster := &recordingPoster{}
+	mgr := NewStreamManager(streamer, poster, "T1", "U1", testLogger())
+
+	if err := mgr.Deliver("C1", "111.0", "msg-1", 0, "Hello", false); err != nil {
+		t.Fatalf("chunk 0: %v", err)
+	}
+
+	poster.postErr = errors.New("temporary network error")
+	if err := mgr.Deliver("C1", "111.0", "msg-1", 1, ", world!", true); err == nil {
+		t.Fatal("Deliver should surface the fallback post failure, not silently succeed")
+	}
+	if len(poster.calls) != 1 {
+		t.Fatalf("PostToThread attempts = %d, want 1 (the failed attempt)", len(poster.calls))
+	}
+	if got := len(mgr.state); got != 1 {
+		t.Fatalf("stream state entries = %d, want 1 (kept for retry, not forgotten on failure)", got)
+	}
+
+	poster.postErr = nil
+	if err := mgr.Deliver("C1", "111.0", "msg-1", 1, ", world!", true); err != nil {
+		t.Fatalf("retry of the final chunk: %v", err)
+	}
+	if len(poster.calls) != 2 {
+		t.Fatalf("PostToThread attempts = %d, want 2", len(poster.calls))
+	}
+	if got, want := poster.calls[1].Text, "Hello, world!"; got != want {
+		t.Errorf("retried fallback post text = %q, want %q (not duplicated)", got, want)
+	}
+	if got := len(mgr.state); got != 0 {
+		t.Errorf("stream state entries = %d, want 0 after the retry succeeds", got)
 	}
 }
 

@@ -2,8 +2,6 @@ package adapter
 
 import (
 	"log/slog"
-	"sort"
-	"strings"
 	"sync"
 
 	"github.com/slack-go/slack"
@@ -13,7 +11,6 @@ import (
 // this, a stalled or dropped chunk would otherwise buffer forever.
 const maxPendingStreamChunks = 32
 
-// Streamer performs one native Slack streaming message's lifecycle.
 type Streamer interface {
 	StartStream(channelID, threadTS, teamID, recipientUserID, text string) (ts string, err error)
 	AppendStream(channelID, ts, text string) error
@@ -63,7 +60,10 @@ type streamChunk struct {
 // streamState is one stream_key's progress. failed is set only on a
 // StartStream failure; a later Append/StopStream error is returned to the
 // caller instead, since a native message exists by then and a fallback
-// post alongside it would break "exactly one Slack thread message".
+// post alongside it would break "exactly one Slack thread message". Every
+// field here is mutated only after the Slack (or fallback) call for the
+// chunk it represents has actually succeeded — see Deliver — so a chunk
+// whose call failed stays exactly as it was for a caller's retry.
 type streamState struct {
 	mu        sync.Mutex
 	started   bool
@@ -71,7 +71,7 @@ type streamState struct {
 	ts        string
 	nextIndex int64
 	pending   map[int64]streamChunk
-	text      strings.Builder
+	text      string // committed fallback text; see applyFallback
 }
 
 // StreamManager renders one plect.message_delta sequence per stream_key as
@@ -98,35 +98,42 @@ func NewStreamManager(streamer Streamer, poster ThreadPoster, teamID, recipientU
 	}
 }
 
-// Deliver processes one chunk for streamKey, ordered by index.
+// Deliver processes one chunk for streamKey, ordered by index. A chunk at
+// or after st.nextIndex is (re-)buffered unconditionally, so redelivering
+// the same index — a caller's retry after this returned an error — always
+// re-attempts it; an index already behind st.nextIndex is a duplicate of
+// an already-applied chunk and is dropped. Draining stops at the first
+// failure, leaving that chunk (and anything after it) pending rather than
+// skipping over or forgetting it, so a stream never silently completes
+// short of its real content.
 func (m *StreamManager) Deliver(channelID, threadTS, streamKey string, index int64, text string, final bool) error {
 	st := m.stateFor(streamKey)
 
 	st.mu.Lock()
 	defer st.mu.Unlock()
 
-	st.pending[index] = streamChunk{text: text, final: final}
-	ready := drainReady(st)
+	if index >= st.nextIndex {
+		st.pending[index] = streamChunk{text: text, final: final}
+	}
 
-	var firstErr error
-	done := false
-	for _, c := range ready {
+	for {
+		idx, c, ok := nextChunk(st)
+		if !ok {
+			return nil
+		}
 		if err := m.apply(channelID, threadTS, st, c); err != nil {
-			m.logger.Warn("stream delivery failed",
+			m.logger.Warn("stream delivery failed, will retry on redelivery",
 				"component", "slack-adapter", "event", "stream_deliver_error",
 				"stream_key", streamKey, "error", err)
-			if firstErr == nil {
-				firstErr = err
-			}
+			return err
 		}
+		delete(st.pending, idx)
+		st.nextIndex = idx + 1
 		if c.final {
-			done = true
+			m.forget(streamKey)
+			return nil
 		}
 	}
-	if done {
-		m.forget(streamKey)
-	}
-	return firstErr
 }
 
 func (m *StreamManager) stateFor(streamKey string) *streamState {
@@ -146,67 +153,38 @@ func (m *StreamManager) forget(streamKey string) {
 	m.mu.Unlock()
 }
 
-// drainReady returns the ordered run starting at st.nextIndex, or, once the
-// buffer bound is hit, gives up on the gap and flushes everything buffered.
-func drainReady(st *streamState) []streamChunk {
-	var ready []streamChunk
-	for {
-		c, ok := st.pending[st.nextIndex]
-		if !ok {
-			break
-		}
-		delete(st.pending, st.nextIndex)
-		ready = append(ready, c)
-		st.nextIndex++
-		if c.final {
-			return ready
-		}
+// nextChunk selects the next candidate for apply: the chunk at
+// st.nextIndex if buffered, or, once the gap ahead of it has stalled past
+// maxPendingStreamChunks, the lowest buffered index instead. It never
+// mutates st — only a successful apply (via Deliver) removes a chunk or
+// advances st.nextIndex, which is what makes a failed chunk retryable.
+func nextChunk(st *streamState) (int64, streamChunk, bool) {
+	if c, ok := st.pending[st.nextIndex]; ok {
+		return st.nextIndex, c, true
 	}
-	if len(st.pending) >= maxPendingStreamChunks {
-		ready = append(ready, flushPending(st)...)
+	if len(st.pending) < maxPendingStreamChunks {
+		return 0, streamChunk{}, false
 	}
-	return ready
-}
-
-func flushPending(st *streamState) []streamChunk {
-	indices := make([]int64, 0, len(st.pending))
+	lowest := int64(-1)
 	for idx := range st.pending {
-		indices = append(indices, idx)
-	}
-	sort.Slice(indices, func(i, j int) bool { return indices[i] < indices[j] })
-
-	var flushed []streamChunk
-	for _, idx := range indices {
-		c := st.pending[idx]
-		delete(st.pending, idx)
-		flushed = append(flushed, c)
-		st.nextIndex = idx + 1
-		if c.final {
-			break
+		if lowest == -1 || idx < lowest {
+			lowest = idx
 		}
 	}
-	return flushed
+	return lowest, st.pending[lowest], true
 }
 
-// apply performs the Slack call(s) for one already-ordered chunk.
+// apply performs the Slack call(s) for one chunk. Caller holds st.mu.
 func (m *StreamManager) apply(channelID, threadTS string, st *streamState, c streamChunk) error {
-	st.text.WriteString(c.text)
-
 	if st.failed {
-		if c.final {
-			return m.postFallback(channelID, threadTS, st)
-		}
-		return nil
+		return m.applyFallback(channelID, threadTS, st, c)
 	}
 
 	if !st.started {
 		ts, err := m.streamer.StartStream(channelID, threadTS, m.teamID, m.recipientUserID, c.text)
 		if err != nil {
 			st.failed = true
-			if c.final {
-				return m.postFallback(channelID, threadTS, st)
-			}
-			return nil
+			return m.applyFallback(channelID, threadTS, st, c)
 		}
 		st.started = true
 		st.ts = ts
@@ -223,7 +201,19 @@ func (m *StreamManager) apply(channelID, threadTS string, st *streamState, c str
 	return m.streamer.AppendStream(channelID, st.ts, c.text)
 }
 
-func (m *StreamManager) postFallback(channelID, threadTS string, st *streamState) error {
-	_, err := m.poster.PostToThread(channelID, threadTS, st.text.String())
-	return err
+// applyFallback buffers c into the fallback text and, on final, posts it
+// once. The merge is a local value until PostToThread actually succeeds:
+// a failed post leaves st.text unchanged, so retrying the same final chunk
+// recomputes the identical merge instead of appending c.text a second time.
+func (m *StreamManager) applyFallback(channelID, threadTS string, st *streamState, c streamChunk) error {
+	merged := st.text + c.text
+	if !c.final {
+		st.text = merged
+		return nil
+	}
+	if _, err := m.poster.PostToThread(channelID, threadTS, merged); err != nil {
+		return err
+	}
+	st.text = merged
+	return nil
 }
