@@ -310,9 +310,8 @@ func sortedKeys(m map[string]int64) []string {
 	return keys
 }
 
-// newScratchDir creates a fresh directory to build the scratch database
-// under: tmpDirOverride if non-empty, else os.TempDir() -- never a path
-// derived from DestDir, so DestDir stays untouched until the final copy.
+// newScratchDir is tmpDirOverride if non-empty, else os.TempDir() -- never
+// derived from DestDir.
 func newScratchDir(tmpDirOverride string) (string, error) {
 	base := tmpDirOverride
 	if base == "" {
