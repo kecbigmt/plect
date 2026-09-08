@@ -193,6 +193,12 @@ func Up(cfg *config.Config, store *state.Store, params UpParams) (result *UpResu
 	var gateTeardown []task.Resolved
 	if params.ForceRecreate && forceRecreateExisting {
 		gateTeardown, err = unifiedTeardownList(cfg, session, false)
+		if err == nil {
+			// Force-recreate also re-runs workspace-provider setup; an
+			// invalid workspace_provider_inputs value is the same class
+			// of precondition failure as an unresolved definition.
+			err = workspaceProviderInputsPrecondition(cfg, session)
+		}
 	} else {
 		gateTeardown, err = staleProducedWorkflowNodes(cfg, session, plan)
 	}

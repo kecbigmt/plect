@@ -382,6 +382,57 @@ func TestLifecycleConfigurationDigest_ChangesWhenNestedOutputBindChanges(t *test
 	}
 }
 
+// RunLayerCleanup reads a layer's BindOutputs to build that layer's own
+// cleanup self view, so an outstanding execution outside the desired
+// workflow (whose declaration is only ever visited through
+// projectLayerCleanupOnly, never projectLayer) must still project them.
+func TestLifecycleConfigurationDigest_ChangesWhenCleanupOnlyOutputBindChanges(t *testing.T) {
+	nestedDefs := func(bindExtra string) []taskFixture {
+		return []taskFixture{
+			{id: "runtime", scope: contract.TaskScopeRun},
+			{id: "team_runtime", scope: contract.TaskScopeRun, extra: "inner = \"runtime\"\n" + bindExtra},
+			{id: "kept", scope: "run", setup: `echo '{}'`, cleanup: "true"},
+		}
+	}
+	before := writeWorkflowFixture(t, t.TempDir(), "coding", nestedDefs(bindPid), []nodeFixture{{id: "kept"}})
+	after := writeWorkflowFixture(t, t.TempDir(), "coding",
+		nestedDefs(strings.ReplaceAll(bindPid, `"inner.outputs.pid"`, `"inner.outputs.pid2"`)),
+		[]nodeFixture{{id: "kept"}},
+	)
+	session := &domain.Session{
+		Workflow: "coding",
+		Nodes: map[string]*contract.TaskState{
+			"orphan": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, TaskID: "team_runtime", Seq: 1, Outputs: map[string]any{}},
+		},
+	}
+
+	plan, err := buildPlanForSession(before, "", session)
+	if err != nil {
+		t.Fatalf("buildPlanForSession: %v", err)
+	}
+	beforeOutstanding, err := unifiedTeardownList(before, session, false)
+	if err != nil {
+		t.Fatalf("unifiedTeardownList (before): %v", err)
+	}
+	beforeDigest, err := lifecycleConfigurationDigest(before, session, plan, beforeOutstanding)
+	if err != nil {
+		t.Fatalf("lifecycleConfigurationDigest (before): %v", err)
+	}
+
+	afterOutstanding, err := unifiedTeardownList(after, session, false)
+	if err != nil {
+		t.Fatalf("unifiedTeardownList (after): %v", err)
+	}
+	afterDigest, err := lifecycleConfigurationDigest(after, session, plan, afterOutstanding)
+	if err != nil {
+		t.Fatalf("lifecycleConfigurationDigest (after): %v", err)
+	}
+
+	if beforeDigest == afterDigest {
+		t.Fatalf("digest unchanged (%q) after an outstanding-but-outside-the-workflow node's output bind changed", beforeDigest)
+	}
+}
+
 // A missing definition is a precondition failure, not a configuration
 // change: an operator repairing it still deserves the warning on the next
 // run, not silence because an earlier attempt already recorded a baseline
@@ -402,6 +453,38 @@ func TestDown_UnresolvedNodeDefinitionBlocksBaselineAdvance(t *testing.T) {
 	}
 	if got := store.Get("sess-1").LifecycleConfigurationDigest; got != "" {
 		t.Errorf("baseline = %q, want it left unrecorded when a precondition (missing definition) fails", got)
+	}
+}
+
+// force-recreate re-runs workspace-provider setup (recreateSessionRuntime),
+// so an invalid workspace_provider_inputs value is exactly as much a
+// precondition failure there as a missing definition is for cleanup.
+func TestUp_ForceRecreateProviderInputPreconditionBlocksBaselineAdvance(t *testing.T) {
+	cfg := writeWorkflowFixture(t, t.TempDir(), "coding",
+		[]taskFixture{{id: "build", scope: "run", setup: `echo '{}'`, cleanup: "true"}},
+		[]nodeFixture{{id: "build"}},
+	)
+	workspacesDir := mkdirWorkspaces(t, cfg)
+	doc := "[coding_provider]\n" +
+		"kind = \"workspace_provider\"\n\n" +
+		"[coding_provider.inputs_schema]\n" +
+		"type = \"object\"\n" +
+		"required = [\"layout\"]\n\n" +
+		"[coding_provider.setup]\n" +
+		"type = \"shell\"\n" +
+		"script = \"echo '{\\\"workspace_dir\\\":\\\".\\\"}'\"\n"
+	if err := os.WriteFile(filepath.Join(workspacesDir, "coding_provider.toml"), []byte(doc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	addWorkflowFields(t, cfg, "coding", "workspace_provider = \"coding_provider\"\n")
+	store := testStore(t)
+	seedSessionWithNodes(t, store, "sess-1", "acme", 1, "coding", map[string]*contract.TaskState{})
+
+	if _, err := Up(cfg, store, UpParams{Identifier: "sess-1", ForceRecreate: true}); err == nil {
+		t.Fatal("Up: want the invalid workspace_provider_inputs surfaced, got nil error")
+	}
+	if got := store.Get("sess-1").LifecycleConfigurationDigest; got != "" {
+		t.Errorf("baseline = %q, want it left unrecorded when the workspace-provider-inputs precondition fails", got)
 	}
 }
 
