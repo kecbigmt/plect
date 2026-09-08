@@ -86,8 +86,15 @@ func (db *DB) EventStreamSessions(ctx context.Context) ([]string, error) {
 // without migrating it or creating gate-lock sidecars next to it. SQLite
 // itself may still create or update path's own -wal/-shm as an ordinary
 // side effect of reading a WAL-mode database; that is the engine's doing,
-// not a write this function performs.
+// not a write this function performs. It requests no journal mode on this
+// connection: a read-only connection can't change the on-disk mode, and
+// go-sqlite3's _journal_mode DSN parameter fails outright (not a no-op)
+// when the requested mode differs from what's on disk. It still validates
+// JournalModeEnvVar, so an unsupported value fails the same way Open would.
 func ReadSessionNames(ctx context.Context, path string) ([]string, error) {
+	if _, err := journalMode(); err != nil {
+		return nil, err
+	}
 	raw, err := sql.Open("sqlite3", fmt.Sprintf("file:%s?mode=ro&_busy_timeout=%d", path, busyTimeoutMillis))
 	if err != nil {
 		return nil, fmt.Errorf("open %s read-only: %w", path, err)

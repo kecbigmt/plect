@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -425,5 +426,120 @@ func TestRun_MissingStateJSONFails(t *testing.T) {
 	_, err := Run(context.Background(), Options{SourceDir: sourceDir, DestDir: destDir})
 	if err == nil {
 		t.Fatal("Run over a source directory with no state.json must fail")
+	}
+}
+
+func TestRun_BuildsScratchDatabaseOutsideDestDirAndCleansUpAfterward(t *testing.T) {
+	sourceDir, _, _ := legacyFixture(t)
+	destDir := t.TempDir()
+	tmpRoot := t.TempDir()
+	ctx := context.Background()
+
+	report, err := Run(ctx, Options{SourceDir: sourceDir, DestDir: destDir, TmpDir: tmpRoot})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !report.Promoted {
+		t.Fatal("report.Promoted = false, want true")
+	}
+
+	leftover, err := os.ReadDir(tmpRoot)
+	if err != nil {
+		t.Fatalf("ReadDir(tmpRoot): %v", err)
+	}
+	if len(leftover) != 0 {
+		t.Errorf("tmpRoot contents = %v, want none (the scratch directory must be removed once Run returns)", leftover)
+	}
+}
+
+func TestRun_DryRunNeverLeavesAScratchDirectoryBehind(t *testing.T) {
+	sourceDir, _, _ := legacyFixture(t)
+	destDir := t.TempDir()
+	tmpRoot := t.TempDir()
+	ctx := context.Background()
+
+	report, err := Run(ctx, Options{SourceDir: sourceDir, DestDir: destDir, TmpDir: tmpRoot, DryRun: true})
+	if err != nil {
+		t.Fatalf("Run (dry-run): %v", err)
+	}
+	if report.Promoted {
+		t.Error("report.Promoted = true, want false for a dry run")
+	}
+
+	leftover, err := os.ReadDir(tmpRoot)
+	if err != nil {
+		t.Fatalf("ReadDir(tmpRoot): %v", err)
+	}
+	if len(leftover) != 0 {
+		t.Errorf("tmpRoot contents = %v, want none (a dry run must not leave its scratch directory behind)", leftover)
+	}
+}
+
+func TestRun_BuildPhaseNeverWritesToAReadOnlyDestDir(t *testing.T) {
+	sourceDir, _, _ := legacyFixture(t)
+	destDir := t.TempDir()
+	ctx := context.Background()
+
+	if err := os.Chmod(destDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(destDir, 0o700) })
+
+	report, err := Run(ctx, Options{SourceDir: sourceDir, DestDir: destDir})
+	if err == nil {
+		t.Fatal("Run must fail once it reaches the final copy into a read-only DestDir")
+	}
+	if !strings.Contains(err.Error(), "copy built database") {
+		t.Errorf("Run failed at an unexpected step (want the final copy): %v", err)
+	}
+	if report.Sessions != 2 || report.Events != 3 {
+		t.Errorf("report = %+v, want the build to have completed (sessions=2 events=3) before the copy failed", report)
+	}
+	if report.Promoted {
+		t.Error("report.Promoted = true, want false")
+	}
+}
+
+func TestCopyFileWithFsync_RefusesToOverwriteAnExistingDestination(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+	if err := os.WriteFile(src, []byte("new content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dst, []byte("stale leftover"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := copyFileWithFsync(src, dst); err == nil {
+		t.Fatal("copyFileWithFsync must refuse an existing destination rather than silently overwriting it")
+	}
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "stale leftover" {
+		t.Errorf("dst content = %q, want the untouched stale leftover", got)
+	}
+}
+
+func TestCopyFileWithFsync_CopiesContentAndFsyncsBeforeReturning(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+	want := []byte("database bytes")
+	if err := os.WriteFile(src, want, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := copyFileWithFsync(src, dst); err != nil {
+		t.Fatalf("copyFileWithFsync: %v", err)
+	}
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("dst content = %q, want %q", got, want)
 	}
 }

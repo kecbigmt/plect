@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"io/fs"
+	"os"
+	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -14,6 +16,29 @@ import (
 // package opens; a caller waiting longer than this on lock contention gets
 // an actionable error instead of blocking indefinitely.
 const busyTimeoutMillis = 5000
+
+// JournalModeEnvVar selects the SQLite journal mode (default WAL); DELETE
+// or TRUNCATE avoid WAL's shared-memory and per-frame fsync assumptions,
+// which do not hold on a network filesystem (NFS, EFS).
+const JournalModeEnvVar = "PLECT_SQLITE_JOURNAL_MODE"
+
+var validJournalModes = map[string]bool{
+	"WAL":      true,
+	"DELETE":   true,
+	"TRUNCATE": true,
+}
+
+func journalMode() (string, error) {
+	v := os.Getenv(JournalModeEnvVar)
+	if v == "" {
+		return "WAL", nil
+	}
+	mode := strings.ToUpper(v)
+	if !validJournalModes[mode] {
+		return "", fmt.Errorf("persistence: %s=%q is not one of WAL, DELETE, TRUNCATE", JournalModeEnvVar, v)
+	}
+	return mode, nil
+}
 
 // DB is one SQLite database opened per this package's connection
 // configuration. It holds two connection pools against the same file: read
@@ -39,13 +64,17 @@ type DB struct {
 	migrations fs.FS
 }
 
-// Open sets WAL journaling, a bounded busy timeout, and foreign-key
+// Open sets its journal mode (JournalModeEnvVar), a bounded busy timeout, and foreign-key
 // enforcement as DSN parameters rather than leaving them to each caller,
 // so every connection this package ever opens carries them, with no path
 // through Open that could construct a connection missing one. It does not
 // apply migrations; call Migrate for that.
 func Open(path string) (*DB, error) {
-	readDSN := fmt.Sprintf("%s?_journal_mode=WAL&_busy_timeout=%d&_foreign_keys=on", path, busyTimeoutMillis)
+	mode, err := journalMode()
+	if err != nil {
+		return nil, err
+	}
+	readDSN := fmt.Sprintf("%s?_journal_mode=%s&_busy_timeout=%d&_foreign_keys=on", path, mode, busyTimeoutMillis)
 	writeDSN := readDSN + "&_txlock=immediate"
 
 	read, err := sql.Open("sqlite3", readDSN)

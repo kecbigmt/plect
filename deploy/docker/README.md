@@ -135,6 +135,18 @@ agent process) needs `plect up <session>` after a restart, the same as after
 any host reboot. This is exactly the #309 investigation's "Restart mid-
 session" section; nothing about running in a container changes it.
 
+If the volume backing `/var/lib/plect` (and so `XDG_DATA_HOME`'s
+`storage.db`) is a network filesystem rather than local block storage — an
+EFS-backed ECS task, for example — set `PLECT_SQLITE_JOURNAL_MODE=DELETE` on
+the task definition. SQLite's default WAL mode depends on mmap'd shared
+memory between connections and fsyncs every commit's WAL frame individually,
+both unreliable or ruinously slow against a network filesystem; this image's
+own `Dockerfile` `ENV` default stays WAL (the right default for the common
+case, local block storage), so a network-filesystem deployment sets this
+deliberately in its own task definition or `docker run -e`, never by editing
+the image. See
+[the SQLite durable-storage cutover migration](../../docs/migrations/sqlite-durable-storage-cutover.md#network-filesystem-data-directories).
+
 ## Secrets and configuration
 
 Nothing is required at boot for the image to come up healthy — `plect

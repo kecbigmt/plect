@@ -7,10 +7,27 @@ Core runtime persistence is one SQLite database at
 `app/internal/datahome.Resolve` returns (see "Data-home resolution" below).
 The `app/internal/persistence` package owns opening the database, schema
 checks, the access gate, migrations, and translation between database
-records and domain values. It opens every connection with WAL mode, a
-non-zero bounded busy timeout, and foreign-key enforcement. Production opens
-the file database; tests use a distinct temporary database file per test so
-WAL, locking, and multiple connections exercise the production configuration.
+records and domain values. It opens every connection with a journal mode
+(WAL by default), a non-zero bounded busy timeout, and foreign-key
+enforcement. Production opens the file database; tests use a distinct
+temporary database file per test so WAL, locking, and multiple connections
+exercise the production configuration.
+
+The journal mode is `$PLECT_SQLITE_JOURNAL_MODE`: `WAL` (the default), `DELETE`,
+or `TRUNCATE`; an unrecognized value refuses at open time, naming the valid
+set. WAL depends on mmap'd shared memory between connections and fsyncs
+every commit's WAL frame individually, both unreliable or ruinously slow
+against a network filesystem (NFS, and EFS as an NFS implementation, per
+SQLite's own documentation). `DELETE` and `TRUNCATE` fall back to the
+classic rollback journal instead, at the cost of coarser locking across
+multiple writers -- acceptable for a deployment running a single `plect
+serve` process against the database. There is no `config.toml` key for this:
+the deployment environment owns it, the same way it owns `PLECT_DATA_HOME`.
+Changing it against an already-created database converts the on-disk mode
+only when the connection requesting the change has exclusive access to the
+file, so every other process holding it open must be stopped first; a
+read-only connection (`ReadSessionNames`) never requests a mode change at
+all, since SQLite refuses that outright rather than treating it as a no-op.
 
 `schema.sql` is the desired-structure authority. Reviewed goose migration SQL
 is the historical transition authority, and the goose ledger in the same
@@ -747,9 +764,12 @@ the source-side validation contract; the exact per-column legacy-JSON-field
 mapping is a separate concern from that contract.
 
 The import command runs only against an operator-created backup while writers
-are stopped. It builds and validates a temporary database, validates it again,
-then atomically promotes it as `storage.db`. It never writes JSON and JSONL
-alongside the database. The command reads the following runtime paths.
+are stopped. It builds its temporary database under `--tmp-dir` (default: the
+OS temporary directory), not the target data directory, so a target data
+directory on a network filesystem never sees the import's many small writes
+— only a single file copy, once the database is built and validated twice.
+It never writes JSON and JSONL alongside the database. The command reads the
+following runtime paths.
 
 | Legacy path | Validation and destination |
 | --- | --- |

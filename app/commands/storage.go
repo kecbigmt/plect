@@ -55,6 +55,7 @@ var (
 	storageImportFrom     string
 	storageImportDataHome string
 	storageImportDryRun   bool
+	storageImportTmpDir   string
 )
 
 var storageImportCmd = &cobra.Command{
@@ -69,7 +70,13 @@ $PLECT_DATA_HOME, else $XDG_DATA_HOME/plect.
 Every writer against --from must already be stopped, and --from should be a
 backup copy, not the live data directory: this command validates that no
 lock file it reads is still held, but it does not stop anything itself. See
-docs/migrations/ for the full cutover procedure.`,
+docs/migrations/ for the full cutover procedure.
+
+The database this command builds is written under --tmp-dir (default: the
+OS temporary directory) while it is being built and validated, then copied
+into the target data directory only once finished — so a target data
+directory on a network filesystem never sees the many small writes building
+it produces, only the single final copy.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		dataHome := storageImportDataHome
@@ -80,6 +87,7 @@ docs/migrations/ for the full cutover procedure.`,
 			SourceDir: storageImportFrom,
 			DestDir:   dataHome,
 			DryRun:    storageImportDryRun,
+			TmpDir:    storageImportTmpDir,
 		})
 		if report != nil {
 			fmt.Fprintln(cmd.OutOrStdout(), report.String())
@@ -149,6 +157,7 @@ func init() {
 	storageImportCmd.Flags().StringVar(&storageImportFrom, "from", "", "Legacy data directory to import (a stopped-writer backup, not the live directory)")
 	storageImportCmd.Flags().StringVar(&storageImportDataHome, "data-home", "", "Target plect data directory (default: $PLECT_DATA_HOME, else $XDG_DATA_HOME/plect)")
 	storageImportCmd.Flags().BoolVar(&storageImportDryRun, "dry-run", false, "Validate and report without promoting a database or writing the rejection marker")
+	storageImportCmd.Flags().StringVar(&storageImportTmpDir, "tmp-dir", "", "Directory to build the scratch database under before copying it into --data-home (default: the OS temporary directory)")
 	_ = storageImportCmd.MarkFlagRequired("from")
 	storageCmd.AddCommand(storageImportCmd)
 

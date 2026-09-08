@@ -208,6 +208,36 @@ func TestStorageImport_DefaultDataHomeSucceedsWithoutDataHomeFlag(t *testing.T) 
 	}
 }
 
+func TestStorageImport_TmpDirFlagIsWiredThroughAndCleanedUp(t *testing.T) {
+	fakeHome := t.TempDir()
+	t.Setenv("HOME", fakeHome)
+	t.Setenv("XDG_DATA_HOME", "")
+	t.Setenv(confighome.EnvVar, "")
+	t.Setenv(confighome.XDGEnvVar, "")
+
+	backupDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(backupDir, "state.json"), []byte(`{"version":7,"sessions":{}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tmpRoot := t.TempDir()
+
+	out, err := execRoot(t, "storage", "import", "--from", backupDir, "--tmp-dir", tmpRoot)
+	if err != nil {
+		t.Fatalf("Execute() error = %v; output:\n%s", err, out)
+	}
+	if !strings.Contains(out, "promoted=true") {
+		t.Errorf("output = %q, want it to report a completed promotion", out)
+	}
+
+	leftover, err := os.ReadDir(tmpRoot)
+	if err != nil {
+		t.Fatalf("ReadDir(tmpRoot): %v", err)
+	}
+	if len(leftover) != 0 {
+		t.Errorf("--tmp-dir contents = %v, want none (the scratch directory must be removed once import finishes)", leftover)
+	}
+}
+
 // TestRootPersistentPreRun_DoesNotPreCreateStorageDBForStorageImport: the
 // same pre-run carve-out storageMigrateCmd already had.
 func TestRootPersistentPreRun_DoesNotPreCreateStorageDBForStorageImport(t *testing.T) {

@@ -3,6 +3,7 @@ package legacyimport
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -24,6 +25,9 @@ type Options struct {
 	// DryRun builds and validates the temporary database and reports on it,
 	// but never promotes it and never writes the legacy rejection marker.
 	DryRun bool
+	// TmpDir is the directory Run builds its scratch database under before
+	// copying it into DestDir (empty defaults to os.TempDir()).
+	TmpDir string
 }
 
 // rejectionMarker is the legacy envelope every supported legacy binary
@@ -106,21 +110,22 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 		return report, fmt.Errorf("legacyimport: create %s: %w", opts.DestDir, err)
 	}
 
-	tmpPath := report.DBPath + ".importing"
-	if err := removeDatabaseFiles(tmpPath); err != nil {
-		return report, fmt.Errorf("legacyimport: clear stale temp database: %w", err)
+	scratchBase := opts.TmpDir
+	if scratchBase == "" {
+		scratchBase = os.TempDir()
 	}
-	db, err := persistence.Open(tmpPath)
+	scratchDir, err := os.MkdirTemp(scratchBase, "plect-storage-import-*")
+	if err != nil {
+		return report, fmt.Errorf("legacyimport: create scratch directory under %s: %w", scratchBase, err)
+	}
+	defer os.RemoveAll(scratchDir)
+	scratchDBPath := filepath.Join(scratchDir, "storage.db")
+
+	db, err := persistence.Open(scratchDBPath)
 	if err != nil {
 		return report, fmt.Errorf("legacyimport: open temporary database: %w", err)
 	}
-	defer func() {
-		db.Close()
-		// Idempotent regardless of outcome: a promoted run already renamed
-		// the main file away, so this only clears its now-orphaned gate
-		// sidecars; a dry run or a failure clears everything at tmpPath.
-		removeDatabaseFiles(tmpPath)
-	}()
+	defer db.Close()
 	if err := db.Migrate(ctx); err != nil {
 		return report, fmt.Errorf("legacyimport: migrate temporary database: %w", err)
 	}
@@ -221,6 +226,7 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 		return report, nil
 	}
 
+	// Close releases scratchDBPath so the copy below sees a stable file.
 	if err := db.Checkpoint(ctx); err != nil {
 		return report, fmt.Errorf("legacyimport: %w", err)
 	}
@@ -228,16 +234,27 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 		return report, fmt.Errorf("legacyimport: close temporary database: %w", err)
 	}
 
+	destTmpPath := report.DBPath + ".importing"
+	if err := os.Remove(destTmpPath); err != nil && !os.IsNotExist(err) {
+		return report, fmt.Errorf("legacyimport: clear stale temp database: %w", err)
+	}
+	if err := copyFileWithFsync(scratchDBPath, destTmpPath); err != nil {
+		return report, fmt.Errorf("legacyimport: copy built database into %s: %w", opts.DestDir, err)
+	}
+	// Idempotent regardless of outcome: a promoted run already renamed this
+	// away, so this only clears a leftover from a failure below.
+	defer os.Remove(destTmpPath)
+
 	// Marker before rename: the only failure left afterward is the rename
 	// itself, leaving no storage.db — retryable — rather than a promoted
 	// db sitting next to a legacy state.json no marker ever locked out.
 	if err := atomicfile.Write(report.MarkerPath, []byte(rejectionMarker)); err != nil {
 		return report, fmt.Errorf("legacyimport: write legacy rejection marker: %w", err)
 	}
-	if err := os.Rename(tmpPath, report.DBPath); err != nil {
+	if err := os.Rename(destTmpPath, report.DBPath); err != nil {
 		return report, fmt.Errorf("legacyimport: promote temporary database: %w", err)
 	}
-	report.Promoted = true // the deferred cleanup above still clears tmpPath's now-orphaned gate sidecars
+	report.Promoted = true
 
 	return report, nil
 }
@@ -297,18 +314,32 @@ func sortedKeys(m map[string]int64) []string {
 	return keys
 }
 
-// removeDatabaseFiles removes path, its WAL-mode siblings (-wal, -shm), and
-// persistence's own gate sidecars (.access.lock, .coordination.lock,
-// .migration.json — see gate.go's newAccessGate), all of which are named
-// after the temporary import path and would otherwise litter the
-// destination directory once that path stops existing. Absence of any of
-// them is not an error.
-func removeDatabaseFiles(path string) error {
-	suffixes := []string{"", "-wal", "-shm", ".access.lock", ".coordination.lock", ".migration.json"}
-	for _, suffix := range suffixes {
-		if err := os.Remove(path + suffix); err != nil && !os.IsNotExist(err) {
-			return err
-		}
+// copyFileWithFsync copies src to dst, fsyncing dst before close. O_EXCL
+// rejects an already-existing dst rather than silently overwriting it.
+func copyFileWithFsync(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", src, err)
+	}
+	defer in.Close()
+
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("create %s: %w", dst, err)
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		os.Remove(dst)
+		return fmt.Errorf("copy %s to %s: %w", src, dst, err)
+	}
+	if err := out.Sync(); err != nil {
+		out.Close()
+		os.Remove(dst)
+		return fmt.Errorf("fsync %s: %w", dst, err)
+	}
+	if err := out.Close(); err != nil {
+		os.Remove(dst)
+		return fmt.Errorf("close %s: %w", dst, err)
 	}
 	return nil
 }
