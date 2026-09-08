@@ -7,9 +7,6 @@ import (
 	"testing"
 )
 
-// recordingStreamer records StartStream/AppendStream/StopStream calls and
-// lets tests inject a standing failure for each, cleared by setting the
-// field back to nil to simulate a transient error clearing on retry.
 type recordingStreamer struct {
 	mu sync.Mutex
 
@@ -128,7 +125,6 @@ func TestStreamManager_OutOfOrderChunks_BufferUntilGapCloses(t *testing.T) {
 	poster := &recordingPoster{}
 	mgr := NewStreamManager(streamer, poster, "T1", "U1", testLogger())
 
-	// index 1 arrives before index 0: nothing should reach Slack yet.
 	if err := mgr.Deliver("C1", "111.0", "msg-1", 1, "world", false); err != nil {
 		t.Fatalf("chunk 1: %v", err)
 	}
@@ -137,7 +133,6 @@ func TestStreamManager_OutOfOrderChunks_BufferUntilGapCloses(t *testing.T) {
 			streamer.startCalls, streamer.appendCalls)
 	}
 
-	// index 0 arrives: both should now flush in order.
 	if err := mgr.Deliver("C1", "111.0", "msg-1", 0, "hello ", false); err != nil {
 		t.Fatalf("chunk 0: %v", err)
 	}
@@ -154,8 +149,6 @@ func TestStreamManager_BufferBoundExceeded_FlushesDespiteGap(t *testing.T) {
 	poster := &recordingPoster{}
 	mgr := NewStreamManager(streamer, poster, "T1", "U1", testLogger())
 
-	// index 0 never arrives. Deliver chunks 1..maxPendingStreamChunks so the
-	// buffer bound is hit and the manager gives up waiting on the gap.
 	for i := int64(1); i <= maxPendingStreamChunks; i++ {
 		if err := mgr.Deliver("C1", "111.0", "msg-1", i, "x", false); err != nil {
 			t.Fatalf("chunk %d: %v", i, err)
@@ -165,8 +158,6 @@ func TestStreamManager_BufferBoundExceeded_FlushesDespiteGap(t *testing.T) {
 	if len(streamer.startCalls) != 1 {
 		t.Fatalf("StartStream calls = %d, want 1 (flush proceeded despite the missing index 0)", len(streamer.startCalls))
 	}
-	// The flushed run starts at index 1 (the lowest buffered index), one
-	// chunk becomes the seed and the rest become appends.
 	if got, want := len(streamer.appendCalls), maxPendingStreamChunks-1; got != want {
 		t.Fatalf("AppendStream calls = %d, want %d", got, want)
 	}
@@ -318,7 +309,6 @@ func TestStreamManager_ForgetsStateAfterFinal(t *testing.T) {
 		t.Errorf("stream state entries = %d, want 0 after final", got)
 	}
 
-	// A later message reusing the same stream_key starts fresh.
 	if err := mgr.Deliver("C1", "111.0", "msg-1", 0, "Second message", true); err != nil {
 		t.Fatalf("Deliver (second message): %v", err)
 	}
