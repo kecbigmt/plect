@@ -1,13 +1,14 @@
 #!/usr/bin/env sh
-# Passes every call through to the real jq unchanged, except the one this
-# plugin's own closing output-construction call is uniquely identifiable
-# by ("profile_path", a key only that call's filter uses) when a scenario
-# declares fail_output — the only way to exercise a non-zero exit after
-# the process was started that is not the detection timeout, since every
-# value that call assembles is otherwise already validated by then.
+# Passes every call through to the real jq unchanged, except each effect's
+# own closing output-construction call, uniquely identifiable by a key only
+# that call's filter uses (`profile_path` for `codex`, `queue_dir` for
+# `exec_runtime`), when a scenario declares fail_output — the only way to
+# exercise a non-zero exit after the process was started that is not the
+# detection timeout, since every value that call assembles is otherwise
+# already validated by then.
 if [ -n "${PLECT_EFFECT_FAIL_OUTPUT-}" ]; then
   case "$*" in
-    *profile_path*)
+    *profile_path*|*queue_dir*)
       plect-effect-record jq "$@"
       echo "jq: simulated output failure" >&2
       exit 1

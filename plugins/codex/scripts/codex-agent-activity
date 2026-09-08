@@ -1,24 +1,28 @@
 #!/usr/bin/env bash
 # Codex CLI turn-boundary activity: the record half is a hook, the read
 # half is this task's `[health].activity` probe, so one executable owns both
-# ends of one fingerprint format. It also owns the Stop reporting hook that
-# publishes an agent's own text as the core plect.message event: Codex's
-# `codex exec`/`codex exec resume` expose no per-message streaming hook, so
-# unlike the Claude plugin's counterpart this has no message_display side —
-# same one-executable reason.
+# ends of one fingerprint format. It also owns reply, the publisher of an
+# agent's own text as the core plect.message event: Codex's `codex exec`/
+# `codex exec resume` expose no per-message streaming hook, so unlike the
+# Claude plugin's counterpart this has no message_display side — same
+# one-executable reason.
 #
 # Usage:
-#   codex-agent-activity working|waiting             # hook; session from $PLECT_SESSION_NAME
-#   codex-agent-activity reply                       # Stop reporting hook; publishes plect.message
+#   codex-agent-activity working|waiting              # hook; session from $PLECT_SESSION_NAME
+#   codex-agent-activity reply                        # publishes plect.message from stdin JSON
 #   codex-agent-activity probe <session> [state_dir]  # activity probe; writes the envelope
-#   codex-agent-activity reset <session>              # drop the record (setup/cleanup)
+#   codex-agent-activity reset <session>               # drop the record (setup/cleanup)
 #
-# The hook paths read the hook event JSON from stdin and are fire-and-forget
-# by design: a failure here must never fail the agent's turn, so every hook
-# exit path is 0. The probe path only fails loud (non-zero exit, no stdout)
-# when the session name itself is missing — an unreadable or torn hook
-# record degrades to "no hook evidence" instead, since the log-file signal
-# below can still carry the probe on its own.
+# working/waiting read a Codex hook's own event JSON from stdin; reply reads
+# whatever JSON its caller built (a Codex hook's payload has the same
+# last_assistant_message/turn_id shape, but exec_runtime's worker calls
+# reply directly with its own --output-last-message capture instead of
+# registering a hook — see that task's setup for why). All three are
+# fire-and-forget by design: a failure here must never fail the agent's
+# turn, so every exit path is 0. The probe path only fails loud (non-zero
+# exit, no stdout) when the session name itself is missing — an unreadable
+# or torn hook record degrades to "no hook evidence" instead, since the
+# log-file signal below can still carry the probe on its own.
 
 set -u
 
@@ -121,12 +125,9 @@ case "${1:-}" in
     [ -n "${PLECT_SESSION_NAME:-}" ] || exit 0
     payload="$(cat)"
 
-    # last_assistant_message is documented on Stop specifically so a hook
-    # never needs to parse the session's own rollout file, which is written
-    # asynchronously and can lag the turn that just ended. Extracted via
-    # jq_field_exact, not a plain `$(...)` read: a real assistant message
-    # routinely contains newlines, which `$(...)` would strip if they were
-    # trailing.
+    # Extracted via jq_field_exact, not a plain `$(...)` read: a real
+    # assistant message routinely contains newlines, which `$(...)` would
+    # strip if they were trailing.
     jq_field_exact '.last_assistant_message // empty'
     message="$REPLY"
     [ -n "$message" ] || exit 0
@@ -134,10 +135,12 @@ case "${1:-}" in
     turn_id="$(printf '%s' "$payload" | jq -r '.turn_id // empty' 2>/dev/null)" || turn_id=""
 
     # message_id is a deterministic synthetic id, per the core contract, not
-    # a random one: turn_id already identifies this turn uniquely within the
-    # session, so it doubles as the id. The counter fallback only matters for
-    # the (practically unreachable) case of Stop firing before any turn_id
-    # was ever assigned in this process's lifetime.
+    # a random one: a caller with its own per-turn id (a real Codex hook)
+    # doubles it as the id. exec_runtime's worker has no such id to give —
+    # every turn is its own `codex exec` call, and Codex's own turn_id lives
+    # only inside its Stop hook payload, which this call path never receives
+    # — so the counter fallback is that caller's every call, not an edge
+    # case.
     if [ -n "$turn_id" ]; then
       message_id="$PLECT_SESSION_NAME/$turn_id"
     else

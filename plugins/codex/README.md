@@ -42,9 +42,9 @@ dependency.
   file (name and size): unlike the interactive TUI, whose pane fingerprint
   (see the `tmux` plugin) covers a single long turn that crosses no hook
   boundary, `codex exec`'s output never reaches the pane, so this is the
-  only mid-turn evidence this shape produces. It also owns the
-  `exec_runtime` Stop hook that publishes an agent's own text as the core
-  `plect.message` event.
+  only mid-turn evidence this shape produces. It also owns `reply`, the
+  verb `codex-exec-worker` calls directly to publish an agent's own text as
+  the core `plect.message` event — see Turn Reporting below.
 - `scripts/codex-exec-worker` — the worker script `exec_runtime.toml`
   launches, resolved through `bin = "<name>"` so it needs no `PATH` entry of
   its own.
@@ -64,28 +64,29 @@ that plugin, this schema accepts only `"message"` — Codex's `codex exec`/
 `codex exec resume` expose no per-message streaming hook, so there is no
 `"message_delta"` counterpart to request.
 
-- `"message"` registers a `Stop` hook, via a per-session profile
-  (`$CODEX_HOME/plect-<uuid>.config.toml`), that publishes `plect.message`
-  from that turn's `last_assistant_message` once the turn completes.
-  `message_id` is deterministic (`message_id_origin = synthetic`) — the
-  hook's own `turn_id` when present (Codex mints a fresh one per
-  `codex exec`/`codex exec resume` call), else a per-session counter for the
-  one boundary that exposes none. Metadata otherwise: `role = assistant`,
-  `source = codex`.
-- A profile-registered hook has no persisted trust of its own, so the
-  worker's `codex exec` calls additionally pass
-  `--dangerously-bypass-hook-trust`; the profile is one this plugin's own
-  setup generated, not user-supplied content, so nothing outside this
-  plugin can use that flag to run unreviewed hooks.
-- An empty `last_assistant_message` publishes nothing. A publish failure
-  (`plect` unreachable) never blocks or delays the agent's turn — the hook's
-  exit path is always 0.
+- `"message"` makes `codex-exec-worker` capture each turn's
+  `--output-last-message` output and hand it to `codex-agent-activity reply`
+  directly, which publishes `plect.message`. This is a plain worker-side
+  capture, not a Codex hook: registering a hook would need
+  `--dangerously-bypass-hook-trust` on every `codex exec` call, and that flag
+  authorizes *every* hook enabled across *every* config layer for that
+  call — this plugin's own registration, but also anything else the
+  invoking user's `~/.codex/config.toml` (or a project's own `.codex/`
+  layer) happens to define — not just the one hook this plugin would
+  register. A worker that already captures the turn's own output has no
+  need to accept that risk for a value it can read directly.
+- `message_id` is deterministic (`message_id_origin = synthetic`): a
+  per-session counter, since `codex exec`'s own per-turn `turn_id` lives
+  only inside a Stop hook's payload, which this capture path never
+  receives. Metadata otherwise: `role = assistant`, `source = codex`.
+- An empty captured reply publishes nothing. A publish failure (`plect`
+  unreachable) never blocks or delays the agent's turn.
 - Turn-boundary activity (`working`/`waiting`, for the session's status
-  line and the `[health].activity` probe) is reported by the worker's own
-  direct calls around each `codex exec` invocation, independent of
-  `publish_events`: unlike the interactive `codex` task's one long-lived
-  process, each turn here is its own process, so the worker's outer wrapper
-  already sees every boundary a hook would.
+  line and the `[health].activity` probe) is reported by this same direct
+  calling convention, independent of `publish_events`: unlike the
+  interactive `codex` task's one long-lived process, each turn here is its
+  own `codex exec` process, so the worker's outer wrapper already sees
+  every boundary a hook would.
 
 ## Parameters
 

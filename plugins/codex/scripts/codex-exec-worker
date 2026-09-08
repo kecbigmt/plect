@@ -10,13 +10,12 @@
 # running one. The first turn has no thread_id yet; its `thread.started`
 # JSONL line seeds state_dir/thread_id for every subsequent resume.
 #
-# Usage: codex-exec-worker <queue_dir> <state_dir> <profile_name>
+# Usage: codex-exec-worker <queue_dir> <state_dir>
 
 set -u
 
 queue_dir="${1:?queue_dir required}"
 state_dir="${2:?state_dir required}"
-profile_name="${3:?profile_name required}"
 
 mkdir -p "$queue_dir" "$state_dir/log"
 
@@ -62,6 +61,21 @@ tick_session() {
     plect tick "$PLECT_SESSION_NAME" >/dev/null 2>&1 || true
 }
 
+# publish_reply hands the turn's captured text to codex-agent-activity's
+# reply verb, the same publisher a real Codex hook would call — but reached
+# by direct invocation here, not hook registration: this worker already
+# sees every turn boundary itself (see tasks/exec_runtime.toml's setup for
+# why that makes a hook unnecessary), and reply's own last_assistant_message
+# extraction and message_id/dedup logic apply the same way regardless of
+# who calls it. jq builds the payload so a reply containing a quote or
+# newline round-trips as valid JSON.
+publish_reply() {
+    [ -n "${PLECT_SESSION_NAME:-}" ] && [ -n "${CODEX_PUBLISH_MESSAGE:-}" ] || return 0
+    local text="$1"
+    jq -n --arg text "$text" '{last_assistant_message: $text}' \
+        | "${PLECT_AGENT_ACTIVITY_BIN:-codex-agent-activity}" reply >/dev/null 2>&1 || true
+}
+
 while true; do
     for f in "$queue_dir"/*.json; do
         [ -e "$f" ] || continue
@@ -75,27 +89,20 @@ while true; do
 
         thread_id="$(cat "$state_dir/thread_id" 2>/dev/null || true)"
         log_file="$state_dir/log/$(date +%s%N).jsonl"
+        last_message_file="$(mktemp "$state_dir/.last-message.XXXXXX")"
 
         agent_activity "UserPromptSubmit" "working"
-        # --dangerously-bypass-hook-trust: the profile this session's setup
-        # wrote (see tasks/exec_runtime.toml) has no persisted trust of its
-        # own, so its Stop hook — this runtime's sole path to publishing
-        # plect.message, since a synthesized activity call carries no
-        # last_assistant_message — never runs without it.
         if [ -z "$thread_id" ]; then
-            codex exec --json --profile "$profile_name" \
+            codex exec --json \
                 --dangerously-bypass-approvals-and-sandbox \
-                --dangerously-bypass-hook-trust \
+                --output-last-message "$last_message_file" \
                 "${extra_args[@]}" \
                 -- "$text" > "$log_file" 2>&1
         else
-            # --profile must precede the `resume` subcommand: codex rejects
-            # it as an unrecognized argument when placed after, unlike every
-            # other flag here, which `resume` also accepts directly.
-            codex exec --json --profile "$profile_name" \
+            codex exec resume --json \
                 --dangerously-bypass-approvals-and-sandbox \
-                --dangerously-bypass-hook-trust \
-                resume "${extra_args[@]}" \
+                --output-last-message "$last_message_file" \
+                "${extra_args[@]}" \
                 "$thread_id" -- "$text" > "$log_file" 2>&1
         fi
         exit_code=$?
@@ -106,7 +113,13 @@ while true; do
         fi
 
         write_health "$exit_code" "$event_type"
-        rm -f "$f"
+        # Publish on success with a non-empty reply only; failures already
+        # surface via health.json.
+        if [ "$exit_code" -eq 0 ]; then
+            reply="$(cat "$last_message_file" 2>/dev/null || true)"
+            [ -n "$reply" ] && publish_reply "$reply"
+        fi
+        rm -f "$last_message_file" "$f"
         agent_activity "Stop" "waiting"
         tick_session
     done

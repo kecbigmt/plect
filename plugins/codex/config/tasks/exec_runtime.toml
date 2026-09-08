@@ -34,7 +34,9 @@ scope = "run"
 #                  it did come up, so raise this rather than treat a
 #                  live-but-slow launch as a failure.
 #   publish_events — core events to publish ("message" only — see the
-#                  README's Turn Reporting section). Default ["message"].
+#                  README's Turn Reporting section for why this is a plain
+#                  worker-side capture, not a Codex hook). Default
+#                  ["message"].
 #
 # codex_exec starts a headless worker (codex-exec-worker) instead of the
 # interactive Codex TUI, so instruction delivery is a queued `codex exec`/
@@ -66,37 +68,14 @@ terminate_if_owned() {
 # rather than inheriting a stale fingerprint.
 "$activity_bin" reset "$session_name"
 
-CODEX_HOME_DIR="${CODEX_HOME:-$HOME/.codex}"
-mkdir -p "$CODEX_HOME_DIR"
-PROFILE_NAME="plect-$(uuidgen)"
-PROFILE_PATH="$CODEX_HOME_DIR/$PROFILE_NAME.config.toml"
-# Turn-boundary activity ("working"/"waiting") is reported by the worker's
-# own direct calls around each `codex exec`/`codex exec resume` invocation,
-# not by a hook: unlike the interactive `codex` task's one long-lived
-# process, each turn here is its own process, so the worker's outer wrapper
-# already sees every boundary a UserPromptSubmit/Stop hook would. The only
-# hook this effect registers is Stop's reply publish, gated on
-# publish_events including "message" — Codex has no per-message streaming
-# hook, so there is no message_delta counterpart to register.
-#
-# A hook entry is its own `[[hooks.Stop.hooks]]` table nested under one
-# `[[hooks.Stop]]` matcher group, with `command` a plain string (codex runs
-# it through a shell, never a JSON array) — the inline-table array shape an
-# earlier version of this profile used registered nothing. Registration
-# alone is also not enough to make codex actually invoke it: the worker's
-# own `codex exec` calls additionally pass `--dangerously-bypass-hook-trust`,
-# since a profile-supplied hooks table has no persisted trust of its own.
+# publish_events selects the worker's own capture-and-publish step, not a
+# Codex hook: a hook needs --dangerously-bypass-hook-trust on every codex
+# exec call, which authorizes every hook Codex has configured across every
+# config layer for that call, not just one this plugin registers — a cost
+# this effect declines to pay for a plect.message it can get more simply
+# from the same --output-last-message capture codex.reply used before it.
 HAS_MESSAGE=false
 printf '%s' "$publish_events" | jq -e 'any(.[]?; . == "message")' >/dev/null 2>&1 && HAS_MESSAGE=true
-HOOKS_SECTION=""
-if [ "$HAS_MESSAGE" = true ]; then
-  HOOKS_SECTION="[[hooks.Stop]]
-[[hooks.Stop.hooks]]
-type = \"command\"
-command = \"$activity_bin reply\"
-"
-fi
-printf '%s' "$HOOKS_SECTION" > "$PROFILE_PATH"
 
 STATE_ROOT="${state_root-}"
 [ -n "$STATE_ROOT" ] || STATE_ROOT="${TMPDIR:-/tmp}/plect-codex-exec"
@@ -114,6 +93,7 @@ EXPORTS="export PLECT_SESSION_NAME=$session_name; "
 # can't resolve a bin reference itself for its own activity-hook calls;
 # hand the resolved path down as an env var instead.
 EXPORTS="${EXPORTS}export PLECT_AGENT_ACTIVITY_BIN='$activity_bin'; "
+[ "$HAS_MESSAGE" = true ] && EXPORTS="${EXPORTS}export CODEX_PUBLISH_MESSAGE=1; "
 
 # launch_env crosses one boundary the binding transport does not close: the
 # keystrokes sent to the pane. jq's @sh closes it by quoting each value, and
@@ -158,7 +138,7 @@ fi
 # The terminal verbs compose against whichever effect in this workflow
 # declares the interactive endpoint — never a concrete multiplexer named
 # here directly.
-sh -c "$send_text" terminal-send-text "${EXPORTS}$worker_bin '$QUEUE_DIR' '$STATE_DIR' '$PROFILE_NAME'"
+sh -c "$send_text" terminal-send-text "${EXPORTS}$worker_bin '$QUEUE_DIR' '$STATE_DIR'"
 sh -c "$send_keys" terminal-send-keys Enter
 
 READY_TIMEOUT_SECONDS="${launch_timeout%s}"
@@ -188,8 +168,7 @@ OUTPUT=$(jq -nc \
   --argjson pid "$PID" \
   --arg queue_dir "$QUEUE_DIR" \
   --arg state_dir "$STATE_DIR" \
-  --arg profile "$PROFILE_PATH" \
-  '{pid:$pid, queue_dir:$queue_dir, state_dir:$state_dir, profile_path:$profile}') || {
+  '{pid:$pid, queue_dir:$queue_dir, state_dir:$state_dir}') || {
     terminate_if_owned "$PID"
     exit 1
   }
@@ -221,14 +200,12 @@ for _ in 1 2 3 4 5; do
   kill -0 "$pid" 2>/dev/null || break
 done
 kill -KILL "$pid" 2>/dev/null || true
-[ -n "${profile_path-}" ] && rm -f "$profile_path"
 "$activity_bin" reset "$session_name"
 true
 '''
 
 [exec_runtime.cleanup.bind]
 pid          = { from = "self.outputs.pid", optional = true }
-profile_path = { from = "self.outputs.profile_path", optional = true }
 session_name = { from = "session.name" }
 activity_bin = { bin = "codex-agent-activity" }
 
@@ -248,13 +225,14 @@ jq -e ".last_exit_code == 0" "$HEALTH" >/dev/null
 pid       = { from = "self.outputs.pid" }
 state_dir = { from = "self.outputs.state_dir" }
 
-# activity reads back the record the same turn-boundary hooks this setup
-# registers write, so hook and probe are two halves of one fingerprint
-# format. Unlike the interactive shape there is no pane to fingerprint here,
-# so state_dir is passed through too: a turn's own log file (one per turn,
-# growing as codex streams to it, never touching the pane) is this runtime's
-# only evidence for a turn still running long enough to outlast the
-# stall_threshold before its own Stop hook ever fires.
+# activity reads back the record the worker's own direct calls around each
+# turn write (see codex-exec-worker), so writer and probe are two halves of
+# one fingerprint format. Unlike the interactive shape there is no pane to
+# fingerprint here, so state_dir is passed through too: a turn's own log
+# file (one per turn, growing as codex streams to it, never touching the
+# pane) is this runtime's only evidence for a turn still running long
+# enough to outlast the stall_threshold before the worker's own
+# end-of-turn call ever lands.
 [exec_runtime.health.activity]
 type = "exec"
 bin  = "codex-agent-activity"
@@ -295,7 +273,6 @@ type     = "object"
 required = ["pid", "queue_dir", "state_dir"]
 
 [exec_runtime.outputs_schema.properties]
-pid          = { type = "integer" }
-queue_dir    = { type = "string" }
-state_dir    = { type = "string" }
-profile_path = { type = "string" }
+pid       = { type = "integer" }
+queue_dir = { type = "string" }
+state_dir = { type = "string" }
