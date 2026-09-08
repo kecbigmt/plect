@@ -171,9 +171,11 @@ func (d *sessionDispatcher) drain(ctx context.Context, s *domain.Session, startG
 // stream of successes would starve the broken one's streak of ever reaching
 // the escalation threshold.
 func (d *sessionDispatcher) processEvent(ctx context.Context, s *domain.Session, ev event.Event) {
-	// Never deliver a channel error — a channel with include="*" would otherwise
-	// loop on its own failures. Structural, not just a config convention.
-	if ev.Type == event.TypeChannelError {
+	// A channel.error about another channel.error's own delivery failure is
+	// never relayed at all: relaying it would let two channels erroring at
+	// each other ping-pong forever, where the per-channel skip below (which
+	// only excludes each error's own originating channel) would not stop it.
+	if ev.Type == event.TypeChannelError && ev.Metadata["event_type"] == event.TypeChannelError {
 		return
 	}
 	var wg sync.WaitGroup
@@ -183,6 +185,10 @@ func (d *sessionDispatcher) processEvent(ctx context.Context, s *domain.Session,
 	var failedCause error
 	for _, ch := range d.channels {
 		if !channelMatches(ch, ev) {
+			continue
+		}
+		if ev.Type == event.TypeChannelError && ev.Metadata["channel"] == ch.Name {
+			// That channel's own failure — relaying it back would loop.
 			continue
 		}
 		def, ok := d.defs[ch.Uses]

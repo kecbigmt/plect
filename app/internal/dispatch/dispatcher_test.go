@@ -466,6 +466,102 @@ func TestDispatcher_ChannelErrorNotRedelivered(t *testing.T) {
 	}
 }
 
+// TestDispatcher_ChannelErrorRelayedToOtherChannelNotOrigin is a regression
+// test for issue #542: a channel's own failure must reach a second,
+// independent channel declared on the same workflow (github#542's proposed
+// fix), while still never looping back to the failing channel itself
+// (the pre-existing structural guard, generalized from a blanket drop to a
+// per-channel one).
+func TestDispatcher_ChannelErrorRelayedToOtherChannelNotOrigin(t *testing.T) {
+	log := eventlog.NewStore(t.TempDir())
+	dead := filepath.Join(t.TempDir(), "absent.sock") // origin: never listened
+	sock, recv := startFakeSocket(t)                  // relay: live
+	def := socketChannel()
+	s := &domain.Session{Name: "o/r-1", Tasks: map[string]*contract.TaskState{}}
+	st := state.NewStore(t.TempDir())
+	if err := st.Put(s); err != nil {
+		t.Fatal(err)
+	}
+	d := &sessionDispatcher{
+		session: "o/r-1",
+		channels: []config.EventChannel{
+			{Name: "origin", Uses: "sock", Inputs: map[string]*lang.Value{"path": literalValue(dead)}, Include: []string{"*"}},
+			{Name: "relay", Uses: "sock", Inputs: map[string]*lang.Value{"path": literalValue(sock)}, Include: []string{"*"}},
+		},
+		defs:   map[string]config.ChannelDefinition{"sock": def},
+		log:    log,
+		state:  st,
+		policy: channel.RetryPolicy{MaxAttempts: 1, BaseBackoff: time.Millisecond, MaxBackoff: time.Millisecond, Timeout: 200 * time.Millisecond},
+	}
+
+	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Direction: event.Internal})
+	drainOnce(d, s) // origin fails delivering the instruction; relay delivers it
+
+	if typ := recvType(t, recv); typ != event.TypeInstruction {
+		t.Fatalf("relay's delivery of the original event = %q", typ)
+	}
+	errs, _, _, _ := log.List("o/r-1", 0, event.Filter{Types: []string{event.TypeChannelError}})
+	if len(errs) != 1 || errs[0].Metadata["channel"] != "origin" {
+		t.Fatalf("want one channel.error for origin, got %+v", errs)
+	}
+
+	drainOnce(d, s) // processes that channel.error: origin skips itself, relay delivers it
+
+	if typ := recvType(t, recv); typ != event.TypeChannelError {
+		t.Errorf("relay must receive origin's channel.error, got %q", typ)
+	}
+	// If origin had also been attempted (a failure to loop back to it), the
+	// dead socket would fail again and append a second channel.error.
+	errs, _, _, _ = log.List("o/r-1", 0, event.Filter{Types: []string{event.TypeChannelError}})
+	if len(errs) != 1 {
+		t.Fatalf("origin must not error again by receiving its own channel.error: got %d", len(errs))
+	}
+}
+
+// TestDispatcher_MutualChannelErrorBoundedNotInfinite is a regression test
+// for the dispatcher note on issue #542: when relaying a channel.error to a
+// second channel itself fails, the resulting channel.error (about a
+// channel.error's own delivery failure) must not be relayed anywhere, or
+// the two channels would ping-pong forever.
+func TestDispatcher_MutualChannelErrorBoundedNotInfinite(t *testing.T) {
+	log := eventlog.NewStore(t.TempDir())
+	deadA := filepath.Join(t.TempDir(), "a.sock")
+	deadB := filepath.Join(t.TempDir(), "b.sock")
+	def := socketChannel()
+	s := &domain.Session{Name: "o/r-1", Tasks: map[string]*contract.TaskState{}}
+	st := state.NewStore(t.TempDir())
+	if err := st.Put(s); err != nil {
+		t.Fatal(err)
+	}
+	d := &sessionDispatcher{
+		session: "o/r-1",
+		channels: []config.EventChannel{
+			{Name: "a", Uses: "sock", Inputs: map[string]*lang.Value{"path": literalValue(deadA)}, Include: []string{"plect.instruction"}},
+			{Name: "b", Uses: "sock", Inputs: map[string]*lang.Value{"path": literalValue(deadB)}, Include: []string{"plect.channel.error"}},
+		},
+		defs:   map[string]config.ChannelDefinition{"sock": def},
+		log:    log,
+		state:  st,
+		policy: channel.RetryPolicy{MaxAttempts: 1, BaseBackoff: time.Millisecond, MaxBackoff: time.Millisecond, Timeout: 200 * time.Millisecond},
+	}
+
+	log.Append(event.Event{SessionName: "o/r-1", Type: event.TypeInstruction, Direction: event.Internal})
+	drainOnce(d, s) // a fails delivering the instruction → one channel.error (channel=a)
+	drainOnce(d, s) // b fails relaying a's channel.error → one more (channel=b, event_type=plect.channel.error)
+	drainOnce(d, s) // b's error records a channel.error's own failure: must not be relayed at all
+
+	errs, _, _, _ := log.List("o/r-1", 0, event.Filter{Types: []string{event.TypeChannelError}})
+	if len(errs) != 2 {
+		t.Fatalf("mutual channel failure must stay bounded at 2 events, got %d: %+v", len(errs), errs)
+	}
+	if errs[0].Metadata["channel"] != "a" || errs[0].Metadata["event_type"] != event.TypeInstruction {
+		t.Errorf("first channel.error = %+v", errs[0].Metadata)
+	}
+	if errs[1].Metadata["channel"] != "b" || errs[1].Metadata["event_type"] != event.TypeChannelError {
+		t.Errorf("second channel.error = %+v", errs[1].Metadata)
+	}
+}
+
 func TestDispatcher_MultiChannelFanOut(t *testing.T) {
 	log := eventlog.NewStore(t.TempDir())
 	sock, recv := startFakeSocket(t)

@@ -69,6 +69,15 @@ uses    = "delivery"
 include = ["plect.instruction", "plect.node.result"]
 ```
 
+A channel's own delivery failure produces a `plect.channel.error` event
+(`events.md`), which `include` can select like any other event type — a
+workflow can relay one channel's failures to a second, independent channel.
+Delivery of a `plect.channel.error` skips only the channel whose failure it
+records, so that channel never loops on its own failure; a `plect.channel.error`
+recording the failure of relaying another `plect.channel.error` is never
+delivered to any channel, so two channels erroring at each other cannot
+ping-pong.
+
 ## Parameters
 
 `[<id>.input_schema]` declares the channel's parameters per key: a `type`, a

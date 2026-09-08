@@ -148,7 +148,11 @@ func ChannelValidationErrorEvent(session, workflowID string, cause error) event.
 
 // ChannelErrorEvent builds the plect.channel.error event a worker appends after
 // exhausting retries. Metadata (channel/event_id/attempts) lets a reader trace
-// the failure; it is never a channel `include` target, so it cannot loop.
+// the failure and lets the dispatcher scope relay: `channel` names the
+// channel whose own delivery this records, so a relay can exclude it without
+// excluding every other channel; `event_type` carries orig's type so a
+// relay can tell a channel.error about an ordinary event apart from one
+// about another channel.error (the mutual-failure case).
 func ChannelErrorEvent(orig event.Event, channelName string, attempts int, cause error) event.Event {
 	reason := ""
 	if cause != nil {
@@ -162,9 +166,10 @@ func ChannelErrorEvent(orig event.Event, channelName string, attempts int, cause
 		Summary:     fmt.Sprintf("event channel %s failed after %d attempts", channelName, attempts),
 		Body:        fmt.Sprintf("failed to deliver %s to channel %s: %s", orig.Type, channelName, reason),
 		Metadata: map[string]string{
-			"channel":  channelName,
-			"event_id": orig.ID,
-			"attempts": strconv.Itoa(attempts),
+			"channel":    channelName,
+			"event_id":   orig.ID,
+			"attempts":   strconv.Itoa(attempts),
+			"event_type": orig.Type,
 		},
 	}
 }
