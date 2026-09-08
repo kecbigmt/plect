@@ -159,7 +159,7 @@ classifies every `_json` column by its owning declaration:
 | `session_channel_health` | `(session_id, kind)` primary key; session foreign key; `kind` CHECK IN `validation`/`delivery` | consecutive failures, first/last failure time, last channel/error, escalation time | `Session.ChannelValidationHealth`/`ChannelDeliveryHealth` |
 | `up_reservations` | `child_session_name` primary key; nullable `parent_session_name`, `virtual_root`, `pid`, `reserved_at` | none | `state.json` `up_reservations` |
 | `events` | `id` primary key; `(session_id, sequence)` unique and references `sessions(id)`; `direction` CHECK IN `inbound`/`outbound`/`internal`; `metadata_json` CHECK `json_valid` | type, source, direction, summary, body, metadata, and recorded time | each `log.jsonl` record |
-| `event_cursors` | `(session_id, kind)` primary key and session foreign key (`ON DELETE CASCADE`); `kind` CHECK IN `delivery`/`tick`/`heartbeat`; `next_sequence` | none | `.cursor.<consumer>` |
+| `event_cursors` | `(session_id, kind)` primary key and session foreign key (`ON DELETE CASCADE`); `kind` CHECK IN `delivery`/`tick`/`heartbeat`/`forward`; `next_sequence` | none | `.cursor.<consumer>` |
 
 ### Stays file-based after cutover
 
@@ -534,7 +534,7 @@ CREATE INDEX events_session_id_type_sequence_idx ON events(session_id, type, seq
 
 CREATE TABLE event_cursors (
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    kind TEXT NOT NULL CHECK (kind IN ('delivery', 'tick', 'heartbeat')),
+    kind TEXT NOT NULL CHECK (kind IN ('delivery', 'tick', 'heartbeat', 'forward')),
     next_sequence INTEGER NOT NULL CHECK (next_sequence >= 0),
     PRIMARY KEY (session_id, kind)
 );

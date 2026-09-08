@@ -11,8 +11,8 @@ import (
 )
 
 // seedDownSession puts a session with no run-scoped node at all (down, not
-// destroyed — resourceforward's own tests never need it up) and, when
-// parent is non-empty, parents it to that session.
+// destroyed — this file's own tests never need it up) and, when parent is
+// non-empty, parents it to that session.
 func seedDownSession(t *testing.T, store *state.Store, name, resourceID, parent string) {
 	t.Helper()
 	now := time.Now()
