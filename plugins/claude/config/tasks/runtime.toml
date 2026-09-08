@@ -38,6 +38,9 @@ scope = "run"
 #                  fixed short window to write that file even though claude
 #                  itself did come up, so raise this rather than treat a
 #                  live-but-slow launch as a failure.
+#   publish_events — core events to publish ("message" and/or
+#                  "message_delta"). Default ["message"]. See the README's
+#                  Turn Reporting section for the hook mapping and contract.
 #
 # Every value the script needs arrives through the binding transport, so
 # nothing below is spliced into this source and no value can become part of
@@ -133,15 +136,28 @@ SKIP_BYPASS_WARNING=false
 
 HOOKS=$(mktemp "${TMPDIR:-/tmp}/plect-hooks.XXXXXX")
 mv "$HOOKS" "$HOOKS.json" && HOOKS="$HOOKS.json"
-jq -nc --arg activity "$activity_bin" --argjson skip_bypass_warning "$SKIP_BYPASS_WARNING" '
+# Shell literals, not jq output round-tripped through --argjson, so a
+# malformed or empty publish_events falls through to "false" here rather
+# than breaking the jq call below.
+HAS_MESSAGE=false
+printf '%s' "$publish_events" | jq -e 'any(.[]?; . == "message")' >/dev/null 2>&1 && HAS_MESSAGE=true
+HAS_MESSAGE_DELTA=false
+printf '%s' "$publish_events" | jq -e 'any(.[]?; . == "message_delta")' >/dev/null 2>&1 && HAS_MESSAGE_DELTA=true
+jq -nc --arg activity "$activity_bin" --argjson has_message "$HAS_MESSAGE" --argjson has_message_delta "$HAS_MESSAGE_DELTA" --argjson skip_bypass_warning "$SKIP_BYPASS_WARNING" '
   {
-    hooks: {
-      UserPromptSubmit: [{hooks: [{type: "command", command: ($activity + " working")}]}],
-      PreToolUse:       [{hooks: [{type: "command", command: ($activity + " working")}]}],
-      Stop:             [{hooks: [{type: "command", command: ($activity + " waiting")}]}]
-    }
+    hooks: (
+      {
+        UserPromptSubmit: [{hooks: [{type: "command", command: ($activity + " working")}]}],
+        PreToolUse:       [{hooks: [{type: "command", command: ($activity + " working")}]}],
+        Stop: [{hooks: [{type: "command", command: ($activity + " waiting")}]
+                       + (if $has_message then [{type: "command", command: ($activity + " reply")}] else [] end)}]
+      }
+      + (if $has_message_delta then
+           {MessageDisplay: [{hooks: [{type: "command", command: ($activity + " message_display")}]}]}
+         else {} end)
+    )
   } + (if $skip_bypass_warning then {skipDangerousModePermissionPrompt: true} else {} end)
-' > "$HOOKS"
+' > "$HOOKS" || exit 1
 
 # PLECT_SESSION_NAME scopes runtime commands to this session: subscribe uses
 # it as the subscriber, and create/up use it as the default parent for
@@ -290,6 +306,7 @@ launch_env          = { from = "inputs.launch_env", optional = true }
 mcp_servers         = { from = "inputs.mcp_servers", optional = true }
 path_prepend        = { from = "inputs.path_prepend", optional = true }
 launch_timeout      = { from = "inputs.launch_timeout", default = "120s" }
+publish_events      = { json = { from = "inputs.publish_events", default = ["message"] } }
 activity_bin        = { bin = "claude-agent-activity" }
 mcp_servers_bin     = { bin = "claude-mcp-servers" }
 channel_server_bin  = { bin = "channel-server" }
@@ -415,6 +432,9 @@ path_prepend = { type = "string", pattern = "^[A-Za-z0-9_./:-]*$" }
 # effective default of 120s is applied by this effect's own setup.bind
 # (`default = "120s"` on the launch_timeout binding), not by this key.
 launch_timeout = { type = "string", pattern = "^[1-9][0-9]*s$", default = "120s" }
+# publish_events: the effective default of ["message"] is applied by this
+# effect's own setup.bind (the `json` binding's `default`), not by this key.
+publish_events = { type = "array", items = { type = "string", enum = ["message", "message_delta"] }, default = ["message"] }
 
 [runtime.outputs_schema]
 type     = "object"

@@ -1,18 +1,23 @@
 #!/usr/bin/env bash
 # Claude Code turn-boundary activity: the record half is a hook, the read
 # half is this task's `[health].activity` probe, so one executable owns both
-# ends of one fingerprint format.
+# ends of one fingerprint format. It also owns the turn-reporting hooks that
+# publish an agent's own text as the core plect.message / plect.message_delta
+# events: plect.message is canonical and always emitted once per message_id
+# (deltas are only a preview) — same one-executable reason.
 #
 # Usage:
-#   claude-agent-activity working|waiting   # hook; session from $PLECT_SESSION_NAME
+#   claude-agent-activity working|waiting   # activity hook; session from $PLECT_SESSION_NAME
+#   claude-agent-activity reply             # Stop reporting hook; publishes plect.message
+#   claude-agent-activity message_display   # MessageDisplay reporting hook; publishes plect.message_delta, then plect.message on its final delta
 #   claude-agent-activity probe <session>   # activity probe; writes the envelope
-#   claude-agent-activity reset <session>   # drop the record (setup/cleanup)
+#   claude-agent-activity reset <session>   # drop the record and any buffered messages (setup/cleanup)
 #
-# The hook path reads the hook event JSON from stdin (only hook_event_name is
-# used) and is fire-and-forget by design: a failure here must never fail the
-# agent's turn, so every hook exit path is 0. The probe path is not
-# fire-and-forget — a probe that cannot read its record must exit non-zero so
-# core reports a broken probe rather than reading it as a quiet surface.
+# The hook paths read the hook event JSON from stdin and are fire-and-forget
+# by design: a failure here must never fail the agent's turn, so every hook
+# exit path is 0. The probe path is not fire-and-forget — a probe that
+# cannot read its record must exit non-zero so core reports a broken probe
+# rather than reading it as a quiet surface.
 
 set -u
 
@@ -21,6 +26,36 @@ set -u
 record_path() {
   local dir="${XDG_STATE_HOME:-$HOME/.local/state}/plect/claude-activity"
   printf '%s/%s.json' "$dir" "$(printf '%s' "$1" | tr '/' '_')"
+}
+
+# MessageDisplay flushes one message's text across several hook invocations,
+# each its own process, so the running text is buffered on disk keyed by
+# message_id rather than kept in memory.
+messages_dir() {
+  local dir="${XDG_STATE_HOME:-$HOME/.local/state}/plect/claude-activity"
+  printf '%s/%s.messages' "$dir" "$(printf '%s' "$1" | tr '/' '_')"
+}
+
+# last_emitted_path names the marker MessageDisplay leaves behind when its
+# final delta already published this turn's plect.message: Stop's own hook
+# invocation reads and consumes it to skip publishing a second one for the
+# same text, since Stop's payload carries no message_id to compare against.
+last_emitted_path() {
+  local dir="${XDG_STATE_HOME:-$HOME/.local/state}/plect/claude-activity"
+  printf '%s/%s.last-message-id' "$dir" "$(printf '%s' "$1" | tr '/' '_')"
+}
+
+# publish_report fires the same event-shape rule every reporting hook shares:
+# empty text publishes nothing, and a non-empty one goes out with a
+# first-line summary. Never fails the caller — a publish failure is silently
+# swallowed, per the fire-and-forget contract these hooks operate under.
+publish_report() {
+  local event_type="$1" text="$2" firstline
+  shift 2
+  [ -n "$text" ] || return 0
+  firstline="$(printf '%s' "$text" | head -n 1)"
+  plect event publish "$PLECT_SESSION_NAME" --type "$event_type" --summary "${firstline:0:120}" --body "$text" "$@" >/dev/null 2>&1
+  return 0
 }
 
 case "${1:-}" in
@@ -36,7 +71,83 @@ case "${1:-}" in
     ;;
   reset)
     session="${2:-}"
-    [ -n "$session" ] && rm -f "$(record_path "$session")"
+    if [ -n "$session" ]; then
+      rm -f "$(record_path "$session")" "$(last_emitted_path "$session")"
+      rm -rf "$(messages_dir "$session")"
+    fi
+    exit 0
+    ;;
+  reply)
+    [ -n "${PLECT_SESSION_NAME:-}" ] || exit 0
+    # last_assistant_message is documented on Stop/SubagentStop specifically
+    # so a hook never needs to parse the transcript file, which is written
+    # asynchronously and can lag the turn that just ended. prompt_id is
+    # Stop's name for the same per-turn correlation id MessageDisplay calls
+    # turn_id.
+    #
+    # message is extracted by its own jq call against the captured payload,
+    # not joined with turn_id by a separator and split with `read`: a real
+    # assistant message routinely contains newlines, and `read` treats an
+    # embedded newline as its own line terminator, which would silently
+    # truncate a joined multi-field read at the message's first line.
+    payload="$(cat)"
+    message="$(printf '%s' "$payload" | jq -r '.last_assistant_message // empty' 2>/dev/null)" || message=""
+    [ -n "$message" ] || exit 0
+
+    # plect.message is emitted exactly once per message_id: when
+    # MessageDisplay is enabled, its final delta already published this
+    # turn's plect.message (full text known at that point), and consuming
+    # the marker here is this hook's only way to tell — Stop's own payload
+    # carries no message_id.
+    last_emitted="$(last_emitted_path "$PLECT_SESSION_NAME")"
+    if [ -s "$last_emitted" ]; then
+      rm -f "$last_emitted" 2>/dev/null
+      exit 0
+    fi
+
+    turn_id="$(printf '%s' "$payload" | jq -r '.prompt_id // empty' 2>/dev/null)" || turn_id=""
+    # Stop exposes no message_id of its own (unlike MessageDisplay), so one
+    # is minted here.
+    meta=(--meta "message_id=$(uuidgen)" --meta "message_id_origin=synthetic" --meta "role=assistant" --meta "source=claude")
+    [ -n "$turn_id" ] && meta+=(--meta "turn_id=$turn_id")
+    publish_report plect.message "$message" "${meta[@]}"
+    exit 0
+    ;;
+  message_display)
+    [ -n "${PLECT_SESSION_NAME:-}" ] || exit 0
+    # A delta event's body is that delta alone, not the message accumulated so
+    # far: a consumer that wants a live preview concatenates deltas itself. delta is
+    # extracted on its own for the reason given above the reply case: it can
+    # contain newlines a joined multi-field read would truncate on.
+    payload="$(cat)"
+    message_id="$(printf '%s' "$payload" | jq -r '.message_id // empty' 2>/dev/null)" || message_id=""
+    # No message_id means this payload didn't parse as the shape this hook
+    # expects — nothing to buffer or correlate the delta against.
+    [ -n "$message_id" ] || exit 0
+    delta="$(printf '%s' "$payload" | jq -r '.delta // empty' 2>/dev/null)" || delta=""
+    turn_id="$(printf '%s' "$payload" | jq -r '.turn_id // empty' 2>/dev/null)" || turn_id=""
+    index="$(printf '%s' "$payload" | jq -r '(.index // 0) | tostring' 2>/dev/null)" || index="0"
+    final="$(printf '%s' "$payload" | jq -r '(.final // false) | tostring' 2>/dev/null)" || final="false"
+
+    buf_dir="$(messages_dir "$PLECT_SESSION_NAME")"
+    mkdir -p "$buf_dir" 2>/dev/null
+    buf_file="$buf_dir/$message_id"
+    [ -n "$delta" ] && printf '%s' "$delta" >> "$buf_file" 2>/dev/null
+
+    meta=(--meta "message_id=$message_id" --meta "message_id_origin=native" --meta "kind=text" --meta "index=$index" --meta "final=$final" --meta "source=claude")
+    [ -n "$turn_id" ] && meta+=(--meta "turn_id=$turn_id")
+    publish_report plect.message_delta "$delta" "${meta[@]}"
+
+    if [ "$final" = "true" ]; then
+      full="$(cat "$buf_file" 2>/dev/null)"
+      rm -f "$buf_file" 2>/dev/null
+      if [ -n "$full" ]; then
+        meta=(--meta "message_id=$message_id" --meta "message_id_origin=native" --meta "role=assistant" --meta "source=claude")
+        [ -n "$turn_id" ] && meta+=(--meta "turn_id=$turn_id")
+        publish_report plect.message "$full" "${meta[@]}"
+        printf '%s' "$message_id" > "$(last_emitted_path "$PLECT_SESSION_NAME")" 2>/dev/null
+      fi
+    fi
     exit 0
     ;;
 esac
@@ -47,7 +158,7 @@ if [ -z "${PLECT_SESSION_NAME:-}" ] || [ -z "$activity" ]; then
   exit 0
 fi
 
-parsed="$(jq -r 'def clean: tostring | gsub("[\n\t\r]+"; " "); [(.hook_event_name // "" | clean), (.tool_name // "" | clean), (.tool_input.command // "" | clean), ((.tool_input.file_path // .tool_input.path // .tool_input.notebook_path // "") | clean)] | join("\u001f")' 2>/dev/null)" || parsed=$'\037\037\037'
+parsed="$(jq -r 'def clean: tostring | gsub("[\n\t\r]+"; " "); [(.hook_event_name // "" | clean), (.tool_name // "" | clean), (.tool_input.command // "" | clean), ((.tool_input.file_path // .tool_input.path // .tool_input.notebook_path // "") | clean)] | join("")' 2>/dev/null)" || parsed=$'\037\037\037'
 IFS=$'\037' read -r event tool command target_path <<EOF
 $parsed
 EOF

@@ -24,16 +24,8 @@ func newPermissionRequestNotification(requestID string) mcp.JSONRPCNotification 
 }
 
 type mockSender struct {
-	mu      sync.Mutex
-	replies []string
-	perms   []string
-}
-
-func (m *mockSender) SendReply(text string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.replies = append(m.replies, text)
-	return nil
+	mu    sync.Mutex
+	perms []string
 }
 
 func (m *mockSender) SendPermissionPrompt(text string) error {
@@ -59,25 +51,6 @@ func TestChannelServer_OnMessage_ForwardsToMCP(t *testing.T) {
 		Text:     "hello",
 		ThreadTS: "1234567890.123456",
 	})
-}
-
-// The reply tool hands the agent's text to the sender as written: Slack
-// renders mrkdwn, and wrapping every reply in a code fence turned readable
-// replies into monospace blocks.
-func TestChannelServer_Reply_SendsTextVerbatim(t *testing.T) {
-	sender := &mockSender{}
-	cs := NewChannelServer(sender)
-
-	const text = "*done*: 2 files changed\n• a\n• b"
-	var req mcp.CallToolRequest
-	req.Params.Arguments = map[string]any{"text": text}
-	res, err := cs.handleReply(context.Background(), req)
-	if err != nil || res == nil || res.IsError {
-		t.Fatalf("handleReply: res=%+v err=%v", res, err)
-	}
-	if len(sender.replies) != 1 || sender.replies[0] != text {
-		t.Fatalf("SendReply got %q, want exactly %q", sender.replies, text)
-	}
 }
 
 func TestChannelServer_PermissionVerdict(t *testing.T) {

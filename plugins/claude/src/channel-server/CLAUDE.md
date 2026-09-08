@@ -6,7 +6,11 @@ Generic message delivery to Claude Code. **It has no knowledge of message source
 
 - Receives messages from external adapters over a Unix socket
 - Pushes messages to Claude Code via MCP `claude/channel`
-- Replies via the `reply` tool; relays approve/deny via `claude/channel/permission`
+- Relays approve/deny via `claude/channel/permission`. It exposes no reply
+  tool: the agent's turn-boundary hooks (`claude-agent-activity`) publish the
+  agent's own text as `plect.message` / `plect.message_delta` events
+  directly, and delivery to the message source happens from there, not
+  through this server.
 
 ## Dependency rules
 
@@ -27,7 +31,7 @@ Framing over the Unix socket is a 4-byte big-endian length prefix + JSON payload
 |---|---|---|
 | `register` | adapter → server | Connection registration |
 | `message` | adapter → server | Text message delivery |
-| `reply` | server → adapter | Reply |
+| `reply` | server → adapter | Reply (defined for the wire protocol; this server no longer sends one — see Responsibility above) |
 | `permission` | server → adapter | Permission prompt |
 
 ## Testing

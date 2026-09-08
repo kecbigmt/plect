@@ -7,8 +7,8 @@ An MCP channel server launched as a Claude Code subprocess. It has no dependency
 1. Claude Code starts it via `--dangerously-load-development-channels server:channel-server`
 2. channel-server connects to the Unix socket specified by `CHANNEL_SOCKET_PATH`
 3. An adapter (e.g. slack-adapter) relays messages from the other end of the socket
-4. Messages are pushed to Claude Code via the MCP `claude/channel` capability
-5. Replies go through the `reply` tool; approve/deny is relayed via `claude/channel/permission`
+4. Messages are pushed to Claude Code via the MCP `claude/channel` capability; approve/deny is relayed via `claude/channel/permission`
+5. channel-server exposes no reply tool: the agent's turn-boundary hooks (`claude-agent-activity`, registered by the `runtime` task) publish the agent's own text as plect events directly, without going through this server
 
 ```
 Claude Code

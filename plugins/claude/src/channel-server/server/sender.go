@@ -1,7 +1,8 @@
 package server
 
-// MessageSender abstracts sending replies and permission prompts back to the message source.
+// MessageSender abstracts sending permission prompts back to the message source.
+// The agent's own replies are no longer a sender responsibility: the Stop hook
+// publishes them as events directly, bypassing this interface entirely.
 type MessageSender interface {
-	SendReply(text string) error
 	SendPermissionPrompt(text string) error
 }
