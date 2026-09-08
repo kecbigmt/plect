@@ -76,13 +76,30 @@ run_report() {
 
 # reply: a non-empty last_assistant_message publishes exactly one
 # plect.message event, summary truncated to its first line, message_id
-# minted (message_id_origin=synthetic) since Stop carries none of its own.
+# deterministic (message_id_origin=synthetic) from turn_id (Stop's
+# prompt_id), not a random one.
 got="$(run_report reply '{"hook_event_name":"Stop","last_assistant_message":"line one\nline two","prompt_id":"turn-abc"}')"
-case "$got" in
-  'event publish owner/repo-1 --type plect.message --summary line one --body line one'$'\n''line two --meta message_id='*' --meta message_id_origin=synthetic --meta role=assistant --meta source=claude --meta turn_id=turn-abc') ;;
-  *) printf 'reply text = %q\n' "$got" >&2; exit 1 ;;
-esac
+want='event publish owner/repo-1 --type plect.message --summary line one --body line one
+line two --meta message_id=owner/repo-1/turn-abc --meta message_id_origin=synthetic --meta role=assistant --meta source=claude --meta turn_id=turn-abc'
+[ "$got" = "$want" ] || { printf 'reply text = %q, want %q\n' "$got" "$want" >&2; exit 1; }
 [ "$(wc -l < "$tmp/calls")" -eq 2 ] || { printf 'reply published more than once: %s\n' "$got" >&2; exit 1; }
+
+# reply: the same turn_id always mints the same message_id (deterministic,
+# not a fresh random one on every call).
+got2="$(run_report reply '{"hook_event_name":"Stop","last_assistant_message":"a different final answer","prompt_id":"turn-abc"}')"
+case "$got2" in
+  *"message_id=owner/repo-1/turn-abc"*) ;;
+  *) printf 'reply message_id should be deterministic per turn_id, got: %s\n' "$got2" >&2; exit 1 ;;
+esac
+
+# reply: a trailing newline in last_assistant_message survives byte for
+# byte -- command substitution silently strips trailing newlines unless
+# guarded against, which would corrupt the canonical message text.
+got="$(run_report reply '{"hook_event_name":"Stop","last_assistant_message":"paragraph one\n\n","prompt_id":"turn-nl"}')"
+want='event publish owner/repo-1 --type plect.message --summary paragraph one --body paragraph one
+
+ --meta message_id=owner/repo-1/turn-nl --meta message_id_origin=synthetic --meta role=assistant --meta source=claude --meta turn_id=turn-nl'
+[ "$got" = "$want" ] || { printf 'reply trailing-newline text = %q, want %q\n' "$got" "$want" >&2; exit 1; }
 
 # reply: an empty last_assistant_message publishes nothing.
 got="$(run_report reply '{"hook_event_name":"Stop","last_assistant_message":""}')"
@@ -93,10 +110,20 @@ got="$(run_report reply '{"hook_event_name":"Stop","last_assistant_message":""}'
 got="$(run_report reply '{"hook_event_name":"Stop"}')"
 [ -z "$got" ] || { printf 'reply with no field should publish nothing, got: %s\n' "$got" >&2; exit 1; }
 
-# reply: no prompt_id means no turn_id metadata, rather than an empty one.
+# reply: no prompt_id falls back to a deterministic per-session counter
+# (never a random id), still distinct call to call.
 got="$(run_report reply '{"hook_event_name":"Stop","last_assistant_message":"hi"}')"
 case "$got" in
+  *"message_id=owner/repo-1/reply-0"*) ;;
+  *) printf 'reply with no prompt_id should use the reply-seq fallback, got: %s\n' "$got" >&2; exit 1 ;;
+esac
+case "$got" in
   *turn_id*) printf 'reply with no prompt_id should carry no turn_id, got: %s\n' "$got" >&2; exit 1 ;;
+esac
+got="$(run_report reply '{"hook_event_name":"Stop","last_assistant_message":"hi again"}')"
+case "$got" in
+  *"message_id=owner/repo-1/reply-1"*) ;;
+  *) printf 'reply fallback counter should advance on the next call, got: %s\n' "$got" >&2; exit 1 ;;
 esac
 
 # reply: plect being unreachable never fails the turn.
@@ -109,23 +136,40 @@ PATH="$(dirname "$(command -v jq)")" \
 
 # message_display: a non-final delta publishes exactly one
 # plect.message_delta event whose body is that delta alone, not any running
-# concatenation, carrying message_id/index/final/turn_id as metadata — and
-# no plect.message yet, since the message isn't finished.
-got="$(run_report message_display '{"hook_event_name":"MessageDisplay","message_id":"msg-1","turn_id":"turn-abc","index":0,"final":false,"delta":"Hello "}')"
+# concatenation, carrying message_id/index/final/turn_id as metadata -- and
+# no plect.message yet, since the message isn't finished. index is this
+# hook's own counter (0 for the first delta of a message_id), not Claude's
+# own .index field, which this payload sets to an unrelated 99 to prove
+# that.
+got="$(run_report message_display '{"hook_event_name":"MessageDisplay","message_id":"msg-1","turn_id":"turn-abc","index":99,"final":false,"delta":"Hello "}')"
 want='event publish owner/repo-1 --type plect.message_delta --summary Hello  --body Hello  --meta message_id=msg-1 --meta message_id_origin=native --meta kind=text --meta index=0 --meta final=false --meta source=claude --meta turn_id=turn-abc'
 [ "$got" = "$want" ] || { printf 'message_display (non-final) = %q, want %q\n' "$got" "$want" >&2; exit 1; }
 
 # message_display: the final delta for the same message_id publishes its own
-# plect.message_delta, then a plect.message whose body is every delta seen
-# for that message_id concatenated, not just the final one.
-got="$(run_report message_display '{"hook_event_name":"MessageDisplay","message_id":"msg-1","turn_id":"turn-abc","index":1,"final":true,"delta":"world"}')"
+# plect.message_delta with the counter advanced to 1 (regardless of this
+# payload's own out-of-sequence .index of 501), then a plect.message whose
+# body is every delta seen for that message_id concatenated, not just the
+# final one.
+got="$(run_report message_display '{"hook_event_name":"MessageDisplay","message_id":"msg-1","turn_id":"turn-abc","index":501,"final":true,"delta":"world"}')"
 want='event publish owner/repo-1 --type plect.message_delta --summary world --body world --meta message_id=msg-1 --meta message_id_origin=native --meta kind=text --meta index=1 --meta final=true --meta source=claude --meta turn_id=turn-abc
 event publish owner/repo-1 --type plect.message --summary Hello world --body Hello world --meta message_id=msg-1 --meta message_id_origin=native --meta role=assistant --meta source=claude --meta turn_id=turn-abc'
 [ "$got" = "$want" ] || { printf 'message_display (final) = %q, want %q\n' "$got" "$want" >&2; exit 1; }
 
+# message_display: a delta ending in newlines survives byte for byte once
+# buffered and concatenated into the final plect.message -- the same
+# command-substitution truncation risk as reply's last_assistant_message,
+# but across a buffer file this time (`cat` inside `$(...)` loses it too).
+got="$(run_report message_display '{"hook_event_name":"MessageDisplay","message_id":"msg-nl","index":0,"final":false,"delta":"para one\n\n"}')"
+got="$(run_report message_display '{"hook_event_name":"MessageDisplay","message_id":"msg-nl","index":1,"final":true,"delta":"para two"}')"
+want='event publish owner/repo-1 --type plect.message_delta --summary para two --body para two --meta message_id=msg-nl --meta message_id_origin=native --meta kind=text --meta index=1 --meta final=true --meta source=claude
+event publish owner/repo-1 --type plect.message --summary para one --body para one
+
+para two --meta message_id=msg-nl --meta message_id_origin=native --meta role=assistant --meta source=claude'
+[ "$got" = "$want" ] || { printf 'message_display trailing-newline text = %q, want %q\n' "$got" "$want" >&2; exit 1; }
+
 # message_display: that final delta leaves a marker so a same-turn Stop does
 # not publish a second plect.message for text MessageDisplay already covered
-# — and Stop consumes (clears) the marker so the next turn is unaffected.
+# -- and Stop consumes (clears) the marker so the next turn is unaffected.
 got="$(run_report reply '{"hook_event_name":"Stop","last_assistant_message":"Hello world","prompt_id":"turn-abc"}')"
 [ -z "$got" ] || { printf 'Stop after a MessageDisplay final should publish nothing, got: %s\n' "$got" >&2; exit 1; }
 got="$(run_report reply '{"hook_event_name":"Stop","last_assistant_message":"next turn","prompt_id":"turn-def"}')"
@@ -135,10 +179,18 @@ case "$got" in
 esac
 
 # message_display: no turn_id means no turn_id metadata, rather than an
-# empty one — on both the delta and the message it completes.
+# empty one -- on both the delta and the message it completes.
 got="$(run_report message_display '{"hook_event_name":"MessageDisplay","message_id":"msg-2","index":0,"final":true,"delta":"hi"}')"
 case "$got" in
   *turn_id*) printf 'message_display with no turn_id should carry no turn_id, got: %s\n' "$got" >&2; exit 1 ;;
+esac
+
+# message_display: a distinct message_id starts its own index count back at
+# 0, independent of any other message_id's count.
+got="$(run_report message_display '{"hook_event_name":"MessageDisplay","message_id":"msg-fresh","index":7,"final":false,"delta":"x"}')"
+case "$got" in
+  *"index=0"*) ;;
+  *) printf 'a fresh message_id should start its index counter at 0, got: %s\n' "$got" >&2; exit 1 ;;
 esac
 
 # message_display: an empty delta publishes no plect.message_delta (empty
@@ -159,15 +211,21 @@ PATH="$(dirname "$(command -v jq)")" \
 "$subject" message_display <<<'{"hook_event_name":"MessageDisplay","message_id":"msg-4","index":0,"final":true,"delta":"hi"}'
 [ $? -eq 0 ] || { echo "message_display must exit 0 even when plect is unreachable" >&2; exit 1; }
 
-# reset also drops the message-buffer directory and the last-emitted marker,
-# so a crashed turn cannot leak partial text or a stale suppression into the
-# next run.
+# reset also drops the message-buffer directory (including a message's own
+# index-counter file), the last-emitted marker, and the reply-seq counter,
+# so a crashed turn cannot leak partial text or a stale suppression into
+# the next run, and a resumed session doesn't inherit a stale reply
+# fallback count either.
 run_report message_display '{"hook_event_name":"MessageDisplay","message_id":"msg-5","index":0,"final":false,"delta":"orphaned"}' >/dev/null
 [ -e "$tmp/state/plect/claude-activity/owner_repo-1.messages/msg-5" ] || { echo "expected an orphaned buffer file before reset" >&2; exit 1; }
+[ -e "$tmp/state/plect/claude-activity/owner_repo-1.messages/msg-5.index" ] || { echo "expected an orphaned index file before reset" >&2; exit 1; }
 run_report message_display '{"hook_event_name":"MessageDisplay","message_id":"msg-6","index":0,"final":true,"delta":"done"}' >/dev/null
 [ -s "$tmp/state/plect/claude-activity/owner_repo-1.last-message-id" ] || { echo "expected a last-message-id marker before reset" >&2; exit 1; }
+run_report reply '{"hook_event_name":"Stop","last_assistant_message":"no prompt_id here either"}' >/dev/null
+[ -s "$tmp/state/plect/claude-activity/owner_repo-1.reply-seq" ] || { echo "expected a reply-seq counter file before reset" >&2; exit 1; }
 XDG_STATE_HOME="$tmp/state" "$subject" reset "owner/repo-1"
 [ ! -e "$tmp/state/plect/claude-activity/owner_repo-1.messages" ] || { echo "reset must remove the session's message buffer directory" >&2; exit 1; }
 [ ! -e "$tmp/state/plect/claude-activity/owner_repo-1.last-message-id" ] || { echo "reset must remove the session's last-message-id marker" >&2; exit 1; }
+[ ! -e "$tmp/state/plect/claude-activity/owner_repo-1.reply-seq" ] || { echo "reset must remove the session's reply-seq counter" >&2; exit 1; }
 
 echo "claude-agent-activity selftest passed"

@@ -56,9 +56,11 @@ Code hooks that installs is this plugin's own concern:
   `MessageDisplay`. Both may be requested together.
 - `plect.message` is canonical: it is always emitted, exactly once per
   `message_id`. With `"message"` alone, it comes from that turn's
-  `last_assistant_message`, with a minted `message_id`
-  (`message_id_origin = synthetic`, since Stop exposes none of its own) and
-  `turn_id` from Stop's `prompt_id`, when present. With `"message_delta"`
+  `last_assistant_message`, with a deterministic `message_id`
+  (`message_id_origin = synthetic` — Stop's `prompt_id` when present,
+  since that already identifies the turn uniquely within the session; a
+  per-session counter on the one boundary Stop exposes no `prompt_id` for
+  at all) and `turn_id` from that same `prompt_id`. With `"message_delta"`
   also requested, it is published once a message's final delta arrives
   (full text now known), carrying that delta's own `message_id`
   (`message_id_origin = native`) and `turn_id`; `claude-agent-activity`
@@ -69,7 +71,10 @@ Code hooks that installs is this plugin's own concern:
 - `"message_delta"` also publishes `plect.message_delta` once per streamed
   delta, as a preview: body is that delta alone, metadata carries
   `message_id`, `message_id_origin = native`, `kind = text`, `turn_id`,
-  `index`, `final`, `source = claude`.
+  `index`, `final`, `source = claude`. `index` is this hook's own counter
+  per `message_id` (0-based, one per delta actually published), not
+  Claude's own `index` field from the hook payload, which a future harness
+  could give a different meaning to (e.g. a block index).
 - An empty message or delta publishes nothing. A publish failure (`plect`
   unreachable) never blocks or delays the agent's turn — every hook exit
   path is 0.

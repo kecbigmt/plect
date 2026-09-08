@@ -30,7 +30,8 @@ record_path() {
 
 # MessageDisplay flushes one message's text across several hook invocations,
 # each its own process, so the running text is buffered on disk keyed by
-# message_id rather than kept in memory.
+# message_id rather than kept in memory. A companion "<message_id>.index"
+# file under the same directory backs the emitter-owned delta counter.
 messages_dir() {
   local dir="${XDG_STATE_HOME:-$HOME/.local/state}/plect/claude-activity"
   printf '%s/%s.messages' "$dir" "$(printf '%s' "$1" | tr '/' '_')"
@@ -45,6 +46,14 @@ last_emitted_path() {
   printf '%s/%s.last-message-id' "$dir" "$(printf '%s' "$1" | tr '/' '_')"
 }
 
+# reply_seq_path backs the fallback branch of reply's message_id: a counter
+# that keeps the synthetic id deterministic even on the one turn boundary
+# Stop exposes no prompt_id for (before this process's first user input).
+reply_seq_path() {
+  local dir="${XDG_STATE_HOME:-$HOME/.local/state}/plect/claude-activity"
+  printf '%s/%s.reply-seq' "$dir" "$(printf '%s' "$1" | tr '/' '_')"
+}
+
 # publish_report fires the same event-shape rule every reporting hook shares:
 # empty text publishes nothing, and a non-empty one goes out with a
 # first-line summary. Never fails the caller — a publish failure is silently
@@ -56,6 +65,31 @@ publish_report() {
   firstline="$(printf '%s' "$text" | head -n 1)"
   plect event publish "$PLECT_SESSION_NAME" --type "$event_type" --summary "${firstline:0:120}" --body "$text" "$@" >/dev/null 2>&1
   return 0
+}
+
+# jq_field_exact sets $REPLY to one jq filter's raw output byte-for-byte from
+# the captured $payload, including any trailing newlines: a sentinel byte
+# anchors the value's real end, since `$(...)` command substitution strips
+# every trailing newline unconditionally — silently dropping the boundary
+# between one delta ending in a newline and the next once concatenated. This
+# is why it is never called as `x="$(jq_field_exact ...)"`: capturing this
+# function's own stdout would hit that exact same loss one layer further
+# out. Follow the `read`/$REPLY convention instead: call it, then read
+# $REPLY as a plain assignment, which strips nothing.
+jq_field_exact() {
+  local out
+  out="$(printf '%s' "$payload" | jq -j "($1) + \"\u0001\"" 2>/dev/null)" || out=$'\001'
+  REPLY="${out%$'\001'}"
+}
+
+# read_exact_file is jq_field_exact's counterpart for a plain file, and
+# follows the same $REPLY convention for the same reason: `cat` run inside
+# `$(...)` loses a file's own trailing newlines, which would corrupt a
+# message whose last delta ended in one.
+read_exact_file() {
+  local out
+  out="$(cat "$1" 2>/dev/null; printf '\001')"
+  REPLY="${out%$'\001'}"
 }
 
 case "${1:-}" in
@@ -72,7 +106,7 @@ case "${1:-}" in
   reset)
     session="${2:-}"
     if [ -n "$session" ]; then
-      rm -f "$(record_path "$session")" "$(last_emitted_path "$session")"
+      rm -f "$(record_path "$session")" "$(last_emitted_path "$session")" "$(reply_seq_path "$session")"
       rm -rf "$(messages_dir "$session")"
     fi
     exit 0
@@ -83,15 +117,13 @@ case "${1:-}" in
     # so a hook never needs to parse the transcript file, which is written
     # asynchronously and can lag the turn that just ended. prompt_id is
     # Stop's name for the same per-turn correlation id MessageDisplay calls
-    # turn_id.
-    #
-    # message is extracted by its own jq call against the captured payload,
-    # not joined with turn_id by a separator and split with `read`: a real
-    # assistant message routinely contains newlines, and `read` treats an
-    # embedded newline as its own line terminator, which would silently
-    # truncate a joined multi-field read at the message's first line.
+    # turn_id. Extracted via jq_field_exact, not a joined multi-field read:
+    # a real assistant message routinely contains newlines, which both
+    # `read` (its own line terminator) and plain `$(...)` (strips every
+    # trailing one) would corrupt.
     payload="$(cat)"
-    message="$(printf '%s' "$payload" | jq -r '.last_assistant_message // empty' 2>/dev/null)" || message=""
+    jq_field_exact '.last_assistant_message // empty'
+    message="$REPLY"
     [ -n "$message" ] || exit 0
 
     # plect.message is emitted exactly once per message_id: when
@@ -106,32 +138,58 @@ case "${1:-}" in
     fi
 
     turn_id="$(printf '%s' "$payload" | jq -r '.prompt_id // empty' 2>/dev/null)" || turn_id=""
-    # Stop exposes no message_id of its own (unlike MessageDisplay), so one
-    # is minted here.
-    meta=(--meta "message_id=$(uuidgen)" --meta "message_id_origin=synthetic" --meta "role=assistant" --meta "source=claude")
+
+    # message_id is a deterministic synthetic id, per the core contract, not
+    # a random one: turn_id already identifies this turn uniquely within the
+    # session, so it doubles as the id. The counter fallback only matters for
+    # the (practically unreachable) case of Stop firing before any prompt_id
+    # was ever assigned in this process's lifetime.
+    if [ -n "$turn_id" ]; then
+      message_id="$PLECT_SESSION_NAME/$turn_id"
+    else
+      seq_file="$(reply_seq_path "$PLECT_SESSION_NAME")"
+      n="$(cat "$seq_file" 2>/dev/null)"
+      case "$n" in ''|*[!0-9]*) n=0 ;; esac
+      mkdir -p "$(dirname "$seq_file")" 2>/dev/null
+      printf '%s' "$((n + 1))" > "$seq_file" 2>/dev/null
+      message_id="$PLECT_SESSION_NAME/reply-$n"
+    fi
+
+    meta=(--meta "message_id=$message_id" --meta "message_id_origin=synthetic" --meta "role=assistant" --meta "source=claude")
     [ -n "$turn_id" ] && meta+=(--meta "turn_id=$turn_id")
     publish_report plect.message "$message" "${meta[@]}"
     exit 0
     ;;
   message_display)
     [ -n "${PLECT_SESSION_NAME:-}" ] || exit 0
-    # A delta event's body is that delta alone, not the message accumulated so
-    # far: a consumer that wants a live preview concatenates deltas itself. delta is
-    # extracted on its own for the reason given above the reply case: it can
-    # contain newlines a joined multi-field read would truncate on.
     payload="$(cat)"
     message_id="$(printf '%s' "$payload" | jq -r '.message_id // empty' 2>/dev/null)" || message_id=""
     # No message_id means this payload didn't parse as the shape this hook
     # expects — nothing to buffer or correlate the delta against.
     [ -n "$message_id" ] || exit 0
-    delta="$(printf '%s' "$payload" | jq -r '.delta // empty' 2>/dev/null)" || delta=""
+    # A delta event's body is that delta alone, not the message accumulated
+    # so far: a consumer that wants a live preview concatenates deltas
+    # itself. Extracted via jq_field_exact for the reason given above the
+    # reply case: a delta ending in a newline must keep it, both on the wire
+    # and once appended to the buffer file below.
+    jq_field_exact '.delta // empty'
+    delta="$REPLY"
     turn_id="$(printf '%s' "$payload" | jq -r '.turn_id // empty' 2>/dev/null)" || turn_id=""
-    index="$(printf '%s' "$payload" | jq -r '(.index // 0) | tostring' 2>/dev/null)" || index="0"
     final="$(printf '%s' "$payload" | jq -r '(.final // false) | tostring' 2>/dev/null)" || final="false"
 
     buf_dir="$(messages_dir "$PLECT_SESSION_NAME")"
     mkdir -p "$buf_dir" 2>/dev/null
     buf_file="$buf_dir/$message_id"
+    idx_file="$buf_dir/$message_id.index"
+
+    # index is an emitter-owned counter per (message_id, kind), not
+    # Claude's own .index forwarded from the payload: the core contract
+    # reserves the harness's own index for a different, harness-specific
+    # axis (e.g. a block index), so this hook keeps its own.
+    index="$(cat "$idx_file" 2>/dev/null)"
+    case "$index" in ''|*[!0-9]*) index=0 ;; esac
+    printf '%s' "$((index + 1))" > "$idx_file" 2>/dev/null
+
     [ -n "$delta" ] && printf '%s' "$delta" >> "$buf_file" 2>/dev/null
 
     meta=(--meta "message_id=$message_id" --meta "message_id_origin=native" --meta "kind=text" --meta "index=$index" --meta "final=$final" --meta "source=claude")
@@ -139,8 +197,9 @@ case "${1:-}" in
     publish_report plect.message_delta "$delta" "${meta[@]}"
 
     if [ "$final" = "true" ]; then
-      full="$(cat "$buf_file" 2>/dev/null)"
-      rm -f "$buf_file" 2>/dev/null
+      read_exact_file "$buf_file"
+      full="$REPLY"
+      rm -f "$buf_file" "$idx_file" 2>/dev/null
       if [ -n "$full" ]; then
         meta=(--meta "message_id=$message_id" --meta "message_id_origin=native" --meta "role=assistant" --meta "source=claude")
         [ -n "$turn_id" ] && meta+=(--meta "turn_id=$turn_id")
@@ -158,7 +217,7 @@ if [ -z "${PLECT_SESSION_NAME:-}" ] || [ -z "$activity" ]; then
   exit 0
 fi
 
-parsed="$(jq -r 'def clean: tostring | gsub("[\n\t\r]+"; " "); [(.hook_event_name // "" | clean), (.tool_name // "" | clean), (.tool_input.command // "" | clean), ((.tool_input.file_path // .tool_input.path // .tool_input.notebook_path // "") | clean)] | join("")' 2>/dev/null)" || parsed=$'\037\037\037'
+parsed="$(jq -r 'def clean: tostring | gsub("[\n\t\r]+"; " "); [(.hook_event_name // "" | clean), (.tool_name // "" | clean), (.tool_input.command // "" | clean), ((.tool_input.file_path // .tool_input.path // .tool_input.notebook_path // "") | clean)] | join("\u001f")' 2>/dev/null)" || parsed=$'\037\037\037'
 IFS=$'\037' read -r event tool command target_path <<EOF
 $parsed
 EOF
