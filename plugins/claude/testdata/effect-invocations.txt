@@ -14,12 +14,12 @@ call[1]: "claude-mcp-servers"
 call[2]: "claude-agent-activity" "reset" "acme/widget-1"
 call[3]: "mktemp" "<state>/plect-hooks.XXXXXX"
 call[4]: "terminal-pid"
-call[5]: "terminal-send_text" "export PLECT_SESSION_NAME=acme/widget-1; claude --resume 11111111-2222-3333-4444-555555555555 --mcp-config <state>/plect-mcp.json --settings <state>/plect-hooks.json --dangerously-load-development-channels server:channel-server   --disallowedTools AskUserQuestion || claude --session-id 11111111-2222-3333-4444-555555555555 --mcp-config <state>/plect-mcp.json --settings <state>/plect-hooks.json --dangerously-load-development-channels server:channel-server   --disallowedTools AskUserQuestion"
+call[5]: "terminal-send_text" "export PLECT_SESSION_NAME=acme/widget-1; claude --resume 11111111-2222-3333-4444-555555555555 --mcp-config <state>/plect-mcp.json --settings <state>/plect-hooks.json --dangerously-load-development-channels server:channel-server   --permission-mode bypassPermissions --disallowedTools AskUserQuestion || claude --session-id 11111111-2222-3333-4444-555555555555 --mcp-config <state>/plect-mcp.json --settings <state>/plect-hooks.json --dangerously-load-development-channels server:channel-server   --permission-mode bypassPermissions --disallowedTools AskUserQuestion"
 call[6]: "terminal-send_keys" "Enter"
 call[7]: "terminal-send_keys" "Enter"
 outputs: {"hooks_settings":"<state>/plect-hooks.json","mcp_config":"<state>/plect-mcp.json","pid":<pid>,"session_id":"11111111-2222-3333-4444-555555555555","socket_path":"<state>/claude-channel/11111111-2222-3333-4444-555555555555.sock"}
 artifact hooks_settings/:
-{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"<plugin>/scripts/claude-agent-activity working"}]}],"PreToolUse":[{"hooks":[{"type":"command","command":"<plugin>/scripts/claude-agent-activity working"}]}],"Stop":[{"hooks":[{"type":"command","command":"<plugin>/scripts/claude-agent-activity waiting"}]}]}}
+{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"<plugin>/scripts/claude-agent-activity working"}]}],"PreToolUse":[{"hooks":[{"type":"command","command":"<plugin>/scripts/claude-agent-activity working"}]}],"Stop":[{"hooks":[{"type":"command","command":"<plugin>/scripts/claude-agent-activity waiting"}]}]},"skipDangerousModePermissionPrompt":true}
 artifact mcp_config/:
 {
   "mcpServers": {
@@ -50,7 +50,7 @@ call[2]: "claude-mcp-servers"
 call[3]: "claude-agent-activity" "reset" "acme/widget-1"
 call[4]: "mktemp" "<state>/plect-hooks.XXXXXX"
 call[5]: "terminal-pid"
-call[6]: "terminal-send_text" "export PLECT_SESSION_NAME=acme/widget-1; export PLECT_TEAM_CONTEXT='acme'; export PATH=/spy/guard:$PATH; claude --session-id aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee --mcp-config <state>/plect-mcp.json --settings <state>/plect-hooks.json --dangerously-load-development-channels server:channel-server --model opus --effort high --disallowedTools AskUserQuestion"
+call[6]: "terminal-send_text" "export PLECT_SESSION_NAME=acme/widget-1; export PLECT_TEAM_CONTEXT='acme'; export PATH=/spy/guard:$PATH; claude --session-id aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee --mcp-config <state>/plect-mcp.json --settings <state>/plect-hooks.json --dangerously-load-development-channels server:channel-server --model opus --effort high --permission-mode plan --disallowedTools AskUserQuestion"
 call[7]: "terminal-send_keys" "Enter"
 outputs: {"hooks_settings":"<state>/plect-hooks.json","mcp_config":"<state>/plect-mcp.json","pid":<pid>,"session_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","socket_path":"<state>/claude-channel/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.sock"}
 artifact mcp_config/:
@@ -88,11 +88,11 @@ call[2]: "claude-mcp-servers"
 call[3]: "claude-agent-activity" "reset" "acme/widget-1"
 call[4]: "mktemp" "<state>/plect-hooks.XXXXXX"
 call[5]: "terminal-pid"
-call[6]: "terminal-send_text" "export PLECT_SESSION_NAME=acme/widget-1; claude --session-id aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee --mcp-config <state>/plect-mcp.json --settings <state>/plect-hooks.json    --disallowedTools AskUserQuestion"
+call[6]: "terminal-send_text" "export PLECT_SESSION_NAME=acme/widget-1; claude --session-id aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee --mcp-config <state>/plect-mcp.json --settings <state>/plect-hooks.json    --permission-mode bypassPermissions --disallowedTools AskUserQuestion"
 call[7]: "terminal-send_keys" "Enter"
 outputs: {"hooks_settings":"<state>/plect-hooks.json","mcp_config":"<state>/plect-mcp.json","pid":<pid>,"session_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","socket_path":"<state>/claude-channel/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.sock"}
 artifact hooks_settings/:
-{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"<plugin>/scripts/claude-agent-activity working"}]}],"PreToolUse":[{"hooks":[{"type":"command","command":"<plugin>/scripts/claude-agent-activity working"}]}],"Stop":[{"hooks":[{"type":"command","command":"<plugin>/scripts/claude-agent-activity waiting"}]}]}}
+{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"<plugin>/scripts/claude-agent-activity working"}]}],"PreToolUse":[{"hooks":[{"type":"command","command":"<plugin>/scripts/claude-agent-activity working"}]}],"Stop":[{"hooks":[{"type":"command","command":"<plugin>/scripts/claude-agent-activity waiting"}]}]},"skipDangerousModePermissionPrompt":true}
 artifact mcp_config/:
 {"mcpServers":{}}
 
@@ -107,13 +107,43 @@ activity: fingerprint="spy-turn-1" silence_expected=false
 call[0]: "claude-agent-activity" "reset" "acme/widget-1"
 cleaned
 
+== runtime:permission-mode-rejected / setup
+declined: node "runtime" input schema: jsonschema validation failed with 'plect:task:runtime:inputs#'
+- at '/permission_mode': value must be one of '', 'acceptEdits', 'auto', 'bypassPermissions', 'manual', 'dontAsk', 'plan'
+
+== runtime:permission-mode-empty-opt-out / setup
+call[0]: "uuidgen"
+call[1]: "mktemp" "<state>/plect-mcp.XXXXXX"
+call[2]: "claude-mcp-servers"
+call[3]: "claude-agent-activity" "reset" "acme/widget-1"
+call[4]: "mktemp" "<state>/plect-hooks.XXXXXX"
+call[5]: "terminal-pid"
+call[6]: "terminal-send_text" "export PLECT_SESSION_NAME=acme/widget-1; claude --session-id aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee --mcp-config <state>/plect-mcp.json --settings <state>/plect-hooks.json     --disallowedTools AskUserQuestion"
+call[7]: "terminal-send_keys" "Enter"
+outputs: {"hooks_settings":"<state>/plect-hooks.json","mcp_config":"<state>/plect-mcp.json","pid":<pid>,"session_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","socket_path":"<state>/claude-channel/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.sock"}
+artifact hooks_settings/:
+{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"<plugin>/scripts/claude-agent-activity working"}]}],"PreToolUse":[{"hooks":[{"type":"command","command":"<plugin>/scripts/claude-agent-activity working"}]}],"Stop":[{"hooks":[{"type":"command","command":"<plugin>/scripts/claude-agent-activity waiting"}]}]}}
+artifact mcp_config/:
+{"mcpServers":{}}
+
+== runtime:permission-mode-empty-opt-out / health.alive
+alive
+
+== runtime:permission-mode-empty-opt-out / health.activity
+call[0]: "claude-agent-activity" "probe" "acme/widget-1"
+activity: fingerprint="spy-turn-1" silence_expected=false
+
+== runtime:permission-mode-empty-opt-out / cleanup
+call[0]: "claude-agent-activity" "reset" "acme/widget-1"
+cleaned
+
 == runtime:launch-timeout-then-retry-succeeds / setup
 call[0]: "mktemp" "<state>/plect-mcp.XXXXXX"
 call[1]: "claude-mcp-servers"
 call[2]: "claude-agent-activity" "reset" "acme/widget-1"
 call[3]: "mktemp" "<state>/plect-hooks.XXXXXX"
 call[4]: "terminal-pid"
-call[5]: "terminal-send_text" "export PLECT_SESSION_NAME=acme/widget-1; claude --resume 33333333-4444-5555-6666-777777777777 --mcp-config <state>/plect-mcp.json --settings <state>/plect-hooks.json    --disallowedTools AskUserQuestion || claude --session-id 33333333-4444-5555-6666-777777777777 --mcp-config <state>/plect-mcp.json --settings <state>/plect-hooks.json    --disallowedTools AskUserQuestion"
+call[5]: "terminal-send_text" "export PLECT_SESSION_NAME=acme/widget-1; claude --resume 33333333-4444-5555-6666-777777777777 --mcp-config <state>/plect-mcp.json --settings <state>/plect-hooks.json    --permission-mode bypassPermissions --disallowedTools AskUserQuestion || claude --session-id 33333333-4444-5555-6666-777777777777 --mcp-config <state>/plect-mcp.json --settings <state>/plect-hooks.json    --permission-mode bypassPermissions --disallowedTools AskUserQuestion"
 call[6]: "terminal-send_keys" "Enter"
 call[7]: "terminal-send_keys" "Enter"
 call[8]: "terminal-send_keys" "Enter"
@@ -130,7 +160,7 @@ call[1]: "claude-mcp-servers"
 call[2]: "claude-agent-activity" "reset" "acme/widget-1"
 call[3]: "mktemp" "<state>/plect-hooks.XXXXXX"
 call[4]: "terminal-pid"
-call[5]: "terminal-send_text" "export PLECT_SESSION_NAME=acme/widget-1; export PLECT_TEAM_CONTEXT='acme'; export PATH=/spy/guard:$PATH; claude --resume 33333333-4444-5555-6666-777777777777 --mcp-config <state>/plect-mcp.json --settings <state>/plect-hooks.json  --model opus --effort high --disallowedTools AskUserQuestion || claude --session-id 33333333-4444-5555-6666-777777777777 --mcp-config <state>/plect-mcp.json --settings <state>/plect-hooks.json  --model opus --effort high --disallowedTools AskUserQuestion"
+call[5]: "terminal-send_text" "export PLECT_SESSION_NAME=acme/widget-1; export PLECT_TEAM_CONTEXT='acme'; export PATH=/spy/guard:$PATH; claude --resume 33333333-4444-5555-6666-777777777777 --mcp-config <state>/plect-mcp.json --settings <state>/plect-hooks.json  --model opus --effort high --permission-mode bypassPermissions --disallowedTools AskUserQuestion || claude --session-id 33333333-4444-5555-6666-777777777777 --mcp-config <state>/plect-mcp.json --settings <state>/plect-hooks.json  --model opus --effort high --permission-mode bypassPermissions --disallowedTools AskUserQuestion"
 call[6]: "terminal-send_keys" "Enter"
 outputs: {"hooks_settings":"<state>/plect-hooks.json","mcp_config":"<state>/plect-mcp.json","pid":<pid>,"session_id":"33333333-4444-5555-6666-777777777777","socket_path":"<state>/claude-channel/33333333-4444-5555-6666-777777777777.sock"}
 
@@ -141,7 +171,7 @@ call[2]: "claude-mcp-servers"
 call[3]: "claude-agent-activity" "reset" "acme/widget-1"
 call[4]: "mktemp" "<state>/plect-hooks.XXXXXX"
 call[5]: "terminal-pid"
-call[6]: "terminal-send_text" "export PLECT_SESSION_NAME=acme/widget-1; claude --session-id aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee --mcp-config <state>/plect-mcp.json --settings <state>/plect-hooks.json    --disallowedTools AskUserQuestion"
+call[6]: "terminal-send_text" "export PLECT_SESSION_NAME=acme/widget-1; claude --session-id aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee --mcp-config <state>/plect-mcp.json --settings <state>/plect-hooks.json    --permission-mode bypassPermissions --disallowedTools AskUserQuestion"
 call[7]: "terminal-send_keys" "Enter"
 call[8]: "jq" "-nc" "--argjson" "pid" "<pid>" "--arg" "sid" "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" "--arg" "sock" "<state>/claude-channel/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.sock" "--arg" "mcp" "<state>/plect-mcp.json" "--arg" "hooks" "<state>/plect-hooks.json" "{pid:$pid, session_id:$sid, socket_path:$sock, mcp_config:$mcp, hooks_settings:$hooks}"
 call[9]: "pgrep" "-P" "<pid>"

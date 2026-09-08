@@ -22,7 +22,7 @@ path   = ""
 
 [[runtime]]
 name   = "channel-server-present"
-inputs = { model = "opus", effort = "high", launch_env = '{"PLECT_TEAM_CONTEXT":"acme"}', mcp_servers = '[{"name":"kbn","command":"kbn-mcp"}]', path_prepend = "/spy/guard" }
+inputs = { model = "opus", effort = "high", permission_mode = "plan", launch_env = '{"PLECT_TEAM_CONTEXT":"acme"}', mcp_servers = '[{"name":"kbn","command":"kbn-mcp"}]', path_prepend = "/spy/guard" }
 
 [[runtime.files]]
 path    = ".claude/sessions/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.json"
@@ -39,6 +39,35 @@ path   = ""
 [[runtime]]
 name               = "channel-server-absent"
 absent_executables = ["channel-server"]
+
+[[runtime.files]]
+path    = ".claude/sessions/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.json"
+content = '{"sessionId":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","pid":PID}'
+
+[[runtime.artifacts]]
+output = "hooks_settings"
+path   = ""
+
+[[runtime.artifacts]]
+output = "mcp_config"
+path   = ""
+
+# Proves the declaration's own inputs_schema enum rejects an out-of-set
+# permission_mode before the shell script ever runs, not merely that a
+# schema engine can reject enums in the abstract.
+[[runtime]]
+name   = "permission-mode-rejected"
+inputs = { permission_mode = "not-a-real-mode" }
+# A rejected setup never reaches health probes in real orchestration.
+hooks  = ["setup"]
+
+# Proves permission_mode = "" opts out of both the --permission-mode flag
+# and the bypassPermissions-only skipDangerousModePermissionPrompt key,
+# distinct from an omitted input (which falls through to the bypassPermissions
+# default, seen in every other scenario above).
+[[runtime]]
+name   = "permission-mode-empty-opt-out"
+inputs = { permission_mode = "" }
 
 [[runtime.files]]
 path    = ".claude/sessions/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.json"
