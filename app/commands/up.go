@@ -86,6 +86,9 @@ state so the next setup cannot resume from .Prev, then runs setup again.`,
 			return err
 		}
 		fmt.Fprintf(os.Stderr, "Session: %s\n", result.SessionName)
+		if result.LifecycleConfigurationWarning != "" {
+			fmt.Fprintf(os.Stderr, "Warning: %s\n", result.LifecycleConfigurationWarning)
+		}
 
 		if upDetach || !stdoutIsTerminal() {
 			return nil

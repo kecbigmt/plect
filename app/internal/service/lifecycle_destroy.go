@@ -32,7 +32,8 @@ type DestroyResult struct {
 	// warnings by --force. Without --force a cleanup error aborts Destroy and
 	// returns the error directly; this field is only populated when the user
 	// explicitly opted into best-effort teardown.
-	CleanupWarnings []string `json:"cleanup_warnings,omitempty"`
+	CleanupWarnings               []string `json:"cleanup_warnings,omitempty"`
+	LifecycleConfigurationWarning string   `json:"lifecycle_configuration_warning,omitempty"`
 }
 
 // Destroy is the task-aware teardown path. fail-fast by default so a
@@ -103,6 +104,21 @@ func Destroy(cfg *config.Config, store *state.Store, params DestroyParams) (*Des
 		if planErr != nil {
 			return nil, &Error{Code: ErrExecutionFailed, Message: planErr.Error()}
 		}
+	}
+
+	// Nothing is configured to compare against when plan is nil (the
+	// workflow-less, nothing-recorded, --force case above), so there is no
+	// lifecycle-configuration notice to give and no baseline to advance.
+	if plan != nil {
+		digest, warning, noticeErr := lifecycleConfigurationNotice(cfg, session, plan)
+		if noticeErr != nil {
+			return nil, &Error{Code: ErrExecutionFailed, Message: noticeErr.Error()}
+		}
+		if err := recordLifecycleConfigurationDigest(store, sessionName, digest); err != nil {
+			return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to record lifecycle configuration baseline: %v", err)}
+		}
+		session.LifecycleConfigurationDigest = digest
+		result.LifecycleConfigurationWarning = warning
 	}
 
 	// A single reverse-instantiation teardown over every non-@workflow task —

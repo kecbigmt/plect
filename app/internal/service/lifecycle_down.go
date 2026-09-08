@@ -20,8 +20,9 @@ type DownParams struct {
 
 // DownResult holds the outcome of Down.
 type DownResult struct {
-	SessionName string                         `json:"session_name"`
-	Tasks       map[string]*contract.TaskState `json:"tasks,omitempty"`
+	SessionName                   string                         `json:"session_name"`
+	Tasks                         map[string]*contract.TaskState `json:"tasks,omitempty"`
+	LifecycleConfigurationWarning string                         `json:"lifecycle_configuration_warning,omitempty"`
 }
 
 // Down runs run-scoped cleanup (in reverse order) for the given session.
@@ -53,6 +54,14 @@ func Down(cfg *config.Config, store *state.Store, params DownParams) (*DownResul
 	if err != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: err.Error()}
 	}
+	digest, warning, noticeErr := lifecycleConfigurationNotice(cfg, session, plan)
+	if noticeErr != nil {
+		return nil, &Error{Code: ErrExecutionFailed, Message: noticeErr.Error()}
+	}
+	if err := recordLifecycleConfigurationDigest(store, sessionName, digest); err != nil {
+		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to record lifecycle configuration baseline: %v", err)}
+	}
+	session.LifecycleConfigurationDigest = digest
 
 	// A single reverse-instantiation teardown over the run-scoped tasks —
 	// static run nodes and run-scoped dynamic instances merged into one
@@ -72,5 +81,5 @@ func Down(cfg *config.Config, store *state.Store, params DownParams) (*DownResul
 		return nil, &Error{Code: ErrExecutionFailed, Message: cleanupErr.Error()}
 	}
 	recordLifecycle(store, sessionName, "down", "run-scoped tasks cleaned")
-	return &DownResult{SessionName: sessionName, Tasks: domain.MergedTasks(session)}, nil
+	return &DownResult{SessionName: sessionName, Tasks: domain.MergedTasks(session), LifecycleConfigurationWarning: warning}, nil
 }

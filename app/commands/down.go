@@ -31,6 +31,9 @@ session-scoped tasks are preserved.`,
 			return err
 		}
 		fmt.Fprintf(os.Stderr, "Session: %s\n", result.SessionName)
+		if result.LifecycleConfigurationWarning != "" {
+			fmt.Fprintf(os.Stderr, "Warning: %s\n", result.LifecycleConfigurationWarning)
+		}
 		return nil
 	},
 }

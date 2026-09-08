@@ -281,7 +281,7 @@ func (q *Queries) GetEventCursor(ctx context.Context, arg GetEventCursorParams) 
 
 const getLatestDestroyedSession = `-- name: GetLatestDestroyedSession :one
 SELECT id, name, status, destroyed_at, parent_session_id, root_session_id,
-       resource_id, alias, workflow, workspace_dir,
+       resource_id, alias, workflow, workspace_dir, lifecycle_configuration_digest,
        population_workflow, population_name, inputs_json,
        health_last_checked_at, health_last_activity_at, health_last_fingerprint,
        health_last_state, health_last_reason, health_last_notified_at, health_notify_count,
@@ -307,6 +307,7 @@ func (q *Queries) GetLatestDestroyedSession(ctx context.Context, name string) (S
 		&i.Alias,
 		&i.Workflow,
 		&i.WorkspaceDir,
+		&i.LifecycleConfigurationDigest,
 		&i.PopulationWorkflow,
 		&i.PopulationName,
 		&i.InputsJson,
@@ -328,7 +329,7 @@ func (q *Queries) GetLatestDestroyedSession(ctx context.Context, name string) (S
 
 const getLiveSession = `-- name: GetLiveSession :one
 SELECT id, name, status, destroyed_at, parent_session_id, root_session_id,
-       resource_id, alias, workflow, workspace_dir,
+       resource_id, alias, workflow, workspace_dir, lifecycle_configuration_digest,
        population_workflow, population_name, inputs_json,
        health_last_checked_at, health_last_activity_at, health_last_fingerprint,
        health_last_state, health_last_reason, health_last_notified_at, health_notify_count,
@@ -351,6 +352,7 @@ func (q *Queries) GetLiveSession(ctx context.Context, name string) (Session, err
 		&i.Alias,
 		&i.Workflow,
 		&i.WorkspaceDir,
+		&i.LifecycleConfigurationDigest,
 		&i.PopulationWorkflow,
 		&i.PopulationName,
 		&i.InputsJson,
@@ -634,41 +636,42 @@ const insertSession = `-- name: InsertSession :exec
 
 INSERT INTO sessions (
     id, name, status, destroyed_at, parent_session_id, root_session_id,
-    resource_id, alias, workflow, workspace_dir,
+    resource_id, alias, workflow, workspace_dir, lifecycle_configuration_digest,
     population_workflow, population_name, inputs_json,
     health_last_checked_at, health_last_activity_at, health_last_fingerprint,
     health_last_state, health_last_reason, health_last_notified_at, health_notify_count,
     tick_consecutive_unchanged, tick_last_fingerprint, last_tick_at,
     created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertSessionParams struct {
-	ID                       string
-	Name                     string
-	Status                   string
-	DestroyedAt              sql.NullString
-	ParentSessionID          sql.NullString
-	RootSessionID            sql.NullString
-	ResourceID               sql.NullString
-	Alias                    sql.NullString
-	Workflow                 string
-	WorkspaceDir             sql.NullString
-	PopulationWorkflow       sql.NullString
-	PopulationName           sql.NullString
-	InputsJson               sql.NullString
-	HealthLastCheckedAt      sql.NullString
-	HealthLastActivityAt     sql.NullString
-	HealthLastFingerprint    sql.NullString
-	HealthLastState          sql.NullString
-	HealthLastReason         sql.NullString
-	HealthLastNotifiedAt     sql.NullString
-	HealthNotifyCount        sql.NullInt64
-	TickConsecutiveUnchanged sql.NullInt64
-	TickLastFingerprint      sql.NullString
-	LastTickAt               sql.NullString
-	CreatedAt                string
-	UpdatedAt                string
+	ID                           string
+	Name                         string
+	Status                       string
+	DestroyedAt                  sql.NullString
+	ParentSessionID              sql.NullString
+	RootSessionID                sql.NullString
+	ResourceID                   sql.NullString
+	Alias                        sql.NullString
+	Workflow                     string
+	WorkspaceDir                 sql.NullString
+	LifecycleConfigurationDigest sql.NullString
+	PopulationWorkflow           sql.NullString
+	PopulationName               sql.NullString
+	InputsJson                   sql.NullString
+	HealthLastCheckedAt          sql.NullString
+	HealthLastActivityAt         sql.NullString
+	HealthLastFingerprint        sql.NullString
+	HealthLastState              sql.NullString
+	HealthLastReason             sql.NullString
+	HealthLastNotifiedAt         sql.NullString
+	HealthNotifyCount            sql.NullInt64
+	TickConsecutiveUnchanged     sql.NullInt64
+	TickLastFingerprint          sql.NullString
+	LastTickAt                   sql.NullString
+	CreatedAt                    string
+	UpdatedAt                    string
 }
 
 // Sessions
@@ -684,6 +687,7 @@ func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) er
 		arg.Alias,
 		arg.Workflow,
 		arg.WorkspaceDir,
+		arg.LifecycleConfigurationDigest,
 		arg.PopulationWorkflow,
 		arg.PopulationName,
 		arg.InputsJson,
@@ -1170,7 +1174,7 @@ func (q *Queries) ListLiveChildSessionNamesForSessions(ctx context.Context, pare
 
 const listLiveSessions = `-- name: ListLiveSessions :many
 SELECT id, name, status, destroyed_at, parent_session_id, root_session_id,
-       resource_id, alias, workflow, workspace_dir,
+       resource_id, alias, workflow, workspace_dir, lifecycle_configuration_digest,
        population_workflow, population_name, inputs_json,
        health_last_checked_at, health_last_activity_at, health_last_fingerprint,
        health_last_state, health_last_reason, health_last_notified_at, health_notify_count,
@@ -1199,6 +1203,7 @@ func (q *Queries) ListLiveSessions(ctx context.Context) ([]Session, error) {
 			&i.Alias,
 			&i.Workflow,
 			&i.WorkspaceDir,
+			&i.LifecycleConfigurationDigest,
 			&i.PopulationWorkflow,
 			&i.PopulationName,
 			&i.InputsJson,
@@ -1230,7 +1235,7 @@ func (q *Queries) ListLiveSessions(ctx context.Context) ([]Session, error) {
 
 const listLiveSessionsByAlias = `-- name: ListLiveSessionsByAlias :many
 SELECT id, name, status, destroyed_at, parent_session_id, root_session_id,
-       resource_id, alias, workflow, workspace_dir,
+       resource_id, alias, workflow, workspace_dir, lifecycle_configuration_digest,
        population_workflow, population_name, inputs_json,
        health_last_checked_at, health_last_activity_at, health_last_fingerprint,
        health_last_state, health_last_reason, health_last_notified_at, health_notify_count,
@@ -1259,6 +1264,7 @@ func (q *Queries) ListLiveSessionsByAlias(ctx context.Context, alias sql.NullStr
 			&i.Alias,
 			&i.Workflow,
 			&i.WorkspaceDir,
+			&i.LifecycleConfigurationDigest,
 			&i.PopulationWorkflow,
 			&i.PopulationName,
 			&i.InputsJson,
@@ -2416,6 +2422,7 @@ UPDATE sessions SET
     alias = ?,
     workflow = ?,
     workspace_dir = ?,
+    lifecycle_configuration_digest = ?,
     population_workflow = ?,
     population_name = ?,
     inputs_json = ?,
@@ -2434,30 +2441,31 @@ WHERE id = ?
 `
 
 type UpdateSessionByIDParams struct {
-	Name                     string
-	Status                   string
-	DestroyedAt              sql.NullString
-	ParentSessionID          sql.NullString
-	RootSessionID            sql.NullString
-	ResourceID               sql.NullString
-	Alias                    sql.NullString
-	Workflow                 string
-	WorkspaceDir             sql.NullString
-	PopulationWorkflow       sql.NullString
-	PopulationName           sql.NullString
-	InputsJson               sql.NullString
-	HealthLastCheckedAt      sql.NullString
-	HealthLastActivityAt     sql.NullString
-	HealthLastFingerprint    sql.NullString
-	HealthLastState          sql.NullString
-	HealthLastReason         sql.NullString
-	HealthLastNotifiedAt     sql.NullString
-	HealthNotifyCount        sql.NullInt64
-	TickConsecutiveUnchanged sql.NullInt64
-	TickLastFingerprint      sql.NullString
-	LastTickAt               sql.NullString
-	UpdatedAt                string
-	ID                       string
+	Name                         string
+	Status                       string
+	DestroyedAt                  sql.NullString
+	ParentSessionID              sql.NullString
+	RootSessionID                sql.NullString
+	ResourceID                   sql.NullString
+	Alias                        sql.NullString
+	Workflow                     string
+	WorkspaceDir                 sql.NullString
+	LifecycleConfigurationDigest sql.NullString
+	PopulationWorkflow           sql.NullString
+	PopulationName               sql.NullString
+	InputsJson                   sql.NullString
+	HealthLastCheckedAt          sql.NullString
+	HealthLastActivityAt         sql.NullString
+	HealthLastFingerprint        sql.NullString
+	HealthLastState              sql.NullString
+	HealthLastReason             sql.NullString
+	HealthLastNotifiedAt         sql.NullString
+	HealthNotifyCount            sql.NullInt64
+	TickConsecutiveUnchanged     sql.NullInt64
+	TickLastFingerprint          sql.NullString
+	LastTickAt                   sql.NullString
+	UpdatedAt                    string
+	ID                           string
 }
 
 func (q *Queries) UpdateSessionByID(ctx context.Context, arg UpdateSessionByIDParams) error {
@@ -2471,6 +2479,7 @@ func (q *Queries) UpdateSessionByID(ctx context.Context, arg UpdateSessionByIDPa
 		arg.Alias,
 		arg.Workflow,
 		arg.WorkspaceDir,
+		arg.LifecycleConfigurationDigest,
 		arg.PopulationWorkflow,
 		arg.PopulationName,
 		arg.InputsJson,

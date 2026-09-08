@@ -35,8 +35,9 @@ type UpParams struct {
 
 // UpResult holds the outcome of Up.
 type UpResult struct {
-	SessionName string                         `json:"session_name"`
-	Tasks       map[string]*contract.TaskState `json:"tasks,omitempty"`
+	SessionName                   string                         `json:"session_name"`
+	Tasks                         map[string]*contract.TaskState `json:"tasks,omitempty"`
+	LifecycleConfigurationWarning string                         `json:"lifecycle_configuration_warning,omitempty"`
 }
 
 // Up runs run-scoped tasks for the given session.
@@ -185,6 +186,14 @@ func Up(cfg *config.Config, store *state.Store, params UpParams) (*UpResult, err
 	if wfErr != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: wfErr.Error()}
 	}
+	digest, warning, noticeErr := lifecycleConfigurationNotice(cfg, session, plan)
+	if noticeErr != nil {
+		return nil, &Error{Code: ErrExecutionFailed, Message: noticeErr.Error()}
+	}
+	if err := recordLifecycleConfigurationDigest(store, sessionName, digest); err != nil {
+		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to record lifecycle configuration baseline: %v", err)}
+	}
+	session.LifecycleConfigurationDigest = digest
 	if params.ForceRecreate && forceRecreateExisting {
 		var recreateErr error
 		plan, recreateErr = recreateSessionRuntime(cfg, store, sessionName, session, wf, plan, params.Observer)
@@ -223,7 +232,7 @@ func Up(cfg *config.Config, store *state.Store, params UpParams) (*UpResult, err
 		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to record session status: %v", err)}
 	}
 	recordLifecycle(store, sessionName, "up", "run-scoped tasks produced")
-	return &UpResult{SessionName: sessionName, Tasks: domain.MergedTasks(session)}, nil
+	return &UpResult{SessionName: sessionName, Tasks: domain.MergedTasks(session), LifecycleConfigurationWarning: warning}, nil
 }
 
 func cleanupStaleWorkflowNodes(cfg *config.Config, store *state.Store, sessionName string, session *domain.Session, plan *task.Plan, observer task.Observer) error {

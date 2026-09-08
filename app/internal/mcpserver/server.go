@@ -212,11 +212,15 @@ func handleUp(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolRe
 		return errorResult(err), nil
 	}
 
-	return jsonResult(map[string]any{
+	resp := map[string]any{
 		"ok":           true,
 		"session_name": result.SessionName,
 		"tasks":        result.Tasks,
-	})
+	}
+	if result.LifecycleConfigurationWarning != "" {
+		resp["lifecycle_configuration_warning"] = result.LifecycleConfigurationWarning
+	}
+	return jsonResult(resp)
 }
 
 func handleDown(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -236,11 +240,15 @@ func handleDown(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallTool
 		return errorResult(err), nil
 	}
 
-	return jsonResult(map[string]any{
+	resp := map[string]any{
 		"ok":           true,
 		"session_name": result.SessionName,
 		"tasks":        result.Tasks,
-	})
+	}
+	if result.LifecycleConfigurationWarning != "" {
+		resp["lifecycle_configuration_warning"] = result.LifecycleConfigurationWarning
+	}
+	return jsonResult(resp)
 }
 
 func handleDestroy(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -271,6 +279,9 @@ func handleDestroy(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallT
 	}
 	if len(result.CleanupWarnings) > 0 {
 		resp["cleanup_warnings"] = result.CleanupWarnings
+	}
+	if result.LifecycleConfigurationWarning != "" {
+		resp["lifecycle_configuration_warning"] = result.LifecycleConfigurationWarning
 	}
 	return jsonResult(resp)
 }
