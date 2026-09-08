@@ -15,6 +15,7 @@ package effect
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"syscall"
@@ -31,6 +32,11 @@ import (
 // margin, rather than hard-coding a duration that has to be kept in sync by
 // hand with the one below.
 const CancelWaitDelay = 2 * time.Second
+
+const (
+	textBusyMaxAttempts = 5
+	textBusyBaseBackoff = 5 * time.Millisecond
+)
 
 // ExecRequest is a single host-process invocation: Argv[0] is the command,
 // Dir is the working directory (applied only if it exists, see hostExecutor),
@@ -57,11 +63,43 @@ type Executor interface {
 // hostExecutor runs argv directly as a host process.
 type hostExecutor struct{}
 
+// A concurrently forked sibling can hold this process's own just-closed script
+// open for writing until its own exec finishes, so ETXTBSY here is retried.
 func (hostExecutor) Run(ctx context.Context, req ExecRequest) (stdout, stderr []byte, err error) {
+	return runWithTextBusyRetry(ctx, req, textBusyBaseBackoff)
+}
+
+// baseBackoff is a parameter so a test can widen the wait below past any
+// race with the first exec attempt.
+func runWithTextBusyRetry(ctx context.Context, req ExecRequest, baseBackoff time.Duration) (stdout, stderr []byte, err error) {
+	backoff := baseBackoff
+	for attempt := 1; ; attempt++ {
+		var outBuf, errBuf bytes.Buffer
+		err = runHostCmd(ctx, req, &outBuf, &errBuf)
+		if attempt >= textBusyMaxAttempts || !errors.Is(err, syscall.ETXTBSY) {
+			return outBuf.Bytes(), errBuf.Bytes(), err
+		}
+		if waitErr := waitBackoff(ctx, backoff); waitErr != nil {
+			return outBuf.Bytes(), errBuf.Bytes(), waitErr
+		}
+		backoff *= 2
+	}
+}
+
+// ctx's own error surfaces here, not the caller's stale ETXTBSY.
+func waitBackoff(ctx context.Context, backoff time.Duration) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(backoff):
+		return nil
+	}
+}
+
+func runHostCmd(ctx context.Context, req ExecRequest, outBuf, errBuf *bytes.Buffer) (err error) {
 	cmd := exec.CommandContext(ctx, req.Argv[0], req.Argv[1:]...)
-	var outBuf, errBuf bytes.Buffer
-	cmd.Stdout = &outBuf
-	cmd.Stderr = &errBuf
+	cmd.Stdout = outBuf
+	cmd.Stderr = errBuf
 	if req.Dir != "" {
 		if _, statErr := os.Stat(req.Dir); statErr == nil {
 			cmd.Dir = req.Dir
@@ -100,8 +138,7 @@ func (hostExecutor) Run(ctx context.Context, req ExecRequest) (stdout, stderr []
 		return groupErr
 	}
 	cmd.WaitDelay = CancelWaitDelay
-	err = cmd.Run()
-	return outBuf.Bytes(), errBuf.Bytes(), err
+	return cmd.Run()
 }
 
 // alwaysHostExecutor backs RunHook, the path used by workspace provider

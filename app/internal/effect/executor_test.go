@@ -2,9 +2,16 @@ package effect
 
 import (
 	"context"
+	"errors"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/lang"
 )
@@ -157,6 +164,108 @@ func TestRunHook_KeepsXDGDataHomeButIsolatesPlectDataHome(t *testing.T) {
 	}
 	if !strings.Contains(got, "XDG_DATA_HOME=/still-inherited") {
 		t.Fatalf("RunHook dropped XDG_DATA_HOME, want it still inherited:\n%s", got)
+	}
+}
+
+// Linux keeps exec of a path ETXTBSY as long as any process anywhere has it
+// open for writing, so only a genuinely separate process — not an fd this
+// test process merely holds — reproduces the race hostExecutor.Run retries.
+func startBusyHolder(t *testing.T, path string) (release func()) {
+	t.Helper()
+	cmd := exec.Command("sh", "-c", `exec 3>>"$0"; printf ready; read _`, path)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatalf("StdinPipe: %v", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("StdoutPipe: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting busy holder: %v", err)
+	}
+	ready := make([]byte, len("ready"))
+	if _, err := io.ReadFull(stdout, ready); err != nil {
+		t.Fatalf("waiting for busy holder: %v", err)
+	}
+	return func() {
+		stdin.Close()
+		_ = cmd.Wait()
+	}
+}
+
+func writeExecutableScript(t *testing.T, dir string) string {
+	t.Helper()
+	path := filepath.Join(dir, "run.sh")
+	if err := os.WriteFile(path, []byte("#!/usr/bin/env sh\necho ok\n"), 0o700); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	return path
+}
+
+func TestExecutor_HostExecutorRetriesPastATextFileBusyRace(t *testing.T) {
+	path := writeExecutableScript(t, t.TempDir())
+	release := startBusyHolder(t, path)
+	time.AfterFunc(2*textBusyBaseBackoff, release)
+
+	var exec Executor = hostExecutor{}
+	stdout, _, err := exec.Run(context.Background(), ExecRequest{Argv: []string{path}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if string(stdout) != "ok\n" {
+		t.Errorf("stdout = %q, want %q", stdout, "ok\n")
+	}
+}
+
+func TestExecutor_HostExecutorGivesUpAfterBoundedTextFileBusyAttempts(t *testing.T) {
+	path := writeExecutableScript(t, t.TempDir())
+	defer startBusyHolder(t, path)()
+
+	start := time.Now()
+	var exec Executor = hostExecutor{}
+	_, _, err := exec.Run(context.Background(), ExecRequest{Argv: []string{path}})
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, syscall.ETXTBSY) {
+		t.Fatalf("err = %v, want ETXTBSY", err)
+	}
+	maxBackoff := textBusyBaseBackoff * (1 << textBusyMaxAttempts)
+	if elapsed > maxBackoff {
+		t.Errorf("Run took %v to give up, want well under %v (bounded retry budget)", elapsed, maxBackoff)
+	}
+}
+
+// A cancelled context, not an elapsed timer, exercises exactly the branch a
+// timing-based test could race past.
+func TestWaitBackoff_ReturnsContextErrorOnCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := waitBackoff(ctx, time.Hour); !errors.Is(err, context.Canceled) {
+		t.Fatalf("waitBackoff = %v, want context.Canceled", err)
+	}
+}
+
+func TestWaitBackoff_WaitsOutABackoffThatIsNotCancelled(t *testing.T) {
+	if err := waitBackoff(context.Background(), time.Millisecond); err != nil {
+		t.Fatalf("waitBackoff = %v, want nil", err)
+	}
+}
+
+// baseBackoff is an hour and cancellation fires 50ms in, so this can only
+// land inside the backoff wait, never race the first exec attempt the way a
+// deadline sized against the production backoff would.
+func TestExecutor_RunWithTextBusyRetryReturnsContextErrorWhenCancelledDuringBackoff(t *testing.T) {
+	path := writeExecutableScript(t, t.TempDir())
+	defer startBusyHolder(t, path)()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	time.AfterFunc(50*time.Millisecond, cancel)
+
+	_, _, err := runWithTextBusyRetry(ctx, ExecRequest{Argv: []string{path}}, time.Hour)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
 	}
 }
 
