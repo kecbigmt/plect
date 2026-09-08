@@ -561,6 +561,69 @@ describe("Conversation", () => {
     expect(commits.some((textContent) => textContent.includes("team-a-live"))).toBe(false);
   });
 
+  it("renders a mixed history of plect.message, a chunk sequence, and a legacy claude.reply each once, in order, with a live chunk extending its message without a reload", async () => {
+    vi.mocked(fetch).mockImplementation((input) => {
+      if (requestUrl(input).pathname.endsWith("/events/stream")) {
+        return Promise.resolve(
+          sseResponse(
+            'id: cur-2\ndata: {"id":"d2","sessionName":"team/a","time":"2026-01-01T00:00:03Z","type":"plect.message_delta","source":"cli","direction":"outbound","summary":"lo","body":"lo","metadata":{"message_id":"msg-2","message_id_origin":"native","source":"claude","kind":"text","index":"1","final":"true"}}\n\n',
+          ),
+        );
+      }
+      return Promise.resolve(
+        jsonResponse({
+          events: [
+            {
+              id: "legacy-1",
+              sessionName: "team/a",
+              time: "2026-01-01T00:00:00Z",
+              type: "claude.reply",
+              source: "claude",
+              direction: "outbound",
+              summary: "Done.",
+              body: "Done.",
+            },
+            {
+              id: "m1",
+              sessionName: "team/a",
+              time: "2026-01-01T00:00:01Z",
+              type: "plect.message",
+              source: "cli",
+              direction: "outbound",
+              summary: "All set.",
+              body: "All set.",
+              metadata: { message_id: "msg-1", message_id_origin: "native", source: "claude", role: "assistant" },
+            },
+            {
+              id: "d1",
+              sessionName: "team/a",
+              time: "2026-01-01T00:00:02Z",
+              type: "plect.message_delta",
+              source: "cli",
+              direction: "outbound",
+              summary: "Hel",
+              body: "Hel",
+              metadata: {
+                message_id: "msg-2",
+                message_id_origin: "native",
+                source: "claude",
+                kind: "text",
+                index: "0",
+                final: "false",
+              },
+            },
+          ],
+        }),
+      );
+    });
+    const { container } = renderConversation("team/a");
+
+    expect(await screen.findByText("Done.")).toBeInTheDocument();
+    expect(screen.getByText("All set.")).toBeInTheDocument();
+    expect(await screen.findByText("Hello")).toBeInTheDocument();
+    expect(container.querySelectorAll('[data-event-style="message"]')).toHaveLength(3);
+  });
+
   it("never commits a render showing session A's stale connection banner under newly selected session B", async () => {
     vi.mocked(fetch).mockImplementation((input) => {
       const url = requestUrl(input);
