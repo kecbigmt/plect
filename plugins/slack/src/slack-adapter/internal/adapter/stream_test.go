@@ -203,11 +203,6 @@ func TestStreamManager_StartFailure_FallsBackToOnePostOnFinal(t *testing.T) {
 	}
 }
 
-// TestStreamManager_AppendFailure_PreservesChunkForRetry is the regression
-// case for a review finding: nextIndex/pending used to advance before the
-// Slack call was attempted, so a failed AppendStream silently dropped that
-// chunk and a caller's retry of the same index returned success without
-// resending it.
 func TestStreamManager_AppendFailure_PreservesChunkForRetry(t *testing.T) {
 	streamer := &recordingStreamer{}
 	poster := &recordingPoster{}
@@ -241,10 +236,6 @@ func TestStreamManager_AppendFailure_PreservesChunkForRetry(t *testing.T) {
 	}
 }
 
-// TestStreamManager_FallbackPostFailure_RetriesWithoutDuplicatingText is the
-// regression case for a review finding: Deliver forgot the stream_key as
-// soon as it saw a final chunk, regardless of whether the fallback post
-// actually succeeded, so a failed PostToThread on final was never retried.
 func TestStreamManager_FallbackPostFailure_RetriesWithoutDuplicatingText(t *testing.T) {
 	streamer := &recordingStreamer{startErr: errors.New("streaming not enabled for this app")}
 	poster := &recordingPoster{}
@@ -274,6 +265,41 @@ func TestStreamManager_FallbackPostFailure_RetriesWithoutDuplicatingText(t *test
 	}
 	if got, want := poster.calls[1].Text, "Hello, world!"; got != want {
 		t.Errorf("retried fallback post text = %q, want %q (not duplicated)", got, want)
+	}
+	if got := len(mgr.state); got != 0 {
+		t.Errorf("stream state entries = %d, want 0 after the retry succeeds", got)
+	}
+}
+
+func TestStreamManager_StopFailure_PreservesFinalChunkForRetryWithoutRestarting(t *testing.T) {
+	streamer := &recordingStreamer{}
+	poster := &recordingPoster{}
+	mgr := NewStreamManager(streamer, poster, "T1", "U1", testLogger())
+
+	if err := mgr.Deliver("C1", "111.0", "msg-1", 0, "Hello", false); err != nil {
+		t.Fatalf("chunk 0: %v", err)
+	}
+
+	streamer.stopErr = errors.New("temporary network error")
+	if err := mgr.Deliver("C1", "111.0", "msg-1", 1, "!", true); err == nil {
+		t.Fatal("Deliver should surface the stop failure, not silently succeed")
+	}
+	if len(streamer.stopCalls) != 1 {
+		t.Fatalf("StopStream calls = %d, want 1 (the failed attempt)", len(streamer.stopCalls))
+	}
+	if got := len(mgr.state); got != 1 {
+		t.Fatalf("stream state entries = %d, want 1 (kept for retry, not forgotten on failure)", got)
+	}
+
+	streamer.stopErr = nil
+	if err := mgr.Deliver("C1", "111.0", "msg-1", 1, "!", true); err != nil {
+		t.Fatalf("retry of the final chunk: %v", err)
+	}
+	if len(streamer.startCalls) != 1 {
+		t.Fatalf("StartStream calls = %d, want 1 (the retry must not start a second stream)", len(streamer.startCalls))
+	}
+	if len(streamer.stopCalls) != 2 || streamer.stopCalls[1].text != "!" {
+		t.Fatalf("StopStream calls = %+v, want a second call with '!'", streamer.stopCalls)
 	}
 	if got := len(mgr.state); got != 0 {
 		t.Errorf("stream state entries = %d, want 0 after the retry succeeds", got)
