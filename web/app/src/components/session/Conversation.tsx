@@ -3,6 +3,7 @@ import { useLayoutEffect, useRef } from "react";
 import type { SessionEvent, SessionEventPage } from "@/lib/eventsApi";
 import { dedupeEventsById, useLiveEvents, useSessionEvents } from "@/lib/useEvents";
 import type { EventStreamState } from "@/lib/eventStream";
+import { buildConversationTimeline, type ConversationMessage } from "@/lib/messageTimeline";
 import { Button } from "@/components/ui/button";
 
 // This component itself never remounts on selection change: its scroll
@@ -100,20 +101,27 @@ function LiveTimeline({
   onFetchNextPage: () => void;
 }) {
   const live = useLiveEvents(sessionName, historyReady, resumeCursor);
-  const items = dedupeEventsById(pages, live.liveEvents);
+  const events = dedupeEventsById(pages, live.liveEvents);
+  const timeline = buildConversationTimeline(events);
 
   return (
     <>
       <LiveStateBanner state={live.state} />
-      {items.length === 0 ? (
+      {timeline.length === 0 ? (
         <p className="text-sm text-muted-foreground">No events recorded yet.</p>
       ) : (
         <ul className="flex flex-col gap-2">
-          {items.map((e) => (
-            <li key={e.id}>
-              <EventRow event={e} sessionName={sessionName} onSelectSession={onSelectSession} />
-            </li>
-          ))}
+          {timeline.map((entry) =>
+            entry.kind === "message" ? (
+              <li key={entry.id}>
+                <MessageRow message={entry} />
+              </li>
+            ) : (
+              <li key={entry.event.id}>
+                <EventRow event={entry.event} sessionName={sessionName} onSelectSession={onSelectSession} />
+              </li>
+            ),
+          )}
         </ul>
       )}
       {hasNextPage && (
@@ -149,6 +157,28 @@ function LiveStateBanner({ state }: { state: EventStreamState }) {
     );
   }
   return null;
+}
+
+// One grouped plect.message/plect.message_delta sequence, or a legacy
+// claude.reply/codex.reply/claude.message_display event mapped onto the
+// same shape — an agent's turn of conversation, styled distinctly from a
+// provider's own utterance (EventRow's "utterance" style, above) and from
+// an internal event (its "compact" style, below).
+function MessageRow({ message }: { message: ConversationMessage }) {
+  const time = new Date(message.time).toLocaleString();
+  return (
+    <article data-event-style="message" className="rounded-md border border-border bg-muted/40 p-2 text-sm">
+      <header className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+        <span>
+          {message.source ?? "assistant"}
+          {message.turnId && <> · turn {message.turnId}</>}
+          {!message.final && <> · …</>}
+        </span>
+        <time dateTime={message.time}>{time}</time>
+      </header>
+      <p className="mt-1 whitespace-pre-wrap break-words">{message.text}</p>
+    </article>
+  );
 }
 
 // Only the two conversational types contracts/event itself defines get
