@@ -39,6 +39,53 @@ func TestUp_VanishedPaneIsRebuilt(t *testing.T) {
 	}
 }
 
+// TestUp_VanishedPaneIsRebuiltWithADistinctExecutionIdentity proves a
+// same-pass liveness-invalidate-then-rebuild (as in TestUp_VanishedPaneIsRebuilt)
+// is durably recorded as two generations, not one row silently reused: the
+// released generation's own row is flushed on its own before the rebuild's
+// row is inserted, so the two never collapse into a single write.
+func TestUp_VanishedPaneIsRebuiltWithADistinctExecutionIdentity(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	store := testStore(t)
+	sessionName := "session1"
+	pane := filepath.Join(t.TempDir(), "pane")
+	cfg := writeWorkflowFixture(t, t.TempDir(), "default",
+		[]taskFixture{
+			{id: "pane", scope: "run", setup: "touch " + pane + "; echo '{}'", alive: "test -f " + pane},
+		},
+		[]nodeFixture{{id: "pane"}},
+	)
+	seedSessionWithNodes(t, store, sessionName, "acct", 1, "default", map[string]*contract.TaskState{
+		"pane": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, Outputs: map[string]any{}},
+	})
+	before, err := store.GetE(sessionName)
+	if err != nil {
+		t.Fatalf("GetE (before): %v", err)
+	}
+	beforeID := before.Nodes["pane"].ExecutionID
+	if beforeID == "" {
+		t.Fatal("seeded pane has no execution id to compare against")
+	}
+
+	if _, err := Up(cfg, store, UpParams{Identifier: sessionName}); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	after, err := store.GetE(sessionName)
+	if err != nil {
+		t.Fatalf("GetE (after): %v", err)
+	}
+	afterID := after.Nodes["pane"].ExecutionID
+	if afterID == "" {
+		t.Fatal("rebuilt pane has no execution id recorded")
+	}
+	if afterID == beforeID {
+		t.Fatalf("execution id unchanged across a same-pass release-then-rebuild: %q -- the release collapsed into the rebuild instead of minting a fresh generation", afterID)
+	}
+}
+
 func TestUp_VanishedGuardDirectoryIsRebuilt(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")

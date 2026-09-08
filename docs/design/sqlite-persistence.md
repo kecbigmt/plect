@@ -347,18 +347,38 @@ duplicate cleaned one, since the "current unreleased" query would no longer
 see it.
 
 A write whose `ExecutionID` is empty makes no claim about continuing a
-specific row, so it instead falls back to "the current unreleased row for
-this node_id, if any" — update in place, or insert a fresh row when none
-exists. Two identity gaps live in this fallback: a same-pass
-liveness-invalidate-then-rebuild's intermediate release is never itself
-persisted (`task.RunSetup` operates on one in-memory state per node id and
-cannot represent "old row now cleaned" and "new row just produced" at
-once), so it collapses onto an update of the released row instead of
-minting a fresh generation; and a genuinely new first attempt racing a
-different writer's concurrent setup of the same node lands on the same
-fallback and cannot tell the two cases apart either. Both are accepted,
-documented limitations rather than something this fallback can resolve
-from the information available to it alone.
+specific row. `contracts/state.TaskState.NewExecution` distinguishes two
+reasons that can be true. An ordinary caller not tracking a specific row at
+all (health/observation/`done_when` updates on whatever node state it was
+handed) falls back to "the current unreleased row for this node_id, if
+any" — update in place, or insert a fresh row when none exists. A write
+that instead claims `NewExecution` — a node's first-ever setup, or a
+same-pass rebuild following a release the caller has already flushed
+durably on its own — takes the same fallback lookup but refuses instead of
+adopting whatever unreleased row it finds: that can only mean a concurrent
+writer's setup landed first, and the losing side reports the conflict
+rather than silently overwriting the winner's execution, layers, or
+dependency edges.
+
+`task.RunSetup` operates on one in-memory state per node id, so a same-pass
+liveness-invalidate-then-rebuild cannot represent "old row now cleaned" and
+"new row just produced" in that one slot at once. `task.ReleaseObserver` is
+an optional `Observer` extension a durable caller implements to close that
+gap from outside `RunSetup`'s own single-slot bookkeeping: when a
+liveness-invalidate cleanup releases one or more nodes in the same pass,
+`invalidateProducedNode` calls it with their final (cleaned) states before
+`RunSetup` goes on to set any of them up again, so the release lands as a
+durable write of its own — through the same exact-`ExecutionID` update path
+described above, since the released state's `ExecutionID` still names the
+row it came from — strictly before the eventual `NewExecution` write for the
+rebuilt node is attempted. That ordering is what makes the rebuild's
+`NewExecution` refusal correct rather than a false-positive trap: by the
+time the rebuild's own write runs, the row it would otherwise collide with
+is already `cleaned`, so the fallback lookup legitimately finds nothing and
+inserts a fresh generation. A caller supplying no `ReleaseObserver` gets no
+such checkpoint: the release stays in-memory only, and whichever single
+write eventually persists the pass's result carries no distinct record of
+it.
 
 Each execution retains its setup directory, the setup-time values needed by
 cleanup bindings, nested-layer facts and environment, a release outcome, and a
@@ -403,6 +423,20 @@ still-unreleased attempt — exactly the data an interrupted release needs. A
 force-flag-gated reconstruction that discards an old unreleased execution was
 also considered. It loses because reconstruction requires a confirmed release
 boundary; force-discard is intentionally limited to `destroy --force`.
+
+A database-level idempotency token (a client-generated attempt id compared
+against a stored value) was considered for the concurrent-setup race instead
+of `NewExecution` plus the partial unique index the schema already carries.
+It loses because it needs a new column and a new comparison rule for a
+guarantee the existing "at most one unreleased row" index already gives for
+free once the write path stops silently adopting whatever unreleased row it
+finds. A callback-free alternative to `task.ReleaseObserver` — having
+`task.RunSetup` return the released states for its caller to persist after
+the whole pass completes — was also considered; it loses because the
+rebuild's own write already needs to run inside the same pass, so the
+release would still have to be flushed as an explicit, separate step before
+that write, and threading it back out through `RunSetup`'s return value
+would only move that step to the caller for no benefit.
 
 ### Release ordering
 

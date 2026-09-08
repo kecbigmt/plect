@@ -644,6 +644,21 @@ type ResultObserver interface {
 	OnResult(scope, node, effectID, action, result string, elapsed time.Duration, body string)
 }
 
+// ReleaseObserver is an optional Observer extension. invalidateProducedNode
+// type-asserts for it: when a same-pass liveness-invalidate cleanup
+// releases one or more nodes, it calls OnRelease with their final (cleaned)
+// states before RunSetup goes on to set any of them up again. A caller with
+// a durable store implements this to flush the release on its own, as a
+// checkpoint distinct from the eventual new-attempt write -- otherwise, with
+// only one state slot per node id, the release is invisible by the time
+// RunSetup's own result gets persisted and collapses into the row for the
+// new generation it is about to produce. A nil-or-non-implementing observer
+// leaves the release in-memory only, resolved by whatever single write
+// eventually persists RunSetup's result.
+type ReleaseObserver interface {
+	OnRelease(released map[string]*contract.TaskState) error
+}
+
 // The log is a delivery surface for channels, not a dump for arbitrary
 // script output, so a failure's captured text is bounded to this many bytes.
 const nodeResultBodyLimit = 4096
@@ -791,16 +806,17 @@ func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, ta
 				return reportSetupFailure(obs, r, time.Since(now), wrapped, stderr)
 			}
 			tasks[r.NodeID] = &contract.TaskState{
-				Scope:       r.Scope,
-				TaskID:      taskIDFor(r),
-				Status:      contract.TaskStatusProduced,
-				Inputs:      resolvedInputs,
-				Outputs:     outputs,
-				Layers:      layers,
-				DependsOn:   append([]string(nil), r.DependsOn...),
-				ExecutionID: continuingExecID,
-				Seq:         nextSeq(tasks),
-				SetupAt:     now,
+				Scope:        r.Scope,
+				TaskID:       taskIDFor(r),
+				Status:       contract.TaskStatusProduced,
+				Inputs:       resolvedInputs,
+				Outputs:      outputs,
+				Layers:       layers,
+				DependsOn:    append([]string(nil), r.DependsOn...),
+				ExecutionID:  continuingExecID,
+				NewExecution: continuingExecID == "",
+				Seq:          nextSeq(tasks),
+				SetupAt:      now,
 			}
 			reportSetupSuccess(obs, r, time.Since(now), stderr)
 			continue
@@ -838,15 +854,16 @@ func RunSetup(goCtx context.Context, ordered []Resolved, session SessionVars, ta
 			}
 		}
 		tasks[r.NodeID] = &contract.TaskState{
-			Scope:       r.Scope,
-			TaskID:      taskIDFor(r),
-			Status:      contract.TaskStatusProduced,
-			Inputs:      resolvedInputs,
-			Outputs:     outputs,
-			DependsOn:   append([]string(nil), r.DependsOn...),
-			ExecutionID: continuingExecID,
-			Seq:         nextSeq(tasks),
-			SetupAt:     now,
+			Scope:        r.Scope,
+			TaskID:       taskIDFor(r),
+			Status:       contract.TaskStatusProduced,
+			Inputs:       resolvedInputs,
+			Outputs:      outputs,
+			DependsOn:    append([]string(nil), r.DependsOn...),
+			ExecutionID:  continuingExecID,
+			NewExecution: continuingExecID == "",
+			Seq:          nextSeq(tasks),
+			SetupAt:      now,
 		}
 		reportSetupSuccess(obs, r, time.Since(now), stderrCaptured)
 	}
@@ -948,15 +965,16 @@ func describeTaskID(taskID, nodeID string) string {
 
 func failedState(r Resolved, now time.Time, errMsg string, prev, inputs map[string]any, continuingExecID string) *contract.TaskState {
 	return &contract.TaskState{
-		Scope:       r.Scope,
-		TaskID:      taskIDFor(r),
-		Status:      contract.TaskStatusFailed,
-		Inputs:      inputs,
-		Outputs:     prev,
-		DependsOn:   append([]string(nil), r.DependsOn...),
-		ExecutionID: continuingExecID,
-		FailedAt:    now,
-		Error:       errMsg,
+		Scope:        r.Scope,
+		TaskID:       taskIDFor(r),
+		Status:       contract.TaskStatusFailed,
+		Inputs:       inputs,
+		Outputs:      prev,
+		DependsOn:    append([]string(nil), r.DependsOn...),
+		ExecutionID:  continuingExecID,
+		NewExecution: continuingExecID == "",
+		FailedAt:     now,
+		Error:        errMsg,
 	}
 }
 

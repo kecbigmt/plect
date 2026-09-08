@@ -67,6 +67,25 @@ func invalidateProducedNode(goCtx context.Context, r Resolved, ordered []Resolve
 	if err := RunCleanup(goCtx, toClean, session, tasks, obs); err != nil {
 		return fmt.Errorf("node %q: liveness check failed (%v), cleanup: %w", r.NodeID, aliveErr, err)
 	}
+	// This release must be durable before the loop below is allowed to set
+	// any of these nodes up again: with only one state slot per node id, an
+	// in-memory-only release is invisible by the time the eventual new
+	// attempt is persisted and collapses into that same row instead of
+	// minting a fresh generation (see docs/design/sqlite-persistence.md's
+	// "Node execution identity" section).
+	if ro, ok := obs.(ReleaseObserver); ok {
+		released := make(map[string]*contract.TaskState, len(toClean))
+		for _, cleaned := range toClean {
+			if st := tasks[cleaned.NodeID]; st != nil && st.Status == contract.TaskStatusCleaned {
+				released[cleaned.NodeID] = st
+			}
+		}
+		if len(released) > 0 {
+			if err := ro.OnRelease(released); err != nil {
+				return fmt.Errorf("node %q: liveness check failed (%v), persisting release: %w", r.NodeID, aliveErr, err)
+			}
+		}
+	}
 	return nil
 }
 

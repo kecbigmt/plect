@@ -65,7 +65,7 @@ func runTaskCleanup(ctx context.Context, ordered []task.Resolved, vars task.Sess
 // than a blind Put, so a nested `plect task setup` subprocess's disk-only
 // write during this call's own (unlocked) setup pass survives.
 func mergeTasks(store *state.Store, sessionName string, session *domain.Session) error {
-	return store.Update(sessionName, func(s *domain.Session) error {
+	if err := store.Update(sessionName, func(s *domain.Session) error {
 		if s.Nodes == nil {
 			s.Nodes = make(map[string]*contract.TaskState)
 		}
@@ -80,11 +80,15 @@ func mergeTasks(store *state.Store, sessionName string, session *domain.Session)
 		}
 		s.UpdatedAt = session.UpdatedAt
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	clearNewExecutionClaims(session.Nodes)
+	return nil
 }
 
 func replaceRuntimeState(store *state.Store, sessionName string, session *domain.Session) error {
-	return store.Update(sessionName, func(s *domain.Session) error {
+	if err := store.Update(sessionName, func(s *domain.Session) error {
 		s.WorkspaceDirPath = session.WorkspaceDirPath
 		s.Nodes = session.Nodes
 		s.Tasks = session.Tasks
@@ -93,7 +97,28 @@ func replaceRuntimeState(store *state.Store, sessionName string, session *domain
 		s.TickBackoff = session.TickBackoff
 		s.UpdatedAt = session.UpdatedAt
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	clearNewExecutionClaims(session.Nodes)
+	return nil
+}
+
+// clearNewExecutionClaims marks every given node as no longer a fresh,
+// unclaimed identity once its own write has actually landed: a caller like
+// Up, whose UpOrder() deliberately re-walks every node so a prior pass's
+// idempotent skip covers a workflow-definition upgrade (see Plan.UpOrder),
+// would otherwise persist the very same in-memory object a second time and
+// have persistence mistake its own already-committed insert for a
+// concurrent writer's row. This only touches the caller's own in-memory
+// objects, so it never weakens the refusal a genuinely different writer's
+// write hits.
+func clearNewExecutionClaims(nodes map[string]*contract.TaskState) {
+	for _, st := range nodes {
+		if st != nil {
+			st.NewExecution = false
+		}
+	}
 }
 
 // setSessionStatus durably records a lifecycle-status transition on its
