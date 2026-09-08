@@ -10,11 +10,8 @@ import (
 
 // TestMergeTasks_PreservesConfirmedExecutionIdentityAfterASuccessfulWrite
 // proves a node persisted via mergeTasks carries its real, confirmed
-// ExecutionID back onto the caller's own object afterward -- Up's UpOrder()
-// re-walk (task.Plan.UpOrder) persists the same in-memory object again
-// later in one call, and without the real id that second write would fall
-// back to "whatever unreleased row exists now" instead of targeting its own
-// row by exact id.
+// ExecutionID back onto the caller's own object afterward (see
+// refreshNodeIdentities).
 func TestMergeTasks_PreservesConfirmedExecutionIdentityAfterASuccessfulWrite(t *testing.T) {
 	store := testStore(t)
 	sessionName := "session1"
@@ -43,11 +40,9 @@ func TestMergeTasks_PreservesConfirmedExecutionIdentityAfterASuccessfulWrite(t *
 }
 
 // TestMergeTasks_RefusesAStaleReWriteAfterAnInterveningReleaseAndRebuild
-// proves the confirmed ExecutionID mergeTasks copies back is actually
-// enforced against a later write of the same object: an intervening writer
+// proves that identity is actually enforced: an intervening writer
 // releasing and recreating the node between two of this caller's own
-// mergeTasks calls must make the second call fail rather than overwrite or
-// resurrect the intervening writer's own fresh generation.
+// mergeTasks calls makes the second call fail rather than overwrite it.
 func TestMergeTasks_RefusesAStaleReWriteAfterAnInterveningReleaseAndRebuild(t *testing.T) {
 	store := testStore(t)
 	sessionName := "session1"

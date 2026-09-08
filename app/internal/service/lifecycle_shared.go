@@ -102,13 +102,10 @@ func replaceRuntimeState(store *state.Store, sessionName string, session *domain
 	return refreshNodeIdentities(store, sessionName, session)
 }
 
-// refreshNodeIdentities re-reads session.Nodes' keys from store and copies
-// each row's confirmed ExecutionID back onto them: Up's UpOrder() re-walk
-// (task.Plan.UpOrder) persists the same in-memory objects again later in
-// one call, and without their real id a later write can't target its own
-// row by exact id -- it would fall back to "whatever unreleased row exists
-// now" instead, open to overwriting or resurrecting a generation an
-// intervening writer already changed.
+// refreshNodeIdentities copies each of session.Nodes' now-confirmed
+// ExecutionID back from store, so Up's UpOrder() re-walk (which persists the
+// same objects again later) targets its own row by exact id instead of the
+// identity-less fallback (see TaskState.ExecutionID).
 func refreshNodeIdentities(store *state.Store, sessionName string, session *domain.Session) error {
 	if len(session.Nodes) == 0 {
 		return nil
