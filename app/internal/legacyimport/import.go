@@ -25,13 +25,10 @@ type Options struct {
 	// DryRun builds and validates the temporary database and reports on it,
 	// but never promotes it and never writes the legacy rejection marker.
 	DryRun bool
-	// TmpDir is the parent directory Run builds its scratch database under,
-	// before copying the finished file into DestDir. Empty defaults to
-	// os.TempDir(). Run's every intermediate write (migrations, session and
-	// event inserts, the two validation passes) lands here, not in DestDir,
-	// so a DestDir on a network filesystem (the motivating case: SQLite's
-	// WAL mode is unreliable and slow there) never sees them -- only the
-	// single final file copy does.
+	// TmpDir is the directory Run builds its scratch database under, before
+	// copying the finished file into DestDir (empty defaults to
+	// os.TempDir()). A DestDir on a network filesystem never sees Run's
+	// intermediate writes this way, only the single final copy.
 	TmpDir string
 }
 
@@ -231,11 +228,7 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 		return report, nil
 	}
 
-	// Checkpoint merges the WAL back into scratchDBPath's main file (see
-	// Checkpoint's own doc comment), so the single file copied below is
-	// everything the built database holds; Close beforehand is what lets
-	// the last-connection-closes cleanup remove scratchDBPath's own -wal/
-	// -shm, and scratchDir's deferred removal above takes care of the rest.
+	// Close releases scratchDBPath so the copy below sees a stable file.
 	if err := db.Checkpoint(ctx); err != nil {
 		return report, fmt.Errorf("legacyimport: %w", err)
 	}
@@ -323,10 +316,9 @@ func sortedKeys(m map[string]int64) []string {
 	return keys
 }
 
-// copyFileWithFsync copies src's bytes to dst, fsyncing dst before close so
-// its content is durable before any caller relies on it (in particular,
-// Run's later rename of dst into place). dst must not already exist:
-// O_EXCL rejects a stale leftover instead of silently overwriting it.
+// copyFileWithFsync copies src to dst, fsyncing dst before close. dst must
+// not already exist: O_EXCL rejects a stale leftover instead of silently
+// overwriting it.
 func copyFileWithFsync(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {

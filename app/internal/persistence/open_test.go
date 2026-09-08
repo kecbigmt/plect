@@ -116,12 +116,6 @@ func TestOpen_RejectsUnknownJournalModeAtOpenTime(t *testing.T) {
 	}
 }
 
-// TestOpen_JournalModeEnvVarSwitchesAnExistingWALDatabase covers the
-// acceptance scenario in kecbigmt/plecture#539: a database first opened in
-// WAL mode and cleanly closed (which checkpoints and removes its -wal/-shm
-// sidecars once no connection remains), then reopened with
-// PLECT_SQLITE_JOURNAL_MODE=DELETE, ends up in delete mode with no -wal/-shm
-// residue -- exactly what a network-filesystem data dir needs.
 func TestOpen_JournalModeEnvVarSwitchesAnExistingWALDatabase(t *testing.T) {
 	dir := t.TempDir()
 	path := PathIn(dir)

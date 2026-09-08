@@ -208,11 +208,6 @@ func TestStorageImport_DefaultDataHomeSucceedsWithoutDataHomeFlag(t *testing.T) 
 	}
 }
 
-// TestStorageImport_TmpDirFlagIsWiredThroughAndCleanedUp covers
-// kecbigmt/plecture#539's `--tmp-dir` flag: it must reach legacyimport.Run
-// (rather than being silently dropped by the command layer), and the
-// scratch directory it builds under must be gone again once the command
-// returns, leaving only the promoted storage.db and marker in --data-home.
 func TestStorageImport_TmpDirFlagIsWiredThroughAndCleanedUp(t *testing.T) {
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)

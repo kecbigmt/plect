@@ -428,11 +428,6 @@ func TestRun_MissingStateJSONFails(t *testing.T) {
 	}
 }
 
-// TestRun_BuildsScratchDatabaseOutsideDestDirAndCleansUpAfterward covers the
-// kecbigmt/plecture#539 acceptance scenario: given a --tmp-dir distinct from
-// DestDir (simulating an EFS-like DestDir a fast local disk stands in for
-// the scratch build), Run's every intermediate write lands there, not in
-// DestDir, and the scratch directory is gone once Run returns.
 func TestRun_BuildsScratchDatabaseOutsideDestDirAndCleansUpAfterward(t *testing.T) {
 	sourceDir, _, _ := legacyFixture(t)
 	destDir := t.TempDir()
@@ -456,10 +451,6 @@ func TestRun_BuildsScratchDatabaseOutsideDestDirAndCleansUpAfterward(t *testing.
 	}
 }
 
-// TestRun_DryRunNeverLeavesAScratchDirectoryBehind mirrors
-// TestRun_DryRunValidatesWithoutPromoting for the --tmp-dir case: a dry run
-// still builds its scratch database (to validate it), but cleans it up
-// without ever promoting anything into DestDir.
 func TestRun_DryRunNeverLeavesAScratchDirectoryBehind(t *testing.T) {
 	sourceDir, _, _ := legacyFixture(t)
 	destDir := t.TempDir()

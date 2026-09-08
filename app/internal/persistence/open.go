@@ -18,15 +18,12 @@ import (
 const busyTimeoutMillis = 5000
 
 // JournalModeEnvVar overrides the SQLite journal mode every connection this
-// package opens uses. Left unset, the default is WAL. WAL depends on
-// mmap'd shared memory between connections and fsyncs every commit's WAL
-// frame individually, neither of which works well against a network
-// filesystem (NFS, and EFS as an NFS implementation): the shared-memory
-// assumption is unreliable there per SQLite's own documentation, and
-// per-frame fsync latency is amplified by the network round trip. DELETE and
-// TRUNCATE fall back to the classic rollback journal, which has neither
-// problem, at the cost of coarser locking -- acceptable for a deployment
-// running a single plect serve process against the database.
+// package opens uses (default WAL). WAL depends on mmap'd shared memory and
+// per-frame fsync, both unreliable or ruinously slow against a network
+// filesystem (NFS, and EFS as an NFS implementation); DELETE and TRUNCATE
+// fall back to the rollback journal instead. go-sqlite3 applies this as
+// `PRAGMA journal_mode=<mode>` on every connection, so switching away from
+// WAL converts an existing database once nothing else holds it open in WAL.
 const JournalModeEnvVar = "PLECT_SQLITE_JOURNAL_MODE"
 
 // validJournalModes is the closed set JournalModeEnvVar accepts.
@@ -81,13 +78,6 @@ type DB struct {
 // them to each caller, so every connection this package ever opens carries
 // them, with no path through Open that could construct a connection missing
 // one. It does not apply migrations; call Migrate for that.
-//
-// go-sqlite3 applies _journal_mode by running `PRAGMA journal_mode=<mode>`
-// on every connection it opens (see its own documentation), so switching
-// JournalModeEnvVar away from WAL against a database file still in WAL mode
-// converts it in place the next time nothing else holds it open in WAL --
-// SQLite refuses the mode switch, silently keeping the prior mode, while any
-// other connection still does.
 func Open(path string) (*DB, error) {
 	mode, err := journalMode()
 	if err != nil {
