@@ -149,8 +149,8 @@ jq -nc --arg activity "$activity_bin" --argjson has_message "$HAS_MESSAGE" --arg
       {
         UserPromptSubmit: [{hooks: [{type: "command", command: ($activity + " working")}]}],
         PreToolUse:       [{hooks: [{type: "command", command: ($activity + " working")}]}],
-        Stop: [{hooks: [{type: "command", command: ($activity + " waiting")}]
-                       + (if $has_message then [{type: "command", command: ($activity + " reply")}] else [] end)}]
+        Stop: [{hooks: ([{type: "command", command: ($activity + " waiting")}]
+                       + (if $has_message then [{type: "command", command: ($activity + " reply")}] else [] end))}]
       }
       + (if $has_message_delta then
            {MessageDisplay: [{hooks: [{type: "command", command: ($activity + " message_display")}]}]}
