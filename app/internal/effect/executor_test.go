@@ -219,12 +219,19 @@ func TestExecutor_HostExecutorRetriesPastATextFileBusyRace(t *testing.T) {
 	}
 }
 
-func TestExecutor_HostExecutorGivesUpAfterBoundedTextFileBusyAttempts(t *testing.T) {
-	// Only Linux enforces ETXTBSY against an open writer fd; on other
-	// kernels the exec below just succeeds, so there is no retry to bound.
+// skipUnlessTextBusyEnforced skips the calling test unless the kernel keeps
+// exec of a path ETXTBSY while any process holds it open for writing:
+// Linux enforces this, but macOS does not, so the exec below would just
+// succeed and leave nothing for the retry logic to do.
+func skipUnlessTextBusyEnforced(t *testing.T) {
+	t.Helper()
 	if runtime.GOOS != "linux" {
 		t.Skip("ETXTBSY is Linux-specific")
 	}
+}
+
+func TestExecutor_HostExecutorGivesUpAfterBoundedTextFileBusyAttempts(t *testing.T) {
+	skipUnlessTextBusyEnforced(t)
 	path := writeExecutableScript(t, t.TempDir())
 	defer startBusyHolder(t, path)()
 
@@ -262,12 +269,7 @@ func TestWaitBackoff_WaitsOutABackoffThatIsNotCancelled(t *testing.T) {
 // land inside the backoff wait, never race the first exec attempt the way a
 // deadline sized against the production backoff would.
 func TestExecutor_RunWithTextBusyRetryReturnsContextErrorWhenCancelledDuringBackoff(t *testing.T) {
-	// Only Linux enforces ETXTBSY against an open writer fd; on other
-	// kernels the exec below just succeeds, so the backoff wait this test
-	// cancels never happens.
-	if runtime.GOOS != "linux" {
-		t.Skip("ETXTBSY is Linux-specific")
-	}
+	skipUnlessTextBusyEnforced(t)
 	path := writeExecutableScript(t, t.TempDir())
 	defer startBusyHolder(t, path)()
 
