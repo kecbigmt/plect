@@ -125,28 +125,88 @@ const (
 	// not a dedup collision.
 	TypeNodeResult = "plect.node.result"
 	// TypeMessage and TypeMessageChunk are the runtime-neutral agent-message
-	// contract documented at docs/language/events.md#agent-messages: for one
-	// MetaMessageID, an emitter produces either exactly one TypeMessage or a
-	// TypeMessageChunk sequence ending with MetaFinal = "true", never both.
+	// contract documented at docs/language/events.md#agent-messages.
+	// TypeMessage is canonical: an emitter always sends exactly one per
+	// MetaMessageID once the message's visible text is non-empty.
+	// TypeMessageChunk is an optional live preview; a TypeMessage for the
+	// same MetaMessageID always follows it.
 	TypeMessage      = "plect.message"
 	TypeMessageChunk = "plect.message_chunk"
 )
 
 // Metadata keys stamped on TypeMessage / TypeMessageChunk events; see
-// docs/language/events.md#agent-messages for the full contract.
+// docs/language/events.md#agent-messages for the full contract and which
+// harness can fill which optional key.
 const (
-	MetaMessageID = "message_id"
+	// Required on both types.
+	MetaMessageID       = "message_id"
+	MetaMessageIDOrigin = "message_id_origin" // MessageIDOriginNative | MessageIDOriginSynthetic
+	MetaSource          = "source"            // harness id; informational, never branched on
+
+	// Required on TypeMessage only.
+	MetaRole = "role" // RoleAssistant, today's only value
+
+	// Required on TypeMessageChunk only.
+	MetaKind  = "kind"  // ChunkKindText | ChunkKindReasoning
+	MetaIndex = "index" // emitter-assigned, 0-based, monotonic per (message_id, kind)
+	MetaFinal = "final" // "true" on the sequence's last chunk (Metadata is map[string]string)
+
+	// Optional on both types.
 	MetaTurnID    = "turn_id"
-	MetaRole      = "role"
-	MetaSource    = "source"
-	MetaIndex     = "index"
-	// MetaFinal is the literal string "true" or "false" (Metadata is
-	// map[string]string).
-	MetaFinal = "final"
+	MetaTurnIndex = "turn_index"
+	MetaStepIndex = "step_index"
+	MetaRunID     = "run_id"
+	MetaSourceSeq = "source_seq"
+	MetaRaw       = "raw" // JSON-encoded object; Metadata values are strings
+
+	// Optional, TypeMessage only.
+	MetaInterim       = "interim" // "true" | "false", default "false"
+	MetaStopReason    = "stop_reason"
+	MetaTruncated     = "truncated" // "true" | "false", default "false"
+	MetaModel         = "model"
+	MetaProvider      = "provider"
+	MetaSurface       = "surface"
+	MetaAgentID       = "agent_id"
+	MetaParentAgentID = "parent_agent_id"
+	MetaDepth         = "depth"
+	MetaAgentRole     = "agent_role"
+
+	// Optional, TypeMessageChunk only.
+	MetaOrdering   = "ordering" // OrderingStrict | OrderingBestEffort
+	MetaBlockIndex = "block_index"
+)
+
+// MessageIDOrigin is MetaMessageIDOrigin's closed set: whether MetaMessageID
+// is the harness's own id or one the emitter synthesized.
+const (
+	MessageIDOriginNative    = "native"
+	MessageIDOriginSynthetic = "synthetic"
 )
 
 // RoleAssistant is TypeMessage's MetaRole value.
 const RoleAssistant = "assistant"
+
+// ChunkKind is MetaKind's closed set.
+const (
+	ChunkKindText      = "text"
+	ChunkKindReasoning = "reasoning"
+)
+
+// StopReason is MetaStopReason's closed set: why the model stopped, when the
+// emitter knows.
+const (
+	StopReasonCompleted   = "completed"
+	StopReasonMaxTokens   = "max_tokens"
+	StopReasonAborted     = "aborted"
+	StopReasonError       = "error"
+	StopReasonInterrupted = "interrupted"
+)
+
+// Ordering is MetaOrdering's closed set: whether MetaIndex is gap-free.
+const (
+	OrderingStrict     = "strict"
+	OrderingBestEffort = "best_effort"
+)
 
 // NodeResultAction is TypeNodeResult's closed set of "action" metadata
 // values: which lifecycle action the event reports on.
