@@ -256,6 +256,40 @@ func TestUp_BaselineAccountsForDynamicOutstandingExecution(t *testing.T) {
 	}
 }
 
+// The cross-operation risk a session-wide digest exists to avoid: if Up's
+// own (node-only) executable scope leaked into what it compares, an
+// outstanding dynamic instance untouched by that Up would make Down's
+// (session-wide) comparison look like a change when nothing changed at all.
+func TestUp_ThenDown_UnchangedConfigurationWithDynamicOutstandingExecutionDoesNotWarn(t *testing.T) {
+	requireBash(t)
+	cfg := writeWorkflowFixture(t, t.TempDir(), "coding",
+		[]taskFixture{
+			{id: "build", scope: "run", setup: `echo '{}'`, cleanup: "true"},
+			{id: "adhoc", scope: "run", cleanup: "true"},
+		},
+		[]nodeFixture{{id: "build"}},
+	)
+	store := testStore(t)
+	seedSessionSplit(t, store, "sess-1", "acme", 1, "coding",
+		map[string]*contract.TaskState{},
+		map[string]*contract.TaskState{
+			"adhoc#1": {Scope: contract.TaskScopeRun, Status: contract.TaskStatusProduced, TaskID: "adhoc", Seq: 1, Outputs: map[string]any{}},
+		},
+	)
+
+	if _, err := Up(cfg, store, UpParams{Identifier: "sess-1"}); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	result, err := Down(cfg, store, DownParams{Identifier: "sess-1"})
+	if err != nil {
+		t.Fatalf("Down: %v", err)
+	}
+	if result.LifecycleConfigurationWarning != "" {
+		t.Errorf("LifecycleConfigurationWarning = %q, want no warning: nothing changed between the Up that recorded the baseline and this Down", result.LifecycleConfigurationWarning)
+	}
+}
+
 // Down only ever tears down run-scoped nodes, but the digest it records
 // must still cover an outstanding session-scoped one, or a later operation
 // repairing that node's cleanup would find nothing changed.
