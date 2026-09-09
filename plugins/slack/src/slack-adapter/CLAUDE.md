@@ -45,7 +45,7 @@ Slack-specific message relay + subscription broker.
 | `POST /messages` | Posts a message to a thread | plect channel (`slack`), `claude-slack-notify.sh` |
 | `POST /status` | Sets/clears a thread's shimmer status line without posting | future agent-hook wiring (not yet a caller) |
 | `POST /stream` | Renders a `plect.message_delta` chunk as part of one live-updating thread reply | plect channel (`stream`) |
-| `POST /subscribe` / `DELETE /subscribe?thread_ts=...` | Register/unregister a subscription | plect task (`slack_subscribe`) |
+| `POST /subscribe` / `DELETE /subscribe?thread_ts=...` / `DELETE /subscribe?session_name=...` | Register/unregister a subscription (one live registration per `socket_path`; the `session_name` form drops every registration for a session) | plect task (`slack_subscribe`) |
 | `GET /subscribers` | Lists subscriptions (for the `[health].alive` probe) | plect task (`slack_subscribe`) |
 | `GET /unbound-mentions` | Streams one JSON item per unbound app mention as it occurs | the `subscribe unbound-mentions` CLI subcommand (a separate process; see below) |
 | `POST /notify` | Notifies Slack + channel-server, keyed by `session_name` | deprecated rollback path (`github-watcher serve --allow-legacy-notify` only) |

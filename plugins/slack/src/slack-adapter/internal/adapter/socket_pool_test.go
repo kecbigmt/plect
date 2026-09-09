@@ -408,3 +408,226 @@ func TestSocketPool_ReusesConnection(t *testing.T) {
 	}
 	mu.Unlock()
 }
+
+func TestSocketPool_RebindsExistingConnectionOnThreadChange(t *testing.T) {
+	socketDir := t.TempDir()
+	socketPath := filepath.Join(socketDir, "test.sock")
+
+	var mu sync.Mutex
+	var registeredThreadTS []string
+	connSeen := map[net.Conn]bool{}
+
+	listener, err := newFakeSocketListener(socketPath, func(env protocol.Envelope, conn net.Conn) {
+		if env.Type != protocol.MsgRegister {
+			return
+		}
+		var reg protocol.RegisterPayload
+		json.Unmarshal(env.Payload, &reg)
+		mu.Lock()
+		registeredThreadTS = append(registeredThreadTS, reg.ThreadTS)
+		connSeen[conn] = true
+		mu.Unlock()
+	}, testLogger())
+	if err != nil {
+		t.Fatalf("NewSocketListener() error: %v", err)
+	}
+	defer listener.Close()
+	go listener.Serve()
+
+	poster := &mockPoster{}
+	router := NewSocketPool(poster, testLogger(), nil, nil)
+	defer router.Close()
+
+	if err := router.Send(socketPath, "C01", protocol.MessagePayload{Text: "hi", ThreadTS: "1111111111.100000"}); err != nil {
+		t.Fatalf("first Send() error: %v", err)
+	}
+	if err := router.Send(socketPath, "C01", protocol.MessagePayload{Text: "hi again", ThreadTS: "2222222222.200000"}); err != nil {
+		t.Fatalf("second Send() error: %v", err)
+	}
+
+	deadline := time.After(2 * time.Second)
+	for {
+		mu.Lock()
+		n := len(registeredThreadTS)
+		mu.Unlock()
+		if n >= 2 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timeout waiting for rebind registration")
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(connSeen) != 1 {
+		t.Fatalf("expected the connection to be reused, got %d distinct connections", len(connSeen))
+	}
+	if len(registeredThreadTS) != 2 || registeredThreadTS[0] != "1111111111.100000" || registeredThreadTS[1] != "2222222222.200000" {
+		t.Fatalf("registered thread_ts sequence = %v, want [1111111111.100000 2222222222.200000]", registeredThreadTS)
+	}
+}
+
+// A cached connection can go bad without SocketPool having noticed yet
+// (ReadLoop's own cleanup is asynchronous). Rebind failing on it must not
+// surface to the caller: SocketPool drops it and connects fresh instead.
+func TestSocketPool_GetOrConnect_ReconnectsWhenRebindFails(t *testing.T) {
+	socketDir := t.TempDir()
+	socketPath := filepath.Join(socketDir, "test.sock")
+
+	var mu sync.Mutex
+	registeredThreadTS := map[net.Conn]string{}
+
+	listener, err := newFakeSocketListener(socketPath, func(env protocol.Envelope, conn net.Conn) {
+		if env.Type != protocol.MsgRegister {
+			return
+		}
+		var reg protocol.RegisterPayload
+		json.Unmarshal(env.Payload, &reg)
+		mu.Lock()
+		registeredThreadTS[conn] = reg.ThreadTS
+		mu.Unlock()
+	}, testLogger())
+	if err != nil {
+		t.Fatalf("NewSocketListener() error: %v", err)
+	}
+	defer listener.Close()
+	go listener.Serve()
+
+	poster := &mockPoster{}
+	router := NewSocketPool(poster, testLogger(), nil, nil)
+	defer router.Close()
+
+	deadClient, err := NewSocketClient(socketPath, "1111111111.100000", "C-OLD", testLogger(), nil, nil)
+	if err != nil {
+		t.Fatalf("NewSocketClient() error: %v", err)
+	}
+
+	// Wait for the listener to record the first Register before tearing the
+	// connection down, so its arrival can't race the reconnect's own.
+	waitForRegistrations := func(n int) {
+		t.Helper()
+		deadline := time.After(2 * time.Second)
+		for {
+			mu.Lock()
+			got := len(registeredThreadTS)
+			mu.Unlock()
+			if got >= n {
+				return
+			}
+			select {
+			case <-deadline:
+				t.Fatalf("timeout waiting for %d registration(s), got %d", n, got)
+			default:
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+	}
+	waitForRegistrations(1)
+
+	deadClient.Close()
+	router.mu.Lock()
+	router.conns[socketPath] = &socketConn{client: deadClient, channelID: "C-OLD", threadTS: "1111111111.100000"}
+	router.mu.Unlock()
+
+	if err := router.Send(socketPath, "C-NEW", protocol.MessagePayload{Text: "hi", ThreadTS: "2222222222.200000"}); err != nil {
+		t.Fatalf("Send() should reconnect past a dead cached connection, got error: %v", err)
+	}
+	waitForRegistrations(2)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(registeredThreadTS) != 2 {
+		t.Fatalf("expected 2 distinct connections accepted (the dead one plus the reconnect), got %d", len(registeredThreadTS))
+	}
+	seen := map[string]bool{}
+	for _, ts := range registeredThreadTS {
+		seen[ts] = true
+	}
+	if !seen["1111111111.100000"] || !seen["2222222222.200000"] {
+		t.Fatalf("registered thread_ts values = %v, want both the dead connection's and the reconnect's", registeredThreadTS)
+	}
+
+	router.mu.Lock()
+	defer router.mu.Unlock()
+	if got := router.conns[socketPath]; got == nil || got.client == deadClient {
+		t.Fatalf("expected the dead connection to be replaced in the pool, got %+v", got)
+	}
+}
+
+// The fake listener echoes back whichever thread_ts it last saw in a
+// Register, mirroring channel-server's own ConnSenderStore, which keys a
+// permission prompt off the connection's registration rather than off
+// whatever message triggered it.
+func TestSocketPool_ReusedSocketRoutesPermissionToCurrentSubscription(t *testing.T) {
+	socketDir := t.TempDir()
+	socketPath := filepath.Join(socketDir, "test.sock")
+
+	var mu sync.Mutex
+	registeredThreadTS := map[net.Conn]string{}
+
+	listener, err := newFakeSocketListener(socketPath, func(env protocol.Envelope, conn net.Conn) {
+		switch env.Type {
+		case protocol.MsgRegister:
+			var reg protocol.RegisterPayload
+			json.Unmarshal(env.Payload, &reg)
+			mu.Lock()
+			registeredThreadTS[conn] = reg.ThreadTS
+			mu.Unlock()
+		case protocol.MsgMessage:
+			var msg protocol.MessagePayload
+			json.Unmarshal(env.Payload, &msg)
+			if msg.Text != "trigger_permission" {
+				return
+			}
+			mu.Lock()
+			threadTS := registeredThreadTS[conn]
+			mu.Unlock()
+			data, _ := protocol.NewEnvelope(protocol.MsgPermission, protocol.PermissionPayload{Text: "allow?", ThreadTS: threadTS})
+			writeFakeMessage(conn, data)
+		}
+	}, testLogger())
+	if err != nil {
+		t.Fatalf("NewSocketListener() error: %v", err)
+	}
+	defer listener.Close()
+	go listener.Serve()
+
+	poster := &mockPoster{}
+	router := NewSocketPool(poster, testLogger(), nil, nil)
+	defer router.Close()
+
+	// First subscription binds the socket to the old thread/channel.
+	if err := router.Send(socketPath, "C-OLD", protocol.MessagePayload{Text: "hello", ThreadTS: "1111111111.100000"}); err != nil {
+		t.Fatalf("first Send() error: %v", err)
+	}
+	// Let the first Register land before the second Send races it onto the
+	// same (not-yet-cached) connection.
+	time.Sleep(50 * time.Millisecond)
+
+	// A second subscription reuses the same socket for a new thread/channel
+	// and triggers a permission prompt.
+	if err := router.Send(socketPath, "C-NEW", protocol.MessagePayload{Text: "trigger_permission", ThreadTS: "2222222222.200000"}); err != nil {
+		t.Fatalf("second Send() error: %v", err)
+	}
+
+	deadline := time.After(2 * time.Second)
+	for poster.postCount() == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("timeout waiting for permission prompt")
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	poster.mu.Lock()
+	defer poster.mu.Unlock()
+	got := poster.posts[0]
+	if got.channelID != "C-NEW" || got.threadTS != "2222222222.200000" {
+		t.Fatalf("permission prompt routed to %+v, want channel_id=C-NEW thread_ts=2222222222.200000", got)
+	}
+}

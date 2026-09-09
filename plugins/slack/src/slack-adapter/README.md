@@ -197,6 +197,23 @@ O(1). Registration also pre-connects to channel-server, so claude's replies
 flow to Slack right away. `session_name` is required for app-mention
 deliberation delivery because it is the target for `plect event publish`.
 
+**One socket, one thread.** A `socket_path` holds at most one live
+registration. A `/subscribe` naming a `socket_path` that already has a
+registration under a different `thread_ts` replaces it outright (the
+replaced `thread_ts` is logged); the persisted registry applies the same
+rule on load, keeping whichever of two same-socket entries has the newer
+`since`. This is what keeps a socket from ever holding two thread
+destinations at once — otherwise a reply from that session can land in the
+wrong thread, or in the channel root, and a bad entry restored from disk on
+every restart would misroute silently forever.
+
+`thread_ts` must have the shape Slack actually issues, `<10 digits>.<6
+digits>` (e.g. `1234567890.123456`); a `catch_up_through` is checked the
+same way. Either field failing the check is a `400`, not a persisted
+subscription — a malformed value can never match a real thread, so
+persisting it would trade a retriable delivery failure for a permanent
+misroute.
+
 An optional `catch_up_through` (a Slack message ts) delivers the thread's
 existing history once, on first binding: covers the escalation shape where
 people discuss something in a thread and then mention the bot, which
@@ -309,12 +326,19 @@ unregistered; a mention that occurs while nothing is connected is simply
 lost, not queued — see `subscribe unbound-mentions` above for the supervised
 CLI client built on this feed.
 
-### DELETE /subscribe?thread_ts=...
+### DELETE /subscribe?thread_ts=... or ?session_name=...
 
-Unsubscribes. A missing `thread_ts` is a no-op (`204`). Called from `plect
+Unsubscribes. An unknown `thread_ts` is a no-op (`204`). Called from `plect
 down` / `destroy` cleanup. If the subscription had a non-empty
 `delivered_through`, it is preserved as a tombstone (see `POST /subscribe`
 above and Persistence below), not discarded.
+
+`?session_name=...` drops every registration for that session regardless of
+`thread_ts` — the operator escape hatch for a stale or malformed entry whose
+exact `thread_ts` string isn't known (an unknown `session_name` is likewise
+a no-op). `?thread_ts=...` still exists for the single-registration case;
+the two query parameters are mutually exclusive forms of the same request,
+not composable.
 
 ### GET /subscribers
 

@@ -29,6 +29,7 @@ type SocketPool struct {
 type socketConn struct {
 	client    *SocketClient
 	channelID string
+	threadTS  string
 }
 
 // ThreadPoster posts messages to Slack threads.
@@ -76,23 +77,28 @@ func (sr *SocketPool) Send(socketPath, channelID string, msg protocol.MessagePay
 
 // getOrConnect returns an existing connection or creates a new one.
 func (sr *SocketPool) getOrConnect(socketPath, channelID, threadTS string) (*socketConn, error) {
-	sr.mu.RLock()
-	conn, ok := sr.conns[socketPath]
-	sr.mu.RUnlock()
-	if ok {
-		return conn, nil
-	}
-
 	sr.mu.Lock()
 	defer sr.mu.Unlock()
 
-	// Double-check after acquiring write lock
 	if conn, ok := sr.conns[socketPath]; ok {
-		return conn, nil
+		if conn.threadTS == threadTS && conn.channelID == channelID {
+			return conn, nil
+		}
+		if err := conn.client.Rebind(threadTS, channelID); err != nil {
+			sr.logger.Warn("rebind failed, reconnecting", "socket_path", socketPath, "error", err)
+			conn.client.Close()
+			delete(sr.conns, socketPath)
+		} else {
+			conn.threadTS = threadTS
+			conn.channelID = channelID
+			sr.logger.Info("rebound connection", "socket_path", socketPath, "thread_ts", threadTS, "channel_id", channelID)
+			return conn, nil
+		}
 	}
 
 	client, err := NewSocketClient(socketPath, threadTS, channelID, sr.logger,
 		func(reply protocol.ReplyPayload) {
+			channelID := sr.channelIDFor(socketPath)
 			if _, err := sr.poster.PostToThread(channelID, reply.ThreadTS, reply.Text); err != nil {
 				sr.logger.Error("failed to post reply to Slack", "error", err)
 				return // don't log an outbound event that never reached Slack
@@ -103,6 +109,7 @@ func (sr *SocketPool) getOrConnect(socketPath, channelID, threadTS string) (*soc
 			sr.clearStatus(channelID, reply.ThreadTS)
 		},
 		func(perm protocol.PermissionPayload) {
+			channelID := sr.channelIDFor(socketPath)
 			if _, err := sr.poster.PostToThread(channelID, perm.ThreadTS, perm.Text); err != nil {
 				sr.logger.Error("failed to post permission to Slack", "error", err)
 				return // don't log an outbound event that never reached Slack
@@ -117,7 +124,7 @@ func (sr *SocketPool) getOrConnect(socketPath, channelID, threadTS string) (*soc
 		return nil, fmt.Errorf("failed to connect to channel-server: %w", err)
 	}
 
-	conn = &socketConn{client: client, channelID: channelID}
+	conn := &socketConn{client: client, channelID: channelID, threadTS: threadTS}
 	sr.conns[socketPath] = conn
 
 	// Start read loop in background
@@ -133,6 +140,17 @@ func (sr *SocketPool) getOrConnect(socketPath, channelID, threadTS string) (*soc
 
 	sr.logger.Info("connected", "socket_path", socketPath)
 	return conn, nil
+}
+
+// channelIDFor is looked up per-message rather than captured in a closure
+// at connect time, since Rebind can change it later.
+func (sr *SocketPool) channelIDFor(socketPath string) string {
+	sr.mu.RLock()
+	defer sr.mu.RUnlock()
+	if conn, ok := sr.conns[socketPath]; ok {
+		return conn.channelID
+	}
+	return ""
 }
 
 // clearStatus doesn't rely on Slack's own auto-clear on an app reply,

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -412,7 +413,7 @@ func TestHandleSubscribe_PostAddsSubscriberWhenSocketReady(t *testing.T) {
 	a := newTestAdapter(&Config{ChannelID: "C0"})
 
 	body, _ := json.Marshal(subscribeRequest{
-		ThreadTS:   "1111.000",
+		ThreadTS:   "1700000010.100000",
 		ChannelID:  "C123",
 		SocketPath: socketPath,
 	})
@@ -427,13 +428,13 @@ func TestHandleSubscribe_PostAddsSubscriberWhenSocketReady(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if got.ThreadTS != "1111.000" || got.ChannelID != "C123" {
+	if got.ThreadTS != "1700000010.100000" || got.ChannelID != "C123" {
 		t.Fatalf("unexpected response: %+v", got)
 	}
 	if got.Since.IsZero() {
 		t.Fatalf("Since should be populated")
 	}
-	if _, ok := a.broker.Find("1111.000"); !ok {
+	if _, ok := a.broker.Find("1700000010.100000"); !ok {
 		t.Fatalf("broker should hold the subscription")
 	}
 }
@@ -443,7 +444,7 @@ func TestHandleSubscribe_PostRejectsWhenSocketUnreachable(t *testing.T) {
 	a := newTestAdapter(&Config{ChannelID: "C0"})
 
 	body, _ := json.Marshal(subscribeRequest{
-		ThreadTS:   "1111.000",
+		ThreadTS:   "1700000011.100000",
 		ChannelID:  "C123",
 		SocketPath: filepath.Join(t.TempDir(), "absent.sock"),
 	})
@@ -454,7 +455,7 @@ func TestHandleSubscribe_PostRejectsWhenSocketUnreachable(t *testing.T) {
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("got status %d, want %d", w.Code, http.StatusServiceUnavailable)
 	}
-	if _, ok := a.broker.Find("1111.000"); ok {
+	if _, ok := a.broker.Find("1700000011.100000"); ok {
 		t.Fatalf("broker should NOT hold a subscription when pre-connect failed")
 	}
 }
@@ -481,7 +482,7 @@ func TestHandleSubscribe_PostRetriesUntilSocketReady(t *testing.T) {
 	}()
 
 	body, _ := json.Marshal(subscribeRequest{
-		ThreadTS:   "1111.000",
+		ThreadTS:   "1700000012.100000",
 		ChannelID:  "C123",
 		SocketPath: socketPath,
 	})
@@ -492,8 +493,97 @@ func TestHandleSubscribe_PostRetriesUntilSocketReady(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("got status %d, want %d, body=%s", w.Code, http.StatusOK, w.Body.String())
 	}
-	if _, ok := a.broker.Find("1111.000"); !ok {
+	if _, ok := a.broker.Find("1700000012.100000"); !ok {
 		t.Fatalf("broker should hold the subscription after retry succeeded")
+	}
+}
+
+func TestHandleSubscribe_SecondSubscribeOnSameSocketRebindsLiveConnection(t *testing.T) {
+	var mu sync.Mutex
+	registeredThreadTS := map[net.Conn]string{}
+
+	dir := t.TempDir()
+	socketPath := filepath.Join(dir, "test.sock")
+	listener, err := newFakeSocketListener(socketPath, func(env protocol.Envelope, conn net.Conn) {
+		if env.Type != protocol.MsgRegister {
+			return
+		}
+		var reg protocol.RegisterPayload
+		if err := env.UnmarshalPayload(&reg); err != nil {
+			return
+		}
+		mu.Lock()
+		registeredThreadTS[conn] = reg.ThreadTS
+		mu.Unlock()
+	}, testLogger())
+	if err != nil {
+		t.Fatalf("NewSocketListener: %v", err)
+	}
+	defer listener.Close()
+	go listener.Serve()
+
+	a := newTestAdapter(&Config{ChannelID: "C0"})
+
+	firstBody, _ := json.Marshal(subscribeRequest{
+		ThreadTS:   "1111111111.100000",
+		ChannelID:  "C-OLD",
+		SocketPath: socketPath,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/subscribe", bytes.NewBuffer(firstBody))
+	w := httptest.NewRecorder()
+	a.HandleSubscribe(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("first subscribe: got status %d, want %d, body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	secondBody, _ := json.Marshal(subscribeRequest{
+		ThreadTS:   "2222222222.200000",
+		ChannelID:  "C-NEW",
+		SocketPath: socketPath,
+	})
+	req2 := httptest.NewRequest(http.MethodPost, "/subscribe", bytes.NewBuffer(secondBody))
+	w2 := httptest.NewRecorder()
+	a.HandleSubscribe(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("second subscribe: got status %d, want %d, body=%s", w2.Code, http.StatusOK, w2.Body.String())
+	}
+
+	// The listener processes each Register asynchronously, off the request
+	// goroutine that already returned 200; wait for the rebind's Register
+	// specifically, not just any Register, since the first one can still be
+	// in flight when the second write lands.
+	sawRebind := func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, ts := range registeredThreadTS {
+			if ts == "2222222222.200000" {
+				return true
+			}
+		}
+		return false
+	}
+	deadline := time.After(2 * time.Second)
+	for !sawRebind() {
+		select {
+		case <-deadline:
+			t.Fatal("timeout waiting for the second subscribe's Register to land")
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(registeredThreadTS) != 1 {
+		t.Fatalf("expected the connection to be reused, got %d distinct connections registered", len(registeredThreadTS))
+	}
+	for _, ts := range registeredThreadTS {
+		if ts != "2222222222.200000" {
+			t.Fatalf("live connection still registered for %q, want the second subscription's thread_ts", ts)
+		}
+	}
+	if _, ok := a.broker.Find("1111111111.100000"); ok {
+		t.Fatalf("stale broker entry should have been replaced")
 	}
 }
 
@@ -502,9 +592,9 @@ func TestHandleSubscribe_CatchUpThroughDeliversHistoryOnce(t *testing.T) {
 	a := newTestAdapter(&Config{ChannelID: "C0"})
 	fetcher := &fakeThreadFetcher{
 		messages: []slack.Message{
-			slackMessage("1000.000001", "U-root", "Review thread opened"),
-			slackMessage("1000.000002", "U-alice", "Looks ready."),
-			slackMessage("1000.000003", "U-bob", "<@U-bot> please act on this"),
+			slackMessage("1700000001.000001", "U-root", "Review thread opened"),
+			slackMessage("1700000001.000002", "U-alice", "Looks ready."),
+			slackMessage("1700000001.000003", "U-bob", "<@U-bot> please act on this"),
 		},
 		names: map[string]string{"U-root": "Plecture", "U-alice": "Alice", "U-bob": "Bob"},
 	}
@@ -513,11 +603,11 @@ func TestHandleSubscribe_CatchUpThroughDeliversHistoryOnce(t *testing.T) {
 	a.eventPublisher = publisher
 
 	body, _ := json.Marshal(subscribeRequest{
-		ThreadTS:       "1000.000001",
+		ThreadTS:       "1700000001.000001",
 		ChannelID:      "C-review",
 		SocketPath:     socketPath,
 		SessionName:    "owner/repo-1",
-		CatchUpThrough: "1000.000003",
+		CatchUpThrough: "1700000001.000003",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/subscribe", bytes.NewBuffer(body))
 	w := httptest.NewRecorder()
@@ -543,12 +633,12 @@ func TestHandleSubscribe_CatchUpThroughDeliversHistoryOnce(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if resp.DeliveredThrough != "1000.000003" {
-		t.Errorf("response delivered_through = %q, want 1000.000003", resp.DeliveredThrough)
+	if resp.DeliveredThrough != "1700000001.000003" {
+		t.Errorf("response delivered_through = %q, want 1700000001.000003", resp.DeliveredThrough)
 	}
-	sub, _ := a.broker.Find("1000.000001")
-	if sub.DeliveredThrough != "1000.000003" {
-		t.Errorf("broker DeliveredThrough = %q, want 1000.000003", sub.DeliveredThrough)
+	sub, _ := a.broker.Find("1700000001.000001")
+	if sub.DeliveredThrough != "1700000001.000003" {
+		t.Errorf("broker DeliveredThrough = %q, want 1700000001.000003", sub.DeliveredThrough)
 	}
 }
 
@@ -559,8 +649,8 @@ func TestHandleSubscribe_CatchUpThroughIsIdempotentAcrossResubscribe(t *testing.
 	a := newTestAdapter(&Config{ChannelID: "C0"})
 	fetcher := &fakeThreadFetcher{
 		messages: []slack.Message{
-			slackMessage("1000.000001", "U-root", "Review thread opened"),
-			slackMessage("1000.000003", "U-bob", "<@U-bot> please act on this"),
+			slackMessage("1700000001.000001", "U-root", "Review thread opened"),
+			slackMessage("1700000001.000003", "U-bob", "<@U-bot> please act on this"),
 		},
 		names: map[string]string{"U-root": "Plecture", "U-bob": "Bob"},
 	}
@@ -569,11 +659,11 @@ func TestHandleSubscribe_CatchUpThroughIsIdempotentAcrossResubscribe(t *testing.
 	a.eventPublisher = publisher
 
 	subscribeBody, _ := json.Marshal(subscribeRequest{
-		ThreadTS:       "1000.000001",
+		ThreadTS:       "1700000001.000001",
 		ChannelID:      "C-review",
 		SocketPath:     socketPath,
 		SessionName:    "owner/repo-1",
-		CatchUpThrough: "1000.000003",
+		CatchUpThrough: "1700000001.000003",
 	})
 
 	for i := 0; i < 2; i++ {
@@ -595,9 +685,9 @@ func TestHandleSubscribe_CatchUpThroughThenLaterMentionDeliversOnlyDelta(t *test
 	a := newTestAdapter(&Config{ChannelID: "C0"})
 	fetcher := &fakeThreadFetcher{
 		messages: []slack.Message{
-			slackMessage("1000.000001", "U-root", "Review thread opened"),
-			slackMessage("1000.000003", "U-bob", "<@U-bot> please act on this"),
-			slackMessage("1000.000006", "U-alice", "new reply"),
+			slackMessage("1700000001.000001", "U-root", "Review thread opened"),
+			slackMessage("1700000001.000003", "U-bob", "<@U-bot> please act on this"),
+			slackMessage("1700000001.000006", "U-alice", "new reply"),
 		},
 		names: map[string]string{"U-root": "Plecture", "U-bob": "Bob", "U-alice": "Alice", "U-dana": "Dana"},
 	}
@@ -606,11 +696,11 @@ func TestHandleSubscribe_CatchUpThroughThenLaterMentionDeliversOnlyDelta(t *test
 	a.eventPublisher = publisher
 
 	subscribeBody, _ := json.Marshal(subscribeRequest{
-		ThreadTS:       "1000.000001",
+		ThreadTS:       "1700000001.000001",
 		ChannelID:      "C-review",
 		SocketPath:     socketPath,
 		SessionName:    "owner/repo-1",
-		CatchUpThrough: "1000.000003",
+		CatchUpThrough: "1700000001.000003",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/subscribe", bytes.NewBuffer(subscribeBody))
 	w := httptest.NewRecorder()
@@ -625,8 +715,8 @@ func TestHandleSubscribe_CatchUpThroughThenLaterMentionDeliversOnlyDelta(t *test
 	a.handleAppMention(&slackevents.AppMentionEvent{
 		User:            "U-dana",
 		Text:            "<@U-bot> send the update",
-		TimeStamp:       "1000.000008",
-		ThreadTimeStamp: "1000.000001",
+		TimeStamp:       "1700000001.000008",
+		ThreadTimeStamp: "1700000001.000001",
 		Channel:         "C-review",
 	})
 
@@ -655,7 +745,7 @@ func TestHandleSubscribe_CatchUpThroughOmittedIsUnchanged(t *testing.T) {
 	a.eventPublisher = publisher
 
 	body, _ := json.Marshal(subscribeRequest{
-		ThreadTS:    "1000.000001",
+		ThreadTS:    "1700000001.000001",
 		ChannelID:   "C-review",
 		SocketPath:  socketPath,
 		SessionName: "owner/repo-1",
@@ -673,7 +763,7 @@ func TestHandleSubscribe_CatchUpThroughOmittedIsUnchanged(t *testing.T) {
 	if len(publisher.events) != 0 {
 		t.Errorf("published events = %d, want 0", len(publisher.events))
 	}
-	sub, _ := a.broker.Find("1000.000001")
+	sub, _ := a.broker.Find("1700000001.000001")
 	if sub.DeliveredThrough != "" {
 		t.Errorf("DeliveredThrough = %q, want empty", sub.DeliveredThrough)
 	}
@@ -685,8 +775,8 @@ func TestHandleSubscribe_UnsubscribeThenResubscribeSameSessionRestoresWatermark(
 	a := newTestAdapter(&Config{ChannelID: "C0"})
 	fetcher := &fakeThreadFetcher{
 		messages: []slack.Message{
-			slackMessage("1000.000001", "U-root", "Review thread opened"),
-			slackMessage("1000.000003", "U-bob", "<@U-bot> please act on this"),
+			slackMessage("1700000001.000001", "U-root", "Review thread opened"),
+			slackMessage("1700000001.000003", "U-bob", "<@U-bot> please act on this"),
 		},
 		names: map[string]string{"U-root": "Plecture", "U-bob": "Bob"},
 	}
@@ -695,11 +785,11 @@ func TestHandleSubscribe_UnsubscribeThenResubscribeSameSessionRestoresWatermark(
 	a.eventPublisher = publisher
 
 	subscribeBody, _ := json.Marshal(subscribeRequest{
-		ThreadTS:       "1000.000001",
+		ThreadTS:       "1700000001.000001",
 		ChannelID:      "C-review",
 		SocketPath:     socketPath,
 		SessionName:    "owner/repo-1",
-		CatchUpThrough: "1000.000003",
+		CatchUpThrough: "1700000001.000003",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/subscribe", bytes.NewBuffer(subscribeBody))
 	w := httptest.NewRecorder()
@@ -711,13 +801,13 @@ func TestHandleSubscribe_UnsubscribeThenResubscribeSameSessionRestoresWatermark(
 		t.Fatalf("published events after initial subscribe = %d, want 1", len(publisher.events))
 	}
 
-	delReq := httptest.NewRequest(http.MethodDelete, "/subscribe?thread_ts=1000.000001", nil)
+	delReq := httptest.NewRequest(http.MethodDelete, "/subscribe?thread_ts=1700000001.000001", nil)
 	delW := httptest.NewRecorder()
 	a.HandleSubscribe(delW, delReq)
 	if delW.Code != http.StatusNoContent {
 		t.Fatalf("unsubscribe: got status %d, want %d", delW.Code, http.StatusNoContent)
 	}
-	if _, ok := a.broker.Find("1000.000001"); ok {
+	if _, ok := a.broker.Find("1700000001.000001"); ok {
 		t.Fatalf("subscription should be removed after unsubscribe")
 	}
 
@@ -732,8 +822,8 @@ func TestHandleSubscribe_UnsubscribeThenResubscribeSameSessionRestoresWatermark(
 	if err := json.NewDecoder(w2.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if resp.DeliveredThrough != "1000.000003" {
-		t.Errorf("resubscribe response delivered_through = %q, want restored 1000.000003", resp.DeliveredThrough)
+	if resp.DeliveredThrough != "1700000001.000003" {
+		t.Errorf("resubscribe response delivered_through = %q, want restored 1700000001.000003", resp.DeliveredThrough)
 	}
 	if len(publisher.events) != 1 {
 		t.Fatalf("published events after resubscribe = %d, want still 1 (no redelivery)", len(publisher.events))
@@ -746,8 +836,8 @@ func TestHandleSubscribe_UnsubscribeThenResubscribeDifferentSessionDeliversFullH
 	a := newTestAdapter(&Config{ChannelID: "C0"})
 	fetcher := &fakeThreadFetcher{
 		messages: []slack.Message{
-			slackMessage("1000.000001", "U-root", "Review thread opened"),
-			slackMessage("1000.000003", "U-bob", "<@U-bot> please act on this"),
+			slackMessage("1700000001.000001", "U-root", "Review thread opened"),
+			slackMessage("1700000001.000003", "U-bob", "<@U-bot> please act on this"),
 		},
 		names: map[string]string{"U-root": "Plecture", "U-bob": "Bob"},
 	}
@@ -756,11 +846,11 @@ func TestHandleSubscribe_UnsubscribeThenResubscribeDifferentSessionDeliversFullH
 	a.eventPublisher = publisher
 
 	firstBody, _ := json.Marshal(subscribeRequest{
-		ThreadTS:       "1000.000001",
+		ThreadTS:       "1700000001.000001",
 		ChannelID:      "C-review",
 		SocketPath:     socketPath,
 		SessionName:    "owner/repo-1",
-		CatchUpThrough: "1000.000003",
+		CatchUpThrough: "1700000001.000003",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/subscribe", bytes.NewBuffer(firstBody))
 	w := httptest.NewRecorder()
@@ -772,7 +862,7 @@ func TestHandleSubscribe_UnsubscribeThenResubscribeDifferentSessionDeliversFullH
 		t.Fatalf("published events after initial subscribe = %d, want 1", len(publisher.events))
 	}
 
-	delReq := httptest.NewRequest(http.MethodDelete, "/subscribe?thread_ts=1000.000001", nil)
+	delReq := httptest.NewRequest(http.MethodDelete, "/subscribe?thread_ts=1700000001.000001", nil)
 	delW := httptest.NewRecorder()
 	a.HandleSubscribe(delW, delReq)
 	if delW.Code != http.StatusNoContent {
@@ -780,11 +870,11 @@ func TestHandleSubscribe_UnsubscribeThenResubscribeDifferentSessionDeliversFullH
 	}
 
 	secondBody, _ := json.Marshal(subscribeRequest{
-		ThreadTS:       "1000.000001",
+		ThreadTS:       "1700000001.000001",
 		ChannelID:      "C-review",
 		SocketPath:     socketPath,
 		SessionName:    "owner/repo-2",
-		CatchUpThrough: "1000.000003",
+		CatchUpThrough: "1700000001.000003",
 	})
 	req2 := httptest.NewRequest(http.MethodPost, "/subscribe", bytes.NewBuffer(secondBody))
 	w2 := httptest.NewRecorder()
@@ -797,8 +887,8 @@ func TestHandleSubscribe_UnsubscribeThenResubscribeDifferentSessionDeliversFullH
 	if err := json.NewDecoder(w2.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if resp.DeliveredThrough != "1000.000003" {
-		t.Errorf("resubscribe response delivered_through = %q, want 1000.000003", resp.DeliveredThrough)
+	if resp.DeliveredThrough != "1700000001.000003" {
+		t.Errorf("resubscribe response delivered_through = %q, want 1700000001.000003", resp.DeliveredThrough)
 	}
 	if len(publisher.events) != 2 {
 		t.Fatalf("published events after different-session resubscribe = %d, want 2 (full history redelivered)", len(publisher.events))
@@ -830,6 +920,50 @@ func TestHandleSubscribe_PostRejectsInvalidJSON(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("got status %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+// A malformed thread_ts can never match a real thread; persisting it turns
+// a bug into a permanent misroute instead of a retriable delivery failure.
+func TestHandleSubscribe_PostRejectsMalformedThreadTS(t *testing.T) {
+	a := newTestAdapter(&Config{ChannelID: "C0"})
+
+	body, _ := json.Marshal(subscribeRequest{
+		ThreadTS:   "1111.000",
+		ChannelID:  "C123",
+		SocketPath: "/run/x.sock",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/subscribe", bytes.NewBuffer(body))
+	w := httptest.NewRecorder()
+	a.HandleSubscribe(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("got status %d, want %d, body=%s", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	if _, ok := a.broker.Find("1111.000"); ok {
+		t.Fatalf("malformed thread_ts must not be persisted")
+	}
+}
+
+func TestHandleSubscribe_PostRejectsMalformedCatchUpThrough(t *testing.T) {
+	socketPath := startTestListener(t)
+	a := newTestAdapter(&Config{ChannelID: "C0"})
+
+	body, _ := json.Marshal(subscribeRequest{
+		ThreadTS:       "1700000020.100000",
+		ChannelID:      "C123",
+		SocketPath:     socketPath,
+		CatchUpThrough: "not-a-timestamp",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/subscribe", bytes.NewBuffer(body))
+	w := httptest.NewRecorder()
+	a.HandleSubscribe(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("got status %d, want %d, body=%s", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	if _, ok := a.broker.Find("1700000020.100000"); ok {
+		t.Fatalf("subscribe with a malformed catch_up_through must not be persisted")
 	}
 }
 
@@ -865,6 +999,39 @@ func TestHandleSubscribe_DeleteUnknownIsIdempotent(t *testing.T) {
 	a := newTestAdapter(&Config{ChannelID: "C0"})
 
 	req := httptest.NewRequest(http.MethodDelete, "/subscribe?thread_ts=9999", nil)
+	w := httptest.NewRecorder()
+	a.HandleSubscribe(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("got status %d, want %d", w.Code, http.StatusNoContent)
+	}
+}
+
+func TestHandleSubscribe_DeleteBySessionRemovesEveryRegistration(t *testing.T) {
+	a := newTestAdapter(&Config{ChannelID: "C0"})
+	a.broker.Subscribe(Subscriber{ThreadTS: "1111111111.100000+op.100000+ops_chat", ChannelID: "C", SocketPath: "/a", SessionName: "owner/repo-1"})
+	a.broker.Subscribe(Subscriber{ThreadTS: "1111111111.100000", ChannelID: "C", SocketPath: "/b", SessionName: "owner/repo-1"})
+	a.broker.Subscribe(Subscriber{ThreadTS: "2222222222.200000", ChannelID: "C", SocketPath: "/c", SessionName: "owner/repo-2"})
+
+	req := httptest.NewRequest(http.MethodDelete, "/subscribe?session_name=owner/repo-1", nil)
+	w := httptest.NewRecorder()
+	a.HandleSubscribe(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("got status %d, want %d", w.Code, http.StatusNoContent)
+	}
+	if _, ok := a.broker.BySession("owner/repo-1"); ok {
+		t.Fatalf("every registration for the session should be removed")
+	}
+	if _, ok := a.broker.BySession("owner/repo-2"); !ok {
+		t.Fatalf("other sessions' registrations must be untouched")
+	}
+}
+
+func TestHandleSubscribe_DeleteBySessionUnknownIsIdempotent(t *testing.T) {
+	a := newTestAdapter(&Config{ChannelID: "C0"})
+
+	req := httptest.NewRequest(http.MethodDelete, "/subscribe?session_name=unknown", nil)
 	w := httptest.NewRecorder()
 	a.HandleSubscribe(w, req)
 
@@ -911,7 +1078,7 @@ func TestHandleSubscribe_PostPersistsSessionName(t *testing.T) {
 	a := newTestAdapter(&Config{ChannelID: "C0"})
 
 	body, _ := json.Marshal(subscribeRequest{
-		ThreadTS:    "1111.000",
+		ThreadTS:    "1700000013.100000",
 		ChannelID:   "C123",
 		SocketPath:  socketPath,
 		SessionName: "owner/repo-1",
@@ -927,8 +1094,8 @@ func TestHandleSubscribe_PostPersistsSessionName(t *testing.T) {
 	if !ok {
 		t.Fatalf("BySession lookup failed after subscribe")
 	}
-	if sub.ThreadTS != "1111.000" {
-		t.Errorf("ThreadTS = %q, want 1111.000", sub.ThreadTS)
+	if sub.ThreadTS != "1700000013.100000" {
+		t.Errorf("ThreadTS = %q, want 1700000013.100000", sub.ThreadTS)
 	}
 }
 
