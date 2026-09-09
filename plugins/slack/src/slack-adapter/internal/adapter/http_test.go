@@ -498,11 +498,6 @@ func TestHandleSubscribe_PostRetriesUntilSocketReady(t *testing.T) {
 	}
 }
 
-// A second POST /subscribe naming the same socket_path (the exact shape
-// that let a reply misroute to the channel) must not just replace the
-// broker's map entry — the live channel-server connection has to be
-// rebound to the new thread_ts too, or it would keep replying to the
-// thread the connection was originally opened for.
 func TestHandleSubscribe_SecondSubscribeOnSameSocketRebindsLiveConnection(t *testing.T) {
 	var mu sync.Mutex
 	registeredThreadTS := map[net.Conn]string{}

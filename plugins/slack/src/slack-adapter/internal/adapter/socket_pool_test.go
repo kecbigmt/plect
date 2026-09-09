@@ -409,10 +409,6 @@ func TestSocketPool_ReusesConnection(t *testing.T) {
 	mu.Unlock()
 }
 
-// A socket_path reused for a different thread_ts must re-register the
-// existing connection rather than silently keeping the old registration:
-// the underlying connection stays the same, but channel-server needs a
-// fresh Register to learn the new thread_ts.
 func TestSocketPool_RebindsExistingConnectionOnThreadChange(t *testing.T) {
 	socketDir := t.TempDir()
 	socketPath := filepath.Join(socketDir, "test.sock")
@@ -475,12 +471,84 @@ func TestSocketPool_RebindsExistingConnectionOnThreadChange(t *testing.T) {
 	}
 }
 
-// channel-server remembers only the most recent Register on a connection
-// and uses that thread_ts for every later permission prompt, regardless of
-// which message triggered it (see ConnSenderStore in channel-server). A
-// socket reused for a new subscription must rebind that live registration,
-// or a permission prompt would keep routing to the previous subscription's
-// thread and channel.
+// A cached connection can go bad without SocketPool having noticed yet
+// (ReadLoop's own cleanup is asynchronous). Rebind failing on it must not
+// surface to the caller: SocketPool drops it and connects fresh instead.
+func TestSocketPool_GetOrConnect_ReconnectsWhenRebindFails(t *testing.T) {
+	socketDir := t.TempDir()
+	socketPath := filepath.Join(socketDir, "test.sock")
+
+	var mu sync.Mutex
+	connSeen := map[net.Conn]bool{}
+	var lastThreadTS string
+
+	listener, err := newFakeSocketListener(socketPath, func(env protocol.Envelope, conn net.Conn) {
+		if env.Type != protocol.MsgRegister {
+			return
+		}
+		var reg protocol.RegisterPayload
+		json.Unmarshal(env.Payload, &reg)
+		mu.Lock()
+		connSeen[conn] = true
+		lastThreadTS = reg.ThreadTS
+		mu.Unlock()
+	}, testLogger())
+	if err != nil {
+		t.Fatalf("NewSocketListener() error: %v", err)
+	}
+	defer listener.Close()
+	go listener.Serve()
+
+	poster := &mockPoster{}
+	router := NewSocketPool(poster, testLogger(), nil, nil)
+	defer router.Close()
+
+	deadClient, err := NewSocketClient(socketPath, "1111111111.100000", "C-OLD", testLogger(), nil, nil)
+	if err != nil {
+		t.Fatalf("NewSocketClient() error: %v", err)
+	}
+	deadClient.Close()
+	router.mu.Lock()
+	router.conns[socketPath] = &socketConn{client: deadClient, channelID: "C-OLD", threadTS: "1111111111.100000"}
+	router.mu.Unlock()
+
+	if err := router.Send(socketPath, "C-NEW", protocol.MessagePayload{Text: "hi", ThreadTS: "2222222222.200000"}); err != nil {
+		t.Fatalf("Send() should reconnect past a dead cached connection, got error: %v", err)
+	}
+
+	deadline := time.After(2 * time.Second)
+	for {
+		mu.Lock()
+		ts := lastThreadTS
+		mu.Unlock()
+		if ts == "2222222222.200000" {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timeout waiting for the reconnected connection to register")
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(connSeen) != 2 {
+		t.Fatalf("expected 2 distinct connections accepted (the dead one plus the reconnect), got %d", len(connSeen))
+	}
+
+	router.mu.Lock()
+	defer router.mu.Unlock()
+	if got := router.conns[socketPath]; got == nil || got.client == deadClient {
+		t.Fatalf("expected the dead connection to be replaced in the pool, got %+v", got)
+	}
+}
+
+// The fake listener echoes back whichever thread_ts it last saw in a
+// Register, mirroring channel-server's own ConnSenderStore, which keys a
+// permission prompt off the connection's registration rather than off
+// whatever message triggered it.
 func TestSocketPool_ReusedSocketRoutesPermissionToCurrentSubscription(t *testing.T) {
 	socketDir := t.TempDir()
 	socketPath := filepath.Join(socketDir, "test.sock")

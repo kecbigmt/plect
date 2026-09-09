@@ -25,7 +25,7 @@ type SocketPool struct {
 	statusMgr *StatusManager
 }
 
-// socketConn holds a connection and its current registration.
+// socketConn holds a connection and its associated metadata.
 type socketConn struct {
 	client    *SocketClient
 	channelID string
@@ -84,7 +84,6 @@ func (sr *SocketPool) getOrConnect(socketPath, channelID, threadTS string) (*soc
 		if conn.threadTS == threadTS && conn.channelID == channelID {
 			return conn, nil
 		}
-		// Otherwise it's still registered for its old thread/channel.
 		if err := conn.client.Rebind(threadTS, channelID); err != nil {
 			sr.logger.Warn("rebind failed, reconnecting", "socket_path", socketPath, "error", err)
 			conn.client.Close()

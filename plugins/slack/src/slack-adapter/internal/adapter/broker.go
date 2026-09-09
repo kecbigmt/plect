@@ -295,8 +295,6 @@ func (b *Broker) load() {
 	b.logger.Info("restored subscribers", "count", len(b.subs), "tombstones", len(b.tombstones), "path", b.path)
 }
 
-// dedupeBySocketPathLocked keeps only the newest-Since entry for each
-// socket_path in subs. Entries with no socket_path pass through unchanged.
 func (b *Broker) dedupeBySocketPathLocked(subs []Subscriber) []Subscriber {
 	bestBySocket := make(map[string]Subscriber, len(subs))
 	var noSocket []Subscriber
