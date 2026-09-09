@@ -78,7 +78,6 @@ func isCapError(err error) bool {
 	return errors.As(err, &serviceErr) && serviceErr.Code == service.ErrChildCapExceeded
 }
 
-// pendingPriorityError names the pending member that preempted admission.
 type pendingPriorityError struct {
 	population string
 	resource   string
@@ -92,15 +91,13 @@ func (e *pendingPriorityError) Error() string {
 	)
 }
 
-// isCapacityRefusal reports whether err is a pure capacity-gate refusal
-// rather than a failure the member caused itself.
+// isCapError alone would miss pendingPriorityError: a member preempted by
+// someone else's priority is itself still just capacity-blocked, not broken.
 func isCapacityRefusal(err error) bool {
 	var priority *pendingPriorityError
 	return isCapError(err) || errors.As(err, &priority)
 }
 
-// blockingMember is the pending member pendingExistingAhead found holding
-// priority over the resource being admitted.
 type blockingMember struct {
 	key      string
 	resource string
@@ -121,29 +118,14 @@ func (c *capacityCoordinator) pendingExistingAhead(current Definition, resource 
 			if member == nil || !member.PendingUp || member.SessionName == "" || member.Tombstoned {
 				continue
 			}
-			if c.blockedByNonCapacityFailure(member) {
+			status := memberAdmitStatus(c.log, member)
+			if status.LastReason != "" && status.LastReason != "capacity" {
 				continue
 			}
 			return blockingMember{key: key, resource: resourceID, session: member.SessionName}, true
 		}
 	}
 	return blockingMember{}, false
-}
-
-// blockedByNonCapacityFailure reads member's own event log (no new
-// persisted field) for a failure reason other than the capacity gate.
-func (c *capacityCoordinator) blockedByNonCapacityFailure(member *state.PopulationMember) bool {
-	events, err := c.log.Tail(member.SessionName, event.Filter{
-		Types: []string{event.TypeWorkflowPopulationFailure, event.TypeWorkflowPopulationUp},
-	}, 1)
-	if err != nil || len(events) == 0 {
-		return false
-	}
-	last := events[0]
-	if last.Type != event.TypeWorkflowPopulationFailure || last.Metadata["resource"] != member.ResourceID {
-		return false
-	}
-	return last.Metadata["reason"] != "capacity"
 }
 
 type idleCandidate struct {

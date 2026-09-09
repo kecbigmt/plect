@@ -13,12 +13,14 @@ import (
 
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/service"
+	"github.com/kecbigmt/plecture/app/internal/state"
 )
 
 var (
-	workflowListJSON     bool
-	workflowListNoHeader bool
-	workflowShowJSON     bool
+	workflowListJSON       bool
+	workflowListNoHeader   bool
+	workflowShowJSON       bool
+	workflowPopulationJSON bool
 )
 
 var workflowCmd = &cobra.Command{
@@ -132,6 +134,60 @@ cleanly.`,
 		}
 		return nil
 	},
+}
+
+var workflowPopulationsCmd = &cobra.Command{
+	Use:   "populations <workflow-id> <population-name>",
+	Short: "Show a population's recorded members and their admit status",
+	Long: `Show one population's recorded members: resource, session, whether it is
+pending admission, and — for a member with a session — its most recent
+admit outcome (reason, error, and how many admits have failed in a row
+since the last one that succeeded).
+
+Reads runtime state directly, not current config, so it still shows a
+population whose config was just changed or removed out from under it.`,
+	Args: cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		store := state.NewStore("")
+		members, err := service.PopulationStatus(store, args[0], args[1])
+		if err != nil {
+			return err
+		}
+		if workflowPopulationJSON {
+			b, err := json.MarshalIndent(members, "", "  ")
+			if err != nil {
+				return err
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), string(b))
+			return nil
+		}
+		if len(members) == 0 {
+			fmt.Fprintln(cmd.ErrOrStderr(), "No recorded members")
+			return nil
+		}
+		return writePopulationMembers(cmd.OutOrStdout(), members)
+	},
+}
+
+func writePopulationMembers(out io.Writer, members []service.PopulationMemberStatus) error {
+	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "RESOURCE\tSESSION\tPENDING\tLAST_ADMIT_ERROR\tSTREAK")
+	for _, m := range members {
+		session := m.Session
+		if session == "" {
+			session = "-"
+		}
+		lastError := "-"
+		if m.LastAdmitReason != "" {
+			lastError = fmt.Sprintf("%s: %s", m.LastAdmitReason, m.LastAdmitError)
+		}
+		streak := "-"
+		if m.ConsecutiveAdmitFailures > 0 {
+			streak = fmt.Sprintf("%d", m.ConsecutiveAdmitFailures)
+		}
+		fmt.Fprintf(w, "%s\t%s\t%t\t%s\t%s\n", m.Resource, session, m.PendingUp, lastError, streak)
+	}
+	return w.Flush()
 }
 
 func printWorkflowDetail(out io.Writer, d *service.WorkflowDetail) error {
@@ -391,8 +447,10 @@ func init() {
 	workflowListCmd.Flags().BoolVar(&workflowListNoHeader, "no-header", false, "Omit the header row")
 
 	workflowShowCmd.Flags().BoolVar(&workflowShowJSON, "json", false, "Output as JSON")
+	workflowPopulationsCmd.Flags().BoolVar(&workflowPopulationJSON, "json", false, "Output as JSON array")
 
 	workflowCmd.AddCommand(workflowListCmd)
 	workflowCmd.AddCommand(workflowShowCmd)
+	workflowCmd.AddCommand(workflowPopulationsCmd)
 	rootCmd.AddCommand(workflowCmd)
 }

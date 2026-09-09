@@ -105,9 +105,8 @@ type = "object"
 	}
 }
 
-// TestCapacityPriorityIgnoresMemberWithNonCapacityFailure guards the
-// starvation regression: a member stuck failing on its own must not hold
-// head-of-line priority forever, blocking eviction of someone else.
+// Both a broken and a genuinely idle member occupy the cap, so success here
+// can only mean the broken one stopped blocking the idle one's eviction.
 func TestCapacityPriorityIgnoresMemberWithNonCapacityFailure(t *testing.T) {
 	cfg := populationConfig(t, `[source.query.poll]
 type = "exec"
@@ -180,8 +179,6 @@ type = "object"
 	}
 }
 
-// TestCapacityPriorityRetainedAfterCapacityRefusal is the flip side: a
-// member whose last failure was purely a capacity refusal keeps priority.
 func TestCapacityPriorityRetainedAfterCapacityRefusal(t *testing.T) {
 	coordinator, def, store, logStore, base := capacityFixture(t)
 	if err := store.UpdatePopulation(populationKey(def), func(population *state.PopulationState) error {
@@ -206,6 +203,46 @@ func TestCapacityPriorityRetainedAfterCapacityRefusal(t *testing.T) {
 	blocker, blocked := coordinator.pendingExistingAhead(def, "urn:case:new")
 	if !blocked || blocker.session != "queued+agent" {
 		t.Fatalf("blocker = %+v, blocked = %v, want the capacity-refused member to keep priority", blocker, blocked)
+	}
+}
+
+// TestCapacityPriorityRecoversAfterAdmitOK guards the case
+// TestCapacityPriorityIgnoresMemberWithNonCapacityFailure cannot: a member
+// that failed once but has since admitted successfully must not stay
+// disqualified by that stale failure the next time it goes pending.
+func TestCapacityPriorityRecoversAfterAdmitOK(t *testing.T) {
+	coordinator, def, store, logStore, base := capacityFixture(t)
+	if err := store.UpdatePopulation(populationKey(def), func(population *state.PopulationState) error {
+		population.Members["urn:case:new"] = &state.PopulationMember{ResourceID: "urn:case:new", PendingUp: true}
+		population.Members["urn:case:recovered"] = &state.PopulationMember{
+			ResourceID: "urn:case:recovered", SessionName: "recovered+agent", PendingUp: true,
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := logStore.Append(event.Event{
+		SessionName: "recovered+agent",
+		Time:        base,
+		Type:        event.TypeWorkflowPopulationFailure,
+		Direction:   event.Internal,
+		Metadata:    map[string]string{"reason": "input", "resource": "urn:case:recovered"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := logStore.Append(event.Event{
+		SessionName: "recovered+agent",
+		Time:        base.Add(time.Minute),
+		Type:        event.TypeWorkflowPopulationAdmitOK,
+		Direction:   event.Internal,
+		Metadata:    map[string]string{"reason": "admit", "resource": "urn:case:recovered"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	blocker, blocked := coordinator.pendingExistingAhead(def, "urn:case:new")
+	if !blocked || blocker.session != "recovered+agent" {
+		t.Fatalf("blocker = %+v, blocked = %v, want a member that admitted successfully since its last failure to hold priority again", blocker, blocked)
 	}
 }
 

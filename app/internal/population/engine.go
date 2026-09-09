@@ -312,7 +312,7 @@ func (e *Engine) admit(ctx context.Context, member *state.PopulationMember) erro
 			return err
 		}
 	}
-	return e.state.UpdatePopulation(e.key, func(population *state.PopulationState) error {
+	if err := e.state.UpdatePopulation(e.key, func(population *state.PopulationState) error {
 		current := population.Members[member.ResourceID]
 		if current == nil || current.Generation != member.Generation || current.Tombstoned {
 			return nil
@@ -320,7 +320,14 @@ func (e *Engine) admit(ctx context.Context, member *state.PopulationMember) erro
 		current.SessionName = session
 		current.PendingUp = false
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	// Unlike TypeWorkflowPopulationUp above, this fires even when outcome.
+	// AlreadyUp is true: pendingExistingAhead needs a "the last attempt
+	// succeeded" signal that isn't gated on presence changing.
+	e.record(session, event.TypeWorkflowPopulationAdmitOK, "admit", "population member admission succeeded", member.ResourceID)
+	return nil
 }
 
 func (e *Engine) decideDestroy(ctx context.Context, member *state.PopulationMember, reason string) error {

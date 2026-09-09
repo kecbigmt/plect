@@ -235,9 +235,8 @@ func TestUpFailureLeavesAcceptedAppearancePending(t *testing.T) {
 	}
 }
 
-// TestAdmitFailureReasonsDrivePriorityClassification checks that admit()
-// tags each recorded failure with the reason pendingExistingAhead (in
-// capacity.go) reads back: only a "capacity" tag keeps priority.
+// The reason tag this asserts is read back by pendingExistingAhead
+// (capacity.go), not consumed anywhere in this file.
 func TestAdmitFailureReasonsDrivePriorityClassification(t *testing.T) {
 	engine, _, _ := engineFixture(t, false)
 	ctx := context.Background()
@@ -367,6 +366,15 @@ func upEventCount(t *testing.T, engine *Engine, session string) int {
 	return len(events)
 }
 
+func admitOKEventCount(t *testing.T, engine *Engine, session string) int {
+	t.Helper()
+	events, _, _, err := engine.log.List(session, 0, event.Filter{Types: []string{event.TypeWorkflowPopulationAdmitOK}})
+	if err != nil {
+		t.Fatalf("list admit_ok events: %v", err)
+	}
+	return len(events)
+}
+
 // An inbound event on a member re-admits it, which re-runs the idempotent Up
 // hook; only a hook call that actually took the session from not-up to up is
 // a presence change a relay downstream should see.
@@ -406,6 +414,11 @@ func TestReadmissionRecordsUpOnlyOnRunStateTransition(t *testing.T) {
 			}
 			if got := upEventCount(t, engine, "session-urn:case:a"); got != tt.wantUpRecords {
 				t.Fatalf("up events = %d, want %d", got, tt.wantUpRecords)
+			}
+			// Unlike the presence-only up event above, admit_ok records
+			// every successful admit, so it's 2 either way.
+			if got := admitOKEventCount(t, engine, "session-urn:case:a"); got != 2 {
+				t.Fatalf("admit_ok events = %d, want 2 regardless of presence change", got)
 			}
 		})
 	}

@@ -350,12 +350,21 @@ Population decisions are durable events:
 | Event | Meaning |
 |---|---|
 | `plect.workflow_population.up` | A member transitioned to up. Re-admitting an up member records nothing. |
+| `plect.workflow_population.admit_ok` | An admit attempt succeeded, including one that found the member already up. |
 | `plect.workflow_population.down` | Capacity policy selected or evaluated a down action. |
 | `plect.workflow_population.destroy` | An eligible member was destroyed. |
 | `plect.workflow_population.destroy_deferred` | A task guard blocked destruction. |
 | `plect.workflow_population.destroy_dry_run` | Destruction was eligible but disabled. |
 | `plect.workflow_population.conflict` | Existing state has incompatible provenance. |
-| `plect.workflow_population.failure` | A query or lifecycle operation failed. |
+| `plect.workflow_population.failure` | A query or lifecycle operation failed; `reason` metadata is `capacity`, `up`, `input`, or `task_setup`. |
+
+A member's admit history — carried only in these events, not a separate
+persisted field — decides whether it keeps head-of-line priority at the
+capacity gate: only a member whose most recent outcome was `admit_ok` or a
+`failure` with `reason = capacity` does. `plect workflow populations
+<workflow-id> <population-name>` shows each member's current status,
+including its last admit error and how many attempts have failed in a row
+since the last `admit_ok`.
 
 A task chain may start another session under a selected workflow once its
 condition holds. It addresses the same resource by default or another concrete
