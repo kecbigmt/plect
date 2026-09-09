@@ -10,7 +10,7 @@ import (
 
 // DefaultCacheRoot returns the root resolved catalog snapshots are
 // materialized under (see cachehome.Resolve).
-func DefaultCacheRoot() string {
+func DefaultCacheRoot() (string, error) {
 	return cachehome.Resolve()
 }
 

@@ -179,31 +179,28 @@ to run and observe, and cannot be automated as a CI check.
    the gated path). `plect-web`'s own `config.toml` is the only thing this
    touches: it reads `$HOME/.config/plect-web/config.toml` with no override
    of its own, so a throwaway `$HOME` isolates it completely — nothing
-   existing is overwritten. The plugin/catalog cache has no XDG override
-   either (always `~/.cache/plect`, `DefaultCacheRoot` in
-   `app/internal/plugins/cache.go`), so it is shared back in via a symlink
-   rather than left unresolvable:
+   existing is overwritten:
    ```bash
    smoke_home="$(mktemp -d)"
    smoke_env="$(mktemp)"
    (umask 077 && mkdir -p "$smoke_home/.config/plect-web")
-   ln -s "$HOME/.cache" "$smoke_home/.cache"
    token="$(head -c32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
    (umask 077 && printf 'auth_token = "%s"\n' "$token" > "$smoke_home/.config/plect-web/config.toml")
    cat > "$smoke_env" <<ENV
    HOME=$smoke_home
    XDG_CONFIG_HOME=$HOME/.config
    XDG_DATA_HOME=$HOME/.local/share
+   XDG_CACHE_HOME=$HOME/.cache
    ENV
    printf 'auth_token: %s\n' "$token"   # sign in with this value in step 3
    ```
    `$smoke_env`'s `HOME` isolates only `plect-web`'s own config; its
-   `XDG_CONFIG_HOME`/`XDG_DATA_HOME` are captured from the real `$HOME`
-   above (before the heredoc), so the real plect declarations and session
-   state this procedure is meant to exercise stay real. Only running
-   `plect-web` itself needs `$smoke_env` (step 2, and step 8's second
-   bind — reuse the same file rather than generating a new one, which
-   would pick a different, token-less `$smoke_home`). Step 5's
+   `XDG_CONFIG_HOME`/`XDG_DATA_HOME`/`XDG_CACHE_HOME` are captured from the
+   real `$HOME` above (before the heredoc), so the real plect declarations,
+   session state, and plugin cache this procedure is meant to exercise stay
+   real. Only running `plect-web` itself needs `$smoke_env` (step 2, and
+   step 8's second bind — reuse the same file rather than generating a new
+   one, which would pick a different, token-less `$smoke_home`). Step 5's
    `plect event publish` is a plain CLI command that never reads
    `plect-web`'s config, so it needs none of this, in any terminal.
 2. **Build and run** against real state, sourcing `$smoke_env` in a
