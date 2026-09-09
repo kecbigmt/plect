@@ -193,6 +193,43 @@ case "$got" in
   *) printf 'a later turn must not be suppressed by a marker an empty-text Stop failed to clear, got: %s\n' "$got" >&2; exit 1 ;;
 esac
 
+# message_display: the marker must be on disk before the plect.message
+# publish call returns, not merely before the whole hook process exits --
+# otherwise a Stop invocation that races in during that exact call still
+# observes "no marker" and publishes its own duplicate. Simulated with a mock
+# plect binary that, the instant it sees the final delta's plect.message
+# publish, itself invokes the Stop hook for the same turn synchronously
+# (mid-call), rather than after the hook process would have returned.
+race_bin_dir="$tmp/bin-race"
+mkdir -p "$race_bin_dir"
+cat > "$race_bin_dir/plect" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$PLECT_CALLS"
+case "$*" in
+  *"--type plect.message "*"message_id=msg-race"*)
+    PLECT_SESSION_NAME="owner/repo-1" \
+    PLECT_CALLS="$PLECT_CALLS" \
+    XDG_STATE_HOME="$XDG_STATE_HOME" \
+    PATH="$RACE_STOP_PATH" \
+    "$RACE_SUBJECT" reply <<<'{"hook_event_name":"Stop","last_assistant_message":"raced","prompt_id":"turn-race"}'
+    ;;
+esac
+EOF
+chmod +x "$race_bin_dir/plect"
+
+: > "$tmp/calls"
+PLECT_SESSION_NAME="owner/repo-1" \
+PLECT_CALLS="$tmp/calls" \
+XDG_STATE_HOME="$tmp/state" \
+PATH="$race_bin_dir:$PATH" \
+RACE_SUBJECT="$subject" \
+RACE_STOP_PATH="$bin_dir:$PATH" \
+"$subject" message_display <<<'{"hook_event_name":"MessageDisplay","message_id":"msg-race","turn_id":"turn-race","index":0,"final":true,"delta":"raced"}'
+[ "$(grep -c -- '--type plect.message ' "$tmp/calls")" -eq 1 ] || {
+  printf 'message_display racing with a concurrent Stop published more than one plect.message: %s\n' "$(cat "$tmp/calls")" >&2
+  exit 1
+}
+
 # message_display: no turn_id means no turn_id metadata, rather than an
 # empty one -- on both the delta and the message it completes.
 got="$(run_report message_display '{"hook_event_name":"MessageDisplay","message_id":"msg-2","index":0,"final":true,"delta":"hi"}')"
