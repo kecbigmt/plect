@@ -119,8 +119,8 @@ func (c *capacityCoordinator) pendingExistingAhead(current Definition, resource 
 			if member == nil || !member.PendingUp || member.SessionName == "" || member.Tombstoned {
 				continue
 			}
-			status := admitstatus.Member(c.log, member.SessionName, member.ResourceID)
-			if status.LastReason != "" && status.LastReason != "capacity" {
+			reason := admitstatus.LatestReason(c.log, member.SessionName, member.ResourceID)
+			if reason != "" && reason != "capacity" {
 				continue
 			}
 			return blockingMember{key: key, resource: resourceID, session: member.SessionName}, true

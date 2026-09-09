@@ -206,6 +206,37 @@ func TestCapacityPriorityRetainedAfterCapacityRefusal(t *testing.T) {
 	}
 }
 
+// TestCapacityPriorityExcludesProvenanceConflict guards a real bug found in
+// review: a provenance conflict is its own event type, not a failure, and
+// was invisible to the priority classifier — a member stuck in an
+// unresolvable naming conflict read as eligible and could hold priority
+// forever, exactly like the original starvation bug this PR fixes.
+func TestCapacityPriorityExcludesProvenanceConflict(t *testing.T) {
+	coordinator, def, store, logStore, base := capacityFixture(t)
+	if err := store.UpdatePopulation(populationKey(def), func(population *state.PopulationState) error {
+		population.Members["urn:case:new"] = &state.PopulationMember{ResourceID: "urn:case:new", PendingUp: true}
+		population.Members["urn:case:conflicted"] = &state.PopulationMember{
+			ResourceID: "urn:case:conflicted", SessionName: "conflicted+agent", PendingUp: true,
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := logStore.Append(event.Event{
+		SessionName: "conflicted+agent",
+		Time:        base,
+		Type:        event.TypeWorkflowPopulationConflict,
+		Direction:   event.Internal,
+		Metadata:    map[string]string{"reason": "provenance", "resource": "urn:case:conflicted"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if blocker, blocked := coordinator.pendingExistingAhead(def, "urn:case:new"); blocked {
+		t.Fatalf("blocker = %+v, want a provenance-conflicted member to lose priority", blocker)
+	}
+}
+
 // TestCapacityPriorityRecoversAfterAdmitOK guards the case
 // TestCapacityPriorityIgnoresMemberWithNonCapacityFailure cannot: a member
 // that failed once but has since admitted successfully must not stay

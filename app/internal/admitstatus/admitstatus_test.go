@@ -142,3 +142,68 @@ func TestMemberAdmitOKResetsAcrossIgnoredFailures(t *testing.T) {
 		t.Fatalf("status = %+v, want a trailing poll failure to leave the post-admit_ok recovery intact", status)
 	}
 }
+
+// TestMemberCountsProvenanceConflict guards a real bug found in review: a
+// provenance conflict (plect.workflow_population.conflict) is not a
+// plect.workflow_population.failure at all, so it was invisible to the
+// classifier — a member stuck in an unresolvable naming conflict read as
+// eligible and could hold priority forever.
+func TestMemberCountsProvenanceConflict(t *testing.T) {
+	log := eventlog.NewStore(state.NewStore(t.TempDir()).Dir())
+	if _, _, _, err := log.Append(event.Event{
+		SessionName: "a+agent",
+		Type:        event.TypeWorkflowPopulationConflict,
+		Direction:   event.Internal,
+		Summary:     "owned elsewhere",
+		Metadata:    map[string]string{"reason": "provenance", "resource": "urn:case:a"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	status := Member(log, "a+agent", "urn:case:a")
+	if status.LastReason != "provenance" || status.LastError != "owned elsewhere" || status.Consecutive != 1 {
+		t.Fatalf("status = %+v, want the conflict counted as a disqualifying outcome", status)
+	}
+}
+
+func TestLatestReasonStopsAtFirstQualifyingEvent(t *testing.T) {
+	store := state.NewStore(t.TempDir())
+	log := eventlog.NewStore(store.Dir())
+	base := time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC)
+	for i, ev := range []event.Event{
+		{Type: event.TypeWorkflowPopulationFailure, Metadata: map[string]string{"reason": "input", "resource": "urn:case:a"}},
+		{Type: event.TypeWorkflowPopulationFailure, Metadata: map[string]string{"reason": "task_setup", "resource": "urn:case:a"}},
+	} {
+		ev.SessionName = "a+agent"
+		ev.Time = base.Add(time.Duration(i) * time.Minute)
+		ev.Direction = event.Internal
+		if _, _, _, err := log.Append(ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if got := LatestReason(log, "a+agent", "urn:case:a"); got != "task_setup" {
+		t.Fatalf("LatestReason = %q, want only the most recent outcome", got)
+	}
+}
+
+func TestLatestReasonEmptyAfterAdmitOK(t *testing.T) {
+	store := state.NewStore(t.TempDir())
+	log := eventlog.NewStore(store.Dir())
+	base := time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC)
+	for i, ev := range []event.Event{
+		{Type: event.TypeWorkflowPopulationFailure, Metadata: map[string]string{"reason": "input", "resource": "urn:case:a"}},
+		{Type: event.TypeWorkflowPopulationAdmitOK, Metadata: map[string]string{"reason": "admit", "resource": "urn:case:a"}},
+	} {
+		ev.SessionName = "a+agent"
+		ev.Time = base.Add(time.Duration(i) * time.Minute)
+		ev.Direction = event.Internal
+		if _, _, _, err := log.Append(ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if got := LatestReason(log, "a+agent", "urn:case:a"); got != "" {
+		t.Fatalf("LatestReason = %q, want eligible after admit_ok", got)
+	}
+}
