@@ -246,14 +246,19 @@ caller of this endpoint, not built into the plugin.
 
 ### POST /stream
 
-One chunk of a `plect.message_delta` sequence, rendered as a single
+One chunk of a `plect.message_delta` sequence, or the single chunk a
+`plect.message` with no preceding deltas is posted as, rendered as a single
 live-updating Slack thread reply via `chat.startStream` /
 `chat.appendStream` / `chat.stopStream`, keyed by `stream_key`. `index`
 orders chunks within a `stream_key`; a chunk arriving out of order is
 buffered until the gap closes or a small bound is reached, at which point
 the buffered chunks flush in index order regardless of the gap. `final`
-finalizes the message; a later chunk under the same `stream_key` starts a
-new one.
+finalizes the message. The `stream` channel that calls this endpoint runs
+unconditionally, so a `plect.message` whose own preceding deltas already
+finalized this `stream_key` reaches it too; a chunk delivered under an
+already-finalized `stream_key` is dropped rather than starting a second
+message (`StreamManager`'s own doc comment,
+`internal/adapter/stream.go`).
 
 `recipient_user_id` (required by `chat.startStream` when streaming to a
 channel — confirmed empirically against a live workspace, and required for
@@ -277,10 +282,9 @@ violate "exactly one Slack thread message appears".
 ```
 
 `index` and `final` are strings, not a JSON number/bool: they originate as
-`plect.message_delta` event metadata, which is always a string (see
-`contracts/event`), and the `stream` channel passes its inputs through
-verbatim rather than requiring every composing workflow to convert them
-first.
+event metadata, which is always a string (see `contracts/event`), and the
+`stream` channel passes them through verbatim rather than requiring every
+composing workflow to convert them first.
 
 ### GET /unbound-mentions
 
