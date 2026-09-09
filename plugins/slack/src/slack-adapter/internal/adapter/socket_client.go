@@ -33,29 +33,43 @@ func NewSocketClient(socketPath, threadTS, channelID string, logger *slog.Logger
 	}
 
 	c := &SocketClient{
-		conn:     conn,
-		threadTS: threadTS,
-		logger:   logger,
-		onReply:  onReply,
-		onPerm:   onPerm,
+		conn:    conn,
+		logger:  logger,
+		onReply: onReply,
+		onPerm:  onPerm,
 	}
 
-	// Register with channel-server
+	if err := c.register(threadTS, channelID); err != nil {
+		conn.Close()
+		return nil, err
+	}
+
+	return c, nil
+}
+
+func (c *SocketClient) register(threadTS, channelID string) error {
 	reg := protocol.RegisterPayload{
 		ThreadTS:  threadTS,
 		ChannelID: channelID,
 	}
 	data, err := protocol.NewEnvelope(protocol.MsgRegister, reg)
 	if err != nil {
-		conn.Close()
-		return nil, err
+		return err
 	}
 	if err := c.writeMessage(data); err != nil {
-		conn.Close()
-		return nil, err
+		return err
 	}
+	c.mu.Lock()
+	c.threadTS = threadTS
+	c.mu.Unlock()
+	return nil
+}
 
-	return c, nil
+// Rebind re-registers an already-open connection under a different
+// thread/channel, so reusing it doesn't leave channel-server pointed at
+// the thread it was originally opened for.
+func (c *SocketClient) Rebind(threadTS, channelID string) error {
+	return c.register(threadTS, channelID)
 }
 
 // ReadLoop reads messages from channel-server. Blocks until connection closes.

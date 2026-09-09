@@ -137,8 +137,6 @@ func (b *Broker) UnsubscribeBySession(sessionName string) []Subscriber {
 	return removed
 }
 
-// removeLocked deletes threadTS, tombstoning its watermark like Unsubscribe,
-// and returns the removed entry. Caller holds b.mu and persists afterward.
 func (b *Broker) removeLocked(threadTS string) (Subscriber, bool) {
 	s, ok := b.subs[threadTS]
 	if !ok {
@@ -157,8 +155,6 @@ func (b *Broker) removeLocked(threadTS string) (Subscriber, bool) {
 	return s, true
 }
 
-// replaceBySocketPathLocked drops any registration sharing s's socket_path
-// under a different thread_ts.
 func (b *Broker) replaceBySocketPathLocked(s Subscriber) {
 	if s.SocketPath == "" {
 		return

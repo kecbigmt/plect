@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -494,6 +495,100 @@ func TestHandleSubscribe_PostRetriesUntilSocketReady(t *testing.T) {
 	}
 	if _, ok := a.broker.Find("1700000012.100000"); !ok {
 		t.Fatalf("broker should hold the subscription after retry succeeded")
+	}
+}
+
+// A second POST /subscribe naming the same socket_path (the exact shape
+// that let a reply misroute to the channel) must not just replace the
+// broker's map entry — the live channel-server connection has to be
+// rebound to the new thread_ts too, or it would keep replying to the
+// thread the connection was originally opened for.
+func TestHandleSubscribe_SecondSubscribeOnSameSocketRebindsLiveConnection(t *testing.T) {
+	var mu sync.Mutex
+	registeredThreadTS := map[net.Conn]string{}
+
+	dir := t.TempDir()
+	socketPath := filepath.Join(dir, "test.sock")
+	listener, err := newFakeSocketListener(socketPath, func(env protocol.Envelope, conn net.Conn) {
+		if env.Type != protocol.MsgRegister {
+			return
+		}
+		var reg protocol.RegisterPayload
+		if err := env.UnmarshalPayload(&reg); err != nil {
+			return
+		}
+		mu.Lock()
+		registeredThreadTS[conn] = reg.ThreadTS
+		mu.Unlock()
+	}, testLogger())
+	if err != nil {
+		t.Fatalf("NewSocketListener: %v", err)
+	}
+	defer listener.Close()
+	go listener.Serve()
+
+	a := newTestAdapter(&Config{ChannelID: "C0"})
+
+	firstBody, _ := json.Marshal(subscribeRequest{
+		ThreadTS:   "1111111111.100000",
+		ChannelID:  "C-OLD",
+		SocketPath: socketPath,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/subscribe", bytes.NewBuffer(firstBody))
+	w := httptest.NewRecorder()
+	a.HandleSubscribe(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("first subscribe: got status %d, want %d, body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	secondBody, _ := json.Marshal(subscribeRequest{
+		ThreadTS:   "2222222222.200000",
+		ChannelID:  "C-NEW",
+		SocketPath: socketPath,
+	})
+	req2 := httptest.NewRequest(http.MethodPost, "/subscribe", bytes.NewBuffer(secondBody))
+	w2 := httptest.NewRecorder()
+	a.HandleSubscribe(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("second subscribe: got status %d, want %d, body=%s", w2.Code, http.StatusOK, w2.Body.String())
+	}
+
+	// The listener processes each Register asynchronously, off the request
+	// goroutine that already returned 200; wait for the rebind's Register
+	// specifically, not just any Register, since the first one can still be
+	// in flight when the second write lands.
+	sawRebind := func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, ts := range registeredThreadTS {
+			if ts == "2222222222.200000" {
+				return true
+			}
+		}
+		return false
+	}
+	deadline := time.After(2 * time.Second)
+	for !sawRebind() {
+		select {
+		case <-deadline:
+			t.Fatal("timeout waiting for the second subscribe's Register to land")
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(registeredThreadTS) != 1 {
+		t.Fatalf("expected the connection to be reused, got %d distinct connections registered", len(registeredThreadTS))
+	}
+	for _, ts := range registeredThreadTS {
+		if ts != "2222222222.200000" {
+			t.Fatalf("live connection still registered for %q, want the second subscription's thread_ts", ts)
+		}
+	}
+	if _, ok := a.broker.Find("1111111111.100000"); ok {
+		t.Fatalf("stale broker entry should have been replaced")
 	}
 }
 
