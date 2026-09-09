@@ -71,6 +71,36 @@ service) use `InheritableEnv`: a workspace-provider hook, resource-observer
 query, or service may read `XDG_DATA_HOME` for on-disk state of its own,
 unrelated to plect's store.
 
+An `IsolatedEnv` child still needs to run `plect` against the daemon's own
+store — a pane's plugin hooks, or a task instruction that tells the agent to
+run `plect judge`/`plect state set` — even though its environment carries no
+data-home variable to resolve it by. `app/internal/plectshim` closes that gap
+by identity rather than environment: every isolated exec prepends a
+directory to `PATH` holding one shim executable named `plect` that execs a
+resolved `plect` CLI binary with `--data-home` pinned to the daemon's
+resolved, absolute data home (and `--config-home`/`--cache-home` likewise,
+but only when the running process was itself launched with an override for
+one of those). That target binary is `os.Executable()` itself when the
+running process is already named `plect`; `plect-web`
+(`webui.LiveService.Up` reaches the same isolated exec path but has no CLI
+subcommand tree of its own) resolves instead to a `plect` shipped alongside
+it, or `$PLECT_BIN` if that's set (normalized to an absolute path before it
+reaches the script, since the script itself runs later from an isolated
+child's own working directory) — refusing (no shim, the pre-existing
+behavior) rather than guessing at an unrelated, differently-versioned
+`plect` a PATH lookup might otherwise find. A `plect-web` built standalone
+(`go install`/`go build ./app/cmd/plect-web`, or any layout other than the
+release archive's `bin/plect` + `bin/plect-web` pair) has no such sibling
+and **must** set `PLECT_BIN` for a pane or channel delivery it launches to
+reach its store; without it, the shim is silently skipped, same as before
+this mechanism existed. The shim lives at
+`<data home>/bin/plect`, rewritten on every isolated exec so it tracks a
+rebuild or restart without any separate cleanup. Consequently, a bare
+`plect` on an isolated child's `PATH` resolves to a build bound to the
+daemon's store, while `./plect`, `go run ./app`, or any other path
+containing a slash bypasses `PATH` lookup entirely and keeps resolving the
+isolated default `IsolatedEnv` intends.
+
 ## Version authority and consumers
 
 `contracts/state.SchemaVersion` is removed. It described a JSON envelope, not

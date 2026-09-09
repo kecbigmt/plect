@@ -24,6 +24,7 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/cachehome"
 	"github.com/kecbigmt/plecture/app/internal/datahome"
 	"github.com/kecbigmt/plecture/app/internal/lang"
+	"github.com/kecbigmt/plecture/app/internal/plectshim"
 )
 
 // CancelWaitDelay bounds how long a cancelled host invocation's Wait keeps
@@ -45,6 +46,10 @@ const (
 // environment, and IsolateDataHome picks datahome.IsolatedEnv over
 // InheritableEnv as that base (see ExecHook/RunHook), stripping the
 // cache-home vars the same way IsolateDataHome does the data-home ones.
+// IsolateDataHome also prepends plectshim's shim directory to PATH, so a
+// bare `plect` this process's own scripts or hooks invoke still reaches the
+// daemon's store even though the isolated environment itself carries no
+// data-home variable (see app/internal/plectshim).
 type ExecRequest struct {
 	Argv            []string
 	Dir             string
@@ -116,7 +121,13 @@ func runHostCmd(ctx context.Context, req ExecRequest, outBuf, errBuf *bytes.Buff
 		base = datahome.IsolatedEnv()
 		stripCacheHome = cachehome.StripIsolated
 	}
-	cmd.Env = append(stripCacheHome(base), req.Env...)
+	base = stripCacheHome(base)
+	if req.IsolateDataHome {
+		if shimDir, err := plectshim.ForCurrentProcess(); err == nil {
+			base = plectshim.PatchPath(base, shimDir)
+		}
+	}
+	cmd.Env = append(base, req.Env...)
 	// Put the child in its own process group and, on cancellation, kill the
 	// whole group rather than just the direct child. A shell script's own
 	// children (e.g. "sleep 5" spawned by "bash -c") don't die with their

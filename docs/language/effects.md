@@ -12,6 +12,14 @@ conversation-directory effect is an ordinary node whose outputs may be chosen
 by its workflow's single `workdir` declaration. It does not reserve an output
 name, and a workflow with no `workdir` is valid.
 
+`setup`/`cleanup`/`health`/`capture` run with no data-home variable in their
+own environment — a build a script starts itself must never reach the
+running daemon's store — but a bare `plect` on that environment's `PATH`
+still resolves to the daemon's own binary bound to the daemon's own store,
+by identity rather than by environment. A build the effect's own script
+starts itself (`./plect`, `go run`) is unaffected: only a name resolved
+through `PATH` is intercepted this way.
+
 ## Surface
 
 | Field | Meaning |

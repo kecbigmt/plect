@@ -28,6 +28,22 @@ chmod +x "$bin_dir/plect"
 export PLECT_CALLS="$tmp/calls"
 export PATH="$bin_dir:$PATH"
 
+# noplect_path simulates plect being unreachable without filtering PATH
+# down to a shortlist of its own: a stub named `plect` ahead of the real
+# PATH always wins the lookup and fails loud, so bash/jq/coreutils stay
+# reachable exactly as they are on the real PATH -- unlike excluding every
+# directory that happens to contain a real `plect`, which on a host that
+# ships coreutils and plect from the same directory would take out bash too.
+noplect_bin_dir="$tmp/bin-noplect"
+mkdir -p "$noplect_bin_dir"
+cat > "$noplect_bin_dir/plect" <<'EOF'
+#!/usr/bin/env bash
+echo "plect: simulated unreachable (selftest)" >&2
+exit 127
+EOF
+chmod +x "$noplect_bin_dir/plect"
+noplect_path="$noplect_bin_dir:$PATH"
+
 fail=0
 check() {
   local label="$1" want="$2" got="$3"
@@ -83,6 +99,22 @@ printf '{"hook_event_name":"UserPromptSubmit"}\n' | "$activity" working
 working_envelope="$("$activity" probe "$session" "$state_dir")"
 check "hook activity is not silence-expected" "false" "$(printf '%s' "$working_envelope" | jq -r .silence_expected)"
 check "working reports its activity as the message" "state set-message selftest/session-1 working (codex UserPromptSubmit)" "$(tail -n 1 "$tmp/calls")"
+
+# working: an unreachable plect never fails the hook, and state
+# set-message's own failure is logged the same way event publish's is above.
+PLECT_SESSION_NAME="$session" \
+XDG_STATE_HOME="$XDG_STATE_HOME" \
+PATH="$noplect_path" \
+"$activity" working <<<'{"hook_event_name":"UserPromptSubmit"}'
+[ $? -eq 0 ] || { echo "FAIL working must exit 0 even when plect is unreachable" >&2; fail=1; }
+statelog="$XDG_STATE_HOME/plect/codex-activity/errors.log"
+if [ -s "$statelog" ] && grep -q 'plect state set-message' "$statelog"; then
+  echo "ok   an unreachable state set-message call is logged instead of the void"
+else
+  echo "FAIL an unreachable state set-message call should be logged to $statelog instead of the void" >&2
+  fail=1
+fi
+: > "$statelog"
 
 printf '{"hook_event_name":"Stop"}\n' | "$activity" waiting
 waiting_envelope="$("$activity" probe "$session" "$state_dir")"
@@ -197,13 +229,28 @@ case "$got" in
   *) echo "FAIL reply fallback counter should advance on the next call, got: $got" >&2; fail=1 ;;
 esac
 
-# reply: plect being unreachable never fails the turn.
+# reply: plect being unreachable never fails the turn, and its failure is
+# logged instead of silently discarded.
 : > "$tmp/calls"
 PLECT_SESSION_NAME="$session" \
 XDG_STATE_HOME="$XDG_STATE_HOME" \
-PATH="$(dirname "$(command -v jq)")" \
-"$activity" reply <<<'{"hook_event_name":"Stop","last_assistant_message":"hi"}'
+PATH="$noplect_path" \
+"$activity" reply <<<'{"hook_event_name":"Stop","last_assistant_message":"secret-payload-marker"}'
 [ $? -eq 0 ] || { echo "FAIL reply must exit 0 even when plect is unreachable" >&2; fail=1; }
+errlog="$XDG_STATE_HOME/plect/codex-activity/errors.log"
+if [ -s "$errlog" ] && grep -q 'plect event publish' "$errlog"; then
+  echo "ok   an unreachable plect call is logged instead of the void"
+else
+  echo "FAIL an unreachable plect call should be logged to $errlog instead of the void" >&2
+  fail=1
+fi
+if grep -q 'secret-payload-marker' "$errlog"; then
+  echo "FAIL errors.log leaked the assistant message payload" >&2
+  fail=1
+else
+  echo "ok   errors.log does not leak the assistant message payload"
+fi
+: > "$errlog"
 
 # reset must NOT drop the reply-seq counter: exec_runtime's setup calls
 # reset on every launch, resumes included, and its reply calls never carry

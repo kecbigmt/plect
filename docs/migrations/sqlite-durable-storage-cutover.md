@@ -59,6 +59,20 @@ import itself stays fast regardless of `$DATA_DIR`'s filesystem — pass
 `--tmp-dir` explicitly if the OS default temporary directory is not local
 disk either.
 
+## Isolation: the pane/channel `plect` shim
+
+A running `plect serve` also keeps `$DATA_DIR/bin/plect` — a small generated
+script an isolated pane or channel-delivery child resolves a bare `plect`
+through, so it still reaches this store even though its own environment
+carries no data-home variable (see [the SQLite persistence
+design](../design/sqlite-persistence.md), "Data-home resolution"). It is
+rewritten on every isolated exec (not just at startup), not part of the
+durable record this migration moves, and needs no attention during import,
+backup, or recovery: the `cp -a`/restore commands below copy and restore it
+along with everything else in `$DATA_DIR` incidentally, and the next
+isolated exec that runs against the restored directory regenerates it from
+scratch regardless of what backup/restore left behind.
+
 ## Backup
 
 Copy the complete runtime data directory to a separate durable location
