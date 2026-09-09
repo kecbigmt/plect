@@ -71,9 +71,9 @@ func scan(log *eventlog.Store, session, resource string) Status {
 
 type cacheKey struct{ session, resource string }
 
-// Cache holds one Status per member in memory: Get seeds an entry with one
-// scan on first access, Record then keeps it exact without scanning again —
-// the capacity gate's hot path never scans a log itself.
+// Cache holds one Status per member in memory, scanning at most once per
+// member (on whichever of Get or Record touches it first) and updating in
+// place after that.
 type Cache struct {
 	log *eventlog.Store
 	mu  sync.Mutex
@@ -99,11 +99,10 @@ func (c *Cache) Get(session, resource string) Status {
 	return status
 }
 
-// Record applies one already-classified admit outcome in place: ok resets
-// session/resource to eligible, otherwise reason/errMsg extend its streak.
-// Callers use this only where the event itself is already known to qualify
-// (an admit attempt's own reason, or a conflict) — Get's own scan is what
-// filters historical noise the first time a member is seen.
+// Record applies one already-classified, already-durably-logged outcome:
+// ok resets to eligible, otherwise reason/errMsg always overwrite
+// LastReason/LastError, since each call already is the newest outcome
+// (unlike scan's own newest-first replay, which keeps only the first).
 func (c *Cache) Record(session, resource string, ok bool, reason, errMsg string) {
 	if session == "" {
 		return
@@ -115,11 +114,16 @@ func (c *Cache) Record(session, resource string, ok bool, reason, errMsg string)
 		c.m[k] = Status{}
 		return
 	}
-	status := c.m[k]
-	if status.LastReason == "" {
-		status.LastReason = reason
-		status.LastError = errMsg
+	if _, seen := c.m[k]; !seen {
+		// Already-durably-logged: a fresh scan on first touch already
+		// reflects this call's own outcome once; applying it again below
+		// would double-count it.
+		c.m[k] = scan(c.log, session, resource)
+		return
 	}
+	status := c.m[k]
+	status.LastReason = reason
+	status.LastError = errMsg
 	status.Consecutive++
 	c.m[k] = status
 }

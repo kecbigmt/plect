@@ -229,16 +229,39 @@ func TestCacheGetSeedsOnceThenIgnoresExternalWrites(t *testing.T) {
 	}
 }
 
-func TestCacheRecordSuccessResetsStreak(t *testing.T) {
-	cache := NewCache(eventlog.NewStore(state.NewStore(t.TempDir()).Dir()))
+// TestCacheRecordHydratesOnceThenUpdatesInPlace guards a real bug found in
+// review: Record's first call for a key it has never seen used to start
+// counting from zero instead of the member's real (durable) history, and
+// every call after the first left LastReason/LastError frozen at whichever
+// failure happened to arrive first instead of the newest one.
+func TestCacheRecordHydratesOnceThenUpdatesInPlace(t *testing.T) {
+	store := state.NewStore(t.TempDir())
+	log := eventlog.NewStore(store.Dir())
+	cache := NewCache(log)
+
+	// The caller (population.Engine) always durably records an outcome
+	// before calling Cache.Record for it, so the first Record for a key
+	// finds its own event already in the log — hydrating from a fresh scan
+	// must not then double-count it on top.
+	if _, _, _, err := log.Append(event.Event{
+		SessionName: "a+agent", Type: event.TypeWorkflowPopulationFailure, Direction: event.Internal,
+		Metadata: map[string]string{"reason": "up", "resource": "urn:case:a"},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	cache.Record("a+agent", "urn:case:a", false, "up", "boom")
-	cache.Record("a+agent", "urn:case:a", false, "up", "boom")
-	if got := cache.Get("a+agent", "urn:case:a").Consecutive; got != 2 {
-		t.Fatalf("consecutive = %d, want 2 before the reset", got)
+	if got := cache.Get("a+agent", "urn:case:a").Consecutive; got != 1 {
+		t.Fatalf("consecutive after the first Record = %d, want 1, not double-counted", got)
+	}
+
+	cache.Record("a+agent", "urn:case:a", false, "task_setup", "boom again")
+	status := cache.Get("a+agent", "urn:case:a")
+	if status.Consecutive != 2 || status.LastReason != "task_setup" {
+		t.Fatalf("status after a second failure = %+v, want consecutive 2 and the newest reason", status)
 	}
 
 	cache.Record("a+agent", "urn:case:a", true, "", "")
-	status := cache.Get("a+agent", "urn:case:a")
+	status = cache.Get("a+agent", "urn:case:a")
 	if status.LastReason != "" || status.Consecutive != 0 {
 		t.Fatalf("status after a successful admit = %+v, want a full reset", status)
 	}
