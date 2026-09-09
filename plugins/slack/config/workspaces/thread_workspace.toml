@@ -14,10 +14,11 @@ name  = { expr = "'slack/' + match.channel_id + '-' + (match.thread_ts != '' ? m
 
 # `setup` has no `match` root — it runs once a session already exists, past
 # the point `name` resolved it — so it recovers channel_id and the root
-# timestamp by splitting `session.name` instead of re-parsing the permalink
-# with a second regex. That keeps the directory `setup` creates and the
-# session `name` already picked in agreement by construction: one
-# derivation of those digits, not two that could drift apart.
+# timestamp by re-parsing `permalink`, the same string `match` parsed to
+# build `session.name` in the first place, rather than splitting
+# `session.name` itself. `session.name` carries a trailing `+<workflow-id>`
+# appended after resolution, which a positional slice of it can't tell apart
+# from the digits it's after; `permalink` carries no such suffix.
 [thread_workspace.setup]
 type = "shell"
 script = '''
@@ -54,10 +55,24 @@ json_escape() {
   printf '%s' "$out"
 }
 
-rest=${session_name#slack/}
-channel_id=${rest%-*}
-ts_digits=${rest##*-}
-thread_ts="${ts_digits%??????}.${ts_digits#??????????}"
+# Same shape `match` requires, walked by parameter expansion instead of a
+# second regex engine call: .../archives/<channel_id>/p<ts16> optionally
+# followed by ?thread_ts=<root-ts>&cid=<channel_id>.
+rest=${permalink#*://}
+rest=${rest#*/archives/}
+channel_id=${rest%%/*}
+rest=${rest#*/p}
+ts16=${rest%%\?*}
+if [ "$rest" != "$ts16" ]; then
+  query=${rest#*\?}
+  thread_ts=${query#thread_ts=}
+  thread_ts=${thread_ts%%&*}
+else
+  thread_ts=""
+fi
+if [ -z "$thread_ts" ]; then
+  thread_ts="${ts16%??????}.${ts16#??????????}"
+fi
 
 workspace_dir="$workspace_dirs_root/slack/$channel_id/$thread_ts"
 mkdir -p "$workspace_dir"
@@ -68,9 +83,8 @@ printf '{"workspace_dir":"%s","channel_id":"%s","thread_ts":"%s","permalink":"%s
 '''
 
 [thread_workspace.setup.bind]
-session_name         = { from = "session.name" }
-permalink            = { from = "resource.id" }
-workspace_dirs_root  = { from = "config.workspace_dirs_root" }
+permalink           = { from = "resource.id" }
+workspace_dirs_root = { from = "config.workspace_dirs_root" }
 
 [thread_workspace.cleanup]
 type   = "shell"
