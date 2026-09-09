@@ -288,6 +288,14 @@ func (a *Adapter) handleSubscribePost(w http.ResponseWriter, req *http.Request) 
 		http.Error(w, "thread_ts, channel_id, and socket_path are required", http.StatusBadRequest)
 		return
 	}
+	if !isSlackTimestampShape(body.ThreadTS) {
+		http.Error(w, "thread_ts must have the shape <10 digits>.<6 digits>", http.StatusBadRequest)
+		return
+	}
+	if body.CatchUpThrough != "" && !isSlackTimestampShape(body.CatchUpThrough) {
+		http.Error(w, "catch_up_through must have the shape <10 digits>.<6 digits>", http.StatusBadRequest)
+		return
+	}
 
 	// Connect before registering so a successful POST guarantees both
 	// directions of routing. Otherwise the subscription would silently
@@ -330,9 +338,23 @@ func (a *Adapter) connectWithRetry(socketPath, channelID, threadTS string) error
 }
 
 func (a *Adapter) handleSubscribeDelete(w http.ResponseWriter, req *http.Request) {
+	// session_name drops every registration for a session regardless of what
+	// thread_ts each one carries — the operator escape hatch for a stale or
+	// malformed entry an exact thread_ts lookup can't reach.
+	if sessionName := req.URL.Query().Get("session_name"); sessionName != "" {
+		removed := a.broker.UnsubscribeBySession(sessionName)
+		if len(removed) == 0 {
+			a.logger.Debug("unsubscribe by session_name miss", "session_name", sessionName)
+		} else {
+			a.logger.Info("unsubscribed by session_name", "session_name", sessionName, "count", len(removed))
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
 	threadTS := req.URL.Query().Get("thread_ts")
 	if threadTS == "" {
-		http.Error(w, "thread_ts query parameter is required", http.StatusBadRequest)
+		http.Error(w, "thread_ts or session_name query parameter is required", http.StatusBadRequest)
 		return
 	}
 	if removed, ok := a.broker.Unsubscribe(threadTS); !ok {

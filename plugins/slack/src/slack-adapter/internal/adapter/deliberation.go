@@ -3,6 +3,7 @@ package adapter
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -11,6 +12,17 @@ import (
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 )
+
+var slackTimestampShape = regexp.MustCompile(`^\d{10}\.\d{6}$`)
+
+// isSlackTimestampShape reports whether ts has the shape Slack actually
+// issues (10-digit seconds, 6-digit microseconds). A value with any other
+// shape can never match a real thread, so persisting it turns a routing bug
+// into a permanent misroute instead of a delivery failure a retry could
+// recover from.
+func isSlackTimestampShape(ts string) bool {
+	return slackTimestampShape.MatchString(ts)
+}
 
 type threadFetcher interface {
 	fetchThreadReplies(channelID, threadTS string) ([]slack.Message, error)

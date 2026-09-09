@@ -108,6 +108,89 @@ func TestBroker_SubscribeReplacesExisting(t *testing.T) {
 	}
 }
 
+// A socket_path shared by two different thread_ts registrations is the
+// exact shape that lets a reply misroute to the channel: the second
+// Subscribe for the same socket must evict the first rather than
+// coexist with it.
+func TestBroker_SubscribeReplacesExistingRegistrationForSameSocket(t *testing.T) {
+	b := NewBroker("", nil)
+	b.Subscribe(Subscriber{ThreadTS: "1111111111.100000", ChannelID: "C1", SocketPath: "/run/x.sock", SessionName: "owner/repo-1"})
+	b.Subscribe(Subscriber{ThreadTS: "1111111111.200000", ChannelID: "C1", SocketPath: "/run/x.sock", SessionName: "owner/repo-1"})
+
+	if _, ok := b.Find("1111111111.100000"); ok {
+		t.Fatalf("stale registration for the same socket should have been replaced")
+	}
+	got, ok := b.Find("1111111111.200000")
+	if !ok || got.SocketPath != "/run/x.sock" {
+		t.Fatalf("expected the new registration to be present, got %+v (ok=%v)", got, ok)
+	}
+	if len(b.List()) != 1 {
+		t.Fatalf("List length = %d, want 1 (one live registration per socket)", len(b.List()))
+	}
+}
+
+// A Subscribe for one thread_ts must not disturb a different socket's
+// registration under a different thread_ts.
+func TestBroker_SubscribeLeavesOtherSocketsAlone(t *testing.T) {
+	b := NewBroker("", nil)
+	b.Subscribe(Subscriber{ThreadTS: "1111111111.100000", ChannelID: "C1", SocketPath: "/run/a.sock"})
+	b.Subscribe(Subscriber{ThreadTS: "2222222222.200000", ChannelID: "C1", SocketPath: "/run/b.sock"})
+
+	if _, ok := b.Find("1111111111.100000"); !ok {
+		t.Fatalf("unrelated socket's registration should be unaffected")
+	}
+	if len(b.List()) != 2 {
+		t.Fatalf("List length = %d, want 2", len(b.List()))
+	}
+}
+
+func TestBroker_UnsubscribeBySessionRemovesEveryMatch(t *testing.T) {
+	b := NewBroker("", nil)
+	b.Subscribe(Subscriber{ThreadTS: "1111111111.100000+op.100000+ops_chat", ChannelID: "C", SocketPath: "/a", SessionName: "owner/repo-1"})
+	b.Subscribe(Subscriber{ThreadTS: "1111111111.100000", ChannelID: "C", SocketPath: "/b", SessionName: "owner/repo-1"})
+	b.Subscribe(Subscriber{ThreadTS: "2222222222.200000", ChannelID: "C", SocketPath: "/c", SessionName: "owner/repo-2"})
+
+	removed := b.UnsubscribeBySession("owner/repo-1")
+	if len(removed) != 2 {
+		t.Fatalf("removed length = %d, want 2", len(removed))
+	}
+	if _, ok := b.BySession("owner/repo-1"); ok {
+		t.Fatalf("every registration for the session should be gone")
+	}
+	if _, ok := b.BySession("owner/repo-2"); !ok {
+		t.Fatalf("other sessions' registrations must be untouched")
+	}
+}
+
+func TestBroker_UnsubscribeBySessionUnknownIsNoop(t *testing.T) {
+	b := NewBroker("", nil)
+	b.Subscribe(Subscriber{ThreadTS: "1111111111.100000", SessionName: "owner/repo-1"})
+
+	if removed := b.UnsubscribeBySession("unknown"); len(removed) != 0 {
+		t.Fatalf("expected no removals, got %+v", removed)
+	}
+	if removed := b.UnsubscribeBySession(""); len(removed) != 0 {
+		t.Fatalf("empty session_name must match nothing, got %+v", removed)
+	}
+	if len(b.List()) != 1 {
+		t.Fatalf("unrelated registration should be untouched")
+	}
+}
+
+// A watermark on a session-wide removal must tombstone the same way a
+// single Unsubscribe does, so a same-session resubscribe still restores it.
+func TestBroker_UnsubscribeBySessionTombstonesWatermark(t *testing.T) {
+	b := NewBroker("", nil)
+	b.Subscribe(Subscriber{ThreadTS: "1111111111.100000", SessionName: "owner/repo-1", DeliveredThrough: "1111111111.100005"})
+
+	b.UnsubscribeBySession("owner/repo-1")
+
+	got := b.Subscribe(Subscriber{ThreadTS: "1111111111.100000", SessionName: "owner/repo-1"})
+	if got.DeliveredThrough != "1111111111.100005" {
+		t.Fatalf("DeliveredThrough = %q, want restored from tombstone", got.DeliveredThrough)
+	}
+}
+
 func TestBroker_SubscribePreservesDeliveryWatermarkWhenReplacing(t *testing.T) {
 	b := NewBroker("", nil)
 	b.Subscribe(Subscriber{ThreadTS: "t", ChannelID: "C1", SocketPath: "/old", DeliveredThrough: "1000.000005"})
@@ -364,6 +447,74 @@ func TestBroker_PersistOnSubscribeAndUnsubscribe(t *testing.T) {
 	}
 	if len(got.Tombstones) != 0 {
 		t.Fatalf("expected no tombstone for a subscriber with no watermark, got %+v", got.Tombstones)
+	}
+}
+
+// Two persisted registrations share one socket_path (a stale entry from
+// before Subscribe enforced one-per-socket). Load must keep only the newer
+// one, so a restart no longer pre-connects the socket to two thread
+// destinations.
+func TestBroker_LoadDedupesBySocketPathKeepingNewestSince(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "subscribers.json")
+
+	older := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	newer := older.Add(time.Hour)
+	initial := persistedState{
+		Subscribers: []Subscriber{
+			{ThreadTS: "1111111111.100000+op.100000+ops_chat", ChannelID: "C", SocketPath: "/run/x.sock", SessionName: "s", Since: older},
+			{ThreadTS: "1111111111.100000", ChannelID: "C", SocketPath: "/run/x.sock", SessionName: "s", Since: newer},
+		},
+	}
+	data, _ := json.Marshal(initial)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	b := NewBroker(path, discardLogger())
+	got := b.List()
+	if len(got) != 1 {
+		t.Fatalf("List length = %d, want 1 after dedup-on-load, got %+v", len(got), got)
+	}
+	if got[0].ThreadTS != "1111111111.100000" {
+		t.Fatalf("kept entry = %+v, want the one with the newer Since", got[0])
+	}
+
+	// The dropped duplicate must not resurface if the process restarts again.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ps persistedState
+	if err := json.Unmarshal(data, &ps); err != nil {
+		t.Fatal(err)
+	}
+	if len(ps.Subscribers) != 1 {
+		t.Fatalf("expected dedup to be persisted back to disk, got %+v", ps.Subscribers)
+	}
+}
+
+// Registrations on different sockets must never be conflated by load-time
+// dedup, even when several share the same socket in different groups.
+func TestBroker_LoadDedupeOnlyAffectsSharedSockets(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "subscribers.json")
+
+	t0 := time.Now()
+	initial := persistedState{
+		Subscribers: []Subscriber{
+			{ThreadTS: "1111111111.100000", ChannelID: "C", SocketPath: "/run/a.sock", Since: t0},
+			{ThreadTS: "2222222222.200000", ChannelID: "C", SocketPath: "/run/b.sock", Since: t0},
+		},
+	}
+	data, _ := json.Marshal(initial)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	b := NewBroker(path, discardLogger())
+	if got := b.List(); len(got) != 2 {
+		t.Fatalf("List length = %d, want 2 (distinct sockets untouched by dedup)", len(got))
 	}
 }
 

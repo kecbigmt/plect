@@ -70,6 +70,8 @@ func NewBroker(path string, logger *slog.Logger) *Broker {
 }
 
 // Subscribe inserts or replaces a subscription, defaulting Since to now.
+// Also replaces any existing registration under the same socket_path, so a
+// socket never ends up bound to two threads at once.
 //
 // The mutex is held through persist so the on-disk order matches the
 // in-memory order; releasing the lock before write lets a stale snapshot
@@ -90,6 +92,7 @@ func (b *Broker) Subscribe(s Subscriber) Subscriber {
 			delete(b.tombstones, key)
 		}
 	}
+	b.replaceBySocketPathLocked(s)
 	b.subs[s.ThreadTS] = s
 	b.persistLocked()
 	return s
@@ -103,6 +106,40 @@ func (b *Broker) Subscribe(s Subscriber) Subscriber {
 func (b *Broker) Unsubscribe(threadTS string) (Subscriber, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	s, ok := b.removeLocked(threadTS)
+	if !ok {
+		return Subscriber{}, false
+	}
+	b.persistLocked()
+	return s, true
+}
+
+// UnsubscribeBySession removes every registration for sessionName, the same
+// way Unsubscribe removes one by thread_ts — for an operator who doesn't
+// know a stale entry's exact thread_ts.
+func (b *Broker) UnsubscribeBySession(sessionName string) []Subscriber {
+	if sessionName == "" {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var removed []Subscriber
+	for ts, s := range b.subs {
+		if s.SessionName != sessionName {
+			continue
+		}
+		r, _ := b.removeLocked(ts)
+		removed = append(removed, r)
+	}
+	if len(removed) > 0 {
+		b.persistLocked()
+	}
+	return removed
+}
+
+// removeLocked deletes threadTS, tombstoning its watermark like Unsubscribe,
+// and returns the removed entry. Caller holds b.mu and persists afterward.
+func (b *Broker) removeLocked(threadTS string) (Subscriber, bool) {
 	s, ok := b.subs[threadTS]
 	if !ok {
 		return Subscriber{}, false
@@ -117,8 +154,23 @@ func (b *Broker) Unsubscribe(threadTS string) (Subscriber, bool) {
 			UnsubscribedAt:   time.Now(),
 		}
 	}
-	b.persistLocked()
 	return s, true
+}
+
+// replaceBySocketPathLocked drops any registration sharing s's socket_path
+// under a different thread_ts.
+func (b *Broker) replaceBySocketPathLocked(s Subscriber) {
+	if s.SocketPath == "" {
+		return
+	}
+	for ts, existing := range b.subs {
+		if ts == s.ThreadTS || existing.SocketPath != s.SocketPath {
+			continue
+		}
+		b.removeLocked(ts)
+		b.logger.Info("replaced stale registration for socket",
+			"socket_path", s.SocketPath, "replaced_thread_ts", ts, "new_thread_ts", s.ThreadTS)
+	}
 }
 
 func tombstoneKey(threadTS, sessionName string) string {
@@ -226,7 +278,8 @@ func (b *Broker) load() {
 		b.logger.Warn("failed to parse subscriber state, starting empty", "path", b.path, "error", err)
 		return
 	}
-	for _, s := range ps.Subscribers {
+	deduped := b.dedupeBySocketPathLocked(ps.Subscribers)
+	for _, s := range deduped {
 		if s.ThreadTS == "" {
 			continue
 		}
@@ -239,7 +292,42 @@ func (b *Broker) load() {
 		b.tombstones[tombstoneKey(t.ThreadTS, t.SessionName)] = t
 	}
 	b.pruneTombstonesLocked()
+	if len(deduped) != len(ps.Subscribers) {
+		// Rewrite so a dropped duplicate doesn't reappear on the next restart.
+		b.persistLocked()
+	}
 	b.logger.Info("restored subscribers", "count", len(b.subs), "tombstones", len(b.tombstones), "path", b.path)
+}
+
+// dedupeBySocketPathLocked keeps only the newest-Since entry for each
+// socket_path in subs. Entries with no socket_path pass through unchanged.
+func (b *Broker) dedupeBySocketPathLocked(subs []Subscriber) []Subscriber {
+	bestBySocket := make(map[string]Subscriber, len(subs))
+	var noSocket []Subscriber
+	for _, s := range subs {
+		if s.SocketPath == "" {
+			noSocket = append(noSocket, s)
+			continue
+		}
+		existing, ok := bestBySocket[s.SocketPath]
+		if !ok {
+			bestBySocket[s.SocketPath] = s
+			continue
+		}
+		kept, dropped := existing, s
+		if s.Since.After(existing.Since) {
+			kept, dropped = s, existing
+		}
+		bestBySocket[s.SocketPath] = kept
+		b.logger.Info("dropping stale persisted registration for socket",
+			"socket_path", s.SocketPath, "dropped_thread_ts", dropped.ThreadTS, "kept_thread_ts", kept.ThreadTS)
+	}
+	out := make([]Subscriber, 0, len(bestBySocket)+len(noSocket))
+	out = append(out, noSocket...)
+	for _, s := range bestBySocket {
+		out = append(out, s)
+	}
+	return out
 }
 
 // persistLocked writes subs and tombstones to b.path atomically (tmp →
