@@ -263,6 +263,63 @@ gone, a retry reclaims the admission, and destroy clears it immediately.
 An admission remains while its up process legitimately runs, not for a fixed
 timeout. An omitted cap is unlimited.
 
+When an admission — population, manual `plect up`, or a chain's dispatched
+`plect up` — would exceed this cap, the reactor first looks, among this
+workflow's real children of the same parent, for a session eligible under
+`idle_down_after` (below) and currently clear; oldest activity then session
+name breaks a tie. Finding one, it brings that session down through ordinary
+cleanup and admits. Finding none, it rejects the admission as it does today.
+`config.md`'s machine-wide `max_up_children` follows the identical rule
+within its own, wider scope (every session with no real parent).
+
+## Session idle-down and destroy policy
+
+`[<id>.session]` declares idle-down and destroy policy for any session this
+workflow produces — one dispatched by a chain, one a population admits, or
+one a person creates directly with `plect up`.
+
+```toml
+[claude.session]
+idle_down_after = "30m"
+
+[claude.session.destroy]
+force  = false
+inputs = { delete_branch = false }
+all = [
+  { check = "resource.state.issue_status", in = ["closed"] },
+]
+```
+
+| Field | Meaning |
+|---|---|
+| `idle_down_after` | Optional duration. Eligible sessions are downed automatically once idle this long. |
+| `destroy.force` | Whether automatic destruction uses force; default false. |
+| `destroy.inputs` | Optional plugin-owned cleanup input object. |
+| `destroy.all` | Optional conjunction of `done_when`-style leaves (`tasks.md#completion`) over `resource.state.*`, gating automatic destruction. |
+
+`idle_down_after`, when declared, makes a session eligible for an automatic
+down: once its latest durable status is an explicit clear newer than its own
+creation, its most recent accepted appearance, and every inbound event, and
+it has stayed so for at least this duration, the reactor brings it down
+through ordinary cleanup. Omitting the field means never — there is no
+separate pin or keep flag, so a session that must stay up simply omits it.
+A session with no real parent (created directly, not by a chain or a
+population) is never eligible, whatever this declares: idle-down exists for
+dispatched work, not for a session a person is using directly. The same
+declaration is the sole authorization for the capacity-pressure down
+described above and in `config.md`; there is no separate boolean for it.
+
+`destroy.all` reads only `resource.state.*` — there is no task instance
+backing a session's own destroy policy, so no `self.state.*` to read — using
+exactly the leaf kinds a `done_when` conjunction allows short of `judge`:
+`check`/`in` and `expr`. Destruction waits until this predicate holds and,
+independently, until every dynamic task instance on the session with its own
+`done_when` is satisfied; a missing predicate, an observation failure, an
+evaluation failure, or any pending leaf on either blocks it. A population's
+absence tombstone (poll absence past `expire_after`) is a further, built-in
+way to become eligible, flowing through this same guard rather than
+bypassing it.
+
 ## Populations and chains
 
 A population belongs to a workflow and therefore derives its resource type
@@ -282,12 +339,8 @@ mutation or destruction.
 | `uses` | Required, non-empty query means, such as `poll` or `subscribe`. |
 | `session.task` | Optional caller-selected initial task, compatible with the entry resource. |
 | `session.inputs` | Optional values over literals, `resource.id`, and `item.*` properties. |
-| `session.destroy.force` | Whether automatic destruction uses force; default false. |
-| `session.destroy.inputs` | Optional plugin-owned cleanup input object. |
 | `poll_every` | Required positive duration when `uses` selects `poll`; forbidden otherwise. |
 | `expire_after` | Required positive quiescence duration without `poll`; forbidden with it. |
-| `auto_down` | Permits capacity-pressure down selection; default false. |
-| `auto_destroy` | Permits guarded destruction; default false, which records a dry run. |
 
 `uses` is the sole authority for query means. A population naming only `poll`
 does not start subscribe even if the resource declares it; one naming only
@@ -307,27 +360,33 @@ policy replacement is not resource evidence. The evaluator re-derives
 membership using the new means alone. An invalid resident reload retains the
 last valid evaluator.
 
-Destruction waits until every dynamic task with `done_when` is satisfied. A
-missing predicate, observation failure, evaluation failure, or pending leaf
-blocks it. At virtual-root capacity, only an up, population-owned session from
-an `auto_down` population is eligible. Its latest durable status must be an
-explicit clear newer than creation, accepted appearance, and inbound events.
-Eligible members are selected by oldest activity then session name and run
-ordinary cleanup. An appearance, inbound event, or positive poll requests up
-again. Removing or invalidly changing provenance never lets another population
-adopt existing sessions.
+A population-owned session's idle-down and destruction follow the containing
+workflow's `[session]` policy (above) exactly like any other session this
+workflow produces; a population declares no down/destroy fields of its own.
+A poll absence past `expire_after` is this population's own additional
+destroy trigger, flowing through that same `[session.destroy]` guard. An
+appearance, inbound event, or positive poll requests up again for a session
+the guard has not yet destroyed. Removing or invalidly changing provenance
+never lets another population adopt existing sessions.
 
 ```toml
 [standing_cases]
 kind     = "workflow"
 resource = "query_source"
 
+[standing_cases.session]
+idle_down_after = "30m"
+
+[standing_cases.session.destroy]
+force = false
+
+[standing_cases.session.destroy.inputs]
+delete_branch = false
+
 [[standing_cases.populations]]
-name         = "dispatch"
-uses         = ["poll", "subscribe"]
-poll_every   = "5m"
-auto_down    = true
-auto_destroy = false
+name       = "dispatch"
+uses       = ["poll", "subscribe"]
+poll_every = "5m"
 
 [standing_cases.populations.query]
 scope = "open"
@@ -337,12 +396,6 @@ task = "population_task"
 
 [standing_cases.populations.session.inputs]
 context = { from = "item.context", optional = true }
-
-[standing_cases.populations.session.destroy]
-force = false
-
-[standing_cases.populations.session.destroy.inputs]
-delete_branch = false
 ```
 
 Population decisions are durable events:
@@ -351,11 +404,14 @@ Population decisions are durable events:
 |---|---|
 | `plect.workflow_population.up` | A member transitioned to up. Re-admitting an up member records nothing. |
 | `plect.workflow_population.down` | Capacity policy selected or evaluated a down action. |
-| `plect.workflow_population.destroy` | An eligible member was destroyed. |
 | `plect.workflow_population.destroy_deferred` | A task guard blocked destruction. |
-| `plect.workflow_population.destroy_dry_run` | Destruction was eligible but disabled. |
 | `plect.workflow_population.conflict` | Existing state has incompatible provenance. |
 | `plect.workflow_population.failure` | A query or lifecycle operation failed. |
+
+An eligible member's destruction itself is `lifecycle.destroyed`
+(`events.md#session-lifecycle`), carrying `metadata.reason = "policy"` or
+`"absence"` — there is no population-specific destroy event, and no dry-run
+event: an eligible destruction always executes.
 
 A task chain may start another session under a selected workflow once its
 condition holds. It addresses the same resource by default or another concrete
@@ -409,12 +465,16 @@ uses = "thread_directory"
 id = "agent"
 uses = "agent_runtime"
 
+[conversation.session]
+idle_down_after = "30m"
+
+[conversation.session.destroy]
+all = [{ check = "resource.state.status", in = ["closed"] }]
+
 [[conversation.populations]]
 name       = "open_conversations"
 uses       = ["poll", "subscribe"]
 poll_every = "5m"
-auto_down  = true
-auto_destroy = true
 
 [conversation.populations.query]
 status = "open"
@@ -425,8 +485,9 @@ task = "conversation_triage"
 
 The conversation population retains its directory and agent environment when
 it adds an `issue_investigation` task bound to an issue resource. Its
-capacity-driven down/up and guarded destruction remain population policy;
-neither turns the issue into the session's entry resource.
+capacity-driven down/up and guarded destruction remain the workflow's
+`[session]` policy; neither turns the issue into the session's entry
+resource.
 
 ## Validation rules
 
@@ -442,3 +503,7 @@ neither turns the issue into the session's entry resource.
   address.
 - Workflow public outputs satisfy `outputs_schema` and bind only declared node
   outputs or allowed session inputs.
+- `session.destroy.inputs` satisfies the cleanup schemas of the effects it
+  addresses.
+- Each `session.destroy.all` leaf is `check`/`in` or `expr`, never `judge`,
+  and reads only `resource.state.*`.
