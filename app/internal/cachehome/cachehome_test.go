@@ -52,9 +52,6 @@ func TestResolve_EnvVarOverridesXDGCacheHomeWithNoSuffix(t *testing.T) {
 	}
 }
 
-// A caller must never see a cache root silently rooted at the process's
-// working directory: os.UserHomeDir()'s failure has to surface as an error,
-// not fall back to a bare ".cache" relative path.
 func TestResolve_HomeDirLookupFailureSurfacesAsError(t *testing.T) {
 	t.Setenv(EnvVar, "")
 	t.Setenv(XDGEnvVar, "")
