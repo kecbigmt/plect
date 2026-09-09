@@ -3,18 +3,15 @@ package plugins
 import (
 	"crypto/sha256"
 	"fmt"
-	"os"
 	"path/filepath"
+
+	"github.com/kecbigmt/plecture/app/internal/cachehome"
 )
 
-// DefaultCacheRoot returns ~/.cache/plect/catalogs, the root resolved
-// catalog snapshots are materialized under.
+// DefaultCacheRoot returns the root resolved catalog snapshots are
+// materialized under (see cachehome.Resolve).
 func DefaultCacheRoot() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("resolve home directory: %w", err)
-	}
-	return filepath.Join(home, ".cache", "plect", "catalogs"), nil
+	return cachehome.Resolve()
 }
 
 // SourceDigest is the content-addressing key for a catalog's cache

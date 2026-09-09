@@ -61,10 +61,13 @@ them in place is not just redundant but breaks loading.
 
 Do this before touching your real config home. Point `PLECT_CONFIG_HOME` at
 an empty scratch directory so a mistake here cannot affect production
-sessions; the plugin cache and runtime state still resolve from your real
-XDG data/cache dirs (they are keyed by source and lock coordinate, not by
-config home, so cache reuse across environments is safe), only
-`config.toml`, `catalogs.toml`, `plect.lock`, and the global overlays move.
+sessions; the plugin cache and runtime state still resolve from their own
+real defaults (they are keyed by source and lock coordinate, not by config
+home, so cache reuse across environments is safe), only `config.toml`,
+`catalogs.toml`, `plect.lock`, and the global overlays move. To isolate the
+plugin cache too — for a rehearsal that must not touch the host's cache at
+all — also point `PLECT_CACHE_HOME` (or `--cache-home`) at a scratch
+directory; it is never passed on to a child a declaration starts.
 
 ```bash
 export PLECT_CONFIG_HOME="$(mktemp -d)"

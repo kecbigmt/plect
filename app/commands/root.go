@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/kecbigmt/plecture/app/internal/cachehome"
 	"github.com/kecbigmt/plecture/app/internal/confighome"
 	"github.com/kecbigmt/plecture/app/internal/datahome"
 	"github.com/kecbigmt/plecture/app/internal/persistence"
@@ -13,6 +14,7 @@ import (
 
 var configHomeFlag string
 var dataHomeFlag string
+var cacheHomeFlag string
 
 var rootCmd = &cobra.Command{
 	Use:   "plect",
@@ -46,6 +48,11 @@ identifier no resolver matches selects a workflow explicitly (see
 		if dataHomeFlag != "" {
 			if err := os.Setenv(datahome.EnvVar, dataHomeFlag); err != nil {
 				return fmt.Errorf("set %s from --data-home: %w", datahome.EnvVar, err)
+			}
+		}
+		if cacheHomeFlag != "" {
+			if err := os.Setenv(cachehome.EnvVar, cacheHomeFlag); err != nil {
+				return fmt.Errorf("set %s from --cache-home: %w", cachehome.EnvVar, err)
 			}
 		}
 		if cmd == storageMigrateCmd {
@@ -88,12 +95,17 @@ func init() {
 		"Override the config home directory (declarations only: config.toml, catalogs.toml, "+
 			"plect.lock, tasks/, workflows/, ...); else $"+confighome.EnvVar+
 			", else $"+confighome.XDGEnvVar+"/plect, else ~/.config/plect. "+
-			"Runtime state and the plugin cache always resolve from the XDG data/cache dirs, unaffected by this.")
+			"Runtime state and the plugin cache resolve independently, unaffected by this; see --data-home and --cache-home.")
 	rootCmd.PersistentFlags().StringVar(&dataHomeFlag, "data-home", "",
 		"Override the runtime data directory (storage.db, the durable event log); else $"+datahome.EnvVar+
 			", else $"+datahome.XDGEnvVar+"/plect, else ~/.local/share/plect. "+
 			"Unlike $"+datahome.XDGEnvVar+", this process never passes $"+datahome.EnvVar+
 			" on to a child a declaration starts, so a build that child invokes resolves the default data directory.")
+	rootCmd.PersistentFlags().StringVar(&cacheHomeFlag, "cache-home", "",
+		"Override the plugin catalog cache root; else $"+cachehome.EnvVar+
+			", else $"+cachehome.XDGEnvVar+"/plect/catalogs, else ~/.cache/plect/catalogs. "+
+			"Unlike $"+cachehome.XDGEnvVar+", this process never passes $"+cachehome.EnvVar+
+			" on to a child a declaration starts, so a build that child invokes resolves the default cache root.")
 }
 
 func Execute() error {

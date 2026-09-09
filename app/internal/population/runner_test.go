@@ -56,6 +56,27 @@ printf '[{"resource":"plect=%s xdg=%s"}]' "$plect_set" "$xdg_set"
 	}
 }
 
+func TestActionRunnerPollStripsPlectCacheHomeButKeepsXDGCacheHome(t *testing.T) {
+	t.Setenv("PLECT_CACHE_HOME", "/poisoned-cache")
+	t.Setenv("XDG_CACHE_HOME", "/still-inherited-cache")
+
+	runner := actionRunner{cfg: &config.Config{}}
+	def := Definition{Observer: config.ResourceDef{Query: &config.ResourceQuery{
+		Poll: &lang.Action{Type: lang.ActionShell, Script: `
+plect_set=no; [ -n "$PLECT_CACHE_HOME" ] && plect_set=yes
+xdg_set=no; [ -n "$XDG_CACHE_HOME" ] && xdg_set=yes
+printf '[{"resource":"plect=%s xdg=%s"}]' "$plect_set" "$xdg_set"
+`},
+	}}}
+	items, err := runner.Poll(context.Background(), def)
+	if err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	if len(items) != 1 || items[0]["resource"] != "plect=no xdg=yes" {
+		t.Fatalf("poll subprocess env = %v, want PLECT_CACHE_HOME stripped and XDG_CACHE_HOME kept", items)
+	}
+}
+
 func TestActionRunnerSubscribeEmitsOneItemPerLine(t *testing.T) {
 	runner := actionRunner{cfg: &config.Config{}}
 	def := Definition{Observer: config.ResourceDef{Query: &config.ResourceQuery{

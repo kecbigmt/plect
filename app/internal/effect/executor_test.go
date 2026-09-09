@@ -123,6 +123,35 @@ func TestExecutor_HostExecutorStripsPlectDataHomeUnlessEnvRebindsIt(t *testing.T
 	}
 }
 
+func TestExecutor_HostExecutorStripsPlectCacheHomeButKeepsXDGCacheHome(t *testing.T) {
+	t.Setenv("PLECT_CACHE_HOME", "/poisoned-cache")
+	t.Setenv("XDG_CACHE_HOME", "/still-inherited-cache")
+
+	var exec Executor = hostExecutor{}
+	stdout, _, err := exec.Run(context.Background(), ExecRequest{Argv: []string{"env"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	got := string(stdout)
+	if strings.Contains(got, "PLECT_CACHE_HOME=") {
+		t.Fatalf("child env leaked PLECT_CACHE_HOME:\n%s", got)
+	}
+	if !strings.Contains(got, "XDG_CACHE_HOME=/still-inherited-cache") {
+		t.Fatalf("child env dropped XDG_CACHE_HOME, want it still inherited:\n%s", got)
+	}
+
+	// IsolateDataHome=true isolates the cache-home vars the same way it does
+	// the data-home ones: both PLECT_ and XDG_ get stripped.
+	stdout, _, err = exec.Run(context.Background(), ExecRequest{Argv: []string{"env"}, IsolateDataHome: true})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	got = string(stdout)
+	if strings.Contains(got, "PLECT_CACHE_HOME=") || strings.Contains(got, "XDG_CACHE_HOME=") {
+		t.Fatalf("child env leaked a cache-home variable with IsolateDataHome=true:\n%s", got)
+	}
+}
+
 func TestExecutor_HostExecutorIsolatesXDGDataHomeWhenRequested(t *testing.T) {
 	t.Setenv("PLECT_DATA_HOME", "/poisoned")
 	t.Setenv("XDG_DATA_HOME", "/poisoned-xdg")

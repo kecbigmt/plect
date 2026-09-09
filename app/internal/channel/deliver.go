@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kecbigmt/plecture/app/internal/cachehome"
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/datahome"
 	"github.com/kecbigmt/plecture/app/internal/lang"
@@ -192,9 +193,9 @@ func deliverProcess(ctx context.Context, def config.ChannelDefinition, eval lang
 	}
 	cmd := exec.CommandContext(ctx, execution.Argv[0], execution.Argv[1:]...)
 	// A channel has no way to bind env explicitly, and no known channel
-	// destination depends on inheriting either data-home variable, so this
-	// is a full, unconditional strip.
-	cmd.Env = datahome.IsolatedEnv()
+	// destination depends on inheriting either data-home or cache-home
+	// variable, so this is a full, unconditional strip.
+	cmd.Env = cachehome.StripIsolated(datahome.IsolatedEnv())
 	if len(execution.Stdin) > 0 {
 		cmd.Stdin = bytes.NewReader(execution.Stdin)
 	}

@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kecbigmt/plecture/app/internal/cachehome"
 	"github.com/kecbigmt/plecture/app/internal/datahome"
 	"github.com/kecbigmt/plecture/app/internal/lang"
 )
@@ -42,7 +43,8 @@ const (
 // Dir is the working directory (applied only if it exists, see hostExecutor),
 // Stdin is optional (nil), Env is additions on top of the process's own
 // environment, and IsolateDataHome picks datahome.IsolatedEnv over
-// InheritableEnv as that base (see ExecHook/RunHook).
+// InheritableEnv as that base (see ExecHook/RunHook), stripping the
+// cache-home vars the same way IsolateDataHome does the data-home ones.
 type ExecRequest struct {
 	Argv            []string
 	Dir             string
@@ -109,10 +111,12 @@ func runHostCmd(ctx context.Context, req ExecRequest, outBuf, errBuf *bytes.Buff
 		cmd.Stdin = bytes.NewReader(req.Stdin)
 	}
 	base := datahome.InheritableEnv()
+	stripCacheHome := cachehome.Strip
 	if req.IsolateDataHome {
 		base = datahome.IsolatedEnv()
+		stripCacheHome = cachehome.StripIsolated
 	}
-	cmd.Env = append(base, req.Env...)
+	cmd.Env = append(stripCacheHome(base), req.Env...)
 	// Put the child in its own process group and, on cancellation, kill the
 	// whole group rather than just the direct child. A shell script's own
 	// children (e.g. "sleep 5" spawned by "bash -c") don't die with their

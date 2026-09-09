@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kecbigmt/plecture/app/internal/cachehome"
 	"github.com/kecbigmt/plecture/app/internal/datahome"
 )
 
@@ -108,10 +109,11 @@ func (w *serviceLogWriter) logLine(line string) {
 // supervisor's own environment — plugin.toml's `env` field carries only
 // non-secret literals, per the plugin service lifecycle ADR.
 //
-// The supervisor's own PLECT_DATA_HOME is dropped before overrides apply,
-// unless plugin.toml's own `env` table rebinds it explicitly. XDG_DATA_HOME
-// is left alone: an existing service may already depend on inheriting it
-// for its own unrelated on-disk state — see datahome.InheritableEnv.
+// The supervisor's own PLECT_DATA_HOME and PLECT_CACHE_HOME are dropped
+// before overrides apply, unless plugin.toml's own `env` table rebinds one
+// explicitly. XDG_DATA_HOME and XDG_CACHE_HOME are left alone: an existing
+// service may already depend on inheriting them for its own unrelated
+// on-disk state — see datahome.InheritableEnv.
 func buildEnv(overrides map[string]string) []string {
 	merged := make(map[string]string, len(overrides))
 	for _, kv := range os.Environ() {
@@ -120,6 +122,7 @@ func buildEnv(overrides map[string]string) []string {
 		}
 	}
 	delete(merged, datahome.EnvVar)
+	delete(merged, cachehome.EnvVar)
 	for k, v := range overrides {
 		merged[k] = v
 	}
