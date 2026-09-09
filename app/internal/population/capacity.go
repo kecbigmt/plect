@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kecbigmt/plecture/app/internal/admitstatus"
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/eventlog"
@@ -118,7 +119,7 @@ func (c *capacityCoordinator) pendingExistingAhead(current Definition, resource 
 			if member == nil || !member.PendingUp || member.SessionName == "" || member.Tombstoned {
 				continue
 			}
-			status := memberAdmitStatus(c.log, member)
+			status := admitstatus.Member(c.log, member.SessionName, member.ResourceID)
 			if status.LastReason != "" && status.LastReason != "capacity" {
 				continue
 			}

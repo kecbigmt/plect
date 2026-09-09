@@ -4,13 +4,10 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/kecbigmt/plecture/app/internal/admitstatus"
 	"github.com/kecbigmt/plecture/app/internal/eventlog"
 	"github.com/kecbigmt/plecture/app/internal/state"
-	"github.com/kecbigmt/plecture/contracts/event"
 )
-
-// admitStatusWindow bounds the event-log scan to a fixed cost.
-const admitStatusWindow = 50
 
 type PopulationMemberStatus struct {
 	Resource                 string `json:"resource"`
@@ -47,37 +44,10 @@ func PopulationStatus(store *state.Store, workflow, population string) ([]Popula
 			Resource: resource, Session: member.SessionName,
 			PendingUp: member.PendingUp, Tombstoned: member.Tombstoned,
 		}
-		if member.SessionName != "" {
-			st.LastAdmitReason, st.LastAdmitError, st.ConsecutiveAdmitFailures =
-				memberAdmitOutcome(log, member.SessionName, resource)
-		}
+		status := admitstatus.Member(log, member.SessionName, resource)
+		st.LastAdmitReason, st.LastAdmitError, st.ConsecutiveAdmitFailures =
+			status.LastReason, status.LastError, status.Consecutive
 		out = append(out, st)
 	}
 	return out, nil
-}
-
-// memberAdmitOutcome mirrors population.memberAdmitStatus: that package
-// cannot be imported here, since it already depends on this one.
-func memberAdmitOutcome(log *eventlog.Store, session, resource string) (reason, lastError string, consecutive int) {
-	events, err := log.Tail(session, event.Filter{
-		Types: []string{event.TypeWorkflowPopulationFailure, event.TypeWorkflowPopulationAdmitOK},
-	}, admitStatusWindow)
-	if err != nil {
-		return "", "", 0
-	}
-	for i := len(events) - 1; i >= 0; i-- {
-		ev := events[i]
-		if ev.Metadata["resource"] != resource {
-			continue
-		}
-		if ev.Type == event.TypeWorkflowPopulationAdmitOK {
-			break
-		}
-		if reason == "" {
-			reason = ev.Metadata["reason"]
-			lastError = ev.Summary
-		}
-		consecutive++
-	}
-	return reason, lastError, consecutive
 }
