@@ -32,12 +32,11 @@ comes back up on its own:
 - `user.emit` and `plect.instruction` are directed: delivering either to a
   down session brings it up first (an ordinary `up`), then delivers.
 - Every other type is a notification: it is forwarded one hop to the
-  nearest live ancestor, exactly as an inbound resource event already is
-  (`../adr/2026-09-08-down-session-resource-event-forwarding.md`), and with no
-  live ancestor it simply stays on the down session's own log, unbrought up,
-  read once that session resumes. A plugin-defined type is never treated as
-  directed — core does not learn plugin types, so anything core does not
-  itself own as directed is a notification.
+  nearest live ancestor (`../adr/2026-09-08-down-session-resource-event-forwarding.md`),
+  and with no live ancestor it simply stays on the down session's own log,
+  unbrought up, read once that session resumes. A plugin-defined type is
+  never treated as directed — core does not learn plugin types, so anything
+  core does not itself own as directed is a notification.
 
 ## Agent messages
 
