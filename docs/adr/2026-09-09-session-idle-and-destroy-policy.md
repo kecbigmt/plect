@@ -82,7 +82,7 @@ regardless of the declaration — that combination is exactly an operator's own
 directly-created session, one no chain and no population dispatched. A
 population-admitted session is also parentless in stored state (it counts
 against the same machine-wide `max_up_children` key an operator's own session
-does, `config.md`), but its `Population` provenance marks it as dispatched
+does, `docs/language/config.md`), but its `Population` provenance marks it as dispatched
 work, so it remains eligible precisely like a chain-dispatched real child.
 Idle-down exists for dispatched work — chain-parented or population-owned —
 not for a session a person is using directly.

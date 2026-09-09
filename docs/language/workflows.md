@@ -268,7 +268,7 @@ When an admission — population, manual `plect up`, or a chain's dispatched
 workflow's real children of the same parent, for a session eligible under
 `idle_down_after` (below) and currently clear; oldest activity then session
 name breaks a tie. Finding one, it brings that session down through ordinary
-cleanup and admits. Finding none, it rejects the admission as it does today.
+cleanup and admits. Finding none, it rejects the admission.
 `config.md`'s machine-wide `max_up_children` follows the identical rule
 within its own, wider scope (every session with no real parent).
 

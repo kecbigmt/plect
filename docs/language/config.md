@@ -95,13 +95,12 @@ by that declaration's own predicate; oldest activity then session name
 breaks a tie. A session with no real parent and no population provenance —
 one an operator created directly, never dispatched by a chain or admitted by
 a population — is never a candidate here even if its workflow declares
-`idle_down_after`: this scope's parentless population members are exactly
-today's existing capacity-down target, generalized, not narrowed. Finding a
-candidate, the reactor brings that session down through ordinary cleanup and
-admits. Finding none, it rejects the admission as it does today. Declaring
-`idle_down_after` is the sole authorization for this
-capacity-pressure down — whoever's admission triggered it, not only a
-population's own. A workflow's own real-children cap
+`idle_down_after`: only a population-admitted or chain-dispatched session in
+this scope is a candidate. Finding a candidate, the reactor brings that
+session down through ordinary cleanup and admits. Finding none, it rejects
+the admission. Declaring `idle_down_after` is the sole authorization for
+this capacity-pressure down, independent of whether a population's own
+admission is what triggered it. A workflow's own real-children cap
 (`workflows.md#concurrency`) follows the identical rule within its narrower
 scope, the same parent's real children.
 
