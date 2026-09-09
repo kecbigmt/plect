@@ -213,10 +213,15 @@ case "${1:-}" in
       full="$REPLY"
       rm -f "$buf_file" "$idx_file" 2>/dev/null
       if [ -n "$full" ]; then
+        # The marker must land on disk before the plect.message publish call
+        # below returns: a concurrent Stop invocation can race in during that
+        # call, and it must find "already covered" rather than "no marker
+        # yet" for a message this process has already committed to
+        # publishing.
+        printf '%s' "$message_id" > "$(last_emitted_path "$PLECT_SESSION_NAME")" 2>/dev/null
         meta=(--meta "message_id=$message_id" --meta "message_id_origin=native" --meta "role=assistant" --meta "source=claude")
         [ -n "$turn_id" ] && meta+=(--meta "turn_id=$turn_id")
         publish_report plect.message "$full" "${meta[@]}"
-        printf '%s' "$message_id" > "$(last_emitted_path "$PLECT_SESSION_NAME")" 2>/dev/null
       fi
     fi
     exit 0
