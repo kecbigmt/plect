@@ -30,10 +30,7 @@ func DefaultPluginPaths() (PluginPaths, error) {
 	if err != nil {
 		return PluginPaths{}, err
 	}
-	cacheRoot, err := plugins.DefaultCacheRoot()
-	if err != nil {
-		return PluginPaths{}, err
-	}
+	cacheRoot := plugins.DefaultCacheRoot()
 	return PluginPaths{CatalogsPath: catalogsPath, LockfilePath: lockPath, CacheRoot: cacheRoot}, nil
 }
 

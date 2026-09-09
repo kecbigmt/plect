@@ -64,6 +64,26 @@ func TestBuildEnv_StripsPlectDataHomeButKeepsXDGDataHomeUnlessRebound(t *testing
 	}
 }
 
+func TestBuildEnv_StripsPlectCacheHomeButKeepsXDGCacheHomeUnlessRebound(t *testing.T) {
+	t.Setenv("PLECT_CACHE_HOME", "/poisoned-cache")
+	t.Setenv("XDG_CACHE_HOME", "/still-inherited-cache")
+
+	env := buildEnv(nil)
+	if slices.ContainsFunc(env, func(kv string) bool {
+		return strings.HasPrefix(kv, "PLECT_CACHE_HOME=")
+	}) {
+		t.Fatalf("buildEnv(nil) leaked PLECT_CACHE_HOME: %v", env)
+	}
+	if !slices.Contains(env, "XDG_CACHE_HOME=/still-inherited-cache") {
+		t.Fatalf("buildEnv(nil) dropped XDG_CACHE_HOME, want it still inherited: %v", env)
+	}
+
+	env = buildEnv(map[string]string{"PLECT_CACHE_HOME": "/explicit-cache"})
+	if !slices.Contains(env, "PLECT_CACHE_HOME=/explicit-cache") {
+		t.Fatalf("plugin.toml's own env override did not survive the strip: %v", env)
+	}
+}
+
 func TestRunProcess_FlushesTrailingLineWithoutNewline(t *testing.T) {
 	dir := t.TempDir()
 	script := writeScript(t, dir, "no-newline", `printf 'no trailing newline'`)

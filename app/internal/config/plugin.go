@@ -50,10 +50,7 @@ func LoadPlugins() ([]plugins.Mounted, *plugins.Lockfile, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("load plect.lock: %w", err)
 	}
-	cacheRoot, err := plugins.DefaultCacheRoot()
-	if err != nil {
-		return nil, nil, fmt.Errorf("resolve catalog cache root: %w", err)
-	}
+	cacheRoot := plugins.DefaultCacheRoot()
 
 	mounted, err := plugins.VerifyAndMountAll(registrations, lock, cacheRoot, version.Current)
 	if err != nil {
@@ -83,10 +80,7 @@ func resolveDeclaredPlugins(cfg *Config) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load plect.lock: %w", err)
 	}
-	cacheRoot, err := plugins.DefaultCacheRoot()
-	if err != nil {
-		return nil, fmt.Errorf("resolve catalog cache root: %w", err)
-	}
+	cacheRoot := plugins.DefaultCacheRoot()
 
 	mounted, err := plugins.VerifyAndMountAll(registrations, lock, cacheRoot, version.Current)
 	if err != nil {
