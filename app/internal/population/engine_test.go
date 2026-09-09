@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kecbigmt/plecture/app/internal/admitstatus"
 	"github.com/kecbigmt/plecture/app/internal/eventlog"
 	"github.com/kecbigmt/plecture/app/internal/lang"
 	"github.com/kecbigmt/plecture/app/internal/service"
@@ -43,6 +44,11 @@ func (h *hookRecorder) hooks() Hooks {
 }
 
 func engineFixture(t *testing.T, autoDestroy bool) (*Engine, *hookRecorder, time.Time) {
+	engine, recorder, now, _ := engineFixtureWithCache(t, autoDestroy)
+	return engine, recorder, now
+}
+
+func engineFixtureWithCache(t *testing.T, autoDestroy bool) (*Engine, *hookRecorder, time.Time, *admitstatus.Cache) {
 	t.Helper()
 	cfg := populationConfig(t, `[source.query.poll]
 type = "exec"
@@ -57,11 +63,13 @@ command = "true"
 	}
 	defs[0].Population.AutoDestroy = autoDestroy
 	store := state.NewStore(t.TempDir())
+	logStore := eventlog.NewStore(store.Dir())
 	recorder := &hookRecorder{store: store, key: populationKey(defs[0])}
 	now := time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC)
-	engine := NewEngine(defs[0], store, eventlog.NewStore(store.Dir()), recorder.hooks())
+	cache := admitstatus.NewCache(logStore)
+	engine := NewEngine(defs[0], store, logStore, cache, recorder.hooks())
 	engine.now = func() time.Time { return now }
-	return engine, recorder, now
+	return engine, recorder, now, cache
 }
 
 func TestAppearanceIsPersistedBeforeAdmission(t *testing.T) {
@@ -285,6 +293,51 @@ func TestAdmitFailureReasonsDrivePriorityClassification(t *testing.T) {
 	}
 }
 
+// TestAdmitUpdatesTheSharedCacheInPlace is the round-5 contract this PR's
+// review settled on: pendingExistingAhead must read a coordinator-owned
+// in-memory record, not rescan a session's event log on every pass. This
+// checks that admit() keeps that record correct via Cache.Record — never
+// forcing a rescan — for every outcome kind, ending in a successful admit
+// that resets it.
+func TestAdmitUpdatesTheSharedCacheInPlace(t *testing.T) {
+	engine, _, _, cache := engineFixtureWithCache(t, false)
+	ctx := context.Background()
+
+	if err := engine.ApplyAppearance(ctx, map[string]any{"resource": "urn:case:a"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := cache.Get("session-urn:case:a", "urn:case:a").LastReason; got != "" {
+		t.Fatalf("cache after a successful admit = %q, want eligible", got)
+	}
+
+	engine.hooks.Up = func(context.Context, string, map[string]any) (UpOutcome, error) {
+		return UpOutcome{}, errors.New("boom")
+	}
+	if err := engine.ApplyAppearance(ctx, map[string]any{"resource": "urn:case:a"}); err == nil {
+		t.Fatal("expected a failure")
+	}
+	if status := cache.Get("session-urn:case:a", "urn:case:a"); status.LastReason != "up" || status.Consecutive != 1 {
+		t.Fatalf("cache after one failure = %+v, want reason \"up\", consecutive 1", status)
+	}
+
+	if err := engine.ApplyAppearance(ctx, map[string]any{"resource": "urn:case:a"}); err == nil {
+		t.Fatal("expected a second failure")
+	}
+	if status := cache.Get("session-urn:case:a", "urn:case:a"); status.Consecutive != 2 {
+		t.Fatalf("cache after two failures = %+v, want consecutive 2", status)
+	}
+
+	engine.hooks.Up = func(context.Context, string, map[string]any) (UpOutcome, error) {
+		return UpOutcome{SessionName: "session-urn:case:a"}, nil
+	}
+	if err := engine.ApplyAppearance(ctx, map[string]any{"resource": "urn:case:a"}); err != nil {
+		t.Fatal(err)
+	}
+	if status := cache.Get("session-urn:case:a", "urn:case:a"); status.LastReason != "" || status.Consecutive != 0 {
+		t.Fatalf("cache after recovering = %+v, want a full reset", status)
+	}
+}
+
 func TestAdmissionProvenanceConflictEmitsConflictEvent(t *testing.T) {
 	engine, _, _ := engineFixture(t, false)
 	engine.hooks.Up = func(context.Context, string, map[string]any) (UpOutcome, error) {
@@ -329,9 +382,10 @@ command = "true"
 	}
 	defs[0].Population.AutoDestroy = true
 	store := state.NewStore(t.TempDir())
+	logStore := eventlog.NewStore(store.Dir())
 	recorder := &hookRecorder{store: store, key: populationKey(defs[0])}
 	base := time.Now().Add(-2 * time.Hour)
-	engine := NewEngine(defs[0], store, eventlog.NewStore(store.Dir()), recorder.hooks())
+	engine := NewEngine(defs[0], store, logStore, admitstatus.NewCache(logStore), recorder.hooks())
 	engine.now = func() time.Time { return base }
 	ctx := context.Background()
 	if err := engine.ApplyAppearance(ctx, map[string]any{"resource": "urn:case:a"}); err != nil {

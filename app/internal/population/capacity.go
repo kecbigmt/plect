@@ -23,12 +23,13 @@ type capacityCoordinator struct {
 	cfg         func() *config.Config
 	state       *state.Store
 	log         *eventlog.Store
+	cache       *admitstatus.Cache
 	mu          sync.Mutex
 	definitions map[string]Definition
 }
 
-func newCapacityCoordinator(cfg func() *config.Config, stateStore *state.Store, logStore *eventlog.Store) *capacityCoordinator {
-	return &capacityCoordinator{cfg: cfg, state: stateStore, log: logStore, definitions: make(map[string]Definition)}
+func newCapacityCoordinator(cfg func() *config.Config, stateStore *state.Store, logStore *eventlog.Store, cache *admitstatus.Cache) *capacityCoordinator {
+	return &capacityCoordinator{cfg: cfg, state: stateStore, log: logStore, cache: cache, definitions: make(map[string]Definition)}
 }
 
 func (c *capacityCoordinator) setDefinitions(definitions []Definition) {
@@ -119,7 +120,7 @@ func (c *capacityCoordinator) pendingExistingAhead(current Definition, resource 
 			if member == nil || !member.PendingUp || member.SessionName == "" || member.Tombstoned {
 				continue
 			}
-			reason := admitstatus.LatestReason(c.log, member.SessionName, member.ResourceID)
+			reason := c.cache.Get(member.SessionName, member.ResourceID).LastReason
 			if reason != "" && reason != "capacity" {
 				continue
 			}

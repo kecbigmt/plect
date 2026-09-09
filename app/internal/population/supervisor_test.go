@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kecbigmt/plecture/app/internal/admitstatus"
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/eventlog"
 	"github.com/kecbigmt/plecture/app/internal/lang"
@@ -74,7 +75,8 @@ func TestRunEvaluatorOnlyStartsSelectedMeans(t *testing.T) {
 		},
 		Observer: config.ResourceDef{Query: &config.ResourceQuery{Poll: &lang.Action{}, Subscribe: &lang.Action{}}},
 	}
-	engine := NewEngine(def, store, eventlog.NewStore(store.Dir()), Hooks{})
+	logStore := eventlog.NewStore(store.Dir())
+	engine := NewEngine(def, store, logStore, admitstatus.NewCache(logStore), Hooks{})
 	runner := &recordingRunner{}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()

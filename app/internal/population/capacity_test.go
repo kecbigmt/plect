@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kecbigmt/plecture/app/internal/admitstatus"
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/eventlog"
 	"github.com/kecbigmt/plecture/app/internal/state"
@@ -22,7 +23,7 @@ func capacityFixture(t *testing.T) (*capacityCoordinator, Definition, *state.Sto
 		Workflow:   config.WorkflowFile{Address: "agent"},
 		Population: config.WorkflowPopulation{Name: "dispatch", AutoDown: true},
 	}
-	coordinator := newCapacityCoordinator(func() *config.Config { return &config.Config{} }, store, logStore)
+	coordinator := newCapacityCoordinator(func() *config.Config { return &config.Config{} }, store, logStore, admitstatus.NewCache(logStore))
 	coordinator.setDefinitions([]Definition{def})
 	return coordinator, def, store, logStore, time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC)
 }
@@ -60,7 +61,8 @@ type = "object"
 			}
 			def := definitions[0]
 			store := state.NewStore(t.TempDir())
-			coordinator := newCapacityCoordinator(func() *config.Config { return cfg }, store, eventlog.NewStore(store.Dir()))
+			logStore := eventlog.NewStore(store.Dir())
+			coordinator := newCapacityCoordinator(func() *config.Config { return cfg }, store, logStore, admitstatus.NewCache(logStore))
 			coordinator.setDefinitions(definitions)
 			if err := store.UpdatePopulation(populationKey(def), func(population *state.PopulationState) error {
 				population.Members["urn:case:new"] = &state.PopulationMember{ResourceID: "urn:case:new", PendingUp: true}
@@ -133,7 +135,7 @@ type = "object"
 	def := definitions[0]
 	store := state.NewStore(t.TempDir())
 	logStore := eventlog.NewStore(store.Dir())
-	coordinator := newCapacityCoordinator(func() *config.Config { return cfg }, store, logStore)
+	coordinator := newCapacityCoordinator(func() *config.Config { return cfg }, store, logStore, admitstatus.NewCache(logStore))
 	coordinator.setDefinitions(definitions)
 
 	base := time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC)
@@ -305,7 +307,8 @@ type = "object"
 	}
 	def := definitions[0]
 	store := state.NewStore(t.TempDir())
-	coordinator := newCapacityCoordinator(func() *config.Config { return cfg }, store, eventlog.NewStore(store.Dir()))
+	logStore := eventlog.NewStore(store.Dir())
+	coordinator := newCapacityCoordinator(func() *config.Config { return cfg }, store, logStore, admitstatus.NewCache(logStore))
 	coordinator.setDefinitions(definitions)
 
 	// Fills the cap with a session that is not a population member, so it

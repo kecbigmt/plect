@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kecbigmt/plecture/app/internal/admitstatus"
 	"github.com/kecbigmt/plecture/app/internal/eventlog"
 	"github.com/kecbigmt/plecture/app/internal/lang"
 	"github.com/kecbigmt/plecture/app/internal/state"
@@ -37,6 +38,7 @@ type Engine struct {
 	definition Definition
 	state      *state.Store
 	log        *eventlog.Store
+	cache      *admitstatus.Cache
 	logger     *slog.Logger
 	hooks      Hooks
 	key        string
@@ -47,8 +49,8 @@ func populationKey(def Definition) string {
 	return def.Workflow.Address + "/" + def.Population.Name
 }
 
-func NewEngine(def Definition, stateStore *state.Store, logStore *eventlog.Store, hooks Hooks) *Engine {
-	return &Engine{definition: def, state: stateStore, log: logStore, logger: slog.Default(), hooks: hooks, key: populationKey(def), now: time.Now}
+func NewEngine(def Definition, stateStore *state.Store, logStore *eventlog.Store, cache *admitstatus.Cache, hooks Hooks) *Engine {
+	return &Engine{definition: def, state: stateStore, log: logStore, cache: cache, logger: slog.Default(), hooks: hooks, key: populationKey(def), now: time.Now}
 }
 
 func (e *Engine) ApplyPoll(ctx context.Context, items []map[string]any) error {
@@ -263,6 +265,7 @@ func (e *Engine) admit(ctx context.Context, member *state.PopulationMember) erro
 	inputs, err := e.sessionInputs(member.ResourceID, member.Item)
 	if err != nil {
 		e.record(member.SessionName, event.TypeWorkflowPopulationFailure, "input", err.Error(), member.ResourceID)
+		e.recordAdmit(member.SessionName, member.ResourceID, false, "input", err.Error())
 		return err
 	}
 	if e.hooks.Up == nil {
@@ -273,15 +276,15 @@ func (e *Engine) admit(ctx context.Context, member *state.PopulationMember) erro
 		var conflict *populationConflictError
 		if errors.As(err, &conflict) {
 			e.record(conflict.session, event.TypeWorkflowPopulationConflict, "provenance", err.Error(), member.ResourceID)
+			e.recordAdmit(conflict.session, member.ResourceID, false, "provenance", err.Error())
 			return err
 		}
-		// pendingExistingAhead reads this tag back to decide whether the
-		// member still deserves head-of-line priority next time.
-		reason := "up"
+		reason := "up" // pendingExistingAhead reads this tag back to decide whether the member keeps priority
 		if isCapacityRefusal(err) {
 			reason = "capacity"
 		}
 		e.record(member.SessionName, event.TypeWorkflowPopulationFailure, reason, err.Error(), member.ResourceID)
+		e.recordAdmit(member.SessionName, member.ResourceID, false, reason, err.Error())
 		return err
 	}
 	session := outcome.SessionName
@@ -309,6 +312,7 @@ func (e *Engine) admit(ctx context.Context, member *state.PopulationMember) erro
 	if e.definition.Population.Session.Task != "" && e.hooks.EnsureInitial != nil {
 		if err := e.hooks.EnsureInitial(ctx, session, e.definition.Population.Session.Task, member.ResourceID); err != nil {
 			e.record(session, event.TypeWorkflowPopulationFailure, "task_setup", err.Error(), member.ResourceID)
+			e.recordAdmit(session, member.ResourceID, false, "task_setup", err.Error())
 			return err
 		}
 	}
@@ -323,11 +327,18 @@ func (e *Engine) admit(ctx context.Context, member *state.PopulationMember) erro
 	}); err != nil {
 		return err
 	}
-	// Unlike TypeWorkflowPopulationUp above, this fires even when outcome.
-	// AlreadyUp is true: pendingExistingAhead needs a "the last attempt
-	// succeeded" signal that isn't gated on presence changing.
+	// Unlike TypeWorkflowPopulationUp above, this fires even when AlreadyUp.
 	e.record(session, event.TypeWorkflowPopulationAdmitOK, "admit", "population member admission succeeded", member.ResourceID)
+	e.recordAdmit(session, member.ResourceID, true, "", "")
 	return nil
+}
+
+// recordAdmit mirrors an e.record call above, one for one, at every site
+// representing this member's own admit outcome.
+func (e *Engine) recordAdmit(session, resource string, ok bool, reason, errMsg string) {
+	if e.cache != nil {
+		e.cache.Record(session, resource, ok, reason, errMsg)
+	}
 }
 
 func (e *Engine) decideDestroy(ctx context.Context, member *state.PopulationMember, reason string) error {
@@ -353,6 +364,7 @@ func (e *Engine) decideDestroy(ctx context.Context, member *state.PopulationMemb
 		var conflict *populationConflictError
 		if errors.As(err, &conflict) {
 			e.record(conflict.session, event.TypeWorkflowPopulationConflict, "provenance", err.Error(), member.ResourceID)
+			e.recordAdmit(conflict.session, member.ResourceID, false, "provenance", err.Error())
 			return err
 		}
 		e.record(member.SessionName, event.TypeWorkflowPopulationFailure, "destroy", err.Error(), member.ResourceID)
