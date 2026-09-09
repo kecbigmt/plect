@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kecbigmt/plecture/app/internal/admitstatus"
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/domain"
 	"github.com/kecbigmt/plecture/app/internal/eventlog"
@@ -19,40 +20,67 @@ import (
 )
 
 type capacityCoordinator struct {
-	cfg         func() *config.Config
-	state       *state.Store
-	log         *eventlog.Store
-	mu          sync.Mutex
+	cfg   func() *config.Config
+	state *state.Store
+	log   *eventlog.Store
+	cache *admitstatus.Cache
+	mu    sync.Mutex // serializes the evict-then-retry decision in up()
+
+	// definitions has its own lock, separate from mu: pendingExistingAhead
+	// (and the cache scan a miss there can trigger) reads it ahead of
+	// acquiring mu, so that read can never block every other population's
+	// concurrent admission attempt on one member's history scan.
+	defMu       sync.RWMutex
 	definitions map[string]Definition
 }
 
-func newCapacityCoordinator(cfg func() *config.Config, stateStore *state.Store, logStore *eventlog.Store) *capacityCoordinator {
-	return &capacityCoordinator{cfg: cfg, state: stateStore, log: logStore, definitions: make(map[string]Definition)}
+func newCapacityCoordinator(cfg func() *config.Config, stateStore *state.Store, logStore *eventlog.Store, cache *admitstatus.Cache) *capacityCoordinator {
+	return &capacityCoordinator{cfg: cfg, state: stateStore, log: logStore, cache: cache, definitions: make(map[string]Definition)}
 }
 
 func (c *capacityCoordinator) setDefinitions(definitions []Definition) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.definitions = make(map[string]Definition, len(definitions))
+	next := make(map[string]Definition, len(definitions))
 	for _, definition := range definitions {
-		c.definitions[populationKey(definition)] = definition
+		next[populationKey(definition)] = definition
 	}
+	c.defMu.Lock()
+	c.definitions = next
+	c.defMu.Unlock()
+}
+
+func (c *capacityCoordinator) definition(key string) (Definition, bool) {
+	c.defMu.RLock()
+	defer c.defMu.RUnlock()
+	def, ok := c.definitions[key]
+	return def, ok
+}
+
+func (c *capacityCoordinator) definitionKeys() []string {
+	c.defMu.RLock()
+	defer c.defMu.RUnlock()
+	keys := make([]string, 0, len(c.definitions))
+	for key := range c.definitions {
+		keys = append(keys, key)
+	}
+	return keys
 }
 
 func (c *capacityCoordinator) up(_ context.Context, def Definition, resource string, inputs map[string]any) (UpOutcome, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	provenance := &contract.PopulationProvenance{Workflow: def.Workflow.Address, Name: def.Population.Name}
 	outcome, err := upPopulation(c.cfg, c.state, def, provenance, resource, inputs)
 	if !isCapError(err) {
 		return outcome, err
 	}
-	if c.pendingExistingAhead(def, resource) {
-		return UpOutcome{}, fmt.Errorf("an existing population member has a pending up request and takes priority")
+	if blocker, blocked := c.pendingExistingAhead(def, resource); blocked {
+		return UpOutcome{}, &pendingPriorityError{population: blocker.key, resource: blocker.resource, session: blocker.session}
 	}
-	candidates, err := c.idleCandidates()
-	if err != nil {
-		return UpOutcome{}, fmt.Errorf("find idle candidates to free capacity: %w", err)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	// A distinct variable, not err: a zero-candidate result isn't an error.
+	candidates, candidatesErr := c.idleCandidates()
+	if candidatesErr != nil {
+		return UpOutcome{}, fmt.Errorf("find idle candidates to free capacity: %w", candidatesErr)
 	}
 	for _, candidate := range candidates {
 		if _, downErr := service.Down(c.cfg(), c.state, service.DownParams{Identifier: candidate.session}); downErr != nil {
@@ -77,23 +105,54 @@ func isCapError(err error) bool {
 	return errors.As(err, &serviceErr) && serviceErr.Code == service.ErrChildCapExceeded
 }
 
-func (c *capacityCoordinator) pendingExistingAhead(current Definition, resource string) bool {
+type pendingPriorityError struct {
+	population string
+	resource   string
+	session    string
+}
+
+func (e *pendingPriorityError) Error() string {
+	return fmt.Sprintf(
+		"existing population member %q (population %s, resource %q) has a pending up request and takes priority",
+		e.session, e.population, e.resource,
+	)
+}
+
+// isCapError alone would miss pendingPriorityError: a member preempted by
+// someone else's priority is itself still just capacity-blocked, not broken.
+func isCapacityRefusal(err error) bool {
+	var priority *pendingPriorityError
+	return isCapError(err) || errors.As(err, &priority)
+}
+
+type blockingMember struct {
+	key      string
+	resource string
+	session  string
+}
+
+func (c *capacityCoordinator) pendingExistingAhead(current Definition, resource string) (blockingMember, bool) {
 	currentState, _ := c.state.Population(populationKey(current))
 	if currentState == nil || currentState.Members[resource] == nil || currentState.Members[resource].SessionName != "" {
-		return false
+		return blockingMember{}, false
 	}
-	for key := range c.definitions {
+	for _, key := range c.definitionKeys() {
 		population, err := c.state.Population(key)
 		if err != nil || population == nil {
 			continue
 		}
-		for _, member := range population.Members {
-			if member != nil && member.PendingUp && member.SessionName != "" && !member.Tombstoned {
-				return true
+		for resourceID, member := range population.Members {
+			if member == nil || !member.PendingUp || member.SessionName == "" || member.Tombstoned {
+				continue
 			}
+			reason := c.cache.Get(member.SessionName, member.ResourceID).LastReason
+			if reason != "" && reason != "capacity" {
+				continue
+			}
+			return blockingMember{key: key, resource: resourceID, session: member.SessionName}, true
 		}
 	}
-	return false
+	return blockingMember{}, false
 }
 
 type idleCandidate struct {
@@ -114,7 +173,7 @@ func (c *capacityCoordinator) idleCandidates() ([]idleCandidate, error) {
 			continue
 		}
 		key := session.Population.Workflow + "/" + session.Population.Name
-		definition, ok := c.definitions[key]
+		definition, ok := c.definition(key)
 		if !ok || !definition.Population.AutoDown {
 			continue
 		}
@@ -188,7 +247,7 @@ func (c *capacityCoordinator) latestStatus(session string) (event.Event, bool) {
 }
 
 func (c *capacityCoordinator) record(candidate idleCandidate, typ, reason, summary string) {
-	definition := c.definitions[candidate.key]
+	definition, _ := c.definition(candidate.key)
 	_, _, _, _ = c.log.Append(event.Event{
 		SessionName: candidate.session,
 		Type:        typ,

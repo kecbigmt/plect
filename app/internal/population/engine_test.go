@@ -9,8 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kecbigmt/plecture/app/internal/admitstatus"
 	"github.com/kecbigmt/plecture/app/internal/eventlog"
 	"github.com/kecbigmt/plecture/app/internal/lang"
+	"github.com/kecbigmt/plecture/app/internal/service"
 	"github.com/kecbigmt/plecture/app/internal/state"
 	"github.com/kecbigmt/plecture/contracts/event"
 )
@@ -42,6 +44,11 @@ func (h *hookRecorder) hooks() Hooks {
 }
 
 func engineFixture(t *testing.T, autoDestroy bool) (*Engine, *hookRecorder, time.Time) {
+	engine, recorder, now, _ := engineFixtureWithCache(t, autoDestroy)
+	return engine, recorder, now
+}
+
+func engineFixtureWithCache(t *testing.T, autoDestroy bool) (*Engine, *hookRecorder, time.Time, *admitstatus.Cache) {
 	t.Helper()
 	cfg := populationConfig(t, `[source.query.poll]
 type = "exec"
@@ -56,11 +63,13 @@ command = "true"
 	}
 	defs[0].Population.AutoDestroy = autoDestroy
 	store := state.NewStore(t.TempDir())
+	logStore := eventlog.NewStore(store.Dir())
 	recorder := &hookRecorder{store: store, key: populationKey(defs[0])}
 	now := time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC)
-	engine := NewEngine(defs[0], store, eventlog.NewStore(store.Dir()), recorder.hooks())
+	cache := admitstatus.NewCache(logStore)
+	engine := NewEngine(defs[0], store, logStore, cache, recorder.hooks())
 	engine.now = func() time.Time { return now }
-	return engine, recorder, now
+	return engine, recorder, now, cache
 }
 
 func TestAppearanceIsPersistedBeforeAdmission(t *testing.T) {
@@ -234,6 +243,101 @@ func TestUpFailureLeavesAcceptedAppearancePending(t *testing.T) {
 	}
 }
 
+// The reason tag this asserts is read back by pendingExistingAhead
+// (capacity.go), not consumed anywhere in this file.
+func TestAdmitFailureReasonsDrivePriorityClassification(t *testing.T) {
+	engine, _, _ := engineFixture(t, false)
+	ctx := context.Background()
+
+	if err := engine.ApplyAppearance(ctx, map[string]any{"resource": "urn:case:a"}); err != nil {
+		t.Fatal(err)
+	}
+
+	engine.hooks.Up = func(context.Context, string, map[string]any) (UpOutcome, error) {
+		return UpOutcome{}, &service.Error{Code: service.ErrChildCapExceeded, Message: "cap"}
+	}
+	if err := engine.ApplyAppearance(ctx, map[string]any{"resource": "urn:case:a"}); err == nil {
+		t.Fatal("expected capacity failure")
+	}
+	events, _, _, err := engine.log.List("session-urn:case:a", 0, event.Filter{Types: []string{event.TypeWorkflowPopulationFailure}})
+	if err != nil || len(events) != 1 || events[0].Metadata["reason"] != "capacity" {
+		t.Fatalf("failure events = %v, %v, want a single capacity-tagged failure", events, err)
+	}
+
+	engine.hooks.Up = func(context.Context, string, map[string]any) (UpOutcome, error) {
+		return UpOutcome{}, errors.New("boom")
+	}
+	if err := engine.ApplyAppearance(ctx, map[string]any{"resource": "urn:case:a"}); err == nil {
+		t.Fatal("expected non-capacity failure")
+	}
+	events, _, _, err = engine.log.List("session-urn:case:a", 0, event.Filter{Types: []string{event.TypeWorkflowPopulationFailure}})
+	if err != nil || len(events) != 2 || events[1].Metadata["reason"] != "up" {
+		t.Fatalf("failure events = %v, %v, want the second failure tagged \"up\"", events, err)
+	}
+
+	// ApplyAppearance validates Session.Inputs before persisting, so the
+	// only way admit() itself hits this failure is a definition change
+	// after the item was already accepted — a direct Reconcile, not another
+	// ApplyAppearance, which would re-validate and never reach admit().
+	engine.definition.Population.Session.Inputs["blocked"] = &lang.Value{Form: lang.FormFrom, From: "item.missing_field"}
+	engine.hooks.Up = func(context.Context, string, map[string]any) (UpOutcome, error) {
+		t.Fatal("hooks.Up called despite a session-input resolution failure")
+		return UpOutcome{}, nil
+	}
+	if err := engine.Reconcile(ctx); err == nil {
+		t.Fatal("expected session-input resolution failure")
+	}
+	events, _, _, err = engine.log.List("session-urn:case:a", 0, event.Filter{Types: []string{event.TypeWorkflowPopulationFailure}})
+	if err != nil || len(events) != 3 || events[2].Metadata["reason"] != "input" {
+		t.Fatalf("failure events = %v, %v, want the third failure tagged \"input\"", events, err)
+	}
+}
+
+// TestAdmitUpdatesTheSharedCacheInPlace is the round-5 contract this PR's
+// review settled on: pendingExistingAhead must read a coordinator-owned
+// in-memory record, not rescan a session's event log on every pass. This
+// checks that admit() keeps that record correct via Cache.Record — never
+// forcing a rescan — for every outcome kind, ending in a successful admit
+// that resets it.
+func TestAdmitUpdatesTheSharedCacheInPlace(t *testing.T) {
+	engine, _, _, cache := engineFixtureWithCache(t, false)
+	ctx := context.Background()
+
+	if err := engine.ApplyAppearance(ctx, map[string]any{"resource": "urn:case:a"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := cache.Get("session-urn:case:a", "urn:case:a").LastReason; got != "" {
+		t.Fatalf("cache after a successful admit = %q, want eligible", got)
+	}
+
+	engine.hooks.Up = func(context.Context, string, map[string]any) (UpOutcome, error) {
+		return UpOutcome{}, errors.New("boom")
+	}
+	if err := engine.ApplyAppearance(ctx, map[string]any{"resource": "urn:case:a"}); err == nil {
+		t.Fatal("expected a failure")
+	}
+	if status := cache.Get("session-urn:case:a", "urn:case:a"); status.LastReason != "up" || status.Consecutive != 1 {
+		t.Fatalf("cache after one failure = %+v, want reason \"up\", consecutive 1", status)
+	}
+
+	if err := engine.ApplyAppearance(ctx, map[string]any{"resource": "urn:case:a"}); err == nil {
+		t.Fatal("expected a second failure")
+	}
+	if status := cache.Get("session-urn:case:a", "urn:case:a"); status.Consecutive != 2 {
+		t.Fatalf("cache after two failures = %+v, want consecutive 2", status)
+	}
+
+	engine.hooks.Up = func(context.Context, string, map[string]any) (UpOutcome, error) {
+		return UpOutcome{SessionName: "session-urn:case:a"}, nil
+	}
+	if err := engine.ApplyAppearance(ctx, map[string]any{"resource": "urn:case:a"}); err != nil {
+		t.Fatal(err)
+	}
+	if status := cache.Get("session-urn:case:a", "urn:case:a"); status.LastReason != "" || status.Consecutive != 0 {
+		t.Fatalf("cache after recovering = %+v, want a full reset", status)
+	}
+}
+
 func TestAdmissionProvenanceConflictEmitsConflictEvent(t *testing.T) {
 	engine, _, _ := engineFixture(t, false)
 	engine.hooks.Up = func(context.Context, string, map[string]any) (UpOutcome, error) {
@@ -278,9 +382,10 @@ command = "true"
 	}
 	defs[0].Population.AutoDestroy = true
 	store := state.NewStore(t.TempDir())
+	logStore := eventlog.NewStore(store.Dir())
 	recorder := &hookRecorder{store: store, key: populationKey(defs[0])}
 	base := time.Now().Add(-2 * time.Hour)
-	engine := NewEngine(defs[0], store, eventlog.NewStore(store.Dir()), recorder.hooks())
+	engine := NewEngine(defs[0], store, logStore, admitstatus.NewCache(logStore), recorder.hooks())
 	engine.now = func() time.Time { return base }
 	ctx := context.Background()
 	if err := engine.ApplyAppearance(ctx, map[string]any{"resource": "urn:case:a"}); err != nil {
@@ -311,6 +416,15 @@ func upEventCount(t *testing.T, engine *Engine, session string) int {
 	events, _, _, err := engine.log.List(session, 0, event.Filter{Types: []string{event.TypeWorkflowPopulationUp}})
 	if err != nil {
 		t.Fatalf("list up events: %v", err)
+	}
+	return len(events)
+}
+
+func admitOKEventCount(t *testing.T, engine *Engine, session string) int {
+	t.Helper()
+	events, _, _, err := engine.log.List(session, 0, event.Filter{Types: []string{event.TypeWorkflowPopulationAdmitOK}})
+	if err != nil {
+		t.Fatalf("list admit_ok events: %v", err)
 	}
 	return len(events)
 }
@@ -354,6 +468,11 @@ func TestReadmissionRecordsUpOnlyOnRunStateTransition(t *testing.T) {
 			}
 			if got := upEventCount(t, engine, "session-urn:case:a"); got != tt.wantUpRecords {
 				t.Fatalf("up events = %d, want %d", got, tt.wantUpRecords)
+			}
+			// Unlike the presence-only up event above, admit_ok records
+			// every successful admit, so it's 2 either way.
+			if got := admitOKEventCount(t, engine, "session-urn:case:a"); got != 2 {
+				t.Fatalf("admit_ok events = %d, want 2 regardless of presence change", got)
 			}
 		})
 	}

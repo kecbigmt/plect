@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kecbigmt/plecture/app/internal/admitstatus"
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/eventlog"
 	"github.com/kecbigmt/plecture/app/internal/lang"
@@ -21,10 +22,18 @@ type Supervisor struct {
 	logger   *slog.Logger
 	poll     time.Duration
 	capacity *capacityCoordinator
+	// cache is shared by capacity (reader) and every population's Engine
+	// (writer), so an admit outcome recorded by one engine is immediately
+	// visible to the capacity gate for every population, not just its own.
+	cache *admitstatus.Cache
 }
 
 func NewSupervisor(cfg func() *config.Config, stateStore *state.Store, logStore *eventlog.Store) *Supervisor {
-	return &Supervisor{cfg: cfg, state: stateStore, log: logStore, logger: slog.Default(), poll: time.Second, capacity: newCapacityCoordinator(cfg, stateStore, logStore)}
+	cache := admitstatus.NewCache(logStore)
+	return &Supervisor{
+		cfg: cfg, state: stateStore, log: logStore, logger: slog.Default(), poll: time.Second,
+		capacity: newCapacityCoordinator(cfg, stateStore, logStore, cache), cache: cache,
+	}
 }
 
 type activeEvaluator struct {
@@ -83,7 +92,7 @@ func (s *Supervisor) reconcile(ctx context.Context, active map[string]activeEval
 		evalCtx, cancel := context.WithCancel(ctx)
 		done := make(chan struct{})
 		active[key] = activeEvaluator{cancel: cancel, done: done, fingerprint: fingerprints[key]}
-		engine := NewEngine(definition, s.state, s.log, serviceHooks(s.cfg, s.state, definition, s.capacity))
+		engine := NewEngine(definition, s.state, s.log, s.cache, serviceHooks(s.cfg, s.state, definition, s.capacity))
 		runner := actionRunner{cfg: cfg}
 		wg.Go(func() {
 			defer close(done)

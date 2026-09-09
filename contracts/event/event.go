@@ -114,7 +114,13 @@ const (
 	// admission path re-runs its idempotent up hook on any inbound signal, so
 	// an unconditional record would report presence changes that never
 	// happened.
-	TypeWorkflowPopulationUp              = "plect.workflow_population.up"
+	TypeWorkflowPopulationUp = "plect.workflow_population.up"
+	// TypeWorkflowPopulationAdmitOK fires on every successful admit
+	// attempt, including one that finds the session already up — unlike
+	// TypeWorkflowPopulationUp above, which is presence-change-only. A
+	// consumer that needs "has this member recovered since its last
+	// failure," not "did presence just change," keys off this instead.
+	TypeWorkflowPopulationAdmitOK         = "plect.workflow_population.admit_ok"
 	TypeWorkflowPopulationConflict        = "plect.workflow_population.conflict"
 	TypeWorkflowPopulationFailure         = "plect.workflow_population.failure"
 	TypeWorkflowPopulationDestroyDeferred = "plect.workflow_population.destroy_deferred"

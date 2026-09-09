@@ -127,6 +127,38 @@ func TestWriteChannels_OmitsBlankTypeAndDelivers(t *testing.T) {
 	}
 }
 
+func TestWritePopulationMembers_ShowsLastErrorAndStreak(t *testing.T) {
+	var buf bytes.Buffer
+	err := writePopulationMembers(&buf, []service.PopulationMemberStatus{
+		{Resource: "urn:case:a", Session: "a+agent", PendingUp: true,
+			LastAdmitReason: "input", LastAdmitError: "resolved to nothing", ConsecutiveAdmitFailures: 3},
+		{Resource: "urn:case:b"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := buf.String()
+	for _, line := range strings.Split(got, "\n") {
+		switch {
+		case strings.HasPrefix(line, "urn:case:a"):
+			for _, want := range []string{"a+agent", "true", "input: resolved to nothing", "3"} {
+				if !strings.Contains(line, want) {
+					t.Errorf("row a missing %q; got:\n%s", want, line)
+				}
+			}
+		case strings.HasPrefix(line, "urn:case:b"):
+			for _, want := range []string{"-", "false"} {
+				if !strings.Contains(line, want) {
+					t.Errorf("row b missing %q; got:\n%s", want, line)
+				}
+			}
+		}
+	}
+	if !strings.Contains(got, "RESOURCE") {
+		t.Errorf("expected a header row; got:\n%s", got)
+	}
+}
+
 func TestWorkflowShow_WorkspaceProviderLoadErrorExitsNonzero(t *testing.T) {
 	setUpBrokenWorkspaceProviderFixture(t)
 
