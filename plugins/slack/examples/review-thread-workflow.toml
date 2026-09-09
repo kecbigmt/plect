@@ -37,6 +37,20 @@ root_text  = { expr = "'[AI review] ' + session.inputs.pr_title + ' — ' + sess
 id   = "reviewer"
 uses = "official.codex.codex"
 
+# One channel, one `include` list, covers both a streaming runtime (Claude:
+# plect.message_delta previews, followed by a plect.message the adapter
+# recognizes as already-rendered and drops) and a non-streaming one (Codex,
+# the reviewer node above: plect.message alone, posted as a single chunk).
+[[pr_review_with_slack.event.channel]]
+name    = "agent_messages"
+uses    = "official.slack.stream"
+include = ["plect.message", "plect.message_delta"]
+
+[pr_review_with_slack.event.channel.inputs]
+base_url   = { from = "session.inputs.slack_base_url" }
+channel_id = { from = "nodes.slack_thread.outputs.channel_id" }
+thread_ts  = { from = "nodes.slack_thread.outputs.thread_ts" }
+
 [[pr_review_with_slack.event.channel]]
 name    = "review_conclusion"
 uses    = "official.slack.slack"

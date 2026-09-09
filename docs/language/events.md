@@ -66,7 +66,12 @@ Body is the delta's new text.
    consumer keys on `message_id` and replaces any delta-built preview with
    the arriving `plect.message`.
 2. `summary` is the text's first line, capped at 120 characters. An emitter
-   with empty text emits nothing.
+   with empty text emits nothing, except a `plect.message_delta` whose
+   `final` is `true`: that one is emitted anyway (empty body, empty
+   `summary`), because it is the only way a delta-driven consumer can close
+   its stream — a harness's own delta split can land the message's last
+   chunk on empty text, and the `plect.message` that eventually follows is
+   a different event type such a consumer may not be watching.
 3. Existing history is not rewritten: `claude.reply`, `codex.reply`, and any
    `claude.message_display` events already stored stay as they are. A
    consumer may render them as legacy messages.

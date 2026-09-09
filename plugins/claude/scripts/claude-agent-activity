@@ -54,17 +54,24 @@ reply_seq_path() {
   printf '%s/%s.reply-seq' "$dir" "$(printf '%s' "$1" | tr '/' '_')"
 }
 
-# publish_report fires the same event-shape rule every reporting hook shares:
-# empty text publishes nothing, and a non-empty one goes out with a
-# first-line summary. Never fails the caller — a publish failure is silently
-# swallowed, per the fire-and-forget contract these hooks operate under.
-publish_report() {
+# publish_event always publishes, regardless of whether text is empty. Never
+# fails the caller — a publish failure is silently swallowed, per the
+# fire-and-forget contract these hooks operate under.
+publish_event() {
   local event_type="$1" text="$2" firstline
   shift 2
-  [ -n "$text" ] || return 0
   firstline="$(printf '%s' "$text" | head -n 1)"
   plect event publish "$PLECT_SESSION_NAME" --type "$event_type" --summary "${firstline:0:120}" --body "$text" "$@" >/dev/null 2>&1
   return 0
+}
+
+# publish_report is publish_event's usual gate: empty text publishes nothing.
+# message_display's final delta is the one caller that bypasses this and
+# calls publish_event directly — see its own comment for why.
+publish_report() {
+  local text="$2"
+  [ -n "$text" ] || return 0
+  publish_event "$@"
 }
 
 # jq_field_exact sets $REPLY to one jq filter's raw output byte-for-byte from
@@ -190,15 +197,25 @@ case "${1:-}" in
 
     [ -n "$delta" ] && printf '%s' "$delta" >> "$buf_file" 2>/dev/null
 
+    # publishes is false only for a non-final empty delta: Claude Code's own
+    # newline-driven split routinely lands the message's *last* hook
+    # invocation on an empty delta, and a delta-driven consumer (this
+    # channel's own stream state, e.g.) needs a real final=true delta to
+    # close its stream — it never sees the plect.message that follows,
+    # which is a different event type. A non-final empty delta still has no
+    # reason to reach a consumer at all.
+    publishes=true
+    [ -n "$delta" ] || [ "$final" = "true" ] || publishes=false
+
     # index is an emitter-owned counter per (message_id, kind), not
     # Claude's own .index forwarded from the payload: the core contract
     # reserves the harness's own index for a different, harness-specific
     # axis (e.g. a block index), so this hook keeps its own. It advances
-    # only for a delta actually published below: an empty delta that
-    # never reaches a consumer must not still consume a number, or the
-    # next real delta starts at 1 and reads as a dropped index 0.
+    # only for a delta actually published: a swallowed non-final empty
+    # delta must not still consume a number, or the next real delta starts
+    # at 1 and reads as a dropped index 0.
     index=0
-    if [ -n "$delta" ]; then
+    if [ "$publishes" = true ]; then
       index="$(cat "$idx_file" 2>/dev/null)"
       case "$index" in ''|*[!0-9]*) index=0 ;; esac
       printf '%s' "$((index + 1))" > "$idx_file" 2>/dev/null
@@ -206,7 +223,9 @@ case "${1:-}" in
 
     meta=(--meta "message_id=$message_id" --meta "message_id_origin=native" --meta "kind=text" --meta "index=$index" --meta "final=$final" --meta "source=claude")
     [ -n "$turn_id" ] && meta+=(--meta "turn_id=$turn_id")
-    publish_report plect.message_delta "$delta" "${meta[@]}"
+    # publish_event, not publish_report: an empty final delta must still
+    # publish, so the text-emptiness gate above already decided this.
+    [ "$publishes" = true ] && publish_event plect.message_delta "$delta" "${meta[@]}"
 
     if [ "$final" = "true" ]; then
       read_exact_file "$buf_file"

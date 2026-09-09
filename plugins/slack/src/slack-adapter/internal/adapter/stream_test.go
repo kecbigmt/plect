@@ -297,7 +297,7 @@ func TestStreamManager_StopFailure_PreservesFinalChunkForRetryWithoutRestarting(
 	}
 }
 
-func TestStreamManager_ForgetsStateAfterFinal(t *testing.T) {
+func TestStreamManager_ForgetsLiveStateAfterFinal(t *testing.T) {
 	streamer := &recordingStreamer{}
 	poster := &recordingPoster{}
 	mgr := NewStreamManager(streamer, poster, "T1", "U1", testLogger())
@@ -308,11 +308,70 @@ func TestStreamManager_ForgetsStateAfterFinal(t *testing.T) {
 	if got := len(mgr.state); got != 0 {
 		t.Errorf("stream state entries = %d, want 0 after final", got)
 	}
+}
 
-	if err := mgr.Deliver("C1", "111.0", "msg-1", 0, "Second message", true); err != nil {
-		t.Fatalf("Deliver (second message): %v", err)
+// A message_id is unique within a session, so a repeat delivery under the
+// same stream_key after it already finalized is always a duplicate.
+func TestStreamManager_DuplicateAfterFinal_IsDroppedNotReposted(t *testing.T) {
+	streamer := &recordingStreamer{}
+	poster := &recordingPoster{}
+	mgr := NewStreamManager(streamer, poster, "T1", "U1", testLogger())
+
+	if err := mgr.Deliver("C1", "111.0", "msg-1", 0, "Hello", true); err != nil {
+		t.Fatalf("Deliver: %v", err)
 	}
-	if len(streamer.startCalls) != 2 {
-		t.Fatalf("StartStream calls = %d, want 2 (reused stream_key started a new message)", len(streamer.startCalls))
+	if err := mgr.Deliver("C1", "111.0", "msg-1", 0, "Hello", true); err != nil {
+		t.Fatalf("Deliver (duplicate): %v", err)
+	}
+	if len(streamer.startCalls) != 1 {
+		t.Fatalf("StartStream calls = %d, want 1 (the duplicate must not start a second message)", len(streamer.startCalls))
+	}
+	if len(streamer.stopCalls) != 1 {
+		t.Fatalf("StopStream calls = %d, want 1", len(streamer.stopCalls))
+	}
+}
+
+// The same duplicate-drop applies to the fallback-post path: a workspace
+// that can't stream still must show exactly one message per message_id.
+func TestStreamManager_DuplicateAfterFallbackFinal_IsDroppedNotReposted(t *testing.T) {
+	streamer := &recordingStreamer{startErr: errors.New("streaming not enabled for this app")}
+	poster := &recordingPoster{}
+	mgr := NewStreamManager(streamer, poster, "T1", "U1", testLogger())
+
+	if err := mgr.Deliver("C1", "111.0", "msg-1", 0, "Hello", true); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	if err := mgr.Deliver("C1", "111.0", "msg-1", 0, "Hello", true); err != nil {
+		t.Fatalf("Deliver (duplicate): %v", err)
+	}
+	if len(poster.calls) != 1 {
+		t.Fatalf("PostToThread calls = %d, want 1 (the duplicate must not post a second message)", len(poster.calls))
+	}
+}
+
+// Regression coverage for stateOrFinalized's atomicity: run with `-race`.
+func TestStreamManager_ConcurrentDeliverToSameKey_PostsExactlyOnce(t *testing.T) {
+	streamer := &recordingStreamer{}
+	poster := &recordingPoster{}
+	mgr := NewStreamManager(streamer, poster, "T1", "U1", testLogger())
+
+	const goroutines = 50
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for range goroutines {
+		go func() {
+			defer wg.Done()
+			if err := mgr.Deliver("C1", "111.0", "msg-race", 0, "Hello", true); err != nil {
+				t.Errorf("Deliver: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if got := len(streamer.startCalls); got != 1 {
+		t.Fatalf("StartStream calls = %d, want 1 (exactly one Slack message per message_id)", got)
+	}
+	if got := len(streamer.stopCalls); got != 1 {
+		t.Fatalf("StopStream calls = %d, want 1", got)
 	}
 }

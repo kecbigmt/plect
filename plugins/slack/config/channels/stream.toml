@@ -1,7 +1,17 @@
-# Channel: render a plect.message_delta chunk sequence as one live-updating
-# Slack thread reply via slack-adapter's POST /stream (src/slack-adapter).
-# index/final are strings, matching plect.message_delta metadata's own type
-# (contracts/event) — the adapter parses them on receipt.
+# Channel: render a plect.message_delta chunk sequence, and any plect.message
+# not already covered by one, as one live-updating Slack thread reply via
+# slack-adapter's POST /stream (src/slack-adapter). stream_key/text/index/
+# final are bound from the delivered event's own fields: an [[event.channel]]
+# `inputs` binding has no access to the event being delivered
+# (docs/language/values.md), so only this channel's own action can. index/
+# final default to "0"/"true" since a plect.message carries no chunk
+# sequence of its own.
+
+# This channel runs unconditionally (an exec action always runs), so a
+# plect.message whose deltas already closed the same stream_key is posted
+# through here too; StreamManager is what keeps that from becoming a second
+# Slack message (its own doc comment, src/slack-adapter/internal/adapter/
+# stream.go).
 [stream]
 kind    = "channel"
 type    = "exec"
@@ -16,7 +26,7 @@ args = [
   "-H",
   "Content-Type: application/json",
   "-d",
-  { json = { thread_ts = { from = "inputs.thread_ts" }, channel_id = { from = "inputs.channel_id" }, stream_key = { from = "inputs.stream_key" }, text = { from = "inputs.text" }, index = { from = "inputs.index" }, final = { from = "inputs.final" } } },
+  { json = { thread_ts = { from = "inputs.thread_ts" }, channel_id = { from = "inputs.channel_id" }, stream_key = { from = "event.metadata.message_id", default = "" }, text = { from = "event.body" }, index = { expr = "has(event.metadata.index) ? event.metadata.index : '0'" }, final = { expr = "has(event.metadata.final) ? event.metadata.final : 'true'" } } },
 ]
 timeout = "10s"
 
@@ -24,7 +34,3 @@ timeout = "10s"
 base_url   = { type = "string", required = true }
 channel_id = { type = "string", required = true }
 thread_ts  = { type = "string", required = true }
-stream_key = { type = "string", required = true }
-text       = { type = "string", required = true }
-index      = { type = "string", required = true }
-final      = { type = "string", required = true }

@@ -3,6 +3,7 @@ package adapter
 import (
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/slack-go/slack"
 )
@@ -72,6 +73,10 @@ type streamState struct {
 	text      string
 }
 
+// finalizedRetention bounds stateOrFinalized's map to a duplicate's
+// realistic lag behind its original, not a session's whole lifetime.
+const finalizedRetention = 10 * time.Minute
+
 type StreamManager struct {
 	streamer        Streamer
 	poster          ThreadPoster
@@ -79,8 +84,9 @@ type StreamManager struct {
 	recipientUserID string
 	logger          *slog.Logger
 
-	mu    sync.Mutex
-	state map[string]*streamState
+	mu        sync.Mutex
+	state     map[string]*streamState
+	finalized map[string]time.Time
 }
 
 func NewStreamManager(streamer Streamer, poster ThreadPoster, teamID, recipientUserID string, logger *slog.Logger) *StreamManager {
@@ -91,6 +97,7 @@ func NewStreamManager(streamer Streamer, poster ThreadPoster, teamID, recipientU
 		recipientUserID: recipientUserID,
 		logger:          logger,
 		state:           make(map[string]*streamState),
+		finalized:       make(map[string]time.Time),
 	}
 }
 
@@ -99,7 +106,13 @@ func NewStreamManager(streamer Streamer, poster ThreadPoster, teamID, recipientU
 // pending instead of skipped, so a caller's retry of the same index
 // re-attempts it rather than the stream silently completing short.
 func (m *StreamManager) Deliver(channelID, threadTS, streamKey string, index int64, text string, final bool) error {
-	st := m.stateFor(streamKey)
+	st, alreadyFinalized := m.stateOrFinalized(streamKey)
+	if alreadyFinalized {
+		m.logger.Info("stream delivery dropped: stream_key already finalized",
+			"component", "slack-adapter", "event", "stream_deliver_duplicate",
+			"stream_key", streamKey)
+		return nil
+	}
 
 	st.mu.Lock()
 	defer st.mu.Unlock()
@@ -129,21 +142,42 @@ func (m *StreamManager) Deliver(channelID, threadTS, streamKey string, index int
 	}
 }
 
-func (m *StreamManager) stateFor(streamKey string) *streamState {
+// stateOrFinalized combines both checks under one lock: split into two, a
+// concurrent forget could land between them and let a duplicate through.
+func (m *StreamManager) stateOrFinalized(streamKey string) (st *streamState, alreadyFinalized bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if t, ok := m.finalized[streamKey]; ok {
+		if time.Since(t) <= finalizedRetention {
+			return nil, true
+		}
+		delete(m.finalized, streamKey)
+	}
 	st, ok := m.state[streamKey]
 	if !ok {
 		st = &streamState{pending: make(map[int64]streamChunk)}
 		m.state[streamKey] = st
 	}
-	return st
+	return st, false
 }
 
+// forget also records streamKey as finalized, guarding against a duplicate.
 func (m *StreamManager) forget(streamKey string) {
+	now := time.Now()
 	m.mu.Lock()
 	delete(m.state, streamKey)
+	m.finalized[streamKey] = now
+	m.pruneFinalizedLocked(now)
 	m.mu.Unlock()
+}
+
+func (m *StreamManager) pruneFinalizedLocked(now time.Time) {
+	cutoff := now.Add(-finalizedRetention)
+	for k, t := range m.finalized {
+		if t.Before(cutoff) {
+			delete(m.finalized, k)
+		}
+	}
 }
 
 // nextChunk selects the next candidate for apply: the chunk at

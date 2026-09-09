@@ -255,11 +255,27 @@ case "$got" in
   *) printf 'the first published delta after a swallowed empty one should still be index 0, got: %s\n' "$got" >&2; exit 1 ;;
 esac
 
-# message_display: an empty delta publishes no plect.message_delta (empty
-# text), and a final flush whose buffered text is still empty publishes no
-# plect.message either.
+# message_display: an empty *final* delta still publishes its own
+# plect.message_delta (empty body, final=true) -- a delta-driven consumer
+# needs a real final delta to close its stream, and Claude Code's own
+# newline-driven split routinely lands a message's last hook invocation on
+# empty text. The plect.message that would complete it is still gated on
+# the buffered text, which is empty here too, so no plect.message follows.
 got="$(run_report message_display '{"hook_event_name":"MessageDisplay","message_id":"msg-3","index":0,"final":true,"delta":""}')"
-[ -z "$got" ] || { printf 'empty message_display should publish nothing, got: %s\n' "$got" >&2; exit 1; }
+want='event publish owner/repo-1 --type plect.message_delta --summary  --body  --meta message_id=msg-3 --meta message_id_origin=native --meta kind=text --meta index=0 --meta final=true --meta source=claude'
+[ "$got" = "$want" ] || { printf 'empty final message_display = %q, want %q\n' "$got" "$want" >&2; exit 1; }
+
+# message_display: a message whose text ends exactly on the newline Claude
+# Code splits on leaves its last hook invocation's own delta empty; the
+# empty final delta still publishes (index advanced past the last real
+# delta), and the plect.message that follows carries the full buffered text
+# since the buffer itself is non-empty.
+got="$(run_report message_display '{"hook_event_name":"MessageDisplay","message_id":"msg-eol","turn_id":"turn-eol","index":0,"final":false,"delta":"line one\n"}')"
+got="$(run_report message_display '{"hook_event_name":"MessageDisplay","message_id":"msg-eol","turn_id":"turn-eol","index":1,"final":true,"delta":""}')"
+want='event publish owner/repo-1 --type plect.message_delta --summary  --body  --meta message_id=msg-eol --meta message_id_origin=native --meta kind=text --meta index=1 --meta final=true --meta source=claude --meta turn_id=turn-eol
+event publish owner/repo-1 --type plect.message --summary line one --body line one
+ --meta message_id=msg-eol --meta message_id_origin=native --meta role=assistant --meta source=claude --meta turn_id=turn-eol'
+[ "$got" = "$want" ] || { printf 'message ending on a newline = %q, want %q\n' "$got" "$want" >&2; exit 1; }
 
 # message_display: no message_id means the payload didn't parse as this
 # hook's expected shape, so nothing publishes.

@@ -40,12 +40,22 @@ another plugin's package.
   `include` list decides which events reach it. An event's body-or-summary
   becomes the sole `loading_messages` entry; an event whose body and summary
   are both empty clears the status instead.
-- `config/channels/stream.toml` — renders a `plect.message_delta` chunk
-  sequence as one live-updating Slack thread reply via the `slack-adapter`
-  service's `POST /stream`. Same `base_url`/`channel_id`/`thread_ts` inputs
-  as `slack.toml`, plus `stream_key`, `text`, `index`, and `final` — bound
-  from the emitting event's own fields, not computed here, since ordering
-  and finality are the emitter's facts, not this channel's. See
+- `config/channels/stream.toml` — accepts both `plect.message_delta` and
+  `plect.message`, and renders either as one live-updating Slack thread
+  reply via the `slack-adapter` service's `POST /stream`. Same
+  `base_url`/`channel_id`/`thread_ts` inputs as `slack.toml`; `stream_key`,
+  `text`, `index`, and `final` are read straight from the delivered event's
+  own fields (`event.metadata.message_id`, `event.body`,
+  `event.metadata.index`, `event.metadata.final`, the last two defaulting to
+  `0`/`true` for a `plect.message`, which carries no chunk sequence of its
+  own) rather than declared as inputs, since an `[[event.channel]].inputs`
+  binding has no access to the event being delivered
+  (`docs/language/values.md`) and only the channel's own action does. This
+  channel runs unconditionally (an `exec` action always runs), so it cannot
+  itself skip a `plect.message` whose deltas already rendered and closed the
+  stream; slack-adapter's `StreamManager` is what keeps that from posting a
+  second Slack message under the same `stream_key` — see its own comment
+  (`src/slack-adapter/internal/adapter/stream.go`) and
   `src/slack-adapter/README.md`'s `POST /stream` section for the
   chat.startStream/appendStream/stopStream sequencing and the
   fallback-to-a-single-post behavior when a workspace rejects streaming.
@@ -121,6 +131,16 @@ above (`base_url`, `channel_id`, `thread_ts`) — no per-event input, because
 an `[event.channel.inputs]` binding resolves from session/node outputs only
 and has no access to the event being delivered; only the channel's own
 action does (see `channels/status.toml`).
+
+It also shows the `stream` channel bound with `include = ["plect.message",
+"plect.message_delta"]` and the same three inputs again. One such binding is
+enough for every runtime a workflow composes, streaming or not: a
+Claude-style delta-then-message sequence and a Codex-style message-only one
+both post through it, and telling a redundant `plect.message` apart from
+one that needs posting is `StreamManager`'s job
+(`src/slack-adapter/internal/adapter/stream.go`), not the workflow's. A
+workflow never needs a separate binding — or a separate channel — per
+runtime, and `plect.message` is not reserved for the `slack` channel.
 
 ### Verified channel-thread rendering facts
 

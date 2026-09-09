@@ -75,9 +75,15 @@ Code hooks that installs is this plugin's own concern:
   per `message_id` (0-based, one per delta actually published), not
   Claude's own `index` field from the hook payload, which a future harness
   could give a different meaning to (e.g. a block index).
-- An empty message or delta publishes nothing. A publish failure (`plect`
-  unreachable) never blocks or delays the agent's turn — every hook exit
-  path is 0.
+- An empty message publishes nothing, and neither does an empty *non-final*
+  delta. An empty *final* delta is the one exception: it still publishes
+  (empty body, `final = true`), because Claude Code's own newline-driven
+  delta split routinely lands a message's last hook invocation on empty
+  text, and a delta-driven consumer needs an actual `final = true` delta to
+  close its stream — it does not necessarily watch `plect.message`, a
+  different event type, to know the stream ended. A publish failure
+  (`plect` unreachable) never blocks or delays the agent's turn — every
+  hook exit path is 0.
 - A consumer that wants only finished messages includes `plect.message`;
   one that wants a live view includes `plect.message_delta` too and
   replaces its running preview with the `plect.message` for the same
