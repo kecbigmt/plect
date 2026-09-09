@@ -303,11 +303,16 @@ creation, its most recent accepted appearance, and every inbound event, and
 it has stayed so for at least this duration, the reactor brings it down
 through ordinary cleanup. Omitting the field means never — there is no
 separate pin or keep flag, so a session that must stay up simply omits it.
-A session with no real parent (created directly, not by a chain or a
-population) is never eligible, whatever this declares: idle-down exists for
-dispatched work, not for a session a person is using directly. The same
-declaration is the sole authorization for the capacity-pressure down
-described above and in `config.md`; there is no separate boolean for it.
+A session with no real parent and no population provenance — one created
+directly by `plect up`, never dispatched by a chain or admitted by a
+population — is never eligible, whatever this declares: idle-down exists for
+dispatched work, not for a session a person is using directly. A
+population-admitted session is also parentless (it counts against the same
+`max_up_children` key an operator's own session does), but its population
+provenance marks it as dispatched work, so it stays eligible exactly like a
+chain-dispatched real child. The same declaration is the sole authorization
+for the capacity-pressure down described above and in `config.md`; there is
+no separate boolean for it.
 
 `destroy.all` reads only `resource.state.*` — there is no task instance
 backing a session's own destroy policy, so no `self.state.*` to read — using

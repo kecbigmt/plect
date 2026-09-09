@@ -75,10 +75,17 @@ automatic down: the reactor brings a session down through ordinary cleanup
 once its latest durable status is an explicit clear newer than its creation,
 its most recent accepted appearance, and every inbound event, and it has
 stayed so for at least the declared duration. Absent, a session is never
-downed automatically. A session with no real parent (`ParentSession == ""` —
-an operator's own directly-created session, not one a chain or population
-dispatched) is never eligible, regardless of the declaration: idle-down
-exists for dispatched work, not for a session a person is using directly.
+downed automatically. Protection is by provenance, not merely by
+`ParentSession`: a session with no real parent (`ParentSession == ""`) *and*
+no population provenance (`session.Population == nil`) is never eligible,
+regardless of the declaration — that combination is exactly an operator's own
+directly-created session, one no chain and no population dispatched. A
+population-admitted session is also parentless in stored state (it counts
+against the same machine-wide `max_up_children` key an operator's own session
+does, `config.md`), but its `Population` provenance marks it as dispatched
+work, so it remains eligible precisely like a chain-dispatched real child.
+Idle-down exists for dispatched work — chain-parented or population-owned —
+not for a session a person is using directly.
 
 The same declaration is also the sole authorization for capacity-pressure
 down (decision 2); there is no separate boolean for that path. A duration
@@ -195,14 +202,18 @@ shim.
 
 ## Consequences
 
-- A chain-dispatched or manually-created session becomes eligible for
+- A chain-dispatched or population-owned session becomes eligible for
   automatic down and destroy by declaring `[session]` policy on its
-  workflow, independent of whether it is ever a population member.
+  workflow, generalized beyond the population-only gate that exists today.
+  A directly `plect up`-created session, carrying neither a real parent nor
+  population provenance, stays exempt exactly as it is today — an
+  operator's own session is never brought down automatically.
 - The machine-wide and per-workflow capacity keys share one down-selection
   rule instead of the population-only one `docs/language/config.md` and
   `docs/language/workflows.md` describe today; a manual or chain-dispatched
-  admission can now free capacity by bringing down an idle-eligible sibling,
-  where before only a population admission could.
+  admission can now free capacity by bringing down an idle-eligible
+  population member or chain-dispatched sibling, where before only a
+  population admission could trigger that selection.
 - A session's tick no longer implies its run state: `done_when` evaluation,
   chain firing, and terminal pushes continue while a session is down, so an
   idle-down session still reaches its own destroy guard without a directed
