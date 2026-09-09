@@ -479,8 +479,7 @@ func TestSocketPool_GetOrConnect_ReconnectsWhenRebindFails(t *testing.T) {
 	socketPath := filepath.Join(socketDir, "test.sock")
 
 	var mu sync.Mutex
-	connSeen := map[net.Conn]bool{}
-	var lastThreadTS string
+	registeredThreadTS := map[net.Conn]string{}
 
 	listener, err := newFakeSocketListener(socketPath, func(env protocol.Envelope, conn net.Conn) {
 		if env.Type != protocol.MsgRegister {
@@ -489,8 +488,7 @@ func TestSocketPool_GetOrConnect_ReconnectsWhenRebindFails(t *testing.T) {
 		var reg protocol.RegisterPayload
 		json.Unmarshal(env.Payload, &reg)
 		mu.Lock()
-		connSeen[conn] = true
-		lastThreadTS = reg.ThreadTS
+		registeredThreadTS[conn] = reg.ThreadTS
 		mu.Unlock()
 	}, testLogger())
 	if err != nil {
@@ -507,6 +505,29 @@ func TestSocketPool_GetOrConnect_ReconnectsWhenRebindFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSocketClient() error: %v", err)
 	}
+
+	// Wait for the listener to record the first Register before tearing the
+	// connection down, so its arrival can't race the reconnect's own.
+	waitForRegistrations := func(n int) {
+		t.Helper()
+		deadline := time.After(2 * time.Second)
+		for {
+			mu.Lock()
+			got := len(registeredThreadTS)
+			mu.Unlock()
+			if got >= n {
+				return
+			}
+			select {
+			case <-deadline:
+				t.Fatalf("timeout waiting for %d registration(s), got %d", n, got)
+			default:
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+	}
+	waitForRegistrations(1)
+
 	deadClient.Close()
 	router.mu.Lock()
 	router.conns[socketPath] = &socketConn{client: deadClient, channelID: "C-OLD", threadTS: "1111111111.100000"}
@@ -515,27 +536,19 @@ func TestSocketPool_GetOrConnect_ReconnectsWhenRebindFails(t *testing.T) {
 	if err := router.Send(socketPath, "C-NEW", protocol.MessagePayload{Text: "hi", ThreadTS: "2222222222.200000"}); err != nil {
 		t.Fatalf("Send() should reconnect past a dead cached connection, got error: %v", err)
 	}
-
-	deadline := time.After(2 * time.Second)
-	for {
-		mu.Lock()
-		ts := lastThreadTS
-		mu.Unlock()
-		if ts == "2222222222.200000" {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatal("timeout waiting for the reconnected connection to register")
-		default:
-			time.Sleep(10 * time.Millisecond)
-		}
-	}
+	waitForRegistrations(2)
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(connSeen) != 2 {
-		t.Fatalf("expected 2 distinct connections accepted (the dead one plus the reconnect), got %d", len(connSeen))
+	if len(registeredThreadTS) != 2 {
+		t.Fatalf("expected 2 distinct connections accepted (the dead one plus the reconnect), got %d", len(registeredThreadTS))
+	}
+	seen := map[string]bool{}
+	for _, ts := range registeredThreadTS {
+		seen[ts] = true
+	}
+	if !seen["1111111111.100000"] || !seen["2222222222.200000"] {
+		t.Fatalf("registered thread_ts values = %v, want both the dead connection's and the reconnect's", registeredThreadTS)
 	}
 
 	router.mu.Lock()
