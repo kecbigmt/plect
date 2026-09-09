@@ -262,6 +262,7 @@ func (e *Engine) processInbound() error {
 func (e *Engine) admit(ctx context.Context, member *state.PopulationMember) error {
 	inputs, err := e.sessionInputs(member.ResourceID, member.Item)
 	if err != nil {
+		e.record(member.SessionName, event.TypeWorkflowPopulationFailure, "input", err.Error(), member.ResourceID)
 		return err
 	}
 	if e.hooks.Up == nil {
@@ -274,7 +275,13 @@ func (e *Engine) admit(ctx context.Context, member *state.PopulationMember) erro
 			e.record(conflict.session, event.TypeWorkflowPopulationConflict, "provenance", err.Error(), member.ResourceID)
 			return err
 		}
-		e.record(member.SessionName, event.TypeWorkflowPopulationFailure, "up", err.Error(), member.ResourceID)
+		// pendingExistingAhead reads this tag back to decide whether the
+		// member still deserves head-of-line priority next time.
+		reason := "up"
+		if isCapacityRefusal(err) {
+			reason = "capacity"
+		}
+		e.record(member.SessionName, event.TypeWorkflowPopulationFailure, reason, err.Error(), member.ResourceID)
 		return err
 	}
 	session := outcome.SessionName

@@ -11,6 +11,7 @@ import (
 
 	"github.com/kecbigmt/plecture/app/internal/eventlog"
 	"github.com/kecbigmt/plecture/app/internal/lang"
+	"github.com/kecbigmt/plecture/app/internal/service"
 	"github.com/kecbigmt/plecture/app/internal/state"
 	"github.com/kecbigmt/plecture/contracts/event"
 )
@@ -231,6 +232,57 @@ func TestUpFailureLeavesAcceptedAppearancePending(t *testing.T) {
 	state, _ = engine.state.Population(engine.key)
 	if !state.Members["urn:case:a"].AcceptedAt.Equal(created) {
 		t.Fatalf("AcceptedAt = %v, want successful creation time %v", state.Members["urn:case:a"].AcceptedAt, created)
+	}
+}
+
+// TestAdmitFailureReasonsDrivePriorityClassification checks that admit()
+// tags each recorded failure with the reason pendingExistingAhead (in
+// capacity.go) reads back: only a "capacity" tag keeps priority.
+func TestAdmitFailureReasonsDrivePriorityClassification(t *testing.T) {
+	engine, _, _ := engineFixture(t, false)
+	ctx := context.Background()
+
+	if err := engine.ApplyAppearance(ctx, map[string]any{"resource": "urn:case:a"}); err != nil {
+		t.Fatal(err)
+	}
+
+	engine.hooks.Up = func(context.Context, string, map[string]any) (UpOutcome, error) {
+		return UpOutcome{}, &service.Error{Code: service.ErrChildCapExceeded, Message: "cap"}
+	}
+	if err := engine.ApplyAppearance(ctx, map[string]any{"resource": "urn:case:a"}); err == nil {
+		t.Fatal("expected capacity failure")
+	}
+	events, _, _, err := engine.log.List("session-urn:case:a", 0, event.Filter{Types: []string{event.TypeWorkflowPopulationFailure}})
+	if err != nil || len(events) != 1 || events[0].Metadata["reason"] != "capacity" {
+		t.Fatalf("failure events = %v, %v, want a single capacity-tagged failure", events, err)
+	}
+
+	engine.hooks.Up = func(context.Context, string, map[string]any) (UpOutcome, error) {
+		return UpOutcome{}, errors.New("boom")
+	}
+	if err := engine.ApplyAppearance(ctx, map[string]any{"resource": "urn:case:a"}); err == nil {
+		t.Fatal("expected non-capacity failure")
+	}
+	events, _, _, err = engine.log.List("session-urn:case:a", 0, event.Filter{Types: []string{event.TypeWorkflowPopulationFailure}})
+	if err != nil || len(events) != 2 || events[1].Metadata["reason"] != "up" {
+		t.Fatalf("failure events = %v, %v, want the second failure tagged \"up\"", events, err)
+	}
+
+	// ApplyAppearance validates Session.Inputs before persisting, so the
+	// only way admit() itself hits this failure is a definition change
+	// after the item was already accepted — a direct Reconcile, not another
+	// ApplyAppearance, which would re-validate and never reach admit().
+	engine.definition.Population.Session.Inputs["blocked"] = &lang.Value{Form: lang.FormFrom, From: "item.missing_field"}
+	engine.hooks.Up = func(context.Context, string, map[string]any) (UpOutcome, error) {
+		t.Fatal("hooks.Up called despite a session-input resolution failure")
+		return UpOutcome{}, nil
+	}
+	if err := engine.Reconcile(ctx); err == nil {
+		t.Fatal("expected session-input resolution failure")
+	}
+	events, _, _, err = engine.log.List("session-urn:case:a", 0, event.Filter{Types: []string{event.TypeWorkflowPopulationFailure}})
+	if err != nil || len(events) != 3 || events[2].Metadata["reason"] != "input" {
+		t.Fatalf("failure events = %v, %v, want the third failure tagged \"input\"", events, err)
 	}
 }
 

@@ -47,12 +47,13 @@ func (c *capacityCoordinator) up(_ context.Context, def Definition, resource str
 	if !isCapError(err) {
 		return outcome, err
 	}
-	if c.pendingExistingAhead(def, resource) {
-		return UpOutcome{}, fmt.Errorf("an existing population member has a pending up request and takes priority")
+	if blocker, blocked := c.pendingExistingAhead(def, resource); blocked {
+		return UpOutcome{}, &pendingPriorityError{population: blocker.key, resource: blocker.resource, session: blocker.session}
 	}
-	candidates, err := c.idleCandidates()
-	if err != nil {
-		return UpOutcome{}, fmt.Errorf("find idle candidates to free capacity: %w", err)
+	// A distinct variable, not err: a zero-candidate result isn't an error.
+	candidates, candidatesErr := c.idleCandidates()
+	if candidatesErr != nil {
+		return UpOutcome{}, fmt.Errorf("find idle candidates to free capacity: %w", candidatesErr)
 	}
 	for _, candidate := range candidates {
 		if _, downErr := service.Down(c.cfg(), c.state, service.DownParams{Identifier: candidate.session}); downErr != nil {
@@ -77,23 +78,72 @@ func isCapError(err error) bool {
 	return errors.As(err, &serviceErr) && serviceErr.Code == service.ErrChildCapExceeded
 }
 
-func (c *capacityCoordinator) pendingExistingAhead(current Definition, resource string) bool {
+// pendingPriorityError names the pending member that preempted admission.
+type pendingPriorityError struct {
+	population string
+	resource   string
+	session    string
+}
+
+func (e *pendingPriorityError) Error() string {
+	return fmt.Sprintf(
+		"existing population member %q (population %s, resource %q) has a pending up request and takes priority",
+		e.session, e.population, e.resource,
+	)
+}
+
+// isCapacityRefusal reports whether err is a pure capacity-gate refusal
+// rather than a failure the member caused itself.
+func isCapacityRefusal(err error) bool {
+	var priority *pendingPriorityError
+	return isCapError(err) || errors.As(err, &priority)
+}
+
+// blockingMember is the pending member pendingExistingAhead found holding
+// priority over the resource being admitted.
+type blockingMember struct {
+	key      string
+	resource string
+	session  string
+}
+
+func (c *capacityCoordinator) pendingExistingAhead(current Definition, resource string) (blockingMember, bool) {
 	currentState, _ := c.state.Population(populationKey(current))
 	if currentState == nil || currentState.Members[resource] == nil || currentState.Members[resource].SessionName != "" {
-		return false
+		return blockingMember{}, false
 	}
 	for key := range c.definitions {
 		population, err := c.state.Population(key)
 		if err != nil || population == nil {
 			continue
 		}
-		for _, member := range population.Members {
-			if member != nil && member.PendingUp && member.SessionName != "" && !member.Tombstoned {
-				return true
+		for resourceID, member := range population.Members {
+			if member == nil || !member.PendingUp || member.SessionName == "" || member.Tombstoned {
+				continue
 			}
+			if c.blockedByNonCapacityFailure(member) {
+				continue
+			}
+			return blockingMember{key: key, resource: resourceID, session: member.SessionName}, true
 		}
 	}
-	return false
+	return blockingMember{}, false
+}
+
+// blockedByNonCapacityFailure reads member's own event log (no new
+// persisted field) for a failure reason other than the capacity gate.
+func (c *capacityCoordinator) blockedByNonCapacityFailure(member *state.PopulationMember) bool {
+	events, err := c.log.Tail(member.SessionName, event.Filter{
+		Types: []string{event.TypeWorkflowPopulationFailure, event.TypeWorkflowPopulationUp},
+	}, 1)
+	if err != nil || len(events) == 0 {
+		return false
+	}
+	last := events[0]
+	if last.Type != event.TypeWorkflowPopulationFailure || last.Metadata["resource"] != member.ResourceID {
+		return false
+	}
+	return last.Metadata["reason"] != "capacity"
 }
 
 type idleCandidate struct {
