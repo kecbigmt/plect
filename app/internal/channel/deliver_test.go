@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/kecbigmt/plecture/app/internal/config"
+	"github.com/kecbigmt/plecture/app/internal/plectshim"
 	"github.com/kecbigmt/plecture/contracts/event"
 )
 
@@ -246,6 +247,55 @@ out = { type = "string", required = true }
 	}
 	if strings.Contains(string(raw), "PLECT_CACHE_HOME=") || strings.Contains(string(raw), "XDG_CACHE_HOME=") {
 		t.Fatalf("channel command's env leaked a cache-home variable:\n%s", raw)
+	}
+}
+
+// plect-web reaches this same delivery path but has no CLI subcommand tree
+// of its own, so the fake standing in for it here fails loud if the shim
+// ever executes it directly instead of its "plect" sibling.
+func TestDeliver_ProcessBarePlectReachesTheDaemonStoreThroughTheShim(t *testing.T) {
+	dataHome := t.TempDir()
+	hostDir := t.TempDir()
+	webBin := filepath.Join(hostDir, "plect-web")
+	if err := os.WriteFile(webBin, []byte("#!/bin/sh\nexit 2\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hostDir, "plect"), []byte("#!/bin/sh\nprintf '%s\\n' \"$@\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	defer plectshim.UseExecutableForTest(webBin)()
+	t.Setenv("PLECT_DATA_HOME", dataHome)
+	// A CI runner's own ambient XDG_CONFIG_HOME would otherwise show up in
+	// the shim script below, which this test compares byte for byte.
+	t.Setenv("PLECT_CONFIG_HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("PLECT_CACHE_HOME", "")
+	t.Setenv("XDG_CACHE_HOME", "")
+
+	out := filepath.Join(t.TempDir(), "out")
+	def := channelDef(t, `
+[c]
+kind   = "channel"
+type   = "shell"
+script = 'plect ls --json > "$out"'
+
+[c.bind]
+out = { from = "inputs.out" }
+
+[c.input_schema]
+out = { type = "string", required = true }
+`)
+	ev := event.Event{Type: event.TypeUserEmit}
+	if err := Deliver(context.Background(), def, map[string]any{"out": out}, ev); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	raw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "--data-home\n" + dataHome + "\nls\n--json\n"
+	if string(raw) != want {
+		t.Fatalf("plect ls --json, forwarded via the shim = %q, want %q (the daemon's own store)", raw, want)
 	}
 }
 

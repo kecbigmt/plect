@@ -54,6 +54,37 @@ reply_seq_path() {
   printf '%s/%s.reply-seq' "$dir" "$(printf '%s' "$1" | tr '/' '_')"
 }
 
+# error_log_path is where a swallowed `plect` call's stderr lands on
+# failure: run_plect's every caller still exits 0 (a hook must never fail
+# the agent's turn), but a broken shim or store no longer disappears into
+# /dev/null unnoticed.
+error_log_path() {
+  local dir="${XDG_STATE_HOME:-$HOME/.local/state}/plect/claude-activity"
+  printf '%s/errors.log' "$dir"
+}
+
+# run_plect runs "plect $*", discarding stdout; a non-zero exit appends
+# plect's stderr to error_log_path instead of the void. Only $1/$2 (the
+# subcommand, e.g. "event publish") are logged, never the full argv or
+# stderr verbatim: a caller's own arguments can carry an arbitrary,
+# multi-line agent message (--body), and embedded newlines in an appended
+# line would let that content forge additional log records. Always returns
+# 0, so every caller keeps the fire-and-forget contract these hooks operate
+# under regardless of whether the call underneath actually succeeded.
+run_plect() {
+  local log out status verb
+  verb="$1 $2"
+  out="$(plect "$@" 2>&1 1>/dev/null)"
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    log="$(error_log_path)"
+    mkdir -p "$(dirname "$log")" 2>/dev/null
+    out="$(printf '%s' "$out" | tr '\n\r\t' '   ')"
+    printf '%s exit=%s plect %s: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$status" "$verb" "$out" >> "$log" 2>/dev/null
+  fi
+  return 0
+}
+
 # publish_event always publishes, regardless of whether text is empty. Never
 # fails the caller — a publish failure is silently swallowed, per the
 # fire-and-forget contract these hooks operate under.
@@ -61,7 +92,7 @@ publish_event() {
   local event_type="$1" text="$2" firstline
   shift 2
   firstline="$(printf '%s' "$text" | head -n 1)"
-  plect event publish "$PLECT_SESSION_NAME" --type "$event_type" --summary "${firstline:0:120}" --body "$text" "$@" >/dev/null 2>&1
+  run_plect event publish "$PLECT_SESSION_NAME" --type "$event_type" --summary "${firstline:0:120}" --body "$text" "$@"
   return 0
 }
 
@@ -289,7 +320,7 @@ text="${text:0:80}"
 # is reported as an empty message, not the literal word "waiting".
 [ "$activity" = "waiting" ] && text=""
 
-plect state set-message "$PLECT_SESSION_NAME" "$text" >/dev/null 2>&1
+run_plect state set-message "$PLECT_SESSION_NAME" "$text"
 
 file="$(record_path "$PLECT_SESSION_NAME")"
 mkdir -p "$(dirname "$file")" 2>/dev/null

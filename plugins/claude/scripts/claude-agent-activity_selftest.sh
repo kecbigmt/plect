@@ -14,6 +14,22 @@ printf '%s\n' "$*" >> "$PLECT_CALLS"
 EOF
 chmod +x "$bin_dir/plect"
 
+# noplect_path simulates plect being unreachable without filtering PATH
+# down to a shortlist of its own: a stub named `plect` ahead of the real
+# PATH always wins the lookup and fails loud, so bash/jq/coreutils stay
+# reachable exactly as they are on the real PATH -- unlike excluding every
+# directory that happens to contain a real `plect`, which on a host that
+# ships coreutils and plect from the same directory would take out bash too.
+noplect_bin_dir="$tmp/bin-noplect"
+mkdir -p "$noplect_bin_dir"
+cat > "$noplect_bin_dir/plect" <<'EOF'
+#!/usr/bin/env bash
+echo "plect: simulated unreachable (selftest)" >&2
+exit 127
+EOF
+chmod +x "$noplect_bin_dir/plect"
+noplect_path="$noplect_bin_dir:$PATH"
+
 run_hook() {
   local payload="$1"
   PLECT_SESSION_NAME="owner/repo-1" \
@@ -62,6 +78,18 @@ PATH="$bin_dir:$PATH" \
 got="$(tail -n 1 "$tmp/calls")"
 want='state set-message owner/repo-1 '
 [ "$got" = "$want" ] || { printf 'Stop text = %q, want %q\n' "$got" "$want" >&2; exit 1; }
+
+# working: an unreachable plect never fails the hook, and state
+# set-message's own failure is logged the same way event publish's is below.
+PLECT_SESSION_NAME="owner/repo-1" \
+XDG_STATE_HOME="$tmp/state" \
+PATH="$noplect_path" \
+"$subject" working <<<'{"hook_event_name":"UserPromptSubmit"}'
+[ $? -eq 0 ] || { echo "working must exit 0 even when plect is unreachable" >&2; exit 1; }
+statelog="$tmp/state/plect/claude-activity/errors.log"
+[ -s "$statelog" ] || { echo "an unreachable state set-message call should be logged to $statelog instead of the void" >&2; exit 1; }
+grep -q 'plect state set-message' "$statelog" || { printf 'errors.log missing the failed plect invocation: %s\n' "$(cat "$statelog")" >&2; exit 1; }
+: > "$statelog"
 
 run_report() {
   local verb="$1" payload="$2"
@@ -130,9 +158,19 @@ esac
 : > "$tmp/calls"
 PLECT_SESSION_NAME="owner/repo-1" \
 XDG_STATE_HOME="$tmp/state" \
-PATH="$(dirname "$(command -v jq)")" \
-"$subject" reply <<<'{"hook_event_name":"Stop","last_assistant_message":"hi"}'
+PATH="$noplect_path" \
+"$subject" reply <<<'{"hook_event_name":"Stop","last_assistant_message":"secret-payload-marker"}'
 [ $? -eq 0 ] || { echo "reply must exit 0 even when plect is unreachable" >&2; exit 1; }
+
+# reply: an unreachable plect no longer just disappears into the void -- its
+# failure lands in this session's own error log, so the next silent failure
+# is visible without changing the hook's own exit code. The logged line
+# names the subcommand only, never the --body payload it was called with.
+errlog="$tmp/state/plect/claude-activity/errors.log"
+[ -s "$errlog" ] || { echo "an unreachable plect call should be logged to $errlog instead of the void" >&2; exit 1; }
+grep -q 'plect event publish' "$errlog" || { printf 'errors.log missing the failed plect invocation: %s\n' "$(cat "$errlog")" >&2; exit 1; }
+grep -q 'secret-payload-marker' "$errlog" && { echo "errors.log leaked the assistant message payload" >&2; exit 1; }
+: > "$errlog"
 
 # message_display: a non-final delta publishes exactly one
 # plect.message_delta event whose body is that delta alone, not any running
@@ -285,9 +323,11 @@ got="$(run_report message_display '{"hook_event_name":"MessageDisplay","index":0
 # message_display: plect being unreachable never fails the turn.
 PLECT_SESSION_NAME="owner/repo-1" \
 XDG_STATE_HOME="$tmp/state" \
-PATH="$(dirname "$(command -v jq)")" \
+PATH="$noplect_path" \
 "$subject" message_display <<<'{"hook_event_name":"MessageDisplay","message_id":"msg-4","index":0,"final":true,"delta":"hi"}'
 [ $? -eq 0 ] || { echo "message_display must exit 0 even when plect is unreachable" >&2; exit 1; }
+[ -s "$errlog" ] || { echo "an unreachable plect call should be logged to $errlog instead of the void" >&2; exit 1; }
+grep -q 'plect event publish' "$errlog" || { printf 'errors.log missing the failed plect invocation: %s\n' "$(cat "$errlog")" >&2; exit 1; }
 
 # reset also drops the message-buffer directory (including a message's own
 # index-counter file), the last-emitted marker, and the reply-seq counter,

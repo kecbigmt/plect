@@ -22,6 +22,7 @@ import (
 	"github.com/kecbigmt/plecture/app/internal/config"
 	"github.com/kecbigmt/plecture/app/internal/datahome"
 	"github.com/kecbigmt/plecture/app/internal/lang"
+	"github.com/kecbigmt/plecture/app/internal/plectshim"
 	protocol "github.com/kecbigmt/plecture/contracts/channel-protocol"
 	"github.com/kecbigmt/plecture/contracts/event"
 )
@@ -195,7 +196,11 @@ func deliverProcess(ctx context.Context, def config.ChannelDefinition, eval lang
 	// A channel has no way to bind env explicitly, and no known channel
 	// destination depends on inheriting either data-home or cache-home
 	// variable, so this is a full, unconditional strip.
-	cmd.Env = cachehome.StripIsolated(datahome.IsolatedEnv())
+	env := cachehome.StripIsolated(datahome.IsolatedEnv())
+	if shimDir, shimErr := plectshim.ForCurrentProcess(); shimErr == nil {
+		env = plectshim.PatchPath(env, shimDir)
+	}
+	cmd.Env = env
 	if len(execution.Stdin) > 0 {
 		cmd.Stdin = bytes.NewReader(execution.Stdin)
 	}

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/kecbigmt/plecture/app/internal/lang"
+	"github.com/kecbigmt/plecture/app/internal/plectshim"
 )
 
 // shellExecution is the invocation a `bash -c` script resolves to, stated
@@ -177,6 +178,57 @@ func TestExecHook_IsolatesBothDataHomeVars(t *testing.T) {
 	}
 	if strings.Contains(string(stdout), "PLECT_DATA_HOME=") || strings.Contains(string(stdout), "XDG_DATA_HOME=") {
 		t.Fatalf("ExecHook leaked a data-home variable:\n%s", stdout)
+	}
+}
+
+// plect-web (webui.LiveService.Up) reaches this same ExecHook path but has
+// no CLI subcommand tree of its own, so the fake standing in for it here
+// fails loud if the shim ever executes it directly instead of its "plect"
+// sibling -- the failure a real pane would see if plectshim picked wrong.
+func TestExecHook_BarePlectReachesTheDaemonStoreThroughTheShim(t *testing.T) {
+	dataHome := t.TempDir()
+	hostDir := t.TempDir()
+	webBin := filepath.Join(hostDir, "plect-web")
+	if err := os.WriteFile(webBin, []byte("#!/bin/sh\nexit 2\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hostDir, "plect"), []byte("#!/bin/sh\nprintf '%s\\n' \"$@\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	defer plectshim.UseExecutableForTest(webBin)()
+	t.Setenv("PLECT_DATA_HOME", dataHome)
+	// Cleared, not left ambient: a CI runner's own XDG_CONFIG_HOME would
+	// otherwise leak into the shim script this test asserts on verbatim.
+	t.Setenv("PLECT_CONFIG_HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("PLECT_CACHE_HOME", "")
+	t.Setenv("XDG_CACHE_HOME", "")
+
+	stdout, _, err := ExecHook(context.Background(), shellExecution("plect ls --json"), "")
+	if err != nil {
+		t.Fatalf("ExecHook: %v", err)
+	}
+	want := "--data-home\n" + dataHome + "\nls\n--json\n"
+	if string(stdout) != want {
+		t.Fatalf("plect ls --json, forwarded via the shim = %q, want %q (the daemon's own store)", stdout, want)
+	}
+}
+
+func TestExecHook_DotSlashPlectBypassesTheShimAndStaysIsolated(t *testing.T) {
+	dataHome := t.TempDir()
+	t.Setenv("PLECT_DATA_HOME", dataHome)
+
+	work := t.TempDir()
+	if err := os.WriteFile(filepath.Join(work, "plect"), []byte("#!/bin/sh\nenv\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, _, err := ExecHook(context.Background(), shellExecution("./plect"), work)
+	if err != nil {
+		t.Fatalf("ExecHook: %v", err)
+	}
+	if strings.Contains(string(stdout), "PLECT_DATA_HOME=") || strings.Contains(string(stdout), "XDG_DATA_HOME=") {
+		t.Fatalf("a sibling ./plect build saw a data-home variable, want it isolated like any other build the agent makes itself:\n%s", stdout)
 	}
 }
 

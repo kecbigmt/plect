@@ -27,6 +27,14 @@ The bind address is set via `--host` / `--port` (`-p`), or `listen_addr` in
 `~/.config/plect-web/config.toml`. It defaults to loopback so a fresh install
 doesn't accidentally expose itself on every interface.
 
+A `plect-web` run this way (or built to any path other than a release
+archive's `bin/plect-web`, alongside its `bin/plect`) has no `plect` CLI
+binary shipped next to it: set `PLECT_BIN` to an installed `plect`'s path,
+or a session it starts (`up` from the session tree, a pane, a channel
+delivery) resolves a bare `plect` to nothing and cannot reach this
+process's own store (see `docs/design/sqlite-persistence.md`, "Data-home
+resolution").
+
 ## React shell (`/app/`)
 
 `GET /app/` serves the embedded production build of the React/TypeScript
