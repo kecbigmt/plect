@@ -29,11 +29,19 @@ doesn't accidentally expose itself on every interface.
 
 A `plect-web` run this way (or built to any path other than a release
 archive's `bin/plect-web`, alongside its `bin/plect`) has no `plect` CLI
-binary shipped next to it: set `PLECT_BIN` to an installed `plect`'s path,
-or a session it starts (`up` from the session tree, a pane, a channel
-delivery) resolves a bare `plect` to nothing and cannot reach this
-process's own store (see `docs/design/sqlite-persistence.md`, "Data-home
-resolution").
+binary shipped next to it: build the matching `plect` CLI from the same
+source tree and set `PLECT_BIN` to its absolute path —
+
+```bash
+go build -o /tmp/plect ./app/cmd/plect
+PLECT_BIN=/tmp/plect go run ./app/cmd/plect-web
+```
+
+— rather than pointing it at an already-installed `plect`, which may be a
+different version. Without a matching `PLECT_BIN`, a session `plect-web`
+starts (`up` from the session tree, a pane, a channel delivery) resolves a
+bare `plect` to nothing and cannot reach this process's own store (see
+`docs/design/sqlite-persistence.md`, "Data-home resolution").
 
 ## React shell (`/app/`)
 
