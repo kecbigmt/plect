@@ -1,15 +1,21 @@
 package adapter
 
 import (
+	"encoding/json"
+	"errors"
+	"io/fs"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
+	"github.com/kecbigmt/plecture/contracts/atomicfile"
 	"github.com/slack-go/slack"
 )
 
-// maxPendingStreamChunks bounds out-of-order buffering per stream_key: past
-// this, a stalled or dropped chunk would otherwise buffer forever.
+// maxPendingStreamChunks bounds out-of-order buffering per stream: past this,
+// a stalled or dropped chunk would otherwise buffer forever.
 const maxPendingStreamChunks = 32
 
 type Streamer interface {
@@ -57,7 +63,7 @@ type streamChunk struct {
 	final bool
 }
 
-// streamState is one stream_key's progress, mutated only once the Slack
+// streamState is one stream's progress, mutated only once the Slack
 // (or fallback) call for a chunk has actually succeeded — see Deliver.
 // failed is set only on a StartStream failure; a later Append/StopStream
 // error is returned to the caller instead, since a native message exists
@@ -73,6 +79,41 @@ type streamState struct {
 	text      string
 }
 
+type streamIdentity struct {
+	channelID string
+	threadTS  string
+	streamKey string
+}
+
+type persistedStreamChunk struct {
+	Text  string `json:"text"`
+	Final bool   `json:"final"`
+}
+
+type persistedStream struct {
+	ChannelID string                         `json:"channel_id"`
+	ThreadTS  string                         `json:"thread_ts"`
+	StreamKey string                         `json:"stream_key"`
+	Started   bool                           `json:"started"`
+	Failed    bool                           `json:"failed"`
+	TS        string                         `json:"ts"`
+	NextIndex int64                          `json:"next_index"`
+	Pending   map[int64]persistedStreamChunk `json:"pending,omitempty"`
+	Text      string                         `json:"text"`
+}
+
+type persistedFinalizedStream struct {
+	ChannelID   string    `json:"channel_id"`
+	ThreadTS    string    `json:"thread_ts"`
+	StreamKey   string    `json:"stream_key"`
+	FinalizedAt time.Time `json:"finalized_at"`
+}
+
+type persistedStreamManagerState struct {
+	Streams   []persistedStream          `json:"streams,omitempty"`
+	Finalized []persistedFinalizedStream `json:"finalized,omitempty"`
+}
+
 // finalizedRetention bounds stateOrFinalized's map to a duplicate's
 // realistic lag behind its original, not a session's whole lifetime.
 const finalizedRetention = 10 * time.Minute
@@ -85,20 +126,31 @@ type StreamManager struct {
 	logger          *slog.Logger
 
 	mu        sync.Mutex
-	state     map[string]*streamState
-	finalized map[string]time.Time
+	state     map[streamIdentity]*streamState
+	finalized map[streamIdentity]time.Time
+	statePath string
+	persistMu sync.Mutex
 }
 
 func NewStreamManager(streamer Streamer, poster ThreadPoster, teamID, recipientUserID string, logger *slog.Logger) *StreamManager {
-	return &StreamManager{
+	return NewStreamManagerWithStatePath(streamer, poster, teamID, recipientUserID, logger, "")
+}
+
+func NewStreamManagerWithStatePath(streamer Streamer, poster ThreadPoster, teamID, recipientUserID string, logger *slog.Logger, statePath string) *StreamManager {
+	m := &StreamManager{
 		streamer:        streamer,
 		poster:          poster,
 		teamID:          teamID,
 		recipientUserID: recipientUserID,
 		logger:          logger,
-		state:           make(map[string]*streamState),
-		finalized:       make(map[string]time.Time),
+		state:           make(map[streamIdentity]*streamState),
+		finalized:       make(map[streamIdentity]time.Time),
+		statePath:       statePath,
 	}
+	if statePath != "" {
+		m.load()
+	}
+	return m
 }
 
 // Deliver processes one chunk for streamKey, ordered by index. Draining
@@ -106,17 +158,16 @@ func NewStreamManager(streamer Streamer, poster ThreadPoster, teamID, recipientU
 // pending instead of skipped, so a caller's retry of the same index
 // re-attempts it rather than the stream silently completing short.
 func (m *StreamManager) Deliver(channelID, threadTS, streamKey string, index int64, text string, final bool) error {
-	st, alreadyFinalized := m.stateOrFinalized(streamKey)
+	id := streamIdentity{channelID: channelID, threadTS: threadTS, streamKey: streamKey}
+	st, alreadyFinalized := m.stateOrFinalized(id)
 	if alreadyFinalized {
-		m.logger.Info("stream delivery dropped: stream_key already finalized",
+		m.logger.Info("stream delivery dropped: stream already finalized",
 			"component", "slack-adapter", "event", "stream_deliver_duplicate",
-			"stream_key", streamKey)
+			"channel_id", channelID, "thread_ts", threadTS, "stream_key", streamKey)
 		return nil
 	}
 
 	st.mu.Lock()
-	defer st.mu.Unlock()
-
 	// A lower index is a duplicate of an already-applied chunk, not a retry.
 	if index >= st.nextIndex {
 		st.pending[index] = streamChunk{text: text, final: final}
@@ -125,18 +176,24 @@ func (m *StreamManager) Deliver(channelID, threadTS, streamKey string, index int
 	for {
 		idx, c, ok := nextChunk(st)
 		if !ok {
+			st.mu.Unlock()
+			m.persist()
 			return nil
 		}
 		if err := m.apply(channelID, threadTS, st, c); err != nil {
 			m.logger.Warn("stream delivery failed, will retry on redelivery",
 				"component", "slack-adapter", "event", "stream_deliver_error",
 				"stream_key", streamKey, "error", err)
+			st.mu.Unlock()
+			m.persist()
 			return err
 		}
 		delete(st.pending, idx)
 		st.nextIndex = idx + 1
 		if c.final {
-			m.forget(streamKey)
+			m.forget(id)
+			st.mu.Unlock()
+			m.persist()
 			return nil
 		}
 	}
@@ -144,31 +201,138 @@ func (m *StreamManager) Deliver(channelID, threadTS, streamKey string, index int
 
 // stateOrFinalized combines both checks under one lock: split into two, a
 // concurrent forget could land between them and let a duplicate through.
-func (m *StreamManager) stateOrFinalized(streamKey string) (st *streamState, alreadyFinalized bool) {
+func (m *StreamManager) stateOrFinalized(id streamIdentity) (st *streamState, alreadyFinalized bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if t, ok := m.finalized[streamKey]; ok {
+	if t, ok := m.finalized[id]; ok {
 		if time.Since(t) <= finalizedRetention {
 			return nil, true
 		}
-		delete(m.finalized, streamKey)
+		delete(m.finalized, id)
 	}
-	st, ok := m.state[streamKey]
+	st, ok := m.state[id]
 	if !ok {
 		st = &streamState{pending: make(map[int64]streamChunk)}
-		m.state[streamKey] = st
+		m.state[id] = st
 	}
 	return st, false
 }
 
-// forget also records streamKey as finalized, guarding against a duplicate.
-func (m *StreamManager) forget(streamKey string) {
+// forget also records the stream identity as finalized, guarding against a duplicate.
+func (m *StreamManager) forget(id streamIdentity) {
 	now := time.Now()
 	m.mu.Lock()
-	delete(m.state, streamKey)
-	m.finalized[streamKey] = now
+	delete(m.state, id)
+	m.finalized[id] = now
 	m.pruneFinalizedLocked(now)
 	m.mu.Unlock()
+}
+
+func (m *StreamManager) load() {
+	data, err := os.ReadFile(m.statePath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return
+	}
+	if err != nil {
+		m.logger.Warn("failed to read stream state, starting empty", "path", m.statePath, "error", err)
+		return
+	}
+	var persisted persistedStreamManagerState
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		m.logger.Warn("failed to parse stream state, starting empty", "path", m.statePath, "error", err)
+		return
+	}
+	for _, saved := range persisted.Streams {
+		id, ok := streamIdentityFromPersisted(saved.ChannelID, saved.ThreadTS, saved.StreamKey)
+		if !ok {
+			continue
+		}
+		pending := make(map[int64]streamChunk, len(saved.Pending))
+		for index, chunk := range saved.Pending {
+			pending[index] = streamChunk{text: chunk.Text, final: chunk.Final}
+		}
+		m.state[id] = &streamState{
+			started:   saved.Started,
+			failed:    saved.Failed,
+			ts:        saved.TS,
+			nextIndex: saved.NextIndex,
+			pending:   pending,
+			text:      saved.Text,
+		}
+	}
+	for _, saved := range persisted.Finalized {
+		id, ok := streamIdentityFromPersisted(saved.ChannelID, saved.ThreadTS, saved.StreamKey)
+		if !ok || saved.FinalizedAt.IsZero() {
+			continue
+		}
+		m.finalized[id] = saved.FinalizedAt
+		delete(m.state, id)
+	}
+	m.pruneFinalizedLocked(time.Now())
+}
+
+func streamIdentityFromPersisted(channelID, threadTS, streamKey string) (streamIdentity, bool) {
+	if channelID == "" || threadTS == "" || streamKey == "" {
+		return streamIdentity{}, false
+	}
+	return streamIdentity{channelID: channelID, threadTS: threadTS, streamKey: streamKey}, true
+}
+
+func (m *StreamManager) persist() {
+	if m.statePath == "" {
+		return
+	}
+	m.persistMu.Lock()
+	defer m.persistMu.Unlock()
+
+	m.mu.Lock()
+	m.pruneFinalizedLocked(time.Now())
+	states := make(map[streamIdentity]*streamState, len(m.state))
+	for id, st := range m.state {
+		states[id] = st
+	}
+	finalized := make(map[streamIdentity]time.Time, len(m.finalized))
+	for id, at := range m.finalized {
+		finalized[id] = at
+	}
+	m.mu.Unlock()
+
+	persisted := persistedStreamManagerState{
+		Streams:   make([]persistedStream, 0, len(states)),
+		Finalized: make([]persistedFinalizedStream, 0, len(finalized)),
+	}
+	for id, st := range states {
+		st.mu.Lock()
+		pending := make(map[int64]persistedStreamChunk, len(st.pending))
+		for index, chunk := range st.pending {
+			pending[index] = persistedStreamChunk{Text: chunk.text, Final: chunk.final}
+		}
+		persisted.Streams = append(persisted.Streams, persistedStream{
+			ChannelID: id.channelID, ThreadTS: id.threadTS, StreamKey: id.streamKey,
+			Started: st.started, Failed: st.failed, TS: st.ts, NextIndex: st.nextIndex,
+			Pending: pending, Text: st.text,
+		})
+		st.mu.Unlock()
+	}
+	for id, at := range finalized {
+		persisted.Finalized = append(persisted.Finalized, persistedFinalizedStream{
+			ChannelID: id.channelID, ThreadTS: id.threadTS, StreamKey: id.streamKey, FinalizedAt: at,
+		})
+	}
+
+	dir := filepath.Dir(m.statePath)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		m.logger.Warn("failed to create stream state directory", "path", dir, "error", err)
+		return
+	}
+	data, err := json.MarshalIndent(persisted, "", "  ")
+	if err != nil {
+		m.logger.Warn("failed to encode stream state", "error", err)
+		return
+	}
+	if err := atomicfile.Write(m.statePath, append(data, '\n')); err != nil {
+		m.logger.Warn("failed to persist stream state", "path", m.statePath, "error", err)
+	}
 }
 
 func (m *StreamManager) pruneFinalizedLocked(now time.Time) {
