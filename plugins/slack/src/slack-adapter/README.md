@@ -277,12 +277,6 @@ reaches it too; a chunk delivered under an already-finalized identity is
 dropped rather than starting a second message (`StreamManager`'s own doc
 comment, `internal/adapter/stream.go`).
 
-Stream progress and the bounded finalized-identity set are atomically stored
-in `$XDG_STATE_HOME/slack-adapter/streams.json` (or
-`~/.local/state/slack-adapter/streams.json`). On restart, the adapter resumes
-the existing Slack stream with its stored stream timestamp, and still
-suppresses the trailing `plect.message` after the final delta.
-
 `recipient_user_id` (required by `chat.startStream` when streaming to a
 channel — confirmed empirically against a live workspace, and required for
 any thread with more than the sender in it, not documented) is resolved

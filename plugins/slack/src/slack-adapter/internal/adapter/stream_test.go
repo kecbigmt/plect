@@ -3,7 +3,6 @@ package adapter
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
 	"sync"
 	"testing"
 )
@@ -385,38 +384,6 @@ func TestStreamManager_IdenticalStreamKeysInDifferentThreadsRemainIndependent(t 
 	}
 	if streamer.stopCalls[1].ts != "ts-2" || streamer.stopCalls[1].text != " two" {
 		t.Errorf("second StopStream call = %+v, want second thread's final text", streamer.stopCalls[1])
-	}
-}
-
-func TestStreamManager_RestartCompletesAndSuppressesTrailingMessage(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "streams.json")
-	streamer := &recordingStreamer{}
-	poster := &recordingPoster{}
-	beforeRestart := NewStreamManagerWithStatePath(streamer, poster, "T1", "U1", testLogger(), path)
-
-	if err := beforeRestart.Deliver("C1", "111.0", "msg-1", 0, "Hello", false); err != nil {
-		t.Fatalf("initial chunk: %v", err)
-	}
-
-	afterRestart := NewStreamManagerWithStatePath(streamer, poster, "T1", "U1", testLogger(), path)
-	if err := afterRestart.Deliver("C1", "111.0", "msg-1", 1, ", world", true); err != nil {
-		t.Fatalf("final chunk after restart: %v", err)
-	}
-	if err := afterRestart.Deliver("C1", "111.0", "msg-1", 0, "Hello, world", true); err != nil {
-		t.Fatalf("trailing message after restart: %v", err)
-	}
-
-	if got := len(streamer.startCalls); got != 1 {
-		t.Fatalf("StartStream calls = %d, want 1 (restart must resume the existing message)", got)
-	}
-	if got := len(streamer.stopCalls); got != 1 {
-		t.Fatalf("StopStream calls = %d, want 1", got)
-	}
-	if got := streamer.stopCalls[0]; got.ts != "ts-1" || got.text != ", world" {
-		t.Errorf("StopStream call = %+v, want existing stream ts with final text", got)
-	}
-	if got := len(poster.calls); got != 0 {
-		t.Errorf("PostToThread calls = %d, want 0", got)
 	}
 }
 

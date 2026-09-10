@@ -4,7 +4,6 @@ go 1.25.6
 
 require (
 	github.com/BurntSushi/toml v1.6.0
-	github.com/kecbigmt/plecture/contracts/atomicfile v0.0.0-20260820120124-c60a0d848ca1
 	github.com/kecbigmt/plecture/contracts/channel-protocol v0.0.0
 	github.com/kecbigmt/plecture/contracts/event v0.0.0
 	github.com/slack-go/slack v0.22.0
@@ -13,7 +12,6 @@ require (
 require github.com/gorilla/websocket v1.5.3 // indirect
 
 replace (
-	github.com/kecbigmt/plecture/contracts/atomicfile => ../../../../contracts/atomicfile
 	github.com/kecbigmt/plecture/contracts/channel-protocol => ../../../../contracts/channel-protocol
 	github.com/kecbigmt/plecture/contracts/event => ../../../../contracts/event
 )
