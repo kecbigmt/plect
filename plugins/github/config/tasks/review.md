@@ -23,7 +23,12 @@ Steps:
    write-side `gh` calls also share)
 2. Review the diff (`gh api repos/<owner>/<repo>/pulls/<n> -H "Accept: application/vnd.github.diff"`)
 3. Evaluate code quality, design, and security
-4. Run relevant tests and linters
+4. Check CI results for this head (`gh api repos/<owner>/<repo>/commits/<head_sha>/check-runs`
+   — REST, not the `gh pr checks` porcelain step 1 reserves for writes) instead of re-running
+   tests/linters CI already covers — running them again duplicates CI and adds real memory/CPU
+   cost to this session for no new signal. Run a test or linter yourself only to reproduce a
+   failure CI reports, or to cover something CI
+   does not run at all.
 5. Identify risks, concerns, and open questions
 6. Record one action per judge id (`ac-met`, `solves`) with a reason:
    `plect judge approve <work-session> <task-instance> <judge-id> --reason "<reason>"`
