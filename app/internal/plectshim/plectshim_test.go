@@ -224,8 +224,6 @@ func TestForCurrentProcess_UsesEnvVarWhenNoSiblingPlectExists(t *testing.T) {
 	}
 }
 
-// A relative EnvVar value must not reach the shim script verbatim: the
-// script runs later, from an isolated child's own working directory.
 func TestForCurrentProcess_NormalizesARelativeEnvVarToAbsolute(t *testing.T) {
 	webBin := filepath.Join(t.TempDir(), "plect-web")
 	if err := os.WriteFile(webBin, []byte("#!/bin/sh\nexit 2\n"), 0o700); err != nil {

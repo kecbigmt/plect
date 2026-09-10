@@ -75,7 +75,10 @@ func resolveBin(self string) (string, error) {
 		if !isExecutableFile(override) {
 			return "", fmt.Errorf("plectshim: %s=%q is not an executable file", EnvVar, override)
 		}
-		abs, err := filepath.Abs(override) // the shim runs from a different cwd later
+		// A relative override is normalized here because the shim script
+		// later runs from an isolated child's own working directory, which
+		// need not match this process's.
+		abs, err := filepath.Abs(override)
 		if err != nil {
 			return "", fmt.Errorf("plectshim: resolve %s: %w", EnvVar, err)
 		}
