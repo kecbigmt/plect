@@ -21,6 +21,12 @@ const (
 type Error struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	// LifecycleConfigurationWarning carries a lifecycle-configuration change
+	// notice (see lifecycleConfigurationNotice) that was computed before
+	// this error occurred, so a caller that only sees the error still
+	// learns of it -- the same notice a successful Up/Down/Destroy result
+	// carries on its own field of the same name.
+	LifecycleConfigurationWarning string `json:"lifecycle_configuration_warning,omitempty"`
 }
 
 func (e *Error) Error() string {

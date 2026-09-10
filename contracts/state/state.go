@@ -290,8 +290,13 @@ type Session struct {
 	// TickBackoff is nil until the first heartbeat sweep decides a tick, so a
 	// session that has never backed off keeps a clean record.
 	TickBackoff *TickBackoff `json:"tick_backoff,omitempty"`
-	CreatedAt   time.Time    `json:"created_at"`
-	UpdatedAt   time.Time    `json:"updated_at"`
+	// LifecycleConfigurationDigest is the SHA-256 hex digest of the lifecycle
+	// configuration used by this session's most recent up/down/destroy
+	// execution, shared by all three; empty before any execution has
+	// recorded one.
+	LifecycleConfigurationDigest string    `json:"lifecycle_configuration_digest,omitempty"`
+	CreatedAt                    time.Time `json:"created_at"`
+	UpdatedAt                    time.Time `json:"updated_at"`
 }
 
 // PopulationProvenance is the sole lifecycle authority an automatic

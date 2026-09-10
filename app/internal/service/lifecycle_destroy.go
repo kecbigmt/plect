@@ -32,7 +32,8 @@ type DestroyResult struct {
 	// warnings by --force. Without --force a cleanup error aborts Destroy and
 	// returns the error directly; this field is only populated when the user
 	// explicitly opted into best-effort teardown.
-	CleanupWarnings []string `json:"cleanup_warnings,omitempty"`
+	CleanupWarnings               []string `json:"cleanup_warnings,omitempty"`
+	LifecycleConfigurationWarning string   `json:"lifecycle_configuration_warning,omitempty"`
 }
 
 // Destroy is the task-aware teardown path. fail-fast by default so a
@@ -42,7 +43,9 @@ type DestroyResult struct {
 // so a mid-teardown crash stays inspectable. State-delete failures error
 // even under --force — silent partial teardown would be worse than a
 // noisy one.
-func Destroy(cfg *config.Config, store *state.Store, params DestroyParams) (*DestroyResult, error) {
+func Destroy(cfg *config.Config, store *state.Store, params DestroyParams) (result *DestroyResult, err error) {
+	var warning string
+	defer func() { err = attachWarning(err, warning) }()
 	sessionName, session, err := resolveSession(cfg, store, params.Identifier)
 	if err != nil {
 		return nil, err
@@ -66,7 +69,7 @@ func Destroy(cfg *config.Config, store *state.Store, params DestroyParams) (*Des
 		session.Tasks = make(map[string]*contract.TaskState)
 	}
 
-	result := &DestroyResult{SessionName: sessionName}
+	result = &DestroyResult{SessionName: sessionName}
 
 	// Fail-closed before any teardown side effect: destroying the parent
 	// removes it from the live tree while a child's ParentSession keeps
@@ -115,6 +118,25 @@ func Destroy(cfg *config.Config, store *state.Store, params DestroyParams) (*Des
 	if teardownErr != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: teardownErr.Error()}
 	}
+
+	// Nothing is configured to compare against when plan is nil (the
+	// workflow-less, nothing-recorded, --force case above), so there is no
+	// lifecycle-configuration notice to give and no baseline to advance.
+	if plan != nil {
+		wsp, wspErr := resolveSessionWorkspaceProvider(cfg, session)
+		if wspErr != nil {
+			return nil, &Error{Code: ErrExecutionFailed, Message: wspErr.Error()}
+		}
+		if precondErr := workspaceProviderInputsPrecondition(wsp); precondErr != nil {
+			return nil, &Error{Code: ErrExecutionFailed, Message: precondErr.Error()}
+		}
+		warning, err = noticeAndAdvanceBaseline(store, sessionName, session, plan, teardown, teardown, wsp)
+		if err != nil {
+			return nil, &Error{Code: ErrExecutionFailed, Message: err.Error()}
+		}
+		result.LifecycleConfigurationWarning = warning
+	}
+
 	if cleanupErr := runTaskCleanup(context.Background(), teardown, sessionVars(cfg, session, plan), session, params.Observer); cleanupErr != nil {
 		session.UpdatedAt = time.Now()
 		putBestEffort(store, session, "run cleanup failure")

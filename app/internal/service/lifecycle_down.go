@@ -20,12 +20,15 @@ type DownParams struct {
 
 // DownResult holds the outcome of Down.
 type DownResult struct {
-	SessionName string                         `json:"session_name"`
-	Tasks       map[string]*contract.TaskState `json:"tasks,omitempty"`
+	SessionName                   string                         `json:"session_name"`
+	Tasks                         map[string]*contract.TaskState `json:"tasks,omitempty"`
+	LifecycleConfigurationWarning string                         `json:"lifecycle_configuration_warning,omitempty"`
 }
 
 // Down runs run-scoped cleanup (in reverse order) for the given session.
-func Down(cfg *config.Config, store *state.Store, params DownParams) (*DownResult, error) {
+func Down(cfg *config.Config, store *state.Store, params DownParams) (result *DownResult, err error) {
+	var warning string
+	defer func() { err = attachWarning(err, warning) }()
 	sessionName, session, err := resolveSession(cfg, store, params.Identifier)
 	if err != nil {
 		return nil, err
@@ -62,6 +65,20 @@ func Down(cfg *config.Config, store *state.Store, params DownParams) (*DownResul
 	if teardownErr != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: teardownErr.Error()}
 	}
+	// The digest hashes the session-wide outstanding scope (see
+	// noticeAndAdvanceBaseline), not just Down's own run-scoped teardown.
+	outstanding, outstandingErr := unifiedTeardownList(cfg, session, false)
+	if outstandingErr != nil {
+		return nil, &Error{Code: ErrExecutionFailed, Message: outstandingErr.Error()}
+	}
+	wsp, err := resolveSessionWorkspaceProvider(cfg, session)
+	if err != nil {
+		return nil, &Error{Code: ErrExecutionFailed, Message: err.Error()}
+	}
+	warning, err = noticeAndAdvanceBaseline(store, sessionName, session, plan, teardown, outstanding, wsp)
+	if err != nil {
+		return nil, &Error{Code: ErrExecutionFailed, Message: err.Error()}
+	}
 	cleanupErr := runTaskCleanup(context.Background(), teardown, sessionVars(cfg, session, plan), session, params.Observer)
 	session.UpdatedAt = time.Now()
 	session.Status = contract.SessionStatusDown
@@ -72,5 +89,5 @@ func Down(cfg *config.Config, store *state.Store, params DownParams) (*DownResul
 		return nil, &Error{Code: ErrExecutionFailed, Message: cleanupErr.Error()}
 	}
 	recordLifecycle(store, sessionName, "down", "run-scoped tasks cleaned")
-	return &DownResult{SessionName: sessionName, Tasks: domain.MergedTasks(session)}, nil
+	return &DownResult{SessionName: sessionName, Tasks: domain.MergedTasks(session), LifecycleConfigurationWarning: warning}, nil
 }

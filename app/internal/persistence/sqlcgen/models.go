@@ -115,31 +115,32 @@ type PopulationMemberBlocker struct {
 }
 
 type Session struct {
-	ID                       string
-	Name                     string
-	Status                   string
-	DestroyedAt              sql.NullString
-	ParentSessionID          sql.NullString
-	RootSessionID            sql.NullString
-	ResourceID               sql.NullString
-	Alias                    sql.NullString
-	Workflow                 string
-	WorkspaceDir             sql.NullString
-	PopulationWorkflow       sql.NullString
-	PopulationName           sql.NullString
-	InputsJson               sql.NullString
-	HealthLastCheckedAt      sql.NullString
-	HealthLastActivityAt     sql.NullString
-	HealthLastFingerprint    sql.NullString
-	HealthLastState          sql.NullString
-	HealthLastReason         sql.NullString
-	HealthLastNotifiedAt     sql.NullString
-	HealthNotifyCount        sql.NullInt64
-	TickConsecutiveUnchanged sql.NullInt64
-	TickLastFingerprint      sql.NullString
-	LastTickAt               sql.NullString
-	CreatedAt                string
-	UpdatedAt                string
+	ID                           string
+	Name                         string
+	Status                       string
+	DestroyedAt                  sql.NullString
+	ParentSessionID              sql.NullString
+	RootSessionID                sql.NullString
+	ResourceID                   sql.NullString
+	Alias                        sql.NullString
+	Workflow                     string
+	WorkspaceDir                 sql.NullString
+	LifecycleConfigurationDigest sql.NullString
+	PopulationWorkflow           sql.NullString
+	PopulationName               sql.NullString
+	InputsJson                   sql.NullString
+	HealthLastCheckedAt          sql.NullString
+	HealthLastActivityAt         sql.NullString
+	HealthLastFingerprint        sql.NullString
+	HealthLastState              sql.NullString
+	HealthLastReason             sql.NullString
+	HealthLastNotifiedAt         sql.NullString
+	HealthNotifyCount            sql.NullInt64
+	TickConsecutiveUnchanged     sql.NullInt64
+	TickLastFingerprint          sql.NullString
+	LastTickAt                   sql.NullString
+	CreatedAt                    string
+	UpdatedAt                    string
 }
 
 type SessionChannelHealth struct {

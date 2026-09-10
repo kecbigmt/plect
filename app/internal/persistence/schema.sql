@@ -28,6 +28,11 @@ CREATE TABLE sessions (
     alias TEXT,
     workflow TEXT NOT NULL,
     workspace_dir TEXT,
+    -- One nullable comparison baseline shared by up/down/destroy; see
+    -- docs/design/sqlite-persistence.md. NULL means no lifecycle execution
+    -- has recorded one yet (a brand-new session, or a session migrated
+    -- from before this column existed).
+    lifecycle_configuration_digest TEXT,
     population_workflow TEXT,
     population_name TEXT,
     inputs_json TEXT CHECK (inputs_json IS NULL OR json_valid(inputs_json)),

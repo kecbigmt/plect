@@ -1216,7 +1216,15 @@ func TestUp_ForceRecreateProviderSetupFailurePersistsInspectableState(t *testing
 	}
 }
 
-func TestRecreateSessionRuntimeTeardownListFailurePreservesRuntimeFieldsButMarksStatusDown(t *testing.T) {
+// recreateSessionRuntime no longer resolves its own teardown list (the
+// caller resolves it once, for both the lifecycle-configuration notice and
+// this call), so the failure this test injects is in cleanup execution
+// itself rather than in list construction -- but the same status-down and
+// crash-inspectability contract still applies.
+func TestRecreateSessionRuntimeCleanupFailureMarksStatusDownAndPersistsFailure(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
 	store := testStore(t)
 	oldWorkdirPath := filepath.Join(t.TempDir(), "old-workdir")
 	if err := os.MkdirAll(oldWorkdirPath, 0o755); err != nil {
@@ -1226,9 +1234,6 @@ func TestRecreateSessionRuntimeTeardownListFailurePreservesRuntimeFieldsButMarks
 		[]taskFixture{{id: "runtime", scope: "run", cleanup: "true"}},
 		[]nodeFixture{{id: "runtime"}},
 	)
-	if err := os.WriteFile(filepath.Join(cfg.BaseDir, "tasks", "broken.toml"), []byte("scope = \n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	sessionName := "org/repo-20"
 	seedSessionWithNodes(t, store, sessionName, "org/repo", 20, "default", map[string]*contract.TaskState{
 		contract.WorkflowPseudoNodeID: {Scope: contract.TaskScopeSession, Status: contract.TaskStatusProduced},
@@ -1247,18 +1252,16 @@ func TestRecreateSessionRuntimeTeardownListFailurePreservesRuntimeFieldsButMarks
 	}
 	session := store.Get(sessionName)
 	session.WorkspaceDirPath = oldWorkdirPath
-	session.Nodes[contract.WorkflowPseudoNodeID].Outputs["branch"] = "old-branch"
 
-	_, err := recreateSessionRuntime(cfg, store, sessionName, session, config.WorkflowFile{ID: "default"}, &taskpkg.Plan{
-		Run: []taskpkg.Resolved{{
-			NodeID:  "runtime",
-			TaskID:  "runtime",
-			Scope:   contract.TaskScopeRun,
-			Cleanup: &lang.Action{Type: lang.ActionShell, Script: "true"},
-		}},
-	}, nil)
+	teardown := []taskpkg.Resolved{{
+		NodeID:  "runtime",
+		TaskID:  "runtime",
+		Scope:   contract.TaskScopeRun,
+		Cleanup: &lang.Action{Type: lang.ActionShell, Script: "exit 1"},
+	}}
+	_, err := recreateSessionRuntime(cfg, store, sessionName, session, config.WorkflowFile{ID: "default"}, &taskpkg.Plan{Run: teardown}, teardown, nil)
 	if err == nil {
-		t.Fatal("expected force recreate to fail when teardown list construction fails")
+		t.Fatal("expected force recreate to fail when cleanup fails")
 	}
 	svcErr, ok := err.(*Error)
 	if !ok || svcErr.Code != ErrExecutionFailed {
@@ -1267,14 +1270,14 @@ func TestRecreateSessionRuntimeTeardownListFailurePreservesRuntimeFieldsButMarks
 
 	persisted := store.Get(sessionName)
 	if persisted == nil {
-		t.Fatal("session must remain inspectable after teardown list failure")
+		t.Fatal("session must remain inspectable after cleanup failure")
 	}
-	if persisted.WorkspaceDirPath != "" || domain.SessionBranch(persisted) != "issue/1" {
-		t.Fatalf("persisted session state = (%q, %q), want original stored values", persisted.WorkspaceDirPath, domain.SessionBranch(persisted))
+	if persisted.WorkspaceDirPath != "" {
+		t.Fatalf("WorkspaceDirPath = %q, want it untouched by the failed recreate", persisted.WorkspaceDirPath)
 	}
 	runtime := persisted.Nodes["runtime"]
-	if runtime == nil || runtime.Status != contract.TaskStatusProduced || runtime.Outputs["session_id"] != "old-runtime" {
-		t.Fatalf("runtime task = %+v, want untouched produced state", runtime)
+	if runtime == nil || runtime.Status != contract.TaskStatusFailed {
+		t.Fatalf("runtime task = %+v, want it recorded as failed", runtime)
 	}
 	if persisted.Status != contract.SessionStatusDown {
 		t.Fatalf("Status = %q, want %q (force-recreate marks it down before its own teardown even runs)", persisted.Status, contract.SessionStatusDown)

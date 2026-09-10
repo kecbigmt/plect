@@ -181,6 +181,9 @@ func TestMigrate_DownRestoresPreDissolutionSchemaWithoutError(t *testing.T) {
 		t.Fatalf("NewProvider: %v", err)
 	}
 	if _, err := provider.Down(ctx); err != nil {
+		t.Fatalf("Down (lifecycle-configuration-digest): %v", err)
+	}
+	if _, err := provider.Down(ctx); err != nil {
 		t.Fatalf("Down (sidecar state): %v", err)
 	}
 	if _, err := provider.Down(ctx); err != nil {
@@ -307,6 +310,9 @@ func TestMigrate_DownRestoresNodeInstancesColumnsWithoutError(t *testing.T) {
 		t.Fatalf("NewProvider: %v", err)
 	}
 	if _, err := provider.Down(ctx); err != nil {
+		t.Fatalf("Down (lifecycle-configuration-digest): %v", err)
+	}
+	if _, err := provider.Down(ctx); err != nil {
 		t.Fatalf("Down (sidecar state): %v", err)
 	}
 	if _, err := provider.Down(ctx); err != nil {
@@ -352,6 +358,9 @@ func TestMigrate_DownDropsForwardCursorRowsWithoutError(t *testing.T) {
 	provider, err := goose.NewProvider(goose.DialectSQLite3, db.write, db.migrations)
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
+	}
+	if _, err := provider.Down(ctx); err != nil {
+		t.Fatalf("Down (lifecycle-configuration-digest): %v", err)
 	}
 	if _, err := provider.Down(ctx); err != nil {
 		t.Fatalf("Down (sidecar state): %v", err)

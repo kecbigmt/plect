@@ -35,8 +35,9 @@ type UpParams struct {
 
 // UpResult holds the outcome of Up.
 type UpResult struct {
-	SessionName string                         `json:"session_name"`
-	Tasks       map[string]*contract.TaskState `json:"tasks,omitempty"`
+	SessionName                   string                         `json:"session_name"`
+	Tasks                         map[string]*contract.TaskState `json:"tasks,omitempty"`
+	LifecycleConfigurationWarning string                         `json:"lifecycle_configuration_warning,omitempty"`
 }
 
 // Up runs run-scoped tasks for the given session.
@@ -49,7 +50,9 @@ type UpResult struct {
 // the user having to remember a separate command. A bare session name
 // without a state entry still errors out — Create needs URL information
 // to resolve session/branch, so the asymmetry is intentional.
-func Up(cfg *config.Config, store *state.Store, params UpParams) (*UpResult, error) {
+func Up(cfg *config.Config, store *state.Store, params UpParams) (result *UpResult, err error) {
+	var warning string
+	defer func() { err = attachWarning(err, warning) }()
 	identifier := params.Identifier
 	forceRecreateExisting := false
 	disp, matched, dispErr := dispatchResource(cfg, params.Workflow, params.Identifier)
@@ -185,13 +188,40 @@ func Up(cfg *config.Config, store *state.Store, params UpParams) (*UpResult, err
 	if wfErr != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: wfErr.Error()}
 	}
+	wsp, wspErr := resolveSessionWorkspaceProvider(cfg, session)
+	if wspErr != nil {
+		return nil, &Error{Code: ErrExecutionFailed, Message: wspErr.Error()}
+	}
+	var teardown, digestOutstanding []task.Resolved
+	if params.ForceRecreate && forceRecreateExisting {
+		teardown, err = unifiedTeardownList(cfg, session, false)
+		if err == nil {
+			// Force-recreate re-runs workspace-provider setup too.
+			err = workspaceProviderInputsPrecondition(wsp)
+		}
+		digestOutstanding = teardown
+	} else {
+		teardown, err = staleProducedWorkflowNodes(cfg, session, plan)
+		if err == nil {
+			// The digest hashes the session-wide outstanding scope (see
+			// noticeAndAdvanceBaseline), not just the stale nodes above.
+			digestOutstanding, err = unifiedTeardownList(cfg, session, false)
+		}
+	}
+	if err != nil {
+		return nil, &Error{Code: ErrExecutionFailed, Message: err.Error()}
+	}
+	warning, err = noticeAndAdvanceBaseline(store, sessionName, session, plan, teardown, digestOutstanding, wsp)
+	if err != nil {
+		return nil, &Error{Code: ErrExecutionFailed, Message: err.Error()}
+	}
 	if params.ForceRecreate && forceRecreateExisting {
 		var recreateErr error
-		plan, recreateErr = recreateSessionRuntime(cfg, store, sessionName, session, wf, plan, params.Observer)
+		plan, recreateErr = recreateSessionRuntime(cfg, store, sessionName, session, wf, plan, teardown, params.Observer)
 		if recreateErr != nil {
 			return nil, recreateErr
 		}
-	} else if cleanupErr := cleanupStaleWorkflowNodes(cfg, store, sessionName, session, plan, params.Observer); cleanupErr != nil {
+	} else if cleanupErr := cleanupStaleWorkflowNodes(cfg, store, sessionName, session, plan, teardown, params.Observer); cleanupErr != nil {
 		return nil, cleanupErr
 	}
 	setupErr := runNodeSetup(context.Background(), plan.UpOrder(), sessionVars(cfg, session, plan), session, params.Observer)
@@ -223,14 +253,11 @@ func Up(cfg *config.Config, store *state.Store, params UpParams) (*UpResult, err
 		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to record session status: %v", err)}
 	}
 	recordLifecycle(store, sessionName, "up", "run-scoped tasks produced")
-	return &UpResult{SessionName: sessionName, Tasks: domain.MergedTasks(session)}, nil
+	return &UpResult{SessionName: sessionName, Tasks: domain.MergedTasks(session), LifecycleConfigurationWarning: warning}, nil
 }
 
-func cleanupStaleWorkflowNodes(cfg *config.Config, store *state.Store, sessionName string, session *domain.Session, plan *task.Plan, observer task.Observer) error {
-	stale, err := staleProducedWorkflowNodes(cfg, session, plan)
-	if err != nil {
-		return &Error{Code: ErrExecutionFailed, Message: err.Error()}
-	}
+// stale is resolved by the caller, once, shared with its own notice call.
+func cleanupStaleWorkflowNodes(cfg *config.Config, store *state.Store, sessionName string, session *domain.Session, plan *task.Plan, stale []task.Resolved, observer task.Observer) error {
 	if len(stale) == 0 {
 		return nil
 	}
@@ -339,13 +366,10 @@ func staleProducedWorkflowNodes(cfg *config.Config, session *domain.Session, pla
 	return out, nil
 }
 
-func recreateSessionRuntime(cfg *config.Config, store *state.Store, sessionName string, session *domain.Session, wf config.WorkflowFile, teardownPlan *task.Plan, observer task.Observer) (*task.Plan, error) {
+// teardown is resolved by the caller, once, shared with its own notice call.
+func recreateSessionRuntime(cfg *config.Config, store *state.Store, sessionName string, session *domain.Session, wf config.WorkflowFile, teardownPlan *task.Plan, teardown []task.Resolved, observer task.Observer) (*task.Plan, error) {
 	if err := setSessionStatus(store, sessionName, contract.SessionStatusDown); err != nil {
 		return nil, &Error{Code: ErrExecutionFailed, Message: fmt.Sprintf("failed to record session status: %v", err)}
-	}
-	teardown, teardownErr := unifiedTeardownList(cfg, session, false)
-	if teardownErr != nil {
-		return nil, &Error{Code: ErrExecutionFailed, Message: teardownErr.Error()}
 	}
 	cleanupErr := runTaskCleanup(context.Background(), teardown, sessionVars(cfg, session, teardownPlan), session, observer)
 	session.UpdatedAt = time.Now()

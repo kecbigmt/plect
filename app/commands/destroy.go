@@ -66,6 +66,9 @@ children intact.`,
 			return err
 		}
 		fmt.Fprintf(os.Stderr, "Destroyed session: %s\n", result.SessionName)
+		if result.LifecycleConfigurationWarning != "" {
+			fmt.Fprintf(os.Stderr, "Warning: %s\n", result.LifecycleConfigurationWarning)
+		}
 		for _, w := range result.CleanupWarnings {
 			fmt.Fprintf(os.Stderr, "Warning: %s\n", w)
 		}
