@@ -54,8 +54,8 @@ another plugin's package.
   channel runs unconditionally (an `exec` action always runs), so it cannot
   itself skip a `plect.message` whose deltas already rendered and closed the
   stream; slack-adapter's `StreamManager` is what keeps that from posting a
-  second Slack message under the same `stream_key` — see its own comment
-  (`src/slack-adapter/internal/adapter/stream.go`) and
+  second Slack message under the same channel/thread/message identity — see
+  its own comment (`src/slack-adapter/internal/adapter/stream.go`) and
   `src/slack-adapter/README.md`'s `POST /stream` section for the
   chat.startStream/appendStream/stopStream sequencing and the
   fallback-to-a-single-post behavior when a workspace rejects streaming.

@@ -8,10 +8,10 @@
 # sequence of its own.
 
 # This channel runs unconditionally (an exec action always runs), so a
-# plect.message whose deltas already closed the same stream_key is posted
-# through here too; StreamManager is what keeps that from becoming a second
-# Slack message (its own doc comment, src/slack-adapter/internal/adapter/
-# stream.go).
+# plect.message whose deltas already closed the same channel/thread/message
+# identity is posted through here too; StreamManager is what keeps that from
+# becoming a second Slack message (its own doc comment,
+# src/slack-adapter/internal/adapter/stream.go).
 [stream]
 kind    = "channel"
 type    = "exec"

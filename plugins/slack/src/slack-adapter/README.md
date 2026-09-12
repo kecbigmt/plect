@@ -266,16 +266,24 @@ caller of this endpoint, not built into the plugin.
 One chunk of a `plect.message_delta` sequence, or the single chunk a
 `plect.message` with no preceding deltas is posted as, rendered as a single
 live-updating Slack thread reply via `chat.startStream` /
-`chat.appendStream` / `chat.stopStream`, keyed by `stream_key`. `index`
-orders chunks within a `stream_key`; a chunk arriving out of order is
-buffered until the gap closes or a small bound is reached, at which point
-the buffered chunks flush in index order regardless of the gap. `final`
-finalizes the message. The `stream` channel that calls this endpoint runs
-unconditionally, so a `plect.message` whose own preceding deltas already
-finalized this `stream_key` reaches it too; a chunk delivered under an
-already-finalized `stream_key` is dropped rather than starting a second
-message (`StreamManager`'s own doc comment,
-`internal/adapter/stream.go`).
+`chat.appendStream` / `chat.stopStream`. Its identity is the combination of
+`channel_id`, `thread_ts`, and `stream_key`; `index` orders chunks within
+that identity. A chunk arriving out of order is buffered until the gap
+closes or a small bound is reached, at which point the buffered chunks flush
+in index order regardless of the gap. `final` finalizes the message. The
+`stream` channel that calls this endpoint runs unconditionally, so a
+`plect.message` whose own preceding deltas already finalized this identity
+reaches it too; a chunk delivered under an already-finalized identity is
+dropped rather than starting a second message (`StreamManager`'s own doc
+comment, `internal/adapter/stream.go`).
+
+The adapter writes version `1` snapshots to
+`$XDG_STATE_HOME/slack-adapter/streams.json` (or
+`~/.local/state/slack-adapter/streams.json`). Each atomic snapshot records
+in-flight Slack stream timestamps and ordering state, fallback text, and the
+bounded finalized-identity set. Startup logs once and starts empty if the
+file is missing, unreadable, corrupt, or a different version; that condition
+never prevents the adapter from starting.
 
 `recipient_user_id` (required by `chat.startStream` when streaming to a
 channel — confirmed empirically against a live workspace, and required for
