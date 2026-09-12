@@ -277,6 +277,14 @@ reaches it too; a chunk delivered under an already-finalized identity is
 dropped rather than starting a second message (`StreamManager`'s own doc
 comment, `internal/adapter/stream.go`).
 
+The adapter writes version `1` snapshots to
+`$XDG_STATE_HOME/slack-adapter/streams.json` (or
+`~/.local/state/slack-adapter/streams.json`). Each atomic snapshot records
+in-flight Slack stream timestamps and ordering state, fallback text, and the
+bounded finalized-identity set. Startup logs once and starts empty if the
+file is missing, unreadable, corrupt, or a different version; that condition
+never prevents the adapter from starting.
+
 `recipient_user_id` (required by `chat.startStream` when streaming to a
 channel — confirmed empirically against a live workspace, and required for
 any thread with more than the sender in it, not documented) is resolved

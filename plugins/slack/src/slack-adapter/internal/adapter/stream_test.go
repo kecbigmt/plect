@@ -1,8 +1,14 @@
 package adapter
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -384,6 +390,93 @@ func TestStreamManager_IdenticalStreamKeysInDifferentThreadsRemainIndependent(t 
 	}
 	if streamer.stopCalls[1].ts != "ts-2" || streamer.stopCalls[1].text != " two" {
 		t.Errorf("second StopStream call = %+v, want second thread's final text", streamer.stopCalls[1])
+	}
+}
+
+func TestStreamManager_RestartCompletesAndSuppressesTrailingMessage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "streams.json")
+	streamer := &recordingStreamer{}
+	poster := &recordingPoster{}
+	beforeRestart := NewStreamManagerWithStatePath(streamer, poster, "T1", "U1", testLogger(), path)
+
+	if err := beforeRestart.Deliver("C1", "111.0", "msg-1", 0, "Hello", false); err != nil {
+		t.Fatalf("initial chunk: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read snapshot: %v", err)
+	}
+	var header struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(data, &header); err != nil {
+		t.Fatalf("decode snapshot header: %v", err)
+	}
+	if header.Version != 1 {
+		t.Fatalf("snapshot version = %d, want 1", header.Version)
+	}
+
+	afterRestart := NewStreamManagerWithStatePath(streamer, poster, "T1", "U1", testLogger(), path)
+	if err := afterRestart.Deliver("C1", "111.0", "msg-1", 1, ", world", true); err != nil {
+		t.Fatalf("final chunk after restart: %v", err)
+	}
+	if err := afterRestart.Deliver("C1", "111.0", "msg-1", 0, "Hello, world", true); err != nil {
+		t.Fatalf("trailing message after restart: %v", err)
+	}
+
+	if got := len(streamer.startCalls); got != 1 {
+		t.Fatalf("StartStream calls = %d, want 1 (restart must resume the existing message)", got)
+	}
+	if got := len(streamer.stopCalls); got != 1 {
+		t.Fatalf("StopStream calls = %d, want 1", got)
+	}
+	if got := streamer.stopCalls[0]; got.ts != "ts-1" || got.text != ", world" {
+		t.Errorf("StopStream call = %+v, want existing stream ts with final text", got)
+	}
+	if got := len(poster.calls); got != 0 {
+		t.Errorf("PostToThread calls = %d, want 0", got)
+	}
+}
+
+func TestStreamManager_InvalidSnapshotStartsEmptyAndLogsOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T, path string)
+	}{
+		{name: "missing", setup: func(t *testing.T, path string) {}},
+		{name: "unreadable", setup: func(t *testing.T, path string) {
+			if err := os.Mkdir(path, 0o700); err != nil {
+				t.Fatalf("create unreadable snapshot path: %v", err)
+			}
+		}},
+		{name: "corrupt", setup: func(t *testing.T, path string) {
+			if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
+				t.Fatalf("write corrupt snapshot: %v", err)
+			}
+		}},
+		{name: "wrong version", setup: func(t *testing.T, path string) {
+			if err := os.WriteFile(path, []byte(`{"version": 2}`), 0o600); err != nil {
+				t.Fatalf("write wrong-version snapshot: %v", err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "streams.json")
+			tc.setup(t, path)
+			var logs bytes.Buffer
+			logger := slog.New(slog.NewTextHandler(&logs, nil))
+			mgr := NewStreamManagerWithStatePath(&recordingStreamer{}, &recordingPoster{}, "T1", "U1", logger, path)
+
+			if got := len(mgr.state); got != 0 {
+				t.Errorf("live streams = %d, want 0", got)
+			}
+			if got := len(mgr.finalized); got != 0 {
+				t.Errorf("finalized streams = %d, want 0", got)
+			}
+			if got := strings.Count(logs.String(), "starting empty"); got != 1 {
+				t.Errorf("starting-empty logs = %d, want 1; logs=%s", got, logs.String())
+			}
+		})
 	}
 }
 

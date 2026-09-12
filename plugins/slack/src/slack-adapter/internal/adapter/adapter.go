@@ -51,6 +51,19 @@ func SubscribersStatePath() string {
 	return filepath.Join(home, ".local", "state", "slack-adapter", "subscribers.json")
 }
 
+// StreamStatePath resolves $XDG_STATE_HOME/slack-adapter/streams.json,
+// falling back to ~/.local/state/.../streams.json. Empty disables persistence.
+func StreamStatePath() string {
+	if stateHome := os.Getenv("XDG_STATE_HOME"); stateHome != "" {
+		return filepath.Join(stateHome, "slack-adapter", "streams.json")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".local", "state", "slack-adapter", "streams.json")
+}
+
 // New creates a new Adapter.
 func New(cfg *Config, logger *slog.Logger) *Adapter {
 	options := []slack.Option{}
@@ -91,7 +104,7 @@ func New(cfg *Config, logger *slog.Logger) *Adapter {
 		}
 		a.teamID = resp.TeamID
 	}
-	a.streamManager = NewStreamManager(a, a.poster, a.teamID, cfg.StreamRecipientUserID(), logger)
+	a.streamManager = NewStreamManagerWithStatePath(a, a.poster, a.teamID, cfg.StreamRecipientUserID(), logger, StreamStatePath())
 
 	// Pre-connect so restored subscribers can push replies immediately.
 	for _, sub := range a.broker.List() {
