@@ -6,6 +6,38 @@ and a workflow's `[tick].on` (`workflows.md#clocks`) select events by
 type glob; this chapter documents the core, provider-neutral vocabulary those
 globs can name.
 
+## Session lifecycle
+
+`lifecycle.created`, `lifecycle.up`, `lifecycle.down`, and
+`lifecycle.destroyed` are internal, best-effort records of the four session
+lifecycle phases, appended at most once per phase (`lifecycle.created`) or
+once per transition (the other three). `lifecycle.down` and
+`lifecycle.destroyed` carry a `metadata.reason`, one of `idle` or `capacity`
+for a down, `policy` or `absence` for a destroy, naming which automatic
+policy triggered the transition (`workflows.md#session-idle-down-and-destroy-policy`).
+A manual `plect down` or `plect destroy` carries no `reason` — the field only
+ever names an automatic trigger, so its absence on an otherwise identical
+event is itself informative. `plect ls` reads this field to show why a down
+session is down.
+
+## Delivery to a down session
+
+A session's own tick — `done_when` evaluation, chain firing, terminal
+pushes — runs independently of its run state: a down session keeps
+evaluating on the same schedule an up one would, so an automatic down never
+strands a session short of its own destroy guard or its own terminal
+signals. Only two things change what a down session receives and whether it
+comes back up on its own:
+
+- `user.emit` and `plect.instruction` are directed: delivering either to a
+  down session brings it up first (an ordinary `up`), then delivers.
+- Every other type is a notification: it is forwarded one hop to the
+  nearest live ancestor (`../adr/2026-09-08-down-session-resource-event-forwarding.md`),
+  and with no live ancestor it simply stays on the down session's own log,
+  unbrought up, read once that session resumes. A plugin-defined type is
+  never treated as directed — core does not learn plugin types, so anything
+  core does not itself own as directed is a notification.
+
 ## Agent messages
 
 `plect.message` and `plect.message_delta` are the runtime-neutral contract

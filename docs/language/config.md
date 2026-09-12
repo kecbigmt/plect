@@ -86,9 +86,23 @@ idempotent up of an already-up session does not, while `--force-recreate`
 holds a new admission. Real children count only against their real parent's
 workflow cap. Unset leaves virtual-root admission unlimited.
 
-A manual up rejected at the cap does not authorize the resident evaluator to
-bring another session down. Capacity-driven down is available only during a
-population admission and only for eligible population-owned members.
+When any admission — population, manual `plect up`, or a chain's dispatched
+`plect up` — would exceed this cap, the reactor first looks, among the
+sessions in this cap's own scope (every parentless session, including those
+in an explicit `root:*` cohort), for one that declares `idle_down_after`
+(`workflows.md#session-idle-down-and-destroy-policy`) and is currently clear
+by that declaration's own predicate; oldest activity then session name
+breaks a tie. A session with no real parent and no population provenance —
+one an operator created directly, never dispatched by a chain or admitted by
+a population — is never a candidate here even if its workflow declares
+`idle_down_after`: only a population-admitted or chain-dispatched session in
+this scope is a candidate. Finding a candidate, the reactor brings that
+session down through ordinary cleanup and admits. Finding none, it rejects
+the admission. Declaring `idle_down_after` is the sole authorization for
+this capacity-pressure down, independent of whether a population's own
+admission is what triggered it. A workflow's own real-children cap
+(`workflows.md#concurrency`) follows the identical rule within its narrower
+scope, the same parent's real children.
 
 There is no field for whether dispatch detaches. Detachment is a property of the
 invoking context — the flag given, whether a terminal is attached, whether an
